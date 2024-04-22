@@ -73,23 +73,28 @@ All system logging is also registered in the Application Insights instance creat
 
 “Office 365 importer” web-job messages (queries are multi-line):
 
+```
 traces
 
 \| where operation_Name == "Office365ActivityImporter"
+```
 
 See when “Office 365 importer” has finished an import cycle:
-
+```
 traces
 
 \| where operation_Name == "Office365ActivityImporter" and message == "Waiting 2 mins..."
+```
 
 For call-logging specifically:
 
+```
 traces
 
 \| where operation_Name == "Office365ActivityImporter"
 
 or operation_Name == "CallRecordWebhookController"
+```
 
 **Important**: this cycle/message should be no longer than once every 24 hours. Any longer & the backlog will be growing quicker than the importer is importing. If this happens, you need to upscale the database & app-service-plan (see 2.4.4).
 
@@ -101,16 +106,18 @@ traces
 
 Graph API Webhook messages
 
+```
 traces
 
 \| where operation_Name == "CallRecordWebhookController"
+```
 
 Call records read from Service Bus
-
+```
 traces
 
 \| where message contains "ServiceBus"
-
+```
 ### General Exception Searching
 
 If you want to see where an error may be logged but are unsure where, you can query for all exceptions being logged to get a start:
