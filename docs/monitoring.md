@@ -75,24 +75,20 @@ All system logging is also registered in the Application Insights instance creat
 
 ```
 traces
-
-\| where operation_Name == "Office365ActivityImporter"
+| where operation_Name == "Office365ActivityImporter"
 ```
 
 See when “Office 365 importer” has finished an import cycle:
 ```
 traces
-
-\| where operation_Name == "Office365ActivityImporter" and message == "Waiting 2 mins..."
+| where operation_Name == "Office365ActivityImporter" and message == "Waiting 2 mins..."
 ```
 
 For call-logging specifically:
 
 ```
 traces
-
-\| where operation_Name == "Office365ActivityImporter"
-
+| where operation_Name == "Office365ActivityImporter"
 or operation_Name == "CallRecordWebhookController"
 ```
 
@@ -108,15 +104,13 @@ Graph API Webhook messages
 
 ```
 traces
-
-\| where operation_Name == "CallRecordWebhookController"
+| where operation_Name == "CallRecordWebhookController"
 ```
 
 Call records read from Service Bus
 ```
 traces
-
-\| where message contains "ServiceBus"
+| where message contains "ServiceBus"
 ```
 ### General Exception Searching
 
