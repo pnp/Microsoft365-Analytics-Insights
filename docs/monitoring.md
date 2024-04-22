@@ -95,11 +95,10 @@ or operation_Name == "CallRecordWebhookController"
 **Important**: this cycle/message should be no longer than once every 24 hours. Any longer & the backlog will be growing quicker than the importer is importing. If this happens, you need to upscale the database & app-service-plan (see 2.4.4).
 
 “Application Insights importer” web-job messages:
-
+```
 traces
-
-\| where operation_Name == "AppInsightsImporter"
-
+| where operation_Name == "AppInsightsImporter"
+```
 Graph API Webhook messages
 
 ```
