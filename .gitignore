@@ -4,3 +4,27 @@
 
 /src/AnalyticsEngine/Web/Web.config
 /src/AnalyticsEngine/Web/Web.Debug.config
+/src/AnalyticsEngine/Web/Scripts/teams-permission-grant/.vscode
+/src/Misc/.vs
+/src/Misc/BuildsSite/.vs
+/src/Misc/BuildsSite/APIs/obj
+/src/Misc/BuildsSite/Models/bin/Debug/netstandard2.0
+/src/Misc/BuildsSite/Models/obj
+/src/Misc/BuildsSite/packages
+/src/Misc/BuildsSite/Tests/bin
+/src/Misc/BuildsSite/Tests/obj
+/src/Misc/BuildsSite/Tests/appsettings.Development.json
+/src/Misc/BuildsSite/UnitTests/bin/Debug/net6.0
+/src/Misc/BuildsSite/UnitTests/obj/Debug/net6.0
+/src/Misc/BuildsSite/Web/ClientApp/.vscode
+/src/Misc/BuildsSite/Web/ClientApp/.env.development
+/src/Misc/packages
+/src/Misc/Scripts.AITrackerInstaller.SPApp/obj
+/src/Misc/Tests.LoadGenerator/bin/Debug
+/src/Misc/Tests.LoadGenerator/obj
+/src/SPO/Scripts.AITrackerInstaller/AITracker/.vscode
+/src/SPO/Scripts.AITrackerInstaller/DevConfig.json-SecureString.txt.tmp
+/src/SPO/Scripts.AITrackerInstaller/AITracker/DevConfig.json-SecureString.txt.tmp
+/src/SPO/Scripts.AITrackerInstaller/AITracker/builduntdeploy.ps1
+/src/AnalyticsEngine/Web/Properties/PublishProfiles
+/src/SPO/Scripts.AITrackerInstaller/DevConfig.json
