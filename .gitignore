@@ -1,0 +1,6 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/src/AnalyticsEngine/Web/Web.config
+/src/AnalyticsEngine/Web/Web.Debug.config
