@@ -4,9 +4,7 @@
 
 /src/AnalyticsEngine/Web/Web.config
 /src/AnalyticsEngine/Web/Web.Debug.config
-/src/AnalyticsEngine/Web/Scripts/teams-permission-grant/.vscode
-/src/Misc/.vs
-/src/Misc/BuildsSite/.vs
+**/.vs
 /src/Misc/BuildsSite/APIs/obj
 /src/Misc/BuildsSite/Models/bin/Debug/netstandard2.0
 /src/Misc/BuildsSite/Models/obj
@@ -16,15 +14,13 @@
 /src/Misc/BuildsSite/Tests/appsettings.Development.json
 /src/Misc/BuildsSite/UnitTests/bin/Debug/net6.0
 /src/Misc/BuildsSite/UnitTests/obj/Debug/net6.0
-/src/Misc/BuildsSite/Web/ClientApp/.vscode
 /src/Misc/BuildsSite/Web/ClientApp/.env.development
 /src/Misc/packages
-/src/Misc/Scripts.AITrackerInstaller.SPApp/obj
-/src/Misc/Tests.LoadGenerator/bin/Debug
-/src/Misc/Tests.LoadGenerator/obj
-/src/SPO/Scripts.AITrackerInstaller/AITracker/.vscode
-/src/SPO/Scripts.AITrackerInstaller/DevConfig.json-SecureString.txt.tmp
-/src/SPO/Scripts.AITrackerInstaller/AITracker/DevConfig.json-SecureString.txt.tmp
+**/.vscode
+*.tmp
 /src/SPO/Scripts.AITrackerInstaller/AITracker/builduntdeploy.ps1
 /src/AnalyticsEngine/Web/Properties/PublishProfiles
 /src/SPO/Scripts.AITrackerInstaller/DevConfig.json
+/src/Misc/BuildsSite/Web/ClientApp/.env
+/src/Misc/BuildsSite/Web/appsettings.Development.json
+/src/Misc/BuildsSite/Web/Properties/ServiceDependencies/m365advancedanalytics - Web Deploy
