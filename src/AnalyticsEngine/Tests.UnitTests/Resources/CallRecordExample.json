@@ -1,0 +1,58 @@
+{
+  "@odata.context": "https://graph.microsoft.com/beta/$metadata#communications/callRecords/$entity",
+  "id": "237a0039-a9bd-4a65-b806-0371b2fb646b",
+  "version": 1,
+  "type": "peerToPeer",
+  "modalities": [ "audio" ],
+  "lastModifiedDateTime": "2020-07-15T13:12:55.8769482Z",
+  "startDateTime": "2020-07-15T13:05:46.1502847Z",
+  "endDateTime": "2020-07-15T13:06:12.7229829Z",
+  "joinWebUrl": null,
+  "organizer": {
+    "phone": null,
+    "guest": null,
+    "encrypted": null,
+    "onPremises": null,
+    "azureApplicationInstance": null,
+    "applicationInstance": null,
+    "application": null,
+    "device": null,
+    "user": {
+      "id": "48fe59a4-c951-43ca-9d16-972083aa6305",
+      "displayName": "MOD Administrator",
+      "tenantId": "ffcdb539-892e-4eef-94f6-0d9851c479ba"
+    }
+  },
+  "participants": [
+    {
+      "phone": null,
+      "guest": null,
+      "encrypted": null,
+      "onPremises": null,
+      "azureApplicationInstance": null,
+      "applicationInstance": null,
+      "application": null,
+      "device": null,
+      "user": {
+        "id": "48fe59a4-c951-43ca-9d16-972083aa6305",
+        "displayName": "MOD Administrator",
+        "tenantId": "ffcdb539-892e-4eef-94f6-0d9851c479ba"
+      }
+    },
+    {
+      "phone": null,
+      "guest": null,
+      "encrypted": null,
+      "onPremises": null,
+      "azureApplicationInstance": null,
+      "applicationInstance": null,
+      "application": null,
+      "device": null,
+      "user": {
+        "id": "93de3982-aa5b-41bf-b6ff-aecd3ab580a0",
+        "displayName": "Megan Bowen",
+        "tenantId": "ffcdb539-892e-4eef-94f6-0d9851c479ba"
+      }
+    }
+  ]
+}

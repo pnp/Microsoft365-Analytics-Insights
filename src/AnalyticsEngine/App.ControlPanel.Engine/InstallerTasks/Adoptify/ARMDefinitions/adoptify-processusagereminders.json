@@ -1,0 +1,524 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "subscriptionId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "location": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "adoptifySiteUrl": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "settingsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "rewardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "cardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    }
+  },
+  "variables": {
+    "Singlequote": "'"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2017-07-01",
+      "name": "Adoptify-ProcessUsageReminders",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "Recurrence": {
+              "recurrence": {
+                "frequency": "Day",
+                "interval": 1
+              },
+              "evaluatedRecurrence": {
+                "frequency": "Day",
+                "interval": 1
+              },
+              "type": "Recurrence"
+            }
+          },
+          "actions": {
+            "Get_AppId_setting": {
+              "runAfter": {},
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('settingsListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "Title eq 'AppId'"
+                }
+              }
+            },
+            "Get_DisableRewards_setting": {
+              "runAfter": {
+                "Get_InactiveDays_setting": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline_1']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('settingsListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "Title eq 'DisableRewards'"
+                }
+              }
+            },
+            "Get_InactiveDays_setting": {
+              "runAfter": {
+                "Get_AppId_setting": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('settingsListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "Title eq 'InactiveDays'"
+                }
+              }
+            },
+            "Get_adaptive_card": {
+              "actions": {
+                "Get_usage_reminder_adaptive_card_item": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('cardsListId'),variables('singlequote'),'))}/items')]",
+                    "queries": {
+                      "$filter": "Title eq '@{if(equals(variables('DisableRewards'),false),'UsageReminder','UsageReminderNoRewards')}'"
+                    }
+                  }
+                },
+                "Get_usage_reminder_card_JSON": {
+                  "runAfter": {
+                    "Get_usage_reminder_adaptive_card_item": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_usage_reminder_adaptive_card_item')?['value'])?['CardJSON']"
+                }
+              },
+              "runAfter": {
+                "Initialize_SendCard_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Get_users_with_no_recent_activity": {
+              "runAfter": {
+                "Initialize_DisableRewards_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "LastActive le '@{addDays(utcNow('yyyy-MM-dd'),-3)}'"
+                }
+              },
+              "runtimeConfiguration": {
+                "paginationPolicy": {
+                  "minimumItemCount": 30000
+                }
+              }
+            },
+            "Initialize_AppId_variable": {
+              "runAfter": {
+                "Get_DisableRewards_setting": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "AppId",
+                    "type": "string",
+                    "value": "@{first(body('Get_AppId_setting')?['value'])?['Value']}"
+                  }
+                ]
+              }
+            },
+            "Initialize_DisableRewards_variable": {
+              "runAfter": {
+                "Initialize_InactiveDays_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "DisableRewards",
+                    "type": "boolean",
+                    "value": "@bool(first(body('Get_DisableRewards_setting')?['value'])?['Value'])"
+                  }
+                ]
+              }
+            },
+            "Initialize_InactiveDays_variable": {
+              "runAfter": {
+                "Initialize_AppId_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "InactiveDays",
+                    "type": "integer",
+                    "value": "@sub(0,int(first(body('Get_InactiveDays_setting')?['value'])?['Value']))"
+                  }
+                ]
+              }
+            },
+            "Initialize_RewardCount_variable": {
+              "runAfter": {
+                "Get_users_with_no_recent_activity": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "RewardCount",
+                    "type": "float",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "Initialize_SendCard_variable": {
+              "runAfter": {
+                "Initialize_RewardCount_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "SendCard",
+                    "type": "boolean",
+                    "value": "@false"
+                  }
+                ]
+              }
+            },
+            "Loop_through_users": {
+              "foreach": "@body('Get_users_with_no_recent_activity')?['value']",
+              "actions": {
+                "Check_if_last_notified_activity_date_is_not_null": {
+                  "actions": {
+                    "Check_if_the_user_was_notified_over_a_week_ago": {
+                      "actions": {
+                        "Set_SendCard_variable_-_notify": {
+                          "runAfter": {},
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "SendCard",
+                            "value": "@true"
+                          }
+                        }
+                      },
+                      "runAfter": {},
+                      "else": {
+                        "actions": {
+                          "Set_SendCard_variable_-_do_not_notify": {
+                            "runAfter": {},
+                            "type": "SetVariable",
+                            "inputs": {
+                              "name": "SendCard",
+                              "value": "@false"
+                            }
+                          }
+                        }
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "lessOrEquals": [
+                              "@items('Loop_through_users')?['LastNotifiedActivity']",
+                              "@addDays(utcNow(),variables('InactiveDays'))"
+                            ]
+                          }
+                        ]
+                      },
+                      "type": "If",
+                      "description": "Only send usage reminders once a week."
+                    }
+                  },
+                  "runAfter": {
+                    "Check_if_rewards_are_disabled": [
+                      "Succeeded"
+                    ]
+                  },
+                  "else": {
+                    "actions": {
+                      "Set_SendCard_variable_-_activity_date_null": {
+                        "runAfter": {},
+                        "type": "SetVariable",
+                        "inputs": {
+                          "name": "SendCard",
+                          "value": "@true"
+                        }
+                      }
+                    }
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@equals(items('Loop_through_users')?['LastNotifiedActivity'],null)",
+                          "@false"
+                        ]
+                      }
+                    ]
+                  },
+                  "type": "If"
+                },
+                "Check_if_rewards_are_disabled": {
+                  "actions": {},
+                  "runAfter": {},
+                  "else": {
+                    "actions": {
+                      "Get_eligable_rewards": {
+                        "actions": {
+                          "Get_rewards": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                              "host": {
+                                "connection": {
+                                  "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                }
+                              },
+                              "method": "get",
+                              "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('rewardsListId'),variables('singlequote'),'))}/items')]"
+                            }
+                          },
+                          "Loop_through_rewards": {
+                            "foreach": "@body('Get_rewards')?['value']",
+                            "actions": {
+                              "Check_if_user_is_eligable": {
+                                "actions": {
+                                  "Increment_RewardCount": {
+                                    "runAfter": {},
+                                    "type": "IncrementVariable",
+                                    "inputs": {
+                                      "name": "RewardCount",
+                                      "value": 1
+                                    }
+                                  }
+                                },
+                                "runAfter": {},
+                                "expression": {
+                                  "and": [
+                                    {
+                                      "greaterOrEquals": [
+                                        "@items('Loop_through_users')?['Points']",
+                                        "@items('Loop_through_rewards')?['XP']"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "type": "If"
+                              }
+                            },
+                            "runAfter": {
+                              "Get_rewards": [
+                                "Succeeded"
+                              ]
+                            },
+                            "type": "Foreach"
+                          }
+                        },
+                        "runAfter": {},
+                        "type": "Scope"
+                      }
+                    }
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@variables('DisableRewards')",
+                          "@true"
+                        ]
+                      }
+                    ]
+                  },
+                  "type": "If"
+                },
+                "Check_whether_to_send_the_card": {
+                  "actions": {
+                    "Clear_RewardCount_variable": {
+                      "runAfter": {
+                        "Post_reminder_adaptive_card": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "SetVariable",
+                      "inputs": {
+                        "name": "RewardCount",
+                        "value": 0
+                      }
+                    },
+                    "Post_reminder_adaptive_card": {
+                      "runAfter": {},
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "messageBody": "@{if(equals(variables('DisableRewards'),false), replace(replace(replace(replace(replace(outputs('Get_usage_reminder_card_JSON'),'{XP}',string(items('Loop_through_users')?['Points'])),'{QuestsCount}',string(items('Loop_through_users')?['QuestCount'])),'{BadgeCount}',string(items('Loop_through_users')?['BadgeCount'])),'{RewardsCount}',string(variables('RewardCount'))),'{AppId}',variables('AppId')),replace(replace(replace(replace(outputs('Get_usage_reminder_card_JSON'),'{XP}',string(items('Loop_through_users')?['Points'])),'{QuestsCount}',string(items('Loop_through_users')?['QuestCount'])),'{BadgeCount}',string(items('Loop_through_users')?['BadgeCount'])),'{AppId}',variables('AppId')))}",
+                          "recipient": {
+                            "to": "@items('Loop_through_users')?['User']?['Email']"
+                          }
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['teams']['connectionId']"
+                          }
+                        },
+                        "method": "post",
+                        "path": "/flowbot/actions/adaptivecard/recipienttypes/user"
+                      }
+                    },
+                    "Update_last_notified_activity_date": {
+                      "runAfter": {
+                        "Clear_RewardCount_variable": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "LastNotifiedActivity": "@{utcNow()}"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "patch",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('singlequote'),'Loop_through_users',variables('singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Check_if_last_notified_activity_date_is_not_null": [
+                      "Succeeded"
+                    ]
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@variables('SendCard')",
+                          "@true"
+                        ]
+                      }
+                    ]
+                  },
+                  "type": "If"
+                }
+              },
+              "runAfter": {
+                "Get_adaptive_card": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Foreach",
+              "runtimeConfiguration": {
+                "concurrency": {
+                  "repetitions": 1
+                }
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "sharepointonline": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-spo')]",
+                "connectionName": "adoptify-spo",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/sharepointonline')]"
+              },
+              "teams": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-teams')]",
+                "connectionName": "adoptify-teams",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/teams')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

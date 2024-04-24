@@ -1,0 +1,88 @@
+{
+    "view": [
+        {
+            "name": "Page Name",
+            "count": 1,
+            "durationMetric": {
+                "value": 0.0,
+                "count": 1.0,
+                "min": 0.0,
+                "max": 0.0,
+                "stdDev": 0.0,
+                "sampledValue": 0.0
+            },
+            "url": "https://sharepoint/whatever",
+            "urlData": {
+                "base": "/whatever",
+                "host": "sharepoint",
+                "hashTag": "#",
+                "protocol": "https"
+            }
+        }
+    ],
+    "internal": {
+        "data": {
+            "id": "5704ec02-9e64-11ea-b895-f720d49840b0",
+            "documentVersion": "1.61"
+        }
+    },
+    "context": {
+        "data": {
+            "eventTime": "2020-05-25T08:47:05.464Z",
+            "isSynthetic": false,
+            "samplingRate": 100.0
+        },
+        "device": {
+            "id": "browser",
+            "type": "Browser",
+            "osVersion": "Windows 10",
+            "deviceName": "Other",
+            "deviceModel": "Other",
+            "browser": "Edg",
+            "browserVersion": "Edg 81.0",
+            "screenResolution": {}
+        },
+        "user": {
+            "anonId": "r2edW",
+            "isAuthenticated": false
+        },
+        "session": {
+            "id": "lO/bh",
+            "isFirst": true
+        },
+        "operation": {
+            "id": "yS/5l",
+            "parentId": "yS/5l",
+            "name": "/proyectos/gastic/_layouts/15/start.aspx"
+        },
+        "location": {
+            "clientip": "0.0.0.0",
+            "continent": "Europe",
+            "country": "Spain",
+            "province": "Granada",
+            "city": "Granada"
+        },
+        "custom": {
+            "dimensions": [
+                {
+                    "pageRequestId": "598de946-1d74-41b0-87db-402240c1aba2"
+                },
+                {
+                    "webUrl": "https://sharepoint/whatever"
+                },
+                {
+                    "siteUrl": "https://sharepoint"
+                },
+                {
+                    "webTitle": "Web Title"
+                },
+                {
+                    "aiTrackerVersion": "1.3.1"
+                },
+                {
+                    "sessionId": "f2858822-08b8-408c-aed8-b784dfebe33f"
+                }
+            ]
+        }
+    }
+}

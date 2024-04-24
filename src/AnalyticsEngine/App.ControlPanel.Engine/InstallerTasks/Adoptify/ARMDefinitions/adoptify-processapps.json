@@ -1,0 +1,1150 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "subscriptionId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "location": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "adoptifySiteUrl": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "questsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "questProcessingListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userQuestsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userBadgesListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "badgesListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "levelsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "settingsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "rewardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userRewardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "cardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    }
+  },
+  "variables": {
+    "Singlequote": "'"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2017-07-01",
+      "name": "Adoptify-ProcessApps",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "Recurrence": {
+              "recurrence": {
+                "frequency": "Day",
+                "interval": 1
+              },
+              "evaluatedRecurrence": {
+                "frequency": "Day",
+                "interval": 1
+              },
+              "type": "Recurrence"
+            }
+          },
+          "actions": {
+            "Get_AppId_setting": {
+              "runAfter": {},
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('settingsListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "Title eq 'AppId'"
+                }
+              }
+            },
+            "Get_adaptive_cards": {
+              "actions": {
+                "Get_adaptive_card_items": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('cardsListId'),variables('singlequote'),'))}/items')]"
+                  }
+                },
+                "Get_badge_awarded_card": {
+                  "runAfter": {
+                    "Get_quest_completed_card_JSON": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'BadgeAwarded')"
+                  }
+                },
+                "Get_badge_awarded_card_JSON": {
+                  "runAfter": {
+                    "Get_badge_awarded_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_badge_awarded_card'))?['CardJSON']"
+                },
+                "Get_level_up_card": {
+                  "runAfter": {
+                    "Get_badge_awarded_card_JSON": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'LevelUp')"
+                  }
+                },
+                "Get_level_up_card_JSON": {
+                  "runAfter": {
+                    "Get_level_up_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_level_up_card'))?['CardJSON']"
+                },
+                "Get_quest_completed_card": {
+                  "runAfter": {
+                    "Get_adaptive_card_items": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'QuestCompleted')"
+                  }
+                },
+                "Get_quest_completed_card_JSON": {
+                  "runAfter": {
+                    "Get_quest_completed_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_quest_completed_card'))?['CardJSON']"
+                },
+                "Get_stats_card": {
+                  "runAfter": {
+                    "Get_level_up_card_JSON": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'Stats')"
+                  }
+                },
+                "Get_stats_card_JSON": {
+                  "runAfter": {
+                    "Get_stats_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_stats_card'))?['CardJSON']"
+                }
+              },
+              "runAfter": {
+                "Initialize_EligableRewardCount_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Get_app_activities": {
+              "runAfter": {
+                "Get_adaptive_cards": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questsListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "QuestType eq 'App' and QuestStatus ne 'Retired'"
+                }
+              }
+            },
+            "Initialize_AppId_variable": {
+              "runAfter": {
+                "Get_AppId_setting": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "AppId",
+                    "type": "string",
+                    "value": "@{first(body('Get_AppId_setting')?['value'])?['Value']}"
+                  }
+                ]
+              }
+            },
+            "Initialize_BadgeAdaptiveImage_variable": {
+              "runAfter": {
+                "Initialize_QuestAdaptiveImage_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "BadgeAdaptiveImage",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "Initialize_EligableRewardCount_variable": {
+              "runAfter": {
+                "Initialize_SQLQuery_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "EligableRewardCount",
+                    "type": "integer",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "Initialize_IsComplete_variable": {
+              "runAfter": {
+                "Initialize_AppId_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "IsComplete",
+                    "type": "boolean",
+                    "value": "@false"
+                  }
+                ]
+              }
+            },
+            "Initialize_QuestAdaptiveImage_variable": {
+              "runAfter": {
+                "Initialize_IsComplete_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "QuestAdaptiveImage",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "Initialize_SQLQuery_variable": {
+              "runAfter": {
+                "Initialize_BadgeAdaptiveImage_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "SQLQuery",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "Loop_through_app_activities": {
+              "foreach": "@body('Get_app_activities')?['value']",
+              "actions": {
+                "Check_if_quest_has_an_adaptive_image": {
+                  "actions": {
+                    "Set_QuestAdaptiveImage_variable": {
+                      "runAfter": {},
+                      "type": "SetVariable",
+                      "inputs": {
+                        "name": "QuestAdaptiveImage",
+                        "value": "@items('Loop_through_app_activities')?['QuestAdaptiveImage']"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Get_app_activities_to_process": [
+                      "Succeeded"
+                    ]
+                  },
+                  "else": {
+                    "actions": {
+                      "Set_QuestAdaptiveImage_variable_-_empty": {
+                        "runAfter": {},
+                        "type": "SetVariable",
+                        "inputs": {
+                          "name": "QuestAdaptiveImage",
+                          "value": "data:image/png;base64,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"
+                        }
+                      }
+                    }
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@empty(items('Loop_through_app_activities')?['QuestAdaptiveImage'])",
+                          "@false"
+                        ]
+                      }
+                    ]
+                  },
+                  "type": "If"
+                },
+                "Get_app_activities_to_process": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questProcessingListId'),variables('singlequote'),'))}/items')]",
+                    "queries": {
+                      "$filter": "QuestID eq '@{items('Loop_through_app_activities')?['ID']}' and ProcessingStatus ne 'Processing'"
+                    }
+                  },
+                  "runtimeConfiguration": {
+                    "paginationPolicy": {
+                      "minimumItemCount": 50000
+                    }
+                  }
+                },
+                "Loop_through_activities_to_process": {
+                  "foreach": "@body('Get_app_activities_to_process')?['value']",
+                  "actions": {
+                    "Check_IsComplete": {
+                      "actions": {
+                        "Clear_eligable_reward_count": {
+                          "runAfter": {
+                            "Send_stats_adaptive_card": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "EligableRewardCount",
+                            "value": 0
+                          }
+                        },
+                        "Delete_processing_item": {
+                          "runAfter": {
+                            "Clear_eligable_reward_count": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                              }
+                            },
+                            "method": "delete",
+                            "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questProcessingListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('singlequote'),'Loop_through_activities_to_process',variables('singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                          }
+                        },
+                        "Get_eligable_rewards": {
+                          "actions": {
+                            "Get_rewards": {
+                              "runAfter": {},
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                  }
+                                },
+                                "method": "get",
+                                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('rewardsListId'),variables('singlequote'),'))}/items')]",
+                                "queries": {
+                                  "$filter": "RewardStatus eq 'Active' and XP le @{add(body('Get_user_from_user_list')?['EligablePoints'],items('Loop_through_app_activities')?['XP'])}"
+                                }
+                              }
+                            },
+                            "Loop_through_rewards": {
+                              "foreach": "@body('Get_rewards')?['value']",
+                              "actions": {
+                                "Check_reward_has_not_reached_redemption_limit": {
+                                  "actions": {
+                                    "Check_for_existing_user_reward_item": {
+                                      "actions": {
+                                        "Increment_eligable_reward_count": {
+                                          "runAfter": {},
+                                          "type": "Compose",
+                                          "inputs": "@add(variables('EligableRewardCount'),1)"
+                                        },
+                                        "Update_eligable_reward_count": {
+                                          "runAfter": {
+                                            "Increment_eligable_reward_count": [
+                                              "Succeeded"
+                                            ]
+                                          },
+                                          "type": "SetVariable",
+                                          "inputs": {
+                                            "name": "EligableRewardCount",
+                                            "value": "@outputs('Increment_eligable_reward_count')"
+                                          }
+                                        }
+                                      },
+                                      "runAfter": {
+                                        "Get_user_reward_item": [
+                                          "Succeeded"
+                                        ]
+                                      },
+                                      "expression": {
+                                        "and": [
+                                          {
+                                            "equals": [
+                                              "@equals(length(body('Get_user_reward_item')?['value']),1)",
+                                              "@false"
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      "type": "If"
+                                    },
+                                    "Get_user_reward_item": {
+                                      "runAfter": {},
+                                      "type": "ApiConnection",
+                                      "inputs": {
+                                        "host": {
+                                          "connection": {
+                                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                          }
+                                        },
+                                        "method": "get",
+                                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userRewardsListId'),variables('singlequote'),'))}/items')]",
+                                        "queries": {
+                                          "$filter": "RewardID eq '@{items('Loop_through_rewards')?['ID']}' and UserID eq '@{body('Get_user_from_user_list')?['ID']}'"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "runAfter": {
+                                    "Handle_empty_redemptions": [
+                                      "Succeeded"
+                                    ]
+                                  },
+                                  "expression": {
+                                    "or": [
+                                      {
+                                        "equals": [
+                                          "@outputs('Handle_empty_redemption_limit')",
+                                          0
+                                        ]
+                                      },
+                                      {
+                                        "less": [
+                                          "@outputs('Handle_empty_redemptions')",
+                                          "@outputs('Handle_empty_redemption_limit')"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "type": "If"
+                                },
+                                "Handle_empty_redemption_limit": {
+                                  "runAfter": {},
+                                  "type": "Compose",
+                                  "inputs": "@if(equals(items('Loop_through_rewards')?['RedemptionLimit'],null),0,items('Loop_through_rewards')?['RedemptionLimit'])"
+                                },
+                                "Handle_empty_redemptions": {
+                                  "runAfter": {
+                                    "Handle_empty_redemption_limit": [
+                                      "Succeeded"
+                                    ]
+                                  },
+                                  "type": "Compose",
+                                  "inputs": "@if(equals(items('Loop_through_rewards')?['Redemptions'],null),0,items('Loop_through_rewards')?['Redemptions'])"
+                                }
+                              },
+                              "runAfter": {
+                                "Get_rewards": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "Foreach"
+                            }
+                          },
+                          "runAfter": {
+                            "Process_level_up": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Scope"
+                        },
+                        "Process_Badge": {
+                          "actions": {
+                            "Check_activity_has_a_badge_assigned": {
+                              "actions": {
+                                "Award_badge": {
+                                  "runAfter": {},
+                                  "type": "ApiConnection",
+                                  "inputs": {
+                                    "body": {
+                                      "BadgeID": "@first(body('Get_badge')?['value'])?['ID']",
+                                      "Notify": true,
+                                      "UserID": "@items('Loop_through_activities_to_process')?['UserID']"
+                                    },
+                                    "host": {
+                                      "connection": {
+                                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                      }
+                                    },
+                                    "method": "post",
+                                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userBadgesListId'),variables('singlequote'),'))}/items')]"
+                                  }
+                                },
+                                "HasBadge": {
+                                  "runAfter": {
+                                    "Award_badge": [
+                                      "Succeeded"
+                                    ]
+                                  },
+                                  "type": "Compose",
+                                  "inputs": "@true"
+                                }
+                              },
+                              "runAfter": {
+                                "Get_badge": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "expression": {
+                                "and": [
+                                  {
+                                    "equals": [
+                                      "@empty(body('Get_badge')?['value'])",
+                                      "@false"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "type": "If"
+                            },
+                            "Get_badge": {
+                              "runAfter": {},
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                  }
+                                },
+                                "method": "get",
+                                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('badgesListId'),variables('singlequote'),'))}/items')]",
+                                "queries": {
+                                  "$filter": "ID eq '@{items('Loop_through_app_activities')?['BadgeID']}'"
+                                }
+                              },
+                              "description": "Get badge for the activity"
+                            },
+                            "Loop_through_badges": {
+                              "foreach": "@body('Get_badge')?['value']",
+                              "actions": {
+                                "Check_if_badge_has_an_adaptive_image": {
+                                  "actions": {
+                                    "Set_BadgeAdaptiveImage_variable": {
+                                      "runAfter": {},
+                                      "type": "SetVariable",
+                                      "inputs": {
+                                        "name": "BadgeAdaptiveImage",
+                                        "value": "@items('Loop_through_badges')?['BadgeAdaptiveImage']"
+                                      }
+                                    }
+                                  },
+                                  "runAfter": {},
+                                  "else": {
+                                    "actions": {
+                                      "Set_BadgeAdaptiveImage_variable_-_empty": {
+                                        "runAfter": {},
+                                        "type": "SetVariable",
+                                        "inputs": {
+                                          "name": "BadgeAdaptiveImage",
+                                          "value": "data:image/png;base64,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"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "expression": {
+                                    "and": [
+                                      {
+                                        "equals": [
+                                          "@empty(items('Loop_through_badges')?['BadgeAdaptiveImage'])",
+                                          "@false"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "type": "If"
+                                },
+                                "Send_badge_awarded_card": {
+                                  "runAfter": {
+                                    "Check_if_badge_has_an_adaptive_image": [
+                                      "Succeeded"
+                                    ]
+                                  },
+                                  "type": "ApiConnection",
+                                  "inputs": {
+                                    "body": {
+                                      "messageBody": "@{replace(replace(replace(replace(outputs('Get_badge_awarded_card_json'),'{BadgeName}',items('Loop_through_badges')?['BadgeName']),'{BadgeDesc}',string(items('Loop_through_badges')?['BadgeDescription'])),'{BadgeAdaptiveImage}',variables('BadgeAdaptiveImage')),'{AppId}',variables('AppId'))}",
+                                      "recipient": {
+                                        "to": "@body('Get_user_from_user_list')?['User']?['Email']"
+                                      }
+                                    },
+                                    "host": {
+                                      "connection": {
+                                        "name": "@parameters('$connections')['teams']['connectionId']"
+                                      }
+                                    },
+                                    "method": "post",
+                                    "path": "/flowbot/actions/adaptivecard/recipienttypes/user"
+                                  }
+                                }
+                              },
+                              "runAfter": {
+                                "Check_activity_has_a_badge_assigned": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "Foreach"
+                            }
+                          },
+                          "runAfter": {
+                            "Send_quest_complete_card": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Scope"
+                        },
+                        "Process_level_up": {
+                          "actions": {
+                            "Check_if_the_user_should_be_notified": {
+                              "actions": {
+                                "Send_level_up_adaptive_card": {
+                                  "runAfter": {},
+                                  "type": "ApiConnection",
+                                  "inputs": {
+                                    "body": {
+                                      "messageBody": "@{replace(replace(replace(outputs('Get_level_up_card_json'),'{Title}',first(body('Get_eligable_levels')?['value'])?['Title']),'{LevelAdaptiveImage}',first(body('Get_eligable_levels')?['value'])?['LevelAdaptiveImage']),'{AppId}',variables('AppId'))}",
+                                      "recipient": {
+                                        "to": "@body('Get_user_from_user_list')?['User']?['Email']"
+                                      }
+                                    },
+                                    "host": {
+                                      "connection": {
+                                        "name": "@parameters('$connections')['teams']['connectionId']"
+                                      }
+                                    },
+                                    "method": "post",
+                                    "path": "/flowbot/actions/adaptivecard/recipienttypes/user"
+                                  },
+                                  "description": "Notify the user of the highest level they are eligable for."
+                                },
+                                "Update_user_eligable_level": {
+                                  "runAfter": {
+                                    "Send_level_up_adaptive_card": [
+                                      "Succeeded"
+                                    ]
+                                  },
+                                  "type": "ApiConnection",
+                                  "inputs": {
+                                    "body": {
+                                      "EligableLevel": "@first(body('Get_eligable_levels')?['value'])?['ID']"
+                                    },
+                                    "host": {
+                                      "connection": {
+                                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                      }
+                                    },
+                                    "method": "patch",
+                                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(body(',variables('Singlequote'),'Get_user_from_user_list',variables('Singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                                  }
+                                }
+                              },
+                              "runAfter": {
+                                "Get_eligable_levels": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "expression": {
+                                "and": [
+                                  {
+                                    "not": {
+                                      "equals": [
+                                        "@body('Get_user_from_user_list')?['LevelID']",
+                                        "@first(body('Get_eligable_levels')?['value'])?['ID']"
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "greaterOrEquals": [
+                                      "@body('Update_user_stats')?['EligablePoints']",
+                                      "@first(body('Get_eligable_levels')?['value'])?['XP']"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "type": "If",
+                              "description": "Check if the level is not the users' current level and that their eligable points are greater than the level XP."
+                            },
+                            "Get_eligable_levels": {
+                              "runAfter": {},
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                  }
+                                },
+                                "method": "get",
+                                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('levelsListId'),variables('singlequote'),'))}/items')]",
+                                "queries": {
+                                  "$filter": "XP le '@{body('Update_user_stats')?['EligablePoints']}'",
+                                  "$orderby": "XP desc",
+                                  "$top": 1
+                                }
+                              },
+                              "description": "Get the levels the user is eligable for."
+                            }
+                          },
+                          "runAfter": {
+                            "Update_user_stats": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Scope"
+                        },
+                        "Send_quest_complete_card": {
+                          "runAfter": {
+                            "Update_quest_to_complete": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "body": {
+                              "messageBody": "@{replace(replace(replace(replace(outputs('Get_quest_completed_card_json'),'{Title}',items('Loop_through_app_activities')?['Title']),'{XP}',string(items('Loop_through_app_activities')?['XP'])),'{QuestAdaptiveImage}',variables('QuestAdaptiveImage')),'{AppId}',variables('AppId'))}",
+                              "recipient": {
+                                "to": "@body('Get_user_from_user_list')?['User']?['Email']"
+                              }
+                            },
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['teams']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "path": "/flowbot/actions/adaptivecard/recipienttypes/user"
+                          }
+                        },
+                        "Send_stats_adaptive_card": {
+                          "runAfter": {
+                            "Get_eligable_rewards": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "body": {
+                              "messageBody": "@{replace(replace(replace(replace(replace(outputs('Get_stats_card_json'),'{XP}',string(add(body('Get_user_from_user_list')?['EligablePoints'],items('Loop_through_app_activities')?['XP']))),'{QuestsCount}',string(add(body('Get_user_from_user_list')?['QuestCount'],1))),'{BadgeCount}',if(equals(outputs('HasBadge'),true),string(add(body('Get_user_from_user_list')?['BadgeCount'],1)),string(body('Get_user_from_user_list')?['BadgeCount']))),'{RewardsCount}',string(variables('EligableRewardCount'))),'{AppId}',variables('AppId'))}",
+                              "recipient": "@body('Get_user_from_user_list')?['User']?['Email']"
+                            },
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['teams']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "path": "/v1.0/teams/conversation/adaptivecard/poster/Flow bot/location/@{encodeURIComponent('Chat with Flow bot')}"
+                          }
+                        },
+                        "Update_quest_to_complete": {
+                          "runAfter": {},
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "body": {
+                              "IsComplete": true,
+                              "Notify": true
+                            },
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                              }
+                            },
+                            "method": "patch",
+                            "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userQuestsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('Singlequote'),'Loop_through_activities_to_process',variables('Singlequote'),')?[',variables('singlequote'),'UserQuestID',variables('singlequote'),'])}')]"
+                          }
+                        },
+                        "Update_user_stats": {
+                          "runAfter": {
+                            "Process_Badge": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "body": {
+                              "BadgeCount": "@if(equals(outputs('HasBadge'),true),add(body('Get_user_from_user_list')?['BadgeCount'],1),body('Get_user_from_user_list')?['BadgeCount'])",
+                              "EligablePoints": "@add(body('Get_user_from_user_list')?['EligablePoints'],items('Loop_through_app_activities')?['XP'])",
+                              "QuestCount": "@add(body('Get_user_from_user_list')?['QuestCount'],1)"
+                            },
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                              }
+                            },
+                            "method": "patch",
+                            "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('Singlequote'),'Loop_through_activities_to_process',variables('Singlequote'),')?[',variables('singlequote'),'UserID',variables('singlequote'),'])}')]"
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Loop_through_installed_apps_results": [
+                          "Succeeded"
+                        ]
+                      },
+                      "else": {
+                        "actions": {
+                          "Update_processing_item": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                              "body": {
+                                "ProcessingStatus": {
+                                  "Value": "Completed"
+                                }
+                              },
+                              "host": {
+                                "connection": {
+                                  "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                }
+                              },
+                              "method": "patch",
+                              "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questProcessingListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('Singlequote'),'Loop_through_activities_to_process',variables('Singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                            }
+                          }
+                        }
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@variables('IsComplete')",
+                              "@true"
+                            ]
+                          }
+                        ]
+                      },
+                      "type": "If"
+                    },
+                    "Get_installed_apps": {
+                      "runAfter": {
+                        "Set_SQLQuery_variable": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "query": "@variables('SQLQuery')"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sql']['connectionId']"
+                          }
+                        },
+                        "method": "post",
+                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                      }
+                    },
+                    "Get_user_from_user_list": {
+                      "runAfter": {
+                        "Update_status_to_processing": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "get",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('Singlequote'),'Loop_through_activities_to_process',variables('Singlequote'),')?[',variables('singlequote'),'UserID',variables('singlequote'),'])}')]"
+                      }
+                    },
+                    "Loop_through_installed_apps_results": {
+                      "foreach": "@body('Get_installed_apps')?['resultsets']?['Table1']",
+                      "actions": {
+                        "Check_installed_app_count_is_not_null": {
+                          "actions": {
+                            "Check_app_installed_count": {
+                              "actions": {
+                                "Set_IsComplete_to_true": {
+                                  "runAfter": {},
+                                  "type": "SetVariable",
+                                  "inputs": {
+                                    "name": "IsComplete",
+                                    "value": "@true"
+                                  },
+                                  "description": "Activity is complete"
+                                }
+                              },
+                              "runAfter": {},
+                               "else": {
+                                                                "actions": {
+                                                                    "Set_IsComplete_to_false_-_app_installed_count": {
+                                                                        "runAfter": {},
+                                                                        "type": "SetVariable",
+                                                                        "inputs": {
+                                                                            "name": "IsComplete",
+                                                                            "value": "@false"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            },
+                              "expression": {
+                                "and": [
+                                  {
+                                    "greaterOrEquals": [
+                                      "@items('Loop_through_installed_apps_results')?['app_installed_count']",
+                                      1
+                                    ]
+                                  }
+                                ]
+                              },
+                              "type": "If"
+                            }
+                          },
+                          "runAfter": {},
+                          "else": {
+                            "actions": {
+                              "Set_IsComplete_to_false_-_app_installed_count_null": {
+                                "runAfter": {},
+                                "type": "SetVariable",
+                                "inputs": {
+                                  "name": "IsComplete",
+                                  "value": "@false"
+                                }
+                              }
+                            }
+                          },
+                          "expression": {
+                            "and": [
+                              {
+                                "not": {
+                                  "equals": [
+                                    "@items('Loop_through_installed_apps_results')?['app_installed_count']",
+                                    "@null"
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          "type": "If"
+                        }
+                      },
+                      "runAfter": {
+                        "Update_processing_item_status_to_failed": [
+                          "Skipped"
+                        ]
+                      },
+                      "type": "Foreach"
+                    },
+                    "Set_SQLQuery_variable": {
+                      "runAfter": {
+                        "Get_user_from_user_list": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "SetVariable",
+                      "inputs": {
+                        "name": "SQLQuery",
+                        "value": "SELECT count(*) as app_installed_count\n  FROM [dbo].[teams_addons_user_installed_log] inner join [dbo].[teams_addons] on [dbo].[teams_addons_user_installed_log].[addon_id]=[dbo].[teams_addons].id\n  where [dbo].[teams_addons].[graph_id] = '@{items('Loop_through_app_activities')?['AppId']}' and [dbo].teams_addons_user_installed_log.user_id in (Select id from dbo.users where user_name = '@{body('Get_user_from_user_list')?['User']?['Email']}')\n  \n\n\n\n\n"
+                      }
+                    },
+                    "Update_processing_item_status_to_failed": {
+                      "runAfter": {
+                        "Get_installed_apps": [
+                          "Failed"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "ProcessingStatus": {
+                            "Value": "Failed"
+                          }
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "patch",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questProcessingListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('Singlequote'),'Loop_through_activities_to_process',variables('Singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                      }
+                    },
+                    "Update_status_to_processing": {
+                      "runAfter": {},
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "ProcessingStatus": {
+                            "Value": "Processing"
+                          }
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "patch",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questProcessingListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('Singlequote'),'Loop_through_activities_to_process',variables('Singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Check_if_quest_has_an_adaptive_image": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Foreach"
+                }
+              },
+              "runAfter": {
+                "Get_app_activities": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Foreach",
+              "runtimeConfiguration": {
+                "concurrency": {
+                  "repetitions": 1
+                }
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "sharepointonline": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-spo')]",
+                "connectionName": "adoptify-spo",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/sharepointonline')]"
+              },
+              "sql": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-sql')]",
+                "connectionName": "adoptify-sql",
+                "id": "[concat('subscriptions/', parameters('subscriptionId'), '/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/sql')]"
+              },
+              "teams": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-teams')]",
+                "connectionName": "adoptify-teams",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/teams')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

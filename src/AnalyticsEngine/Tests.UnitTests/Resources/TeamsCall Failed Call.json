@@ -1,0 +1,317 @@
+{
+    "@odata.context": "https://graph.microsoft.com/beta/$metadata#communications/callRecords(sessions(segments()))/$entity",
+    "id": "ccf29131-4011-4ef6-978c-402232c235c9",
+    "version": 1,
+    "type": "groupCall",
+    "modalities": [
+        "audio"
+    ],
+    "lastModifiedDateTime": "2020-10-06T11:42:47.7117121Z",
+    "startDateTime": "2020-10-06T11:32:49.7639581Z",
+    "endDateTime": "2020-10-06T11:32:51.904649Z",
+    "joinWebUrl": "https://teams.microsoft.com/l/meetup-join/19%3ac106df53f78b4fb0a3c59575009570a9%40thread.v2/0?context=%7b%22Tid%22%3a%229ad4d727-5838-4492-8ee4-d2845a26ccf3%22%2c%22Oid%22%3a%22940b0bbd-a382-4702-908f-a6c70a0445f7%22%7d",
+    "organizer": {
+        "acsUser": null,
+        "spoolUser": null,
+        "phone": null,
+        "guest": null,
+        "encrypted": null,
+        "onPremises": null,
+        "acsApplicationInstance": null,
+        "spoolApplicationInstance": null,
+        "applicationInstance": null,
+        "application": null,
+        "device": null,
+        "user": {
+            "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+            "displayName": "MOD Administrator",
+            "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+        }
+    },
+    "participants": [
+        {
+            "acsUser": null,
+            "spoolUser": null,
+            "phone": null,
+            "guest": null,
+            "encrypted": null,
+            "onPremises": null,
+            "acsApplicationInstance": null,
+            "spoolApplicationInstance": null,
+            "applicationInstance": null,
+            "application": null,
+            "device": null,
+            "user": {
+                "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+                "displayName": "MOD Administrator",
+                "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+            }
+        }
+    ],
+    "sessions@odata.context": "https://graph.microsoft.com/beta/$metadata#communications/callRecords('ccf29131-4011-4ef6-978c-402232c235c9')/sessions(segments())",
+    "sessions": [
+        {
+            "id": "c5796350-596b-49ff-b104-f285e839dc5b",
+            "modalities": [
+                "audio"
+            ],
+            "startDateTime": "2020-10-06T11:32:49.7639581Z",
+            "endDateTime": "2020-10-06T11:32:51.904649Z",
+            "failureInfo": null,
+            "caller": {
+                "@odata.type": "#microsoft.graph.callRecords.participantEndpoint",
+                "userAgent": {
+                    "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                    "headerValue": "SkypeSpaces/1415/1.0.0.2020091645/os=windows; osVer=10; deviceType=computer; browser=chrome; browserVer=85.0/TsCallingVersion=2020.34.01.1/Ovb=fb06dea2241e27a8ffb61b15601d634c2dad265b",
+                    "applicationVersion": null,
+                    "platform": "web",
+                    "productFamily": "teams"
+                },
+                "identity": {
+                    "acsUser": null,
+                    "spoolUser": null,
+                    "phone": null,
+                    "guest": null,
+                    "encrypted": null,
+                    "onPremises": null,
+                    "acsApplicationInstance": null,
+                    "spoolApplicationInstance": null,
+                    "applicationInstance": null,
+                    "application": null,
+                    "device": null,
+                    "user": {
+                        "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+                        "displayName": "MOD Administrator",
+                        "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+                    }
+                },
+                "feedback": {
+                    "text": null,
+                    "rating": "bad",
+                    "tokens": {}
+                }
+            },
+            "callee": {
+                "@odata.type": "#microsoft.graph.callRecords.serviceEndpoint",
+                "userAgent": {
+                    "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                    "headerValue": null,
+                    "applicationVersion": null,
+                    "platform": "unknown",
+                    "productFamily": "unknown"
+                }
+            },
+            "segments@odata.context": "https://graph.microsoft.com/beta/$metadata#communications/callRecords('ccf29131-4011-4ef6-978c-402232c235c9')/sessions('c5796350-596b-49ff-b104-f285e839dc5b')/segments",
+            "segments": [
+                {
+                    "id": "c5796350-596b-49ff-b104-f285e839dc5b",
+                    "startDateTime": "2020-10-06T11:32:49.7639581Z",
+                    "endDateTime": "2020-10-06T11:32:51.904649Z",
+                    "failureInfo": null,
+                    "caller": {
+                        "@odata.type": "#microsoft.graph.callRecords.participantEndpoint",
+                        "userAgent": {
+                            "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                            "headerValue": "SkypeSpaces/1415/1.0.0.2020091645/os=windows; osVer=10; deviceType=computer; browser=chrome; browserVer=85.0/TsCallingVersion=2020.34.01.1/Ovb=fb06dea2241e27a8ffb61b15601d634c2dad265b",
+                            "applicationVersion": null,
+                            "platform": "web",
+                            "productFamily": "teams"
+                        },
+                        "identity": {
+                            "acsUser": null,
+                            "spoolUser": null,
+                            "phone": null,
+                            "guest": null,
+                            "encrypted": null,
+                            "onPremises": null,
+                            "acsApplicationInstance": null,
+                            "spoolApplicationInstance": null,
+                            "applicationInstance": null,
+                            "application": null,
+                            "device": null,
+                            "user": {
+                                "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+                                "displayName": "MOD Administrator",
+                                "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+                            }
+                        },
+                        "feedback": {
+                            "text": null,
+                            "rating": "bad",
+                            "tokens": {}
+                        }
+                    },
+                    "callee": {
+                        "@odata.type": "#microsoft.graph.callRecords.serviceEndpoint",
+                        "userAgent": {
+                            "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                            "headerValue": null,
+                            "applicationVersion": null,
+                            "platform": "unknown",
+                            "productFamily": "unknown"
+                        }
+                    },
+                    "media": [
+                        {
+                            "label": "main-audio",
+                            "callerNetwork": {
+                                "ipAddress": null,
+                                "subnet": null,
+                                "linkSpeed": null,
+                                "connectionType": "unknown",
+                                "port": null,
+                                "reflexiveIPAddress": null,
+                                "relayIPAddress": null,
+                                "relayPort": null,
+                                "macAddress": null,
+                                "wifiMicrosoftDriver": null,
+                                "wifiMicrosoftDriverVersion": null,
+                                "wifiVendorDriver": null,
+                                "wifiVendorDriverVersion": null,
+                                "wifiChannel": null,
+                                "wifiBand": "unknown",
+                                "basicServiceSetIdentifier": null,
+                                "wifiRadioType": "unknown",
+                                "wifiSignalStrength": null,
+                                "wifiBatteryCharge": null,
+                                "dnsSuffix": null,
+                                "sentQualityEventRatio": null,
+                                "receivedQualityEventRatio": null,
+                                "delayEventRatio": null,
+                                "bandwidthLowEventRatio": null
+                            },
+                            "calleeNetwork": {
+                                "ipAddress": "10.0.143.5",
+                                "subnet": "10.0.136.0",
+                                "linkSpeed": 0,
+                                "connectionType": "wired",
+                                "port": 3480,
+                                "reflexiveIPAddress": "52.112.156.197",
+                                "relayIPAddress": null,
+                                "relayPort": null,
+                                "macAddress": null,
+                                "wifiMicrosoftDriver": null,
+                                "wifiMicrosoftDriverVersion": null,
+                                "wifiVendorDriver": null,
+                                "wifiVendorDriverVersion": null,
+                                "wifiChannel": null,
+                                "wifiBand": "unknown",
+                                "basicServiceSetIdentifier": null,
+                                "wifiRadioType": "unknown",
+                                "wifiSignalStrength": null,
+                                "wifiBatteryCharge": null,
+                                "dnsSuffix": null,
+                                "sentQualityEventRatio": null,
+                                "receivedQualityEventRatio": null,
+                                "delayEventRatio": null,
+                                "bandwidthLowEventRatio": null
+                            },
+                            "callerDevice": {
+                                "captureDeviceName": null,
+                                "captureDeviceDriver": null,
+                                "renderDeviceName": null,
+                                "renderDeviceDriver": null,
+                                "sentSignalLevel": null,
+                                "receivedSignalLevel": null,
+                                "sentNoiseLevel": null,
+                                "receivedNoiseLevel": null,
+                                "initialSignalLevelRootMeanSquare": null,
+                                "cpuInsufficentEventRatio": null,
+                                "renderNotFunctioningEventRatio": null,
+                                "captureNotFunctioningEventRatio": null,
+                                "deviceGlitchEventRatio": null,
+                                "lowSpeechToNoiseEventRatio": null,
+                                "lowSpeechLevelEventRatio": null,
+                                "deviceClippingEventRatio": null,
+                                "howlingEventCount": null,
+                                "renderZeroVolumeEventRatio": null,
+                                "renderMuteEventRatio": null,
+                                "micGlitchRate": null,
+                                "speakerGlitchRate": null
+                            },
+                            "calleeDevice": {
+                                "captureDeviceName": null,
+                                "captureDeviceDriver": null,
+                                "renderDeviceName": null,
+                                "renderDeviceDriver": null,
+                                "sentSignalLevel": null,
+                                "receivedSignalLevel": null,
+                                "sentNoiseLevel": null,
+                                "receivedNoiseLevel": null,
+                                "initialSignalLevelRootMeanSquare": null,
+                                "cpuInsufficentEventRatio": null,
+                                "renderNotFunctioningEventRatio": null,
+                                "captureNotFunctioningEventRatio": null,
+                                "deviceGlitchEventRatio": null,
+                                "lowSpeechToNoiseEventRatio": null,
+                                "lowSpeechLevelEventRatio": null,
+                                "deviceClippingEventRatio": null,
+                                "howlingEventCount": 0,
+                                "renderZeroVolumeEventRatio": null,
+                                "renderMuteEventRatio": null,
+                                "micGlitchRate": null,
+                                "speakerGlitchRate": null
+                            },
+                            "streams": [
+                                {
+                                    "streamId": "2429576534",
+                                    "startDateTime": null,
+                                    "endDateTime": null,
+                                    "streamDirection": "callerToCallee",
+                                    "averageAudioDegradation": null,
+                                    "averageJitter": "PT0.002S",
+                                    "maxJitter": "PT0.004S",
+                                    "averagePacketLossRate": 0,
+                                    "maxPacketLossRate": 0,
+                                    "averageRatioOfConcealedSamples": null,
+                                    "maxRatioOfConcealedSamples": null,
+                                    "averageRoundTripTime": null,
+                                    "maxRoundTripTime": null,
+                                    "packetUtilization": 66,
+                                    "averageBandwidthEstimate": null,
+                                    "wasMediaBypassed": null,
+                                    "postForwardErrorCorrectionPacketLossRate": null,
+                                    "averageVideoFrameLossPercentage": null,
+                                    "averageReceivedFrameRate": null,
+                                    "lowFrameRateRatio": null,
+                                    "averageVideoPacketLossRate": null,
+                                    "averageVideoFrameRate": null,
+                                    "lowVideoProcessingCapabilityRatio": null,
+                                    "averageAudioNetworkJitter": "PT0.018S",
+                                    "maxAudioNetworkJitter": "PT0.022S"
+                                },
+                                {
+                                    "streamId": "1000",
+                                    "startDateTime": null,
+                                    "endDateTime": null,
+                                    "streamDirection": "calleeToCaller",
+                                    "averageAudioDegradation": null,
+                                    "averageJitter": null,
+                                    "maxJitter": null,
+                                    "averagePacketLossRate": null,
+                                    "maxPacketLossRate": null,
+                                    "averageRatioOfConcealedSamples": null,
+                                    "maxRatioOfConcealedSamples": null,
+                                    "averageRoundTripTime": null,
+                                    "maxRoundTripTime": null,
+                                    "packetUtilization": 0,
+                                    "averageBandwidthEstimate": null,
+                                    "wasMediaBypassed": null,
+                                    "postForwardErrorCorrectionPacketLossRate": null,
+                                    "averageVideoFrameLossPercentage": null,
+                                    "averageReceivedFrameRate": null,
+                                    "lowFrameRateRatio": null,
+                                    "averageVideoPacketLossRate": null,
+                                    "averageVideoFrameRate": null,
+                                    "lowVideoProcessingCapabilityRatio": null,
+                                    "averageAudioNetworkJitter": null,
+                                    "maxAudioNetworkJitter": null
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,119 @@
+[
+  {
+    "Title": "AppId",
+    "Description": "ID of the Adoptify Power App",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "AppId",
+        "insertValue": "00000000-0000-0000-0000-000000000000" 
+      }
+    }
+  },
+  {
+    "Title": "InactiveDays",
+    "Description": "No of inactive days before a user is reminded to open Adoptify",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "InactiveDays",
+        "insertValue": 11 
+      }
+    }
+  },
+  {
+    "Title": "FirstLaunchBadgeID",
+    "Description": "ID of the badge to award to a user on their first launch of Adoptify",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "FirstLaunchBadgeID",
+        "insertValue": { 
+          "lookupType": "IdLookup",
+          "required": true,
+          "lookupParams": {
+            "listTitle": "Badges",
+            "fieldName": "BadgeName",
+            "fieldValue": "Starter"
+          }
+        }
+      }
+    }
+  },
+  {
+    "Title": "DisableRewards",
+    "Description": "Disable the rewards functionality",
+    "Value": "false"
+  },
+  {
+    "Title": "LanguageOverride",
+    "Description": "Default Adoptify language ISO code. If blank, will autodetect.",
+    "Value": ""
+  },
+  {
+    "Title": "SupportEmail",
+    "Description": "Email address of a contact who will support Adoptify internally.",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "SupportEmail",
+        "insertValue": "adoptify@contoso.local"
+      }
+    }
+  },
+  {
+    "Title": "QuestApproverEmail",
+    "Description": "Email address of a user or group that will approve the completion of custom quests.",
+    "Value": ""
+  },
+  {
+    "Title": "QuestApprovalUseTeams",
+    "Description": "Use Microsoft Teams for custom quest approval. Posts adaptive cards instead of using Power Automate Approvals.",
+    "Value": ""
+  },
+  {
+    "Title": "QuestApprovalTeamId",
+    "Description": "ID of a Microsoft Teams Team to use for custom quest approval.",
+    "Value": ""
+  },
+  {
+    "Title": "QuestApprovalChannelId",
+    "Description": "ID of a Microsoft Teams Channel to use for custom quest approval.",
+    "Value": ""
+  },
+  {
+    "Title": "RewardApprovers",
+    "Description": "Semicolon separated list of approver email addresses who will approve rewards that require approval or the email address of a Microsoft 365 group.",
+    "Value": ""
+  },
+  {
+    "Title": "RewardCodeAdminEmail",
+    "Description": "Email address of a single user who will provide codes for rewards that require a unique code but do not require approval.",
+    "Value": ""
+  },
+  {
+    "Title": "RewardRedemptionTeamId",
+    "Description": "ID of a Microsoft Teams Team where an adaptive card will be posted to provide codes for rewards that require a unique code but do not require approval. Used instead of the RewardCodeAdminUPN setting.",
+    "Value": ""
+  },
+  {
+    "Title": "RewardRedemptionChannelId",
+    "Description": "ID of a Microsoft Teams Channel where an adaptive card will be posted to provide codes for rewards that require a unique code but do not require approval.",
+    "Value": ""
+  }
+
+
+  
+
+
+
+
+]

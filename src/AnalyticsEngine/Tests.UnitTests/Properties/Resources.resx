@@ -1,0 +1,209 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- 
+    Microsoft ResX Schema 
+    
+    Version 2.0
+    
+    The primary goals of this format is to allow a simple XML format 
+    that is mostly human readable. The generation and parsing of the 
+    various data types are done through the TypeConverter classes 
+    associated with the data types.
+    
+    Example:
+    
+    ... ado.net/XML headers & schema ...
+    <resheader name="resmimetype">text/microsoft-resx</resheader>
+    <resheader name="version">2.0</resheader>
+    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+        <value>[base64 mime encoded serialized .NET Framework object]</value>
+    </data>
+    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+        <comment>This is a comment</comment>
+    </data>
+                
+    There are any number of "resheader" rows that contain simple 
+    name/value pairs.
+    
+    Each data row contains a name, and value. The row also contains a 
+    type or mimetype. Type corresponds to a .NET class that support 
+    text/value conversion through the TypeConverter architecture. 
+    Classes that don't support this are serialized and stored with the 
+    mimetype set.
+    
+    The mimetype is used for serialized objects, and tells the 
+    ResXResourceReader how to depersist the object. This is currently not 
+    extensible. For a given mimetype the value must be set accordingly:
+    
+    Note - application/x-microsoft.net.object.binary.base64 is the format 
+    that the ResXResourceWriter will generate, however the reader can 
+    read any of the formats listed below.
+    
+    mimetype: application/x-microsoft.net.object.binary.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+            : and then encoded with base64 encoding.
+    
+    mimetype: application/x-microsoft.net.object.soap.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+            : and then encoded with base64 encoding.
+
+    mimetype: application/x-microsoft.net.object.bytearray.base64
+    value   : The object must be serialized into a byte array 
+            : using a System.ComponentModel.TypeConverter
+            : and then encoded with base64 encoding.
+    -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <assembly alias="System.Windows.Forms" name="System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" />
+  <data name="HitDateTimePrecisionTestData" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\datetimeprecisiontestdata.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitPage_Exit_Event_json" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Page Exit Event.json.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitOversizedSearchEvent" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\oversizedsearchevent.blob;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitTest_3___New_SessionID___Events" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\testjourneys\test 3 - new sessionid - events.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitTest_3___New_SessionID___PageViews" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\testjourneys\test 3 - new sessionid - pageviews.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitTest_Journey_1_Events" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\testjourneys\test journey 1 events.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitTest_Journey_1_PageViews" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\testjourneys\test journey 1 pageviews.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitTest_Journey_2_Events" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\testjourneys\test journey 2 events.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitTest_Journey_2_PageViews" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\testjourneys\test journey 2 pageviews.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="HitPageView_Export_json" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\PageView Export.json.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
+  </data>
+  <data name="HitOversizedSearchEvent_Hit" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\oversizedsearchevent hit.txt;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
+  </data>
+  <data name="ActivityAzure_AD_Login" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\example data\azure ad login.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
+  </data>
+  <data name="ActivityExchange" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\example data\exchange.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
+  </data>
+  <data name="ActivitySharePoint_Permission_Change" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\example data\sharepoint permission change.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="ActivitySharePoint_Various_Responses" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\example data\sharepoint various responses.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="ActivityTeams" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\example data\teams.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="searches" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\example data\searches.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="Anon_PageView_JSon" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\anon pageview json.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="TeamsCall_3way" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\teamscall 3way.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="TeamsCall_Failed_Call" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\teamscall failed call.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="TeamsCall_Peer2PeerCall" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\teamscall peer2peercall.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="PublishXml" xml:space="preserve">
+    <value>&lt;publishData&gt;
+
+    &lt;publishProfile profileName="o365analyticsdemocopy - FTP" publishMethod="FTP"
+        publishUrl="ftp://server/site/wwwroot" ftpPassiveMode="True"
+        userName="username"
+        userPWD="asdf"
+        destinationAppUrl="https://o365analyticsdemocopy.azurewebsites.net"
+        SQLServerDBConnectionString="SQL"
+        mySQLDBConnectionString="" hostingProviderForumLink="" controlPanelLink="http://windows.azure.com"
+        webSystem="WebSites" targetDatabaseEngineType="sqlazuredatabase" targetServerVersion="Version100"&gt;
+
+    &lt;/publishProfile&gt;
+    
+&lt;/publishData&gt;</value>
+  </data>
+  <data name="PageUpdateEventAppInsightsQueryResult" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\resources\pageupdateeventappinsightsqueryresult.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+  <data name="StringifiedJson" xml:space="preserve">
+    <value>"{\"__metadata\":{\"id\":\"c602fe15-f56b-4c63-bbb4-5c693894ea90\",\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)\",\"etag\":\"\\\"3\\\"\",\"type\":\"SP.Data.PagesItem\"},\"FirstUniqueAncestorSecurableObject\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/FirstUniqueAncestorSecurableObject\"}},\"RoleAssignments\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/RoleAssignments\"}},\"AttachmentFiles\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/AttachmentFiles\"}},\"ContentType\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/ContentType\"}},\"GetDlpPolicyTip\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/GetDlpPolicyTip\"}},\"FieldValuesAsHtml\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/FieldValuesAsHtml\"}},\"FieldValuesAsText\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/FieldValuesAsText\"}},\"FieldValuesForEdit\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/FieldValuesForEdit\"}},\"File\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/File\"}},\"Folder\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/Folder\"}},\"LikedByInformation\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/LikedByInformation\"}},\"ParentList\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/ParentList\"}},\"Properties\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/Properties\"}},\"Versions\":{\"__deferred\":{\"uri\":\"https://m365x72460609.sharepoint.com/sites/Classic/_api/Web/Lists(guid'aa85bd92-eb6b-4b91-90ed-10485dff0d9b')/Items(2)/Versions\"}},\"Id\":2,\"ContentTypeId\":\"0x010100C568DB52D9D0A14D9B2FDCC96666E9F2007948130EC3DB064584E219954237AF390064DEA0F50FC8C147B0B6EA0636C4A7D4009525A2F3129D9D4E8D3CBE36A8D75E12\",\"Title\":\"Home\",\"PublishingPageLayout\":{\"__metadata\":{\"type\":\"SP.FieldUrlValue\"},\"Description\":\"Blank Web Part page\",\"Url\":\"https://m365x72460609.sharepoint.com/sites/Classic/_catalogs/masterpage/BlankWebPartPage.aspx\"},\"PublishingPageContent\":\"&lt;h2&gt;Welcome to Your Publishing Site&lt;/h2&gt;&lt;h3 class=\\\"ms-rteElement-H3\\\"&gt;These links will help you get started.&lt;/h3&gt;\",\"RandoTextCol\":\"3asdfasd\",\"ID\":2,\"Created\":\"2022-11-28T16:31:07Z\",\"AuthorId\":1073741823,\"Modified\":\"2022-12-15T09:32:22Z\",\"EditorId\":18,\"CheckoutUserId\":18,\"OData__UIVersionString\":\"1.1\",\"GUID\":\"33960dd3-7a1f-40d5-8562-8126d42056d2\"}"</value>
+  </data>
+  <data name="TestInstallerConfig" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\TestSolutionInstallConfig.json;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+  </data>
+</root>

@@ -1,0 +1,68 @@
+﻿[
+  {
+    "CreationTime": "2018-07-11T06:22:31",
+    "Id": "5b3e15f6-9bf0-44d8-46c5-08d5e6f6aee5",
+    "Operation": "Set-Mailbox",
+    "OrganizationId": "00000-3edc-4124-8483-00000",
+    "RecordType": 1,
+    "ResultStatus": "True",
+    "UserKey": "1003BFFD9A7D3BD6",
+    "UserType": 2,
+    "Version": 1,
+    "Workload": "Exchange",
+    "ClientIP": "127.0.137.131:51598",
+    "ObjectId": "ועדות רפואיות נכות כללית - חיפה",
+    "UserId": "tamaraa@testtenant.local",
+    "ExternalAccess": false,
+    "OrganizationName": "testtenant.onmicrosoft.com",
+    "OriginatingServer": "HE1PR0601MB2587 (15.20.0930.000)",
+    "Parameters": [
+      {
+        "Name": "Identity",
+        "Value": "ועדות רפואיות נכות כללית - חיפה"
+      },
+      {
+        "Name": "GrantSendOnBehalfTo",
+        "Value": "Ihlas Farhat;Iris Shayovich;Livnat Zigdon Mizrachi;Miri Abotbol"
+      }
+    ],
+    "SessionId": ""
+  },
+  {
+    "CreationTime": "2018-07-11T06:22:33",
+    "Id": "fc66b949-5151-4513-c6d6-08d5e6f6b001",
+    "Operation": "Add-MailboxPermission",
+    "OrganizationId": "d38e0d78-3edc-4124-8483-6f8aad3bc32a",
+    "RecordType": 1,
+    "ResultStatus": "True",
+    "UserKey": "1003BFFD9A7D3BD6",
+    "UserType": 2,
+    "Version": 1,
+    "Workload": "Exchange",
+    "ClientIP": "127.0.0.0:51598",
+    "ObjectId": "ועדות רפואיות נכות כללית - חיפה",
+    "UserId": "tamaraa@testtenant.local",
+    "ExternalAccess": false,
+    "OrganizationName": "testtenant.onmicrosoft.com",
+    "OriginatingServer": "HE1PR0601MB2587 (15.20.0930.000)",
+    "Parameters": [
+      {
+        "Name": "Identity",
+        "Value": "ועדות רפואיות נכות כללית - חיפה"
+      },
+      {
+        "Name": "User",
+        "Value": "domain\\user"
+      },
+      {
+        "Name": "AccessRights",
+        "Value": "FullAccess"
+      },
+      {
+        "Name": "InheritanceType",
+        "Value": "All"
+      }
+    ],
+    "SessionId": ""
+  }
+]

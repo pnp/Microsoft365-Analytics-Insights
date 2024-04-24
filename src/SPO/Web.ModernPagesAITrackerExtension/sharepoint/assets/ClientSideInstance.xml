@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Elements xmlns="http://schemas.microsoft.com/sharepoint/">
+    <ClientSideComponentInstance
+        Title="AiTrackerModern"
+        Location="ClientSideExtension.ApplicationCustomizer"
+        ComponentId="a4e24884-9cfd-41ac-87af-747a47055f25"
+        Properties="{&quot;appInsightsKey&quot;:&quot;&quot;, &quot;cacheToken&quot;:&quot;&quot;}">
+    </ClientSideComponentInstance>
+</Elements>

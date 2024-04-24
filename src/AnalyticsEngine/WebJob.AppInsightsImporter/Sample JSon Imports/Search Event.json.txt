@@ -1,0 +1,53 @@
+{
+  "event": [
+    {
+      "name": "UserSearch",
+      "count": 1
+    }
+  ],
+  "internal": {
+    "data": {
+      "id": "ba957682-834c-11e7-8993-0d4e2a524e7c",
+      "documentVersion": "1.61"
+    }
+  },
+  "context": {
+    "data": {
+      "eventTime": "2017-08-17T13:05:07.704Z",
+      "isSynthetic": false,
+      "samplingRate": 100.0
+    },
+    "device": {
+      "id": "browser",
+      "type": "Browser",
+      "osVersion": "Windows 10",
+      "deviceName": "Other",
+      "deviceModel": "Other",
+      "browser": "Firefox",
+      "browserVersion": "Firefox 54.0",
+      "screenResolution": {}
+    },
+    "user": {
+      "anonId": "6i00a",
+      "authId": "admin@mod669071.onmicrosoft.com",
+      "isAuthenticated": true
+    },
+    "session": {
+      "id": "x7yuf",
+      "isFirst": false
+    },
+    "operation": {
+      "id": "JNUPM",
+      "parentId": "JNUPM",
+      "name": "/sites/pub/_layouts/15/osssearchresults.aspx"
+    },
+    "location": {
+      "clientip": "167.220.196.0",
+      "continent": "Europe",
+      "country": "United Kingdom",
+      "province": "England",
+      "city": "London"
+    },
+    "custom": { "dimensions": [ { "SearchText": "search" } ] }
+  }
+}

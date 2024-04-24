@@ -1,0 +1,642 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "subscriptionId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "location": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "adoptifySiteUrl": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "badgesListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userBadgesListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "statsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "levelsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "questsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userQuestsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "rewardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userRewardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    }
+
+  },
+  "variables": {
+    "Singlequote": "'"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2017-07-01",
+      "name": "Adoptify-ProcessCounts",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "Recurrence": {
+              "recurrence": {
+                "frequency": "Day",
+                "interval": 1
+              },
+              "evaluatedRecurrence": {
+                "frequency": "Day",
+                "interval": 1
+              },
+              "type": "Recurrence"
+            }
+          },
+          "actions": {
+            "Count_badges_earned": {
+              "actions": {
+                "Get_badges": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('badgesListId'),variables('singlequote'),'))}/items')]"
+                  }
+                },
+                "Get_badges_earned_stat": {
+                  "runAfter": {
+                    "Loop_through_badges": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('statsListId'),variables('singlequote'),'))}/items')]",
+                    "queries": {
+                      "$filter": "StatName eq 'BadgesEarned'"
+                    }
+                  },
+                  "description": "Get the statistic item for badges earned."
+                },
+                "Loop_through_badges": {
+                  "foreach": "@body('Get_badges')?['value']",
+                  "actions": {
+                    "Get_user_badge_items_for_badge": {
+                      "runAfter": {},
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "get",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userBadgesListId'),variables('singlequote'),'))}/items')]",
+                        "queries": {
+                          "$filter": "BadgeID eq '@{items('Loop_through_badges')?['ID']}'"
+                        }
+                      },
+                      "runtimeConfiguration": {
+                        "paginationPolicy": {
+                          "minimumItemCount": 100000
+                        }
+                      }
+                    },
+                    "Increment_BadgesEarnedCount_variable": {
+                      "runAfter": {
+                        "Update_badge_awarded_count": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "IncrementVariable",
+                      "inputs": {
+                        "name": "BadgesEarnedCount",
+                        "value": "@length(body('Get_user_badge_items_for_badge')?['value'])"
+                      }
+                    },
+                    "Update_badge_awarded_count": {
+                      "runAfter": {
+                        "Get_user_badge_items_for_badge": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "Awarded": "@length(body('Get_user_badge_items_for_badge')?['value'])"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "patch",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('badgesListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('Singlequote'),'Loop_through_badges',variables('Singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Get_badges": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Foreach"
+                },
+                "Update_badges_earned_stat_value": {
+                  "runAfter": {
+                    "Get_badges_earned_stat": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "body": {
+                      "StatValue": "@{variables('BadgesEarnedCount')}"
+                    },
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "patch",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('statsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(first(body(',variables('Singlequote'),'Get_badges_earned_stat',variables('Singlequote'),')?[',variables('Singlequote'),'value',variables('Singlequote'),'])?[',variables('singlequote'),'id',variables('singlequote'),'])}')]"
+                  }
+                }
+              },
+              "runAfter": {
+                "Initialize_LevelsAchievedCount": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Count_levels_achieved": {
+              "actions": {
+                "Get_levels": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('levelsListId'),variables('singlequote'),'))}/items')]"
+                  }
+                },
+                "Loop_through_levels": {
+                  "foreach": "@body('Get_levels')?['value']",
+                  "actions": {
+                    "Get_levels_for_users": {
+                      "runAfter": {},
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "get",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items')]",
+                        "queries": {
+                          "$filter": "LevelID eq '@{items('Loop_through_levels')?['ID']}'"
+                        }
+                      }
+                    },
+                    "Increment_LevelsAchievedCount_variable": {
+                      "runAfter": {
+                        "Update_level_achieved_count": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "IncrementVariable",
+                      "inputs": {
+                        "name": "LevelsAchievedCount",
+                        "value": "@length(body('Get_levels_for_users')?['value'])"
+                      }
+                    },
+                    "Update_level_achieved_count": {
+                      "runAfter": {
+                        "Get_levels_for_users": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "Achieved": "@length(body('Get_levels_for_users')?['value'])",
+                          "Title": "@{items('Loop_through_levels')?['Title']}"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "patch",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('levelsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('singlequote'),'Loop_through_levels',variables('singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Get_levels": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Foreach"
+                }
+              },
+              "runAfter": {
+                "Count_quests_completed": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Count_quests_completed": {
+              "actions": {
+                "Get_quests": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questsListId'),variables('singlequote'),'))}/items')]"
+                  }
+                },
+                "Get_quests_completed_stat": {
+                  "runAfter": {
+                    "Loop_through_quests": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('statsListId'),variables('singlequote'),'))}/items')]",
+                    "queries": {
+                      "$filter": "StatName eq 'QuestsCompleted'"
+                    }
+                  }
+                },
+                "Loop_through_quests": {
+                  "foreach": "@body('Get_quests')?['value']",
+                  "actions": {
+                    "Get_user_quest_items_for_quest": {
+                      "runAfter": {},
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "get",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userQuestsListId'),variables('singlequote'),'))}/items')]",
+                        "queries": {
+                          "$filter": "QuestID eq '@{items('Loop_through_quests')?['ID']}' and IsComplete eq '1'"
+                        }
+                      },
+                      "runtimeConfiguration": {
+                        "paginationPolicy": {
+                          "minimumItemCount": 100000
+                        }
+                      }
+                    },
+                    "Increment_QuestsCompletedCount_variable": {
+                      "runAfter": {
+                        "Update_quest_completion_count": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "IncrementVariable",
+                      "inputs": {
+                        "name": "QuestsCompletedCount",
+                        "value": "@length(body('Get_user_quest_items_for_quest')?['value'])"
+                      }
+                    },
+                    "Update_quest_completion_count": {
+                      "runAfter": {
+                        "Get_user_quest_items_for_quest": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "Completions": "@length(body('Get_user_quest_items_for_quest')?['value'])",
+                          "ItemCount": "@items('Loop_through_quests')?['ItemCount']",
+                          "ShortDescription": "@{items('Loop_through_quests')?['ShortDescription']}",
+                          "Title": "@{items('Loop_through_quests')?['Title']}",
+                          "XP": "@items('Loop_through_quests')?['XP']"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "patch",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('singlequote'),'Loop_through_quests',variables('singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Get_quests": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Foreach"
+                },
+                "Update_quests_completed_stat_value": {
+                  "runAfter": {
+                    "Get_quests_completed_stat": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "body": {
+                      "StatValue": "@{variables('QuestsCompletedCount')}"
+                    },
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "patch",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('statsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(first(body(',variables('Singlequote'),'Get_quests_completed_stat',variables('Singlequote'),')?[',variables('Singlequote'),'value',variables('Singlequote'),'])?[',variables('singlequote'),'id',variables('singlequote'),'])}')]"
+                  }
+                }
+              },
+              "runAfter": {
+                "Count_rewards_redeemed": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Count_rewards_redeemed": {
+              "actions": {
+                "Get_rewards": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('rewardsListId'),variables('singlequote'),'))}/items')]"
+
+                  }
+                },
+                "Get_rewards_redeemed_stat": {
+                  "runAfter": {
+                    "Loop_through_rewards": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('statsListId'),variables('singlequote'),'))}/items')]",
+                    "queries": {
+                      "$filter": "StatName eq 'RewardsRedeemed'"
+                    }
+                  },
+                  "description": "Get the statistic item for rewards redeemed."
+                },
+                "Loop_through_rewards": {
+                  "foreach": "@body('Get_rewards')?['value']",
+                  "actions": {
+                    "Get_user_reward_items_for_reward": {
+                      "runAfter": {},
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "get",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userRewardsListId'),variables('singlequote'),'))}/items')]",
+                        "queries": {
+                          "$filter": "RewardID eq '@{items('Loop_through_rewards')?['ID']}'"
+                        }
+                      },
+                      "runtimeConfiguration": {
+                        "paginationPolicy": {
+                          "minimumItemCount": 100000
+                        }
+                      }
+                    },
+                    "Increment_RewardsRedeemedCount_variable": {
+                      "runAfter": {
+                        "Update_reward_redeemed_count": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "IncrementVariable",
+                      "inputs": {
+                        "name": "RewardsRedeemedCount",
+                        "value": "@length(body('Get_user_reward_items_for_reward')?['value'])"
+                      }
+                    },
+                    "Update_reward_redeemed_count": {
+                      "runAfter": {
+                        "Get_user_reward_items_for_reward": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "body": {
+                          "Redemptions": "@length(body('Get_user_reward_items_for_reward')?['value'])",
+                          "Title": "@items('Loop_through_rewards')?['Title']"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "patch",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('rewardsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('singlequote'),'Loop_through_rewards',variables('singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Get_rewards": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Foreach"
+                },
+                "Update_rewards_redeemed_stat_value": {
+                  "runAfter": {
+                    "Get_rewards_redeemed_stat": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "body": {
+                      "StatValue": "@{variables('RewardsRedeemedCount')}"
+                    },
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "patch",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('statsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(first(body(',variables('Singlequote'),'Get_rewards_redeemed_stat',variables('Singlequote'),')?[',variables('Singlequote'),'value',variables('Singlequote'),'])?[',variables('singlequote'),'id',variables('singlequote'),'])}')]"
+                  }
+                }
+              },
+              "runAfter": {
+                "Count_badges_earned": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Initialize_BadgesEarnedCount": {
+              "runAfter": {},
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "BadgesEarnedCount",
+                    "type": "float"
+                  }
+                ]
+              }
+            },
+            "Initialize_LevelsAchievedCount": {
+              "runAfter": {
+                "Initialize_QuestsCompletedCount": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "LevelsAchievedCount",
+                    "type": "float"
+                  }
+                ]
+              }
+            },
+            "Initialize_QuestsCompletedCount": {
+              "runAfter": {
+                "Initialize_RewardsRedeemedCount": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "QuestsCompletedCount",
+                    "type": "float"
+                  }
+                ]
+              }
+            },
+            "Initialize_RewardsRedeemedCount": {
+              "runAfter": {
+                "Initialize_BadgesEarnedCount": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "RewardsRedeemedCount",
+                    "type": "float"
+                  }
+                ]
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "sharepointonline": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-spo')]",
+                "connectionName": "adoptify-spo",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/sharepointonline')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

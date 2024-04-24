@@ -1,0 +1,83 @@
+{
+  "EnvironmentType": 0,
+  "LocalSourceOverride": {
+    "Components": {
+      "AITracker": {
+        "FileLocation": "C:\\Users\\sambetts\\Desktop\\dev - build 1190\\AITrackerInstaller.zip"
+      },
+      "WebJobActivity": {
+        "FileLocation": "C:\\Users\\sambetts\\Desktop\\dev - build 1190\\Office365ActivityImporter.zip"
+      },
+      "WebJobAppInsights": {
+        "FileLocation": "C:\\Users\\sambetts\\Desktop\\dev - build 1190\\AppInsightsImporter.zip"
+      },
+      "ControlPanel": {
+        "FileLocation": "C:\\Users\\sambetts\\Desktop\\dev - build 1190\\ControlPanelApp.zip"
+      },
+      "WebSite": {
+        "FileLocation": "C:\\Users\\sambetts\\Desktop\\dev - build 1190\\Website.zip"
+      }
+    }
+  },
+  "Subscription": {
+    "DisplayName": "Microsoft Azure Sponsorship 2",
+    "SubId": "da6429d7-8e8c-4423-8d5d-09c9bedce5c2"
+  },
+  "SharePointConfig": {
+    "AppCatalogueURL": "https://m365x72460609.sharepoint.com/sites/appcatalog",
+    "DestinationDocLibTitle": "SPOInsights",
+    "AITrackerFileName": "AITracker.js",
+    "TargetSites": [
+      "https://m365x72460609.sharepoint.com/sites/Remoteliving",
+      "https://m365x72460609.sharepoint.com/sites/Comms",
+      "https://m365x72460609.sharepoint.com/sites/SomeInvalidSite"
+    ]
+  },
+  "InstallerAccount": {
+    "ClientId": "82e1ac3f-631d-4b85-952e-8a48eb763746",
+    "DirectoryId": "f6cd3d8c-b7de-4b84-a736-446fa13aefe0",
+    "SecretHash": "Nbs/0EHEJdfgG1vRfB1LTcWFqLW4htyckxH4CXLHDyLmw0U9HzNHqI1+NCRBe4h3ONW9E85z0dIBh0ghfG4rl9aGOFQjd0aitWec1cJiikc1uAF0gBEzjQ1I793AmxHmhsgoGhyY2OX9CmfTc4ckCQkB6d4rhOI7xA5rjvh/DTM="
+  },
+  "ActivityAccount": {
+    "ClientId": "0a669462-2b7f-41f5-a6b5-6e7ad16963de",
+    "DirectoryId": "f6cd3d8c-b7de-4b84-a736-446fa13aefe0",
+    "SecretHash": "F1j5gG/lc5R/kUGxt2FWhQvOoc5QryxXa4+X2/Dc2avu+3ukQicagITvnk6p0dTaHPjax+T4rzjbE3Ow7oaeTDfZc/QK3EEzeciydn993HM7y/ohj7lTTYEpjh9SHU9+9Y5TGwj+JlGPyQlVim24s3kpuTqqGGeE5jKt5dQJEQg="
+  },
+  "SolutionConfig": {
+    "ImportTaskSettings": {
+      "Calls": true,
+      "GraphUsersMetadata": true,
+      "GraphUserApps": true,
+      "GraphUsageReports": true,
+      "GraphTeams": true,
+      "ActivityLog": true,
+      "WebTraffic": true
+    },
+    "Adoptify": {
+      "ExistingSiteUrl": "",
+      "ProvisionSchema": true,
+      "CreateDefaultData": true
+    },
+    "SolutionTargeted": 0,
+    "SolutionLanguageCode": "en"
+  },
+  "AllowTelemetry": true,
+  "ResourceGroupName": "AdvancedAnalyticsEngine",
+  "AzureLocationName": "westeurope",
+  "ServiceBusName": "o365analyticsdev",
+  "StorageAccountName": "o365analyticsdev",
+  "SQLServerName": "o365analyticsdevsvr",
+  "SQLServerDatabaseName": "Analytics",
+  "SQLServerAdminUsername": "sqladmin",
+  "CognitiveServicesEnabled": true,
+  "CognitiveServiceName": "analyticsdev",
+  "RedisName": "o365analyticsdev",
+  "DownloadLatestStable": false,
+  "SQLServerAdminPasswordHash": "dmV/yuO2KKwymDwWoBSsGGQfsZ4u5508IIy2TYO+b9TlRkm/ZT65MjGCi1p5UwVsq5ZbP2cTzy2Xng39FDcFFKyFesY4bpSb84kiO35J0gDg4fMKPIVz5lfHP3mQtExq",
+  "AppInsightsName": "o365analyticsdev",
+  "AppInsightsWorkspaceName": "o365analyticsdevlogs",
+  "AppServiceWebAppName": "o365analyticsdev",
+  "AppServicePlanName": "o365analyticsdev",
+  "KeyVaultName": "o365analyticsdev",
+  "ConfigSchemaVersion": "1.7.0"
+}

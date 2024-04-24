@@ -1,0 +1,13 @@
+{
+  "CreationTime": "2020-03-24T10:32:56",
+  "Id": "e44ffeb0-3020-42e3-a1aa-e69c375e4a69",
+  "Operation": "TeamsSessionStarted",
+  "OrganizationId": "2e1d1b32-bab7-48f3-b0db-3a93158d447e",
+  "RecordType": 25,
+  "UserKey": "61ccd33a-41c0-4a63-a735-09453209f215",
+  "UserType": 0,
+  "Version": 1,
+  "Workload": "MicrosoftTeams",
+  "ObjectId": "Web (1415/1.0.0.2020031406)",
+  "UserId": "admin@M365x176143.onmicrosoft.com"
+}

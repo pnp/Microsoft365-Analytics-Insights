@@ -1,0 +1,488 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{637930BD-073B-421E-9F33-FE90BF2103C5}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>Common.Entities</RootNamespace>
+    <AssemblyName>Common.Entities</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <PublishUrl>publish\</PublishUrl>
+    <Install>true</Install>
+    <InstallFrom>Disk</InstallFrom>
+    <UpdateEnabled>false</UpdateEnabled>
+    <UpdateMode>Foreground</UpdateMode>
+    <UpdateInterval>7</UpdateInterval>
+    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
+    <UpdatePeriodically>false</UpdatePeriodically>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <UpdateRequired>false</UpdateRequired>
+    <MapFileExtensions>true</MapFileExtensions>
+    <ApplicationRevision>0</ApplicationRevision>
+    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
+    <UseApplicationTrust>false</UseApplicationTrust>
+    <BootstrapperEnabled>true</BootstrapperEnabled>
+    <TargetFrameworkProfile />
+    <NuGetPackageImportStamp>
+    </NuGetPackageImportStamp>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup>
+    <SignAssembly>false</SignAssembly>
+  </PropertyGroup>
+  <PropertyGroup>
+    <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.IdentityModel" />
+    <Reference Include="System.Net" />
+    <Reference Include="System.Net.Http.WebRequest" />
+    <Reference Include="System.Numerics" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="BaseEntity.cs" />
+    <Compile Include="Config\AppConfig.cs" />
+    <Compile Include="Config\AppConnectionStrings.cs" />
+    <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
+    <Compile Include="Entities\OnlineMeeting.cs" />
+    <Compile Include="Entities\UsageReports\AppPlatformUserActivityLog.cs" />
+    <Compile Include="Entities\UsageReports\SharePointSitesFileWeeklyStats.cs" />
+    <Compile Include="Installer\AdoptifySolutionInstallConfig.cs" />
+    <Compile Include="Installer\BaseConfig.cs" />
+    <Compile Include="Installer\BaseSolutionInstallConfig.cs" />
+    <Compile Include="Installer\TargetSolutionConfig.cs" />
+    <Compile Include="LookupCaches\Discrete\CallModalityCache.cs" />
+    <Compile Include="LookupCaches\Discrete\CallTypeCache.cs" />
+    <Compile Include="LookupCaches\Discrete\CompanyNameCache.cs" />
+    <Compile Include="LookupCaches\Discrete\CountryOrRegionCache.cs" />
+    <Compile Include="LookupCaches\Discrete\DBLookupCache.cs" />
+    <Compile Include="LookupCaches\Discrete\KeywordCache.cs" />
+    <Compile Include="LookupCaches\Discrete\LanguageCache.cs" />
+    <Compile Include="LookupCaches\Discrete\LicenseTypeCache.cs" />
+    <Compile Include="LookupCaches\Discrete\OfficeLocationCache.cs" />
+    <Compile Include="LookupCaches\Discrete\SiteCache.cs" />
+    <Compile Include="LookupCaches\Discrete\YammerGroupCache.cs" />
+    <Compile Include="LookupCaches\SharePointLookupManager.cs" />
+    <Compile Include="LookupCaches\SPWebResolver.cs" />
+    <Compile Include="LookupCaches\Discrete\StateOrProvinceCache.cs" />
+    <Compile Include="LookupCaches\StreamLookupManager.cs" />
+    <Compile Include="LookupCaches\Discrete\TeamsAddOnCache.cs" />
+    <Compile Include="LookupCaches\TeamsAndCallsDBLookupManager.cs" />
+    <Compile Include="LookupCaches\Discrete\TeamsCache.cs" />
+    <Compile Include="LookupCaches\Discrete\TeamsChannelCache.cs" />
+    <Compile Include="LookupCaches\Discrete\TeamsReactionTypeCache.cs" />
+    <Compile Include="LookupCaches\Discrete\TeamsTabCache.cs" />
+    <Compile Include="LookupCaches\Discrete\UsageLocationCache.cs" />
+    <Compile Include="LookupCaches\Discrete\UserCache.cs" />
+    <Compile Include="LookupCaches\Discrete\UserDepartmentCache.cs" />
+    <Compile Include="LookupCaches\Discrete\UserJobTitleCache.cs" />
+    <Compile Include="Config\SiteFilterLoader.cs" />
+    <Compile Include="EFInsertBatch.cs" />
+    <Compile Include="Config\ConfigState.cs" />
+    <Compile Include="Entities\AuditLog\ExtendedPropertiesClasses.cs" />
+    <Compile Include="Entities\AuditLog\AuditPropertyName.cs" />
+    <Compile Include="Entities\AuditLog\AuditPropertyValue.cs" />
+    <Compile Include="Entities\AuditLog\AzureADEventMetadata.cs" />
+    <Compile Include="Entities\AuditLog\BaseClasses.cs" />
+    <Compile Include="Entities\AuditLog\StreamEventMetada.cs" />
+    <Compile Include="Entities\AuditLog\GeneralEventMetada.cs" />
+    <Compile Include="Entities\AuditLog\Office365Event.cs" />
+    <Compile Include="Entities\AuditLog\ExchangeEventMetadata.cs" />
+    <Compile Include="Entities\AuditLog\SharePointEventMetadata.cs" />
+    <Compile Include="Entities\BaseActivityClasses.cs" />
+    <Compile Include="Entities\FileAndMetadata.cs" />
+    <Compile Include="Entities\WebTraffic\Browser.cs" />
+    <Compile Include="Entities\WebTraffic\City.cs" />
+    <Compile Include="Entities\WebTraffic\Clicks.cs" />
+    <Compile Include="Entities\WebTraffic\Country.cs" />
+    <Compile Include="Entities\WebTraffic\Device.cs" />
+    <Compile Include="Entities\AuditLog\SPEventFileExtension.cs" />
+    <Compile Include="Entities\AuditLog\SPEventFileName.cs" />
+    <Compile Include="Entities\AuditLog\EventOperation.cs" />
+    <Compile Include="Entities\AuditLog\SPEventType.cs" />
+    <Compile Include="Entities\WebTraffic\Hit.cs" />
+    <Compile Include="Entities\KeyWord.cs" />
+    <Compile Include="Entities\Language.cs" />
+    <Compile Include="Entities\O365ClientApplication.cs" />
+    <Compile Include="Entities\Site.cs" />
+    <Compile Include="Entities\StreamVideo.cs" />
+    <Compile Include="Entities\Teams\BaseClasses.cs" />
+    <Compile Include="Entities\Teams\CallFailureReason.cs" />
+    <Compile Include="Entities\Teams\CallFeedback.cs" />
+    <Compile Include="Entities\Teams\CallModality.cs" />
+    <Compile Include="Entities\Teams\CallRecord.cs" />
+    <Compile Include="Entities\Teams\CallSession.cs" />
+    <Compile Include="Entities\Teams\CallType.cs" />
+    <Compile Include="Entities\Teams\ChannelLogLanguage.cs" />
+    <Compile Include="Entities\Teams\ChannelLogKeyword.cs" />
+    <Compile Include="Entities\Teams\ChannelStatsLog.cs" />
+    <Compile Include="Entities\Teams\ChannelUserLog.cs" />
+    <Compile Include="Entities\Teams\TeamDefinition.cs" />
+    <Compile Include="Entities\Teams\TeamAddOnLog.cs" />
+    <Compile Include="Entities\Teams\TeamAddOnDefinition.cs" />
+    <Compile Include="Entities\Teams\TeamChannelDefinition.cs" />
+    <Compile Include="Entities\Teams\TeamMembershipLog.cs" />
+    <Compile Include="Entities\Teams\TeamOwners.cs" />
+    <Compile Include="Entities\Teams\GroupsCrawlWhitelist.cs" />
+    <Compile Include="Entities\Teams\TeamTabDefinition.cs" />
+    <Compile Include="Entities\Teams\ChannelTabLog.cs" />
+    <Compile Include="Entities\Teams\UserReaction.cs" />
+    <Compile Include="Entities\UsageReports\OneDriveUsageLog.cs" />
+    <Compile Include="Entities\UsageReports\SharePointUserActivityLog.cs" />
+    <Compile Include="Entities\UsageReports\OneDriveUserActivityLog.cs" />
+    <Compile Include="Entities\UsageReports\OutlookUsageActivityLog.cs" />
+    <Compile Include="Entities\UsageReports\YammerActivityClasses.cs" />
+    <Compile Include="Entities\UsageReports\TeamsUsageActivityClasses.cs" />
+    <Compile Include="Entities\TelemetryReport.cs" />
+    <Compile Include="Entities\Web.cs" />
+    <Compile Include="Entities\YammerGroup.cs" />
+    <Compile Include="Entities\YammerMessage.cs" />
+    <Compile Include="ImportTaskSettings.cs" />
+    <Compile Include="Entities\ImportLog.cs" />
+    <Compile Include="Entities\WebTraffic\OperatingSystem.cs" />
+    <Compile Include="Entities\Org.cs" />
+    <Compile Include="Entities\OrgUrl.cs" />
+    <Compile Include="Entities\WebTraffic\PageTitle.cs" />
+    <Compile Include="Entities\AuditLog\IgnoredEvent.cs" />
+    <Compile Include="Migrations\201808231327312_v1-0-6.cs" />
+    <Compile Include="Migrations\201808231327312_v1-0-6.Designer.cs">
+      <DependentUpon>201808231327312_v1-0-6.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202002061517489_v1-0-7.cs" />
+    <Compile Include="Migrations\202002061517489_v1-0-7.designer.cs">
+      <DependentUpon>202002061517489_v1-0-7.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202003121036383_v1-0-8.cs" />
+    <Compile Include="Migrations\202003121036383_v1-0-8.designer.cs">
+      <DependentUpon>202003121036383_v1-0-8.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202010271125334_v1-0-9.cs" />
+    <Compile Include="Migrations\202010271125334_v1-0-9.designer.cs">
+      <DependentUpon>202010271125334_v1-0-9.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202012101043042_v1-0-10.cs" />
+    <Compile Include="Migrations\202012101043042_v1-0-10.designer.cs">
+      <DependentUpon>202012101043042_v1-0-10.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202112171359330_TeamsExtraViews1.cs" />
+    <Compile Include="Migrations\202112171359330_TeamsExtraViews1.designer.cs">
+      <DependentUpon>202112171359330_TeamsExtraViews1.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202201101014269_TeamsExtraViews2.cs" />
+    <Compile Include="Migrations\202201101014269_TeamsExtraViews2.designer.cs">
+      <DependentUpon>202201101014269_TeamsExtraViews2.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202203091433062_UsageReportsEnhancements.cs" />
+    <Compile Include="Migrations\202203091433062_UsageReportsEnhancements.designer.cs">
+      <DependentUpon>202203091433062_UsageReportsEnhancements.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202204061339174_MetadataConstraints.cs" />
+    <Compile Include="Migrations\202204061339174_MetadataConstraints.designer.cs">
+      <DependentUpon>202204061339174_MetadataConstraints.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202205101603006_UserMetadataV2.cs" />
+    <Compile Include="Migrations\202205101603006_UserMetadataV2.designer.cs">
+      <DependentUpon>202205101603006_UserMetadataV2.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202205241114535_SearchImportFix.cs" />
+    <Compile Include="Migrations\202205241114535_SearchImportFix.designer.cs">
+      <DependentUpon>202205241114535_SearchImportFix.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202206171501050_TeamsExtraAnalyticsAndConfig.cs" />
+    <Compile Include="Migrations\202206171501050_TeamsExtraAnalyticsAndConfig.designer.cs">
+      <DependentUpon>202206171501050_TeamsExtraAnalyticsAndConfig.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202207291127095_OrgUrlsFilterOptions.cs" />
+    <Compile Include="Migrations\202207291127095_OrgUrlsFilterOptions.designer.cs">
+      <DependentUpon>202207291127095_OrgUrlsFilterOptions.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202301160857218_EnhancedWebTracking.cs" />
+    <Compile Include="Migrations\202301160857218_EnhancedWebTracking.designer.cs">
+      <DependentUpon>202301160857218_EnhancedWebTracking.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202401191004335_PageCommentsAndLikes.cs" />
+    <Compile Include="Migrations\202401191004335_PageCommentsAndLikes.designer.cs">
+      <DependentUpon>202401191004335_PageCommentsAndLikes.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202403131104274_ExtendedUsageReports.cs" />
+    <Compile Include="Migrations\202403131104274_ExtendedUsageReports.Designer.cs">
+      <DependentUpon>202403131104274_ExtendedUsageReports.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs" />
+    <Compile Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.Designer.cs">
+      <DependentUpon>202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202404101126333_CopilotEvents.cs" />
+    <Compile Include="Migrations\202404101126333_CopilotEvents.Designer.cs">
+      <DependentUpon>202404101126333_CopilotEvents.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\v1-0-5.cs" />
+    <Compile Include="Migrations\v1-0-5.Designer.cs">
+      <DependentUpon>v1-0-5.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\v1-0-4.cs" />
+    <Compile Include="Migrations\v1-0-4.Designer.cs">
+      <DependentUpon>v1-0-4.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\v1-0-3.cs" />
+    <Compile Include="Migrations\v1-0-3.Designer.cs">
+      <DependentUpon>v1-0-3.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\v1.cs" />
+    <Compile Include="Migrations\v1.Designer.cs">
+      <DependentUpon>v1.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\v1-0-25.cs" />
+    <Compile Include="Migrations\v1-0-25.Designer.cs">
+      <DependentUpon>v1-0-25.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\Configuration.cs" />
+    <Compile Include="Models\AuthToken.cs" />
+    <Compile Include="Models\GraphChangeNotification.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Entities\WebTraffic\Province.cs" />
+    <Compile Include="Entities\Search.cs" />
+    <Compile Include="Entities\SearchTerm.cs" />
+    <Compile Include="Entities\WebTraffic\UserSession.cs" />
+    <Compile Include="Properties\Resources.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+    <Compile Include="Redis\CacheConnectionManager.cs" />
+    <Compile Include="Redis\ClaimsRedisManager.cs" />
+    <Compile Include="Redis\TeamsRedisManager.cs" />
+    <Compile Include="AnalyticsEntitiesContext.cs" />
+    <Compile Include="Entities\Url.cs" />
+    <Compile Include="Entities\User.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <BootstrapperPackage Include=".NETFramework,Version=v4.5.2">
+      <Visible>False</Visible>
+      <ProductName>Microsoft .NET Framework 4.5.2 %28x86 and x64%29</ProductName>
+      <Install>true</Install>
+    </BootstrapperPackage>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.5 SP1</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+  </ItemGroup>
+  <ItemGroup>
+    <Service Include="{508349B6-6B84-4DF5-91F0-309BEEBAD82D}" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Migrations\201808231327312_v1-0-6.resx">
+      <DependentUpon>201808231327312_v1-0-6.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202002061517489_v1-0-7.resx">
+      <DependentUpon>202002061517489_v1-0-7.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202003121036383_v1-0-8.resx">
+      <DependentUpon>202003121036383_v1-0-8.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202010271125334_v1-0-9.resx">
+      <DependentUpon>202010271125334_v1-0-9.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202012101043042_v1-0-10.resx">
+      <DependentUpon>202012101043042_v1-0-10.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202112171359330_TeamsExtraViews1.resx">
+      <DependentUpon>202112171359330_TeamsExtraViews1.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202201101014269_TeamsExtraViews2.resx">
+      <DependentUpon>202201101014269_TeamsExtraViews2.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202203091433062_UsageReportsEnhancements.resx">
+      <DependentUpon>202203091433062_UsageReportsEnhancements.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202204061339174_MetadataConstraints.resx">
+      <DependentUpon>202204061339174_MetadataConstraints.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202205101603006_UserMetadataV2.resx">
+      <DependentUpon>202205101603006_UserMetadataV2.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202205241114535_SearchImportFix.resx">
+      <DependentUpon>202205241114535_SearchImportFix.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202206171501050_TeamsExtraAnalyticsAndConfig.resx">
+      <DependentUpon>202206171501050_TeamsExtraAnalyticsAndConfig.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202207291127095_OrgUrlsFilterOptions.resx">
+      <DependentUpon>202207291127095_OrgUrlsFilterOptions.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202301160857218_EnhancedWebTracking.resx">
+      <DependentUpon>202301160857218_EnhancedWebTracking.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202401191004335_PageCommentsAndLikes.resx">
+      <DependentUpon>202401191004335_PageCommentsAndLikes.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202403131104274_ExtendedUsageReports.resx">
+      <DependentUpon>202403131104274_ExtendedUsageReports.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.resx">
+      <DependentUpon>202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202404101126333_CopilotEvents.resx">
+      <DependentUpon>202404101126333_CopilotEvents.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\v1-0-5.resx">
+      <DependentUpon>v1-0-5.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\v1-0-4.resx">
+      <DependentUpon>v1-0-4.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\v1-0-3.resx">
+      <DependentUpon>v1-0-3.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\v1.resx">
+      <DependentUpon>v1.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\v1-0-25.resx">
+      <DependentUpon>v1-0-25.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="app.config" />
+    <None Include="Resources\Create DB.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Migrations\SQL\TeamsViewsV2.sql" />
+    <Content Include="Migrations\SQL\TeamsViewsV1.sql" />
+    <Content Include="Migrations\SQL\Audit Log Migration.sql" />
+    <Content Include="Queries\Get User Journies.sql" />
+    <Content Include="Queries\Hits with Orgs.sql" />
+    <Content Include="Queries\Top 10 Search Terms.sql" />
+    <Content Include="Resources\Tables\DimDate.sql" />
+    <Content Include="Resources\Tables\DimTime.sql" />
+    <Content Include="Resources\Views\Content.sql" />
+    <Content Include="Resources\Views\Teams\events_view_teams v1.sql" />
+    <Content Include="Resources\Views\Usage.sql" />
+    <Content Include="Resources\Views\vwEvents.sql" />
+    <Content Include="Resources\Views\VWHits.sql" />
+    <Content Include="Resources\Views\vwSearches.sql" />
+    <Content Include="Resources\Views\vwSessions.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Migrations\SQL\TeamsExtraViews1.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DataUtils\DataUtils.csproj">
+      <Project>{b8da83ac-9151-4922-b255-12d105b33dc6}</Project>
+      <Name>Common.DataUtils</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity">
+      <Version>1.11.0</Version>
+    </PackageReference>
+    <PackageReference Include="Azure.Security.KeyVault.Secrets">
+      <Version>4.5.0</Version>
+    </PackageReference>
+    <PackageReference Include="BCrypt.Net-Next.StrongName">
+      <Version>4.0.3</Version>
+    </PackageReference>
+    <PackageReference Include="EntityFramework">
+      <Version>6.4.4</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
+      <Version>6.0.1</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.IdentityModel.Abstractions">
+      <Version>6.35.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory">
+      <Version>5.2.9</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NETCore.Platforms">
+      <Version>6.0.2</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NETCore.Targets">
+      <Version>5.0.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Rest.ClientRuntime">
+      <Version>2.3.24</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Rest.ClientRuntime.Azure">
+      <Version>3.3.19</Version>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json">
+      <Version>13.0.1</Version>
+    </PackageReference>
+    <PackageReference Include="StackExchange.Redis">
+      <Version>2.5.43</Version>
+    </PackageReference>
+    <PackageReference Include="System.Diagnostics.PerformanceCounter">
+      <Version>6.0.0</Version>
+    </PackageReference>
+    <PackageReference Include="System.IO.Pipelines">
+      <Version>6.0.2</Version>
+    </PackageReference>
+    <PackageReference Include="System.Memory.Data">
+      <Version>6.0.0</Version>
+    </PackageReference>
+    <PackageReference Include="System.Runtime">
+      <Version>4.3.1</Version>
+    </PackageReference>
+    <PackageReference Include="System.Runtime.InteropServices.RuntimeInformation">
+      <Version>4.3.0</Version>
+    </PackageReference>
+    <PackageReference Include="System.Security.AccessControl">
+      <Version>6.0.0</Version>
+    </PackageReference>
+    <PackageReference Include="System.Security.Cryptography.Algorithms">
+      <Version>4.3.1</Version>
+    </PackageReference>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData">
+      <Version>7.0.1</Version>
+    </PackageReference>
+    <PackageReference Include="System.Security.Cryptography.X509Certificates">
+      <Version>4.3.2</Version>
+    </PackageReference>
+    <PackageReference Include="System.Text.Json">
+      <Version>6.0.2</Version>
+    </PackageReference>
+    <PackageReference Include="System.Threading.Channels">
+      <Version>6.0.0</Version>
+    </PackageReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
