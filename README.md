@@ -1,14 +1,16 @@
-*-Source coming soon-*
+![Design Header](docs/media/design.jpg)
 
-This document describes the steps required to deploy and verify the “Office 365 Advanced Analytics Engine” for any solutions based on it.
+Welcome to the "Office 365 Advanced Analytics" project home. This is an analytics engine that extracts much more analytics from M365 than is available out of the box. The core part of this solution is an ingestion engine that collects enhanced M365 usage data and stores it into a single SQL Server database. Other solutions then use this dataset to offer enhanced funcionality or reporting. 
 
-Each delivery will have solution specific steps you need to address too – **review the solution specific deployment document before continuing**.
+A complete list of data this engine can collect is below. 
+
+Each dependent will have solution specific steps you need to address too – **review the solution specific deployment document before continuing**.
 
 There are several prerequisites needed though so please take time to check if these are in place before starting this deployment for the first time.
 
 **Important**: this guide explains the full setup for all areas of the analytics engine. You may not need all parts of the solution, so please be clear which areas of data-collection are needed first, so the right permissions & prerequisites are clear too.
 
-A complete list of data this engine can collect is below. Troubleshooting guides for common errors and problems are also in this document.
+Troubleshooting guides for common errors and problems are also in the readme files.
 
 ### System Docs
 [Prerequisites](docs/prerequisites.md)
@@ -158,3 +160,5 @@ Expected data-range for a medium-sized environment:
 -   Up to 1 year of data-collection. Longer retention rates will require higher SQL performance tiers.
 
 Some components can be moved out of Azure; the app-service and the SQL database if needed, but we recommend keeping it in Azure so the automatic installer update process will work with the architecture.
+
+![Architecture diagram](docs/media/architecture.jpg)
