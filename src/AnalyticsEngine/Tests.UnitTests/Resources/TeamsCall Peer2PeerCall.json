@@ -1,0 +1,217 @@
+{
+    "@odata.context": "https://graph.microsoft.com/beta/$metadata#communications/callRecords(sessions(segments()))/$entity",
+    "id": "8952c843-755c-4a1e-8e98-3acf05924f57",
+    "version": 2,
+    "type": "peerToPeer",
+    "modalities": [
+        "audio",
+        "screenSharing"
+    ],
+    "lastModifiedDateTime": "2020-10-08T08:14:09.78271Z",
+    "startDateTime": "2020-10-08T08:00:54.627227Z",
+    "endDateTime": "2020-10-08T08:01:19.1161293Z",
+    "joinWebUrl": null,
+    "organizer": {
+        "acsUser": null,
+        "spoolUser": null,
+        "phone": null,
+        "guest": null,
+        "encrypted": null,
+        "onPremises": null,
+        "acsApplicationInstance": null,
+        "spoolApplicationInstance": null,
+        "applicationInstance": null,
+        "application": null,
+        "device": null,
+        "user": {
+            "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+            "displayName": "MOD Administrator",
+            "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+        }
+    },
+    "participants": [
+        {
+            "acsUser": null,
+            "spoolUser": null,
+            "phone": null,
+            "guest": null,
+            "encrypted": null,
+            "onPremises": null,
+            "acsApplicationInstance": null,
+            "spoolApplicationInstance": null,
+            "applicationInstance": null,
+            "application": null,
+            "device": null,
+            "user": {
+                "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+                "displayName": "MOD Administrator",
+                "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+            }
+        },
+        {
+            "acsUser": null,
+            "spoolUser": null,
+            "phone": null,
+            "guest": null,
+            "encrypted": null,
+            "onPremises": null,
+            "acsApplicationInstance": null,
+            "spoolApplicationInstance": null,
+            "applicationInstance": null,
+            "application": null,
+            "device": null,
+            "user": {
+                "id": "07e7847c-42eb-4738-8ca3-3a8ad3ac6d63",
+                "displayName": "Megan Bowen",
+                "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+            }
+        }
+    ],
+    "sessions@odata.context": "https://graph.microsoft.com/beta/$metadata#communications/callRecords('8952c843-755c-4a1e-8e98-3acf05924f57')/sessions(segments())",
+    "sessions": [
+        {
+            "id": "8952c843-755c-4a1e-8e98-3acf05924f57",
+            "modalities": [
+                "audio",
+                "screenSharing"
+            ],
+            "startDateTime": "2020-10-08T08:00:54.627227Z",
+            "endDateTime": "2020-10-08T08:01:19.1161293Z",
+            "failureInfo": null,
+            "caller": {
+                "@odata.type": "#microsoft.graph.callRecords.participantEndpoint",
+                "feedback": null,
+                "userAgent": {
+                    "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                    "headerValue": "SkypeSpaces/1415/1.0.0.2020100225/os=windows; osVer=10; deviceType=computer; browser=chrome; browserVer=85.0/TsCallingVersion=2020.36.01.12/Ovb=0fa8ca3cc0bcf924a2dc4ebfe3d99eaa8c32f8b4",
+                    "applicationVersion": null,
+                    "platform": "web",
+                    "productFamily": "teams"
+                },
+                "identity": {
+                    "acsUser": null,
+                    "spoolUser": null,
+                    "phone": null,
+                    "guest": null,
+                    "encrypted": null,
+                    "onPremises": null,
+                    "acsApplicationInstance": null,
+                    "spoolApplicationInstance": null,
+                    "applicationInstance": null,
+                    "application": null,
+                    "device": null,
+                    "user": {
+                        "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+                        "displayName": "MOD Administrator",
+                        "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+                    }
+                }
+            },
+            "callee": {
+                "@odata.type": "#microsoft.graph.callRecords.participantEndpoint",
+                "userAgent": {
+                    "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                    "headerValue": "SkypeSpaces/1415/1.0.0.2020091645/os=windows; osVer=10; deviceType=computer; browser=chrome; browserVer=85.0/TsCallingVersion=2020.34.01.1/Ovb=fb06dea2241e27a8ffb61b15601d634c2dad265b",
+                    "applicationVersion": null,
+                    "platform": "web",
+                    "productFamily": "teams"
+                },
+                "identity": {
+                    "acsUser": null,
+                    "spoolUser": null,
+                    "phone": null,
+                    "guest": null,
+                    "encrypted": null,
+                    "onPremises": null,
+                    "acsApplicationInstance": null,
+                    "spoolApplicationInstance": null,
+                    "applicationInstance": null,
+                    "application": null,
+                    "device": null,
+                    "user": {
+                        "id": "07e7847c-42eb-4738-8ca3-3a8ad3ac6d63",
+                        "displayName": "Megan Bowen",
+                        "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+                    }
+                },
+                "feedback": {
+                    "text": null,
+                    "rating": "excellent",
+                    "tokens": {}
+                }
+            },
+            "segments@odata.context": "https://graph.microsoft.com/beta/$metadata#communications/callRecords('8952c843-755c-4a1e-8e98-3acf05924f57')/sessions('8952c843-755c-4a1e-8e98-3acf05924f57')/segments",
+            "segments": [
+                {
+                    "id": "8952c843-755c-4a1e-8e98-3acf05924f57",
+                    "startDateTime": "2020-10-08T08:00:54.627227Z",
+                    "endDateTime": "2020-10-08T08:01:19.1161293Z",
+                    "failureInfo": null,
+                    "caller": {
+                        "@odata.type": "#microsoft.graph.callRecords.participantEndpoint",
+                        "feedback": null,
+                        "userAgent": {
+                            "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                            "headerValue": "SkypeSpaces/1415/1.0.0.2020100225/os=windows; osVer=10; deviceType=computer; browser=chrome; browserVer=85.0/TsCallingVersion=2020.36.01.12/Ovb=0fa8ca3cc0bcf924a2dc4ebfe3d99eaa8c32f8b4",
+                            "applicationVersion": null,
+                            "platform": "web",
+                            "productFamily": "teams"
+                        },
+                        "identity": {
+                            "acsUser": null,
+                            "spoolUser": null,
+                            "phone": null,
+                            "guest": null,
+                            "encrypted": null,
+                            "onPremises": null,
+                            "acsApplicationInstance": null,
+                            "spoolApplicationInstance": null,
+                            "applicationInstance": null,
+                            "application": null,
+                            "device": null,
+                            "user": {
+                                "id": "3c7d559f-1b7c-4c69-8fc3-82ea6b37cdd2",
+                                "displayName": "MOD Administrator",
+                                "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+                            }
+                        }
+                    },
+                    "callee": {
+                        "@odata.type": "#microsoft.graph.callRecords.participantEndpoint",
+                        "userAgent": {
+                            "@odata.type": "#microsoft.graph.callRecords.clientUserAgent",
+                            "headerValue": "SkypeSpaces/1415/1.0.0.2020091645/os=windows; osVer=10; deviceType=computer; browser=chrome; browserVer=85.0/TsCallingVersion=2020.34.01.1/Ovb=fb06dea2241e27a8ffb61b15601d634c2dad265b",
+                            "applicationVersion": null,
+                            "platform": "web",
+                            "productFamily": "teams"
+                        },
+                        "identity": {
+                            "acsUser": null,
+                            "spoolUser": null,
+                            "phone": null,
+                            "guest": null,
+                            "encrypted": null,
+                            "onPremises": null,
+                            "acsApplicationInstance": null,
+                            "spoolApplicationInstance": null,
+                            "applicationInstance": null,
+                            "application": null,
+                            "device": null,
+                            "user": {
+                                "id": "07e7847c-42eb-4738-8ca3-3a8ad3ac6d63",
+                                "displayName": "Megan Bowen",
+                                "tenantId": "47814e7e-54bb-4192-98af-7949e514b0a8"
+                            }
+                        },
+                        "feedback": {
+                            "text": null,
+                            "rating": "excellent",
+                            "tokens": {}
+                        }
+                    },
+                    "media": []
+                }
+            ]
+        }
+    ]
+}

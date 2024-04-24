@@ -1,0 +1,76 @@
+{
+  "view": [
+    {
+      "name": "SPO Insights Modern - Home",
+      "count": 1,
+      "durationMetric": {
+        "value": 24170000.0,
+        "count": 1.0,
+        "min": 24170000.0,
+        "max": 24170000.0,
+        "stdDev": 0.0,
+        "sampledValue": 24170000.0
+      },
+      "url": "https://m365x246423.sharepoint.com/sites/SPOInsightsModern",
+      "urlData": {
+        "base": "/sites/SPOInsightsModern",
+        "host": "m365x246423.sharepoint.com",
+        "hashTag": "",
+        "protocol": "https"
+      }
+    }
+  ],
+  "internal": {
+    "data": {
+      "id": "71cf10a5-d7dd-11e8-bfdd-9703f928becf",
+      "documentVersion": "1.61"
+    }
+  },
+  "context": {
+    "data": {
+      "eventTime": "2018-10-24T22:37:49.659Z",
+      "isSynthetic": false,
+      "samplingRate": 100.0
+    },
+    "device": {
+      "id": "browser",
+      "type": "Browser",
+      "osVersion": "Windows 10",
+      "deviceName": "Other",
+      "deviceModel": "Other",
+      "browser": "Chrome",
+      "browserVersion": "Chrome 66.0",
+      "screenResolution": {}
+    },
+    "user": {
+      "anonId": "2yv+z",
+      "authId": "admin@m365x246423.onmicrosoft.com",
+      "isAuthenticated": true
+    },
+    "session": {
+      "id": "F3r/M",
+      "isFirst": true
+    },
+    "operation": {
+      "id": "RVH6t",
+      "parentId": "RVH6t",
+      "name": "/sites/SPOInsightsModern"
+    },
+    "location": {
+      "clientip": "0.0.0.0",
+      "continent": "Europe",
+      "country": "Spain",
+      "province": "Madrid",
+      "city": "Tres Cantos"
+    },
+    "custom": {
+      "dimensions": [
+        { "pageRequestId": "c7e59c0c-35c9-44a7-9add-54134ba882fb" },
+        { "webUrl": "https://m365x246423.sharepoint.com/sites/SPOInsightsModern" },
+        { "siteUrl": "https://m365x246423.sharepoint.com/sites/SPOInsightsModern" },
+        { "webTitle": "SPO Insights Modern" },
+        { "aiTrackerVersion": "1.2.2" }
+      ]
+    }
+  }
+}

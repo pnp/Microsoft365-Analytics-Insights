@@ -1,0 +1,506 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "subscriptionId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "location": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "adoptifySiteUrl": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "userRewardProcessingListId": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "userListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "rewardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "settingsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userRewardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "cardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    }
+  },
+  "variables": {
+    "Singlequote": "'"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2017-07-01",
+      "name": "Adoptify-ProcessRedeemedRewards",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "When_an_item_is_created": {
+              "recurrence": {
+                "frequency": "Minute",
+                "interval": 5
+              },
+              "evaluatedRecurrence": {
+                "frequency": "Minute",
+                "interval": 5
+              },
+              "splitOn": "@triggerBody()?['value']",
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userRewardProcessingListId'),variables('singlequote'),'))}/onnewitems')]"
+              }
+            }
+          },
+          "actions": {
+            "Check_if_the_reward_requires_approval_or_unique_code": {
+              "actions": {
+                "Get_user_reward_item": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+
+
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userRewardsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(triggerBody()?[',variables('singlequote'),'UserRewardID',variables('singlequote'),'])}')]"
+                  }
+                },
+                "Set_RedeemedCard_variable": {
+                  "runAfter": {
+                    "Set_RedemptionComments_variable": [
+                      "Succeeded"
+                    ]
+                  },
+                  "cases": {
+                    "Approved": {
+                      "case": "Approved",
+                      "actions": {
+                        "Set_RedeemedCard_variable_-_approved": {
+                          "runAfter": {},
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "RedeemedCard",
+                            "value": "@{replace(replace(replace(outputs('Get_reward_redemption_approved_card_json'),'{Title}',body('Get_reward_item')?['Title']),'{RedemptionComments}',variables('RedemptionComments')),'{RedeemURL}',if(empty(body('Get_reward_item')?['RedeemURL']),'',body('Get_reward_item')?['RedeemURL']))}"
+                          }
+                        }
+                      }
+                    },
+                    "Denied": {
+                      "case": "Denied",
+                      "actions": {
+                        "Set_RedeemedCard_variable_-_denied": {
+                          "runAfter": {},
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "RedeemedCard",
+                            "value": "@{replace(replace(outputs('Get_reward_redemption_denied_card_json'),'{Title}',body('Get_reward_item')?['Title']),'{RedemptionComments}',variables('RedemptionComments'))}"
+                          }
+                        }
+                      }
+                    },
+                    "Provided": {
+                      "case": "Provided",
+                      "actions": {
+                        "Set_RedeemedCard_variable_-_provided": {
+                          "runAfter": {},
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "RedeemedCard",
+                            "value": "@{replace(replace(replace(outputs('Get_reward_redemption_provided_card_json'),'{Title}',body('Get_reward_item')?['Title']),'{VoucherCode}',if(empty(body('Get_user_reward_item')?['VoucherCode']),'',body('Get_user_reward_item')?['VoucherCode'])),'{RedeemURL}',if(empty(body('Get_reward_item')?['RedeemURL']),'',body('Get_reward_item')?['RedeemURL']))}"
+                          }
+                        }
+                      }
+                    },
+                    "Rejected": {
+                      "case": "Rejected",
+                      "actions": {
+                        "Set_RedeemedCard_variable_-_rejected": {
+                          "runAfter": {},
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "RedeemedCard",
+                            "value": "@{replace(replace(outputs('Get_reward_redemption_rejected_card_json'),'{Title}',body('Get_reward_item')?['Title']),'{RedemptionComments}',variables('RedemptionComments'))}"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "actions": {}
+                  },
+                  "expression": "@body('Get_user_reward_item')?['CodeStatus']['Value']",
+                  "type": "Switch"
+                },
+                "Set_RedemptionComments_variable": {
+                  "runAfter": {
+                    "Get_user_reward_item": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "RedemptionComments",
+                    "value": "@{If(empty(body('Get_user_reward_item')?['RedemptionComments']),'No details provided.',body('Get_user_reward_item')?['RedemptionComments'])}"
+                  }
+                }
+              },
+              "runAfter": {
+                "Initialize_RedeemedCard_variable": [
+                  "Succeeded"
+                ]
+              },
+              "expression": {
+                "or": [
+                  {
+                    "equals": [
+                      "@body('Get_reward_item')?['UniqueCodeRequired']",
+                      "@true"
+                    ]
+                  },
+                  {
+                    "equals": [
+                      "@body('Get_reward_item')?['ApprovalRequired']",
+                      "@true"
+                    ]
+                  }
+                ]
+              },
+              "type": "If"
+            },
+            "Delete_processing_item": {
+              "runAfter": {
+                "Send_reward_redeemed_card": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "delete",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userRewardProcessingListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(triggerbody()?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+              }
+            },
+            "Get_AppId_setting": {
+              "runAfter": {},
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('settingsListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "Title eq 'AppId'"
+                }
+              }
+            },
+            "Get_adaptive_cards": {
+              "actions": {
+                "Get_adaptive_card_items": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('cardsListId'),variables('singlequote'),'))}/items')]"
+                  }
+                },
+                "Get_reward_redeemed_card": {
+                  "runAfter": {
+                    "Get_reward_redemption_rejected_card_JSON": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'RewardRedeemed')"
+                  }
+                },
+                "Get_reward_redeemed_card_JSON": {
+                  "runAfter": {
+                    "Get_reward_redeemed_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_reward_redeemed_card'))?['CardJSON']"
+                },
+                "Get_reward_redemption_approved_card": {
+                  "runAfter": {
+                    "Get_adaptive_card_items": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'RewardRedemptionApproved')"
+                  }
+                },
+                "Get_reward_redemption_approved_card_JSON": {
+                  "runAfter": {
+                    "Get_reward_redemption_approved_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_reward_redemption_approved_card'))?['CardJSON']"
+                },
+                "Get_reward_redemption_denied_card": {
+                  "runAfter": {
+                    "Get_reward_redemption_approved_card_JSON": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'RewardRedemptionDenied')"
+                  }
+                },
+                "Get_reward_redemption_denied_card_JSON": {
+                  "runAfter": {
+                    "Get_reward_redemption_denied_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_reward_redemption_denied_card'))?['CardJSON']"
+                },
+                "Get_reward_redemption_provided_card": {
+                  "runAfter": {
+                    "Get_reward_redemption_denied_card_JSON": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'RewardRedemptionProvided')"
+                  }
+                },
+                "Get_reward_redemption_provided_card_JSON": {
+                  "runAfter": {
+                    "Get_reward_redemption_provided_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_reward_redemption_provided_card'))?['CardJSON']"
+                },
+                "Get_reward_redemption_rejected_card": {
+                  "runAfter": {
+                    "Get_reward_redemption_provided_card_JSON": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Query",
+                  "inputs": {
+                    "from": "@body('Get_adaptive_card_items')?['value']",
+                    "where": "@equals(item()?['Title'], 'RewardRedemptionRejected')"
+                  }
+                },
+                "Get_reward_redemption_rejected_card_JSON": {
+                  "runAfter": {
+                    "Get_reward_redemption_rejected_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_reward_redemption_rejected_card'))?['CardJSON']"
+                }
+              },
+              "runAfter": {
+                "Initialize_RedemptionComments_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Get_reward_item": {
+              "runAfter": {
+                "Get_user_from_user_list": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('rewardsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(triggerbody()?[',variables('singlequote'),'RewardID',variables('singlequote'),'])}')]"
+
+              }
+            },
+            "Get_user_from_user_list": {
+              "runAfter": {
+                "Initialize_AppId_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(triggerbody()?[',variables('singlequote'),'UserID',variables('singlequote'),'])}')]"
+              }
+            },
+            "Initialize_AppId_variable": {
+              "runAfter": {
+                "Get_AppId_setting": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "AppId",
+                    "type": "string",
+                    "value": "@{first(body('Get_AppId_setting')?['value'])?['Value']}"
+                  }
+                ]
+              }
+            },
+            "Initialize_RedeemedCard_variable": {
+              "runAfter": {
+                "Get_adaptive_cards": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "RedeemedCard",
+                    "type": "string",
+                    "value": "@{replace(replace(replace(replace(outputs('Get_reward_redeemed_card_json'),'{Title}',body('Get_reward_item')?['Title']),'{RedeemInstructions}',if(empty(body('Get_reward_item')?['RedeemInstructions']),'',body('Get_reward_item')?['RedeemInstructions'])),'{RedeemURL}',if(empty(body('Get_reward_item')?['RedeemURL']),'',body('Get_reward_item')?['RedeemURL'])),'{VoucherCode}',if(empty(body('Get_reward_item')?['VoucherCode']),'',body('Get_reward_item')?['VoucherCode']))}"
+                  }
+                ]
+              },
+              "description": "Initialize a variable for the adaptive card that will display the details of reward redemption - voucher code, instructions etc. This allows us to dynamically change the columns in case approval or a unique code is required."
+            },
+            "Initialize_RedemptionComments_variable": {
+              "runAfter": {
+                "Get_reward_item": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "RedemptionComments",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "Send_reward_redeemed_card": {
+              "runAfter": {
+                "Check_if_the_reward_requires_approval_or_unique_code": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "body": {
+                  "messageBody": "@variables('RedeemedCard')",
+                  "recipient": {
+                    "to": "@body('Get_user_from_user_list')?['User']?['Email']"
+                  }
+                },
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['teams']['connectionId']"
+                  }
+                },
+                "method": "post",
+                "path": "/flowbot/actions/adaptivecard/recipienttypes/user"
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "sharepointonline": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-spo')]",
+                "connectionName": "adoptify-spo",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/sharepointonline')]"
+              },
+              "teams": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-teams')]",
+                "connectionName": "adoptify-teams",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/teams')]"
+              },
+              "office365outlook": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-office365outlook')]",
+                "connectionName": "adoptify-office365outlook",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/office365')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

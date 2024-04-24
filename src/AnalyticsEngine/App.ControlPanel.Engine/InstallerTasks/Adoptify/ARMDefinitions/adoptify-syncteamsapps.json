@@ -1,0 +1,555 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "subscriptionId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "adoptifySiteUrl": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "teamsAppsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "location": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "insightsAppId": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "tenantId": {
+      "defaultValue": "",
+      "type": "string"
+    }
+  },
+  "variables": {
+    "Singlequote": "'"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2017-07-01",
+      "name": "Adoptify-SyncTeamsApps",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "Recurrence": {
+              "recurrence": {
+                "frequency": "Week",
+                "interval": 1
+              },
+              "evaluatedRecurrence": {
+                "frequency": "Week",
+                "interval": 1
+              },
+              "type": "Recurrence"
+            }
+          },
+          "actions": {
+            "Get_client_secret": {
+              "runAfter": {
+                "Initialize_ColorIconURL_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['keyvault']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "/secrets/@{encodeURIComponent('appsecret')}/value"
+              }
+            },
+            "Get_teams_apps_from_catalog": {
+              "runAfter": {
+                "Get_client_secret": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Http",
+              "inputs": {
+                "authentication": {
+                  "audience": "https://graph.microsoft.com",
+                  "clientId": "[parameters('insightsAppId')]",
+                  "secret": "@body('Get_client_secret')?['value']",
+                  "tenant": "[parameters('tenantId')]",
+                  "type": "ActiveDirectoryOAuth"
+                },
+                "headers": {
+                  "content-type": "application/json"
+                },
+                "method": "GET",
+                "uri": "https://graph.microsoft.com/v1.0/appCatalogs/teamsApps?$expand=appDefinitions"
+              }
+            },
+            "Get_value": {
+              "runAfter": {
+                "Get_teams_apps_from_catalog": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Compose",
+              "inputs": "@body('Get_teams_apps_from_catalog')?['value']"
+            },
+            "Initialize_AppExists_variable": {
+              "runAfter": {},
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "AppExists",
+                    "type": "boolean",
+                    "value": "@false"
+                  }
+                ]
+              }
+            },
+            "Initialize_ColorIconURL_variable": {
+              "runAfter": {
+                "Initialize_SiteURL_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "ColorIconURL",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "Initialize_SiteURL_variable": {
+              "runAfter": {
+                "Initialize_AppExists_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "SiteURL",
+                    "type": "string",
+                    "value": "[parameters('adoptifySiteUrl')]"
+                  }
+                ]
+              }
+            },
+            "Parse_value_JSON": {
+              "runAfter": {
+                "Get_value": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ParseJson",
+              "inputs": {
+                "content": "@outputs('Get_value')",
+                "schema": {
+                  "items": {
+                    "properties": {
+                      "appDefinitions": {
+                        "items": {
+                          "properties": {
+                            "createdBy": {},
+                            "description": {
+                              "type": "string"
+                            },
+                            "displayName": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "lastModifiedDateTime": {},
+                            "publishingState": {
+                              "type": "string"
+                            },
+                            "shortDescription": {
+                              "type": "string"
+                            },
+                            "teamsAppId": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "teamsAppId",
+                            "displayName",
+                            "version",
+                            "publishingState",
+                            "shortDescription",
+                            "description",
+                            "lastModifiedDateTime",
+                            "createdBy"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "appDefinitions@odata.context": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "distributionMethod": {
+                        "type": "string"
+                      },
+                      "externalId": {},
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "externalId",
+                      "displayName",
+                      "distributionMethod",
+                      "appDefinitions@odata.context",
+                      "appDefinitions"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "Process_removed_teams_apps": {
+              "actions": {
+                "Get_all_apps_list_items": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('teamsAppsListId'),variables('singlequote'),'))}/items')]"
+                  }
+                },
+                "Loop_through_apps_list_items_-_delete": {
+                  "foreach": "@body('Get_all_apps_list_items')?['value']",
+                  "actions": {
+                    "Check_if_app_exists": {
+                      "actions": {
+                        "Delete_app_list_item": {
+                          "runAfter": {},
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                              }
+                            },
+                            "method": "delete",
+                            "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('teamsAppsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(items(',variables('singlequote'),'Loop_through_apps_list_items_-_delete',variables('singlequote'),')?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Loop_through_apps_-_delete": [
+                          "Succeeded"
+                        ]
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@variables('AppExists')",
+                              "@false"
+                            ]
+                          }
+                        ]
+                      },
+                      "type": "If"
+                    },
+                    "Loop_through_apps_-_delete": {
+                      "foreach": "@body('Parse_value_JSON')",
+                      "actions": {
+                        "Check_if_app_id_matches": {
+                          "actions": {
+                            "Set_AppExists_variable": {
+                              "runAfter": {},
+                              "type": "SetVariable",
+                              "inputs": {
+                                "name": "AppExists",
+                                "value": "@true"
+                              }
+                            }
+                          },
+                          "runAfter": {},
+                          "expression": {
+                            "and": [
+                              {
+                                "equals": [
+                                  "@items('Loop_through_apps_list_items_-_delete')?['AppId']",
+                                  "@first(items('Loop_through_apps_-_delete')?['appDefinitions'])?['teamsAppId']"
+                                ]
+                              }
+                            ]
+                          },
+                          "type": "If"
+                        }
+                      },
+                      "runAfter": {
+                        "Reset_AppExists_variable": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Foreach"
+                    },
+                    "Reset_AppExists_variable": {
+                      "runAfter": {},
+                      "type": "SetVariable",
+                      "inputs": {
+                        "name": "AppExists",
+                        "value": "@false"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Get_all_apps_list_items": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Foreach"
+                }
+              },
+              "runAfter": {
+                "Process_teams_apps": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Process_teams_apps": {
+              "actions": {
+                "Loop_through_teams_apps": {
+                  "foreach": "@body('Parse_value_JSON')",
+                  "actions": {
+                    "Check_if_the_app_was_found_in_the_list": {
+                      "actions": {
+                        "Create_app_list_item": {
+                          "runAfter": {},
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "body": {
+                              "AppDefinitionId": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['id']}",
+                              "AppDescription": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['shortDescription']}",
+                              "AppIconURL": "@variables('ColorIconURL')",
+                              "AppId": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['teamsAppId']}",
+                              "AppName": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['displayName']}",
+                              "Title": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['displayName']}"
+                            },
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('teamsAppsListId'),variables('singlequote'),'))}/items')]"
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Set_ColorIconURL_variable_-_generic_": [
+                          "Succeeded",
+                          "Skipped"
+                        ]
+                      },
+                      "else": {
+                        "actions": {
+                          "Update_app_list_item": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                              "body": {
+                                "AppDefinitionId": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['id']}",
+                                "AppDescription": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['shortDescription']}",
+                                "AppIconURL": "@variables('ColorIconURL')",
+                                "AppId": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['teamsAppId']}",
+                                "AppName": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['displayName']}",
+                                "Title": "@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['displayName']}"
+                              },
+                              "host": {
+                                "connection": {
+                                  "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                                }
+                              },
+                              "method": "patch",
+                              "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('teamsAppsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(first(body(',variables('singlequote'),'Get_app_list_item',variables('singlequote'),')?[',variables('singlequote'),'Value',variables('singlequote'),'])?[',variables('Singlequote'),'ID',variables('Singlequote'),'])}')]"
+                            }
+                          }
+                        }
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@empty(body('Get_app_list_item')?['value'])",
+                              "@true"
+                            ]
+                          }
+                        ]
+                      },
+                      "type": "If"
+                    },
+                    "Get_app_list_item": {
+                      "runAfter": {},
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                          }
+                        },
+                        "method": "get",
+                        "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('teamsAppsListId'),variables('singlequote'),'))}/items')]",
+                        "queries": {
+                          "$filter": "AppId eq '@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['teamsAppId']}'"
+                        },
+                        "retryPolicy": {
+                          "count": 5,
+                          "interval": "PT10S",
+                          "type": "fixed"
+                        }
+                      }
+                    },
+                    "Process_color_icon": {
+                      "actions": {
+                        "Get_color_icon": {
+                          "runAfter": {},
+                          "type": "Http",
+                          "inputs": {
+                            "authentication": {
+                              "audience": "https://graph.microsoft.com",
+                              "clientId": "[parameters('insightsAppId')]",
+                              "secret": "@body('Get_client_secret')?['value']",
+                              "tenant": "[parameters('tenantId')]",
+                              "type": "ActiveDirectoryOAuth"
+                            },
+                            "method": "GET",
+                            "uri": "https://graph.microsoft.com/beta/appCatalogs/teamsApps/@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['teamsAppId']}/appDefinitions/@{first(items('Loop_through_teams_apps')?['appDefinitions'])?['id']}/colorIcon"
+                          }
+                        },
+                        "Parse_color_icon_JSON": {
+                          "runAfter": {
+                            "Get_color_icon": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ParseJson",
+                          "inputs": {
+                            "content": "@body('Get_color_icon')",
+                            "schema": {
+                              "properties": {
+                                "@@odata.context": {
+                                  "type": "string"
+                                },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "webUrl": {
+                                  "type": "string"
+                                }
+                              },
+                              "type": "object"
+                            }
+                          }
+                        },
+                        "Set_ColorIconURL_variable": {
+                          "runAfter": {
+                            "Parse_color_icon_JSON": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "ColorIconURL",
+                            "value": "@body('Parse_color_icon_JSON')?['webUrl']"
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Get_app_list_item": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Scope"
+                    },
+                    "Set_ColorIconURL_variable_-_generic_": {
+                      "runAfter": {
+                        "Process_color_icon": [
+                          "Failed"
+                        ]
+                      },
+                      "type": "SetVariable",
+                      "inputs": {
+                        "name": "ColorIconURL",
+                        "value": "@{variables('SiteURL')}/QuestImages/app_generic.png"
+                      }
+                    }
+                  },
+                  "runAfter": {},
+                  "type": "Foreach"
+                }
+              },
+              "runAfter": {
+                "Parse_value_JSON": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "keyvault": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-kv')]",
+                "connectionName": "adoptify-kv",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/keyvault')]"
+              },
+              "sharepointonline": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-spo')]",
+                "connectionName": "adoptify-spo",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/sharepointonline')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

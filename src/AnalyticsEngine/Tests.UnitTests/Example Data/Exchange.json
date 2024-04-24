@@ -1,0 +1,67 @@
+﻿[
+  {
+    "CreationTime": "2018-07-10T12:06:50",
+    "Id": "09a84061-2c80-4850-b709-08d5e65d9e73",
+    "Operation": "New-MigrationBatch",
+    "OrganizationId": "d38e0d78-3edc-4124-8483-6f8aad3bc32a",
+    "RecordType": 1,
+    "ResultStatus": "True",
+    "UserKey": "1003BFFD9A7D3BD6",
+    "UserType": 2,
+    "Version": 1,
+    "Workload": "Exchange",
+    "ClientIP": "127.0.137.131:40927",
+    "ObjectId": "",
+    "UserId": "tamaraa@testtenant.local",
+    "ExternalAccess": false,
+    "OrganizationName": "testtenant.onmicrosoft.com",
+    "OriginatingServer": "HE1PR0601MB2587 (15.20.0930.000)",
+    "Parameters": [
+      {
+        "Name": "Name",
+        "Value": "yana fishman"
+      },
+      {
+        "Name": "NotificationEmails",
+        "Value": "tamara@testtenant.local"
+      },
+      {
+        "Name": "LargeItemLimit",
+        "Value": "100"
+      },
+      {
+        "Name": "TargetDeliveryDomain",
+        "Value": "testtenant.mail.onmicrosoft.com"
+      },
+      {
+        "Name": "AutoStart",
+        "Value": "True"
+      },
+      {
+        "Name": "ArchiveOnly",
+        "Value": "True"
+      },
+      {
+        "Name": "BadItemLimit",
+        "Value": "100"
+      },
+      {
+        "Name": "CSVData",
+        "Value": "RW1haWxBZGRyZXNzDQp5YW5hZkBuaW9pLmdvdi5pbA==..."
+      },
+      {
+        "Name": "SourceEndpoint",
+        "Value": "Hybrid Migration Endpoint - doar.testtenant.local"
+      },
+      {
+        "Name": "AutoComplete",
+        "Value": "True"
+      },
+      {
+        "Name": "TimeZone",
+        "Value": "Israel Standard Time"
+      }
+    ],
+    "SessionId": ""
+  }
+]

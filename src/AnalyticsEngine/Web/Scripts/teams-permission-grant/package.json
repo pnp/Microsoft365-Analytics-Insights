@@ -1,0 +1,50 @@
+{
+    "name": "react-sample-app",
+    "version": "0.1.0",
+    "private": true,
+    "homepage": "/Scripts/teams-permission-grant/build/",
+    "dependencies": {
+        "@azure/msal-browser": "^2.19.0",
+        "@types/jest": "^27.0.2",
+        "@types/node": "^16.11.7",
+        "@types/react": "^17.0.34",
+        "@types/react-dom": "^17.0.11",
+        "msal": "^1.4.15",
+        "prop-types": "^15.7.2",
+        "react": "^16.14.0",
+        "react-app-polyfill": "^1.0.1",
+        "react-dom": "^16.14.0",
+        "react-hot-toast": "^2.1.1",
+        "react-loader-spinner": "^4.0.0",
+        "react-scripts": "5.0.0",
+        "typescript": "^4.4.4"
+    },
+    "scripts": {
+        "start": "react-scripts start",
+        "build": "react-scripts build",
+        "test": "react-scripts test",
+        "eject": "react-scripts eject",
+        "prettier": "prettier src/**/*.js"
+    },
+    "eslintConfig": {
+        "extends": "react-app"
+    },
+    "browserslist": {
+        "production": [
+            ">0.2%",
+            "not dead",
+            "not op_mini all",
+            "ie 11"
+        ],
+        "development": [
+            "last 1 chrome version",
+            "last 1 firefox version",
+            "last 1 safari version",
+            "ie 11"
+        ]
+    },
+    "devDependencies": {
+        "@microsoft/microsoft-graph-types": "^2.10.0",
+        "prettier": "1.17.1"
+    }
+}

@@ -1,0 +1,62 @@
+﻿[
+  {
+    "CreationTime": "2018-07-02T14:52:57",
+    "Id": "1c0655f1-e870-401b-949c-398cb9a8f984",
+    "Operation": "UserLoggedIn",
+    "OrganizationId": "d38e0d78-3edc-4124-8483-6f8aad3bc32a",
+    "RecordType": 15,
+    "ResultStatus": "Succeeded",
+    "UserKey": "1003BFFD9A7D358F@domainredacted.com",
+    "UserType": 0,
+    "Version": 1,
+    "Workload": "AzureActiveDirectory",
+    "ClientIP": "31.168.15.90",
+    "ObjectId": "Unknown",
+    "UserId": "motim@domainredacted.com",
+    "AzureActiveDirectoryEventType": 1,
+    "ExtendedProperties": [
+      {
+        "Name": "UserAgent",
+        "Value": "Microsoft Office/14.0 (Windows NT 6.2; Microsoft Outlook 14.0.7208; Pro)"
+      },
+      {
+        "Name": "UserAuthenticationMethod",
+        "Value": "1"
+      },
+      {
+        "Name": "RequestType",
+        "Value": "OrgIdWsTrust2:process"
+      },
+      {
+        "Name": "ResultStatusDetail",
+        "Value": "Success"
+      }
+    ],
+    "Actor": [
+      {
+        "ID": "7e6d215e-b549-4b18-b6cf-57b20e898563",
+        "Type": 0
+      },
+      {
+        "ID": "motim@domainredacted.com",
+        "Type": 5
+      },
+      {
+        "ID": "1003BFFD9A7D358F",
+        "Type": 3
+      }
+    ],
+    "ActorContextId": "d38e0d78-3edc-4124-8483-6f8aad3bc32a",
+    "ActorIpAddress": "XX.XX.15.90",
+    "InterSystemsId": "47363770-8187-4ffe-baa4-d3ba58929fdf",
+    "IntraSystemId": "67adf692-a420-4d02-a146-cda960731c00",
+    "Target": [
+      {
+        "ID": "Unknown",
+        "Type": 0
+      }
+    ],
+    "TargetContextId": "d38e0d78-3edc-4124-8483-6f8aad3bc32a",
+    "ApplicationId": "00000002-0000-0ff1-ce00-000000000000"
+  }
+]

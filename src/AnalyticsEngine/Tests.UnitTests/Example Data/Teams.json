@@ -1,0 +1,21 @@
+[
+  {
+    "CreationTime": "2018-11-22T13:02:42",
+    "Id": "c1a108ee-778a-4b3f-98b1-780163ee8c4a",
+    "Operation": "TeamsSessionStarted",
+    "OrganizationId": "00000-5953-484b-ae95-000000",
+    "RecordType": 25,
+    "UserKey": "aaaa-1b7b-0000-90c1-fffff",
+    "UserType": 0,
+    "Version": 1,
+    "Workload": "MicrosoftTeams",
+    "ObjectId": "Web (1415\/1.0.0.2018110740)",
+    "UserId": "user@domain.com",
+    "ExtraProperties": [
+      {
+        "Key": "OriginEnvironment",
+        "Value": "ProdEUNO-01"
+      }
+    ]
+  }
+]

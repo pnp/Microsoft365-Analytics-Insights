@@ -1,0 +1,21 @@
+[
+  {
+    "CreationTime": "2018-11-22T13:36:59",
+    "Id": "f6fd7181-1f6e-41c1-202d-08d6507f93e5",
+    "Operation": "TimesheetSaved",
+    "OrganizationId": "00000-5953-484b-00000-000000",
+    "RecordType": 35,
+    "UserKey": "i:0h.f|membership|00000000@redacted.com",
+    "UserType": 0,
+    "Version": 1,
+    "Workload": "Project",
+    "ClientIP": "000.000.1.212",
+    "UserId": "user@domain",
+    "CorrelationId": "02dda49e-80bb-7000-5ea7-052367a4793b",
+    "EventSource": "Project",
+    "ItemType": "Project",
+    "UserAgent": "Mozilla\/5.0 (Windows NT 6.1; WOW64; Trident\/7.0; rv:11.0) like Gecko",
+    "Action": "Saved",
+    "Entity": "Timesheet"
+  }
+]

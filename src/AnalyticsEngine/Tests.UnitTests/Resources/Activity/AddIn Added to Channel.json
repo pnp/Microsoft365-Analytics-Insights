@@ -1,0 +1,20 @@
+{
+  "CreationTime": "2020-03-25T11:36:54",
+  "Id": "06a468f8-2f1f-57a7-b494-90a227dbf245",
+  "Operation": "TabAdded",
+  "OrganizationId": "2e1d1b32-bab7-48f3-b0db-3a93158d447e",
+  "RecordType": 25,
+  "UserKey": "61ccd33a-41c0-4a63-a735-09453209f215",
+  "UserType": 0,
+  "Version": 1,
+  "Workload": "MicrosoftTeams",
+  "UserId": "admin@M365x176143.onmicrosoft.com",
+  "AADGroupId": "28d169df-2a00-4a6e-8135-53da94c78299",
+  "AddOnGuid": "tab::c3dba3de-25a9-41dd-ac00-8cc77c38eedb",
+  "AddOnType": 3,
+  "ChannelGuid": "19:955a47c6555c4d258356d8b56ebdcdd9@thread.tacv2",
+  "TabType": "extension",
+  "TeamGuid": "19:955a47c6555c4d258356d8b56ebdcdd9@thread.tacv2",
+  "ChannelName": "General",
+  "TeamName": "Test Team"
+}

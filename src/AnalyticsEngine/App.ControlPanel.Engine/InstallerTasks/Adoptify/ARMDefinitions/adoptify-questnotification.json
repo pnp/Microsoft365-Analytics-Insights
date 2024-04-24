@@ -1,0 +1,578 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "subscriptionId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "location": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "adoptifySiteUrl": {
+      "defaultvalue": "",
+      "type": "string"
+    },
+    "questsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "userListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "settingsListId": {
+      "defaultValue": "",
+      "type": "string"
+    },
+    "cardsListId": {
+      "defaultValue": "",
+      "type": "string"
+    }
+  },
+  "variables": {
+    "Singlequote": "'"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2017-07-01",
+      "name": "Adoptify-QuestNotification",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "When_a_quest_is_created_or_modified": {
+              "recurrence": {
+                "frequency": "Minute",
+                "interval": 5
+              },
+              "evaluatedRecurrence": {
+                "frequency": "Minute",
+                "interval": 5
+              },
+              "splitOn": "@triggerBody()?['value']",
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questsListId'),variables('singlequote'),'))}/onupdateditems')]"
+              },
+              "conditions": [
+                {
+                  "expression": "@equals(triggerBody()?['QuestStatus']?['Value'],'Active')"
+                },
+                {
+                  "expression": "@equals(triggerBody()?['Notified'],false)"
+                }
+              ]
+            }
+          },
+          "actions": {
+            "Check_if_quest_has_an_adaptive_image": {
+              "actions": {
+                "Set_QuestAdaptiveImage_variable": {
+                  "runAfter": {},
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "QuestAdaptiveImage",
+                    "value": "@triggerBody()?['QuestAdaptiveImage']"
+                  }
+                }
+              },
+              "runAfter": {
+                "Check_if_visible_to_column_is_populated": [
+                  "Succeeded"
+                ]
+              },
+              "else": {
+                "actions": {
+                  "Set_QuestAdaptiveImage_variable_-_empty": {
+                    "runAfter": {},
+                    "type": "SetVariable",
+                    "inputs": {
+                      "name": "QuestAdaptiveImage",
+                      "value": "data:image/png;base64,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"
+                    }
+                  }
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@empty(triggerBody()?['QuestAdaptiveImage'])",
+                      "@false"
+                    ]
+                  }
+                ]
+              },
+              "type": "If"
+            },
+            "Check_if_visible_to_column_is_populated": {
+              "actions": {
+                "Get_group_id_from_visible_to": {
+                  "runAfter": {
+                    "Set_HasVisibleTo_variable": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@replace(triggerBody()?['VisibleTo']?['Claims'],'c:0t.c|tenant|','')"
+                },
+                "List_group_members": {
+                  "runAfter": {
+                    "Get_group_id_from_visible_to": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['office365groups']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "/v1.0/groups/@{encodeURIComponent(outputs('Get_group_id_from_visible_to'))}/members"
+                  }
+                },
+                "Parse_group_members_json": {
+                  "runAfter": {
+                    "List_group_members": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "ParseJson",
+                  "inputs": {
+                    "content": "@body('List_group_members')?['value']",
+                    "schema": {
+                      "items": {
+                        "properties": {
+                          "@@odata.type": {
+                            "type": "string"
+                          },
+                          "businessPhones": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "displayName": {
+                            "type": "string"
+                          },
+                          "givenName": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "jobTitle": {
+                            "type": "string"
+                          },
+                          "mail": {
+                            "type": "string"
+                          },
+                          "mobilePhone": {},
+                          "officeLocation": {
+                            "type": "string"
+                          },
+                          "preferredLanguage": {},
+                          "surname": {
+                            "type": "string"
+                          },
+                          "userPrincipalName": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@@odata.type",
+                          "id",
+                          "businessPhones",
+                          "displayName",
+                          "givenName",
+                          "jobTitle",
+                          "mail",
+                          "mobilePhone",
+                          "officeLocation",
+                          "preferredLanguage",
+                          "surname",
+                          "userPrincipalName"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  }
+                },
+                "Set_HasVisibleTo_variable": {
+                  "runAfter": {},
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "HasVisibleTo",
+                    "value": "@true"
+                  }
+                }
+              },
+              "runAfter": {
+                "Get_adaptive_card": [
+                  "Succeeded"
+                ]
+              },
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@empty(triggerBody()?['VisibleTo'])",
+                      "@false"
+                    ]
+                  }
+                ]
+              },
+              "type": "If"
+            },
+            "Get_AppId_setting": {
+              "runAfter": {},
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('settingsListId'),variables('singlequote'),'))}/items')]",
+                "queries": {
+                  "$filter": "Title eq 'AppId'"
+                }
+              }
+            },
+            "Get_adaptive_card": {
+              "actions": {
+                "Get_quest_notification_adaptive_card_item": {
+                  "runAfter": {},
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                      }
+                    },
+                    "method": "get",
+                    "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('cardsListId'),variables('singlequote'),'))}/items')]",
+                    "queries": {
+                      "$filter": "Title eq 'QuestNotification'"
+                    }
+                  }
+                },
+                "Get_quest_notification_card_JSON": {
+                  "runAfter": {
+                    "Get_quest_notification_adaptive_card_item": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@first(body('Get_quest_notification_adaptive_card_item')?['value'])?['CardJSON']"
+                }
+              },
+              "runAfter": {
+                "Initialize_AdaptiveCardJSON_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Scope"
+            },
+            "Get_users": {
+              "runAfter": {
+                "Check_if_quest_has_an_adaptive_image": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('userListId'),variables('singlequote'),'))}/items')]"
+
+              },
+              "runtimeConfiguration": {
+                "paginationPolicy": {
+                  "minimumItemCount": 100000
+                }
+              }
+            },
+            "Initialize_AdaptiveCardJSON_variable": {
+              "runAfter": {
+                "Initialize_SendCard_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "AdaptiveCardJSON",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "Initialize_AppId_variable": {
+              "runAfter": {
+                "Get_AppId_setting": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "AppId",
+                    "type": "string",
+                    "value": "@{first(body('Get_AppId_setting')?['value'])?['Value']}"
+                  }
+                ]
+              }
+            },
+            "Initialize_HasVisibleTo_variable": {
+              "runAfter": {
+                "Initialize_QuestAdaptiveImage_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "HasVisibleTo",
+                    "type": "boolean",
+                    "value": "@false"
+                  }
+                ]
+              }
+            },
+            "Initialize_QuestAdaptiveImage_variable": {
+              "runAfter": {
+                "Initialize_AppId_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "QuestAdaptiveImage",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "Initialize_SendCard_variable": {
+              "runAfter": {
+                "Initialize_HasVisibleTo_variable": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "SendCard",
+                    "type": "boolean",
+                    "value": "@false"
+                  }
+                ]
+              }
+            },
+            "Loop_through_users": {
+              "foreach": "@body('Get_users')?['value']",
+              "actions": {
+                "Check_HasVisibleTo_variable": {
+                  "actions": {
+                    "Check_is_user_was_found_in_the_group": {
+                      "actions": {
+                        "Send_new_quest_adaptive_card_-_user_in_group": {
+                          "runAfter": {
+                            "Set_SendCard_variable_-_user_in_group": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "body": {
+                              "messageBody": "@{replace(replace(replace(outputs('Get_quest_notification_card_json'),'{Title}',triggerBody()?['Title']),'{QuestAdaptiveImage}',variables('QuestAdaptiveImage')),'{AppId}',variables('AppId'))}",
+                              "recipient": "@items('Loop_through_users')?['User']?['Email']"
+                            },
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['teams']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "path": "/v1.0/teams/conversation/adaptivecard/poster/Flow bot/location/@{encodeURIComponent('Chat with Flow bot')}"
+                          }
+                        },
+                        "Set_SendCard_variable_-_user_in_group": {
+                          "runAfter": {},
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "SendCard",
+                            "value": "@true"
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Filter_group_members_array": [
+                          "Succeeded"
+                        ]
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@empty(body('Filter_group_members_array'))",
+                              "@false"
+                            ]
+                          }
+                        ]
+                      },
+                      "type": "If"
+                    },
+                    "Filter_group_members_array": {
+                      "runAfter": {},
+                      "type": "Query",
+                      "inputs": {
+                        "from": "@body('Parse_group_members_json')",
+                        "where": "@contains(item()?['mail'], items('Loop_through_users')?['User']?['Email'])"
+                      }
+                    }
+                  },
+                  "runAfter": {},
+                  "else": {
+                    "actions": {
+                      "Send_new_quest_adaptive_card_-_visible_to_empty": {
+                        "runAfter": {
+                          "Set_SendCard_variable_-_visible_to_empty": [
+                            "Succeeded"
+                          ]
+                        },
+                        "type": "ApiConnection",
+                        "inputs": {
+                          "body": {
+                            "messageBody": "@{replace(replace(replace(outputs('Get_quest_notification_card_json'),'{Title}',triggerBody()?['Title']),'{QuestAdaptiveImage}',variables('QuestAdaptiveImage')),'{AppId}',variables('AppId'))}",
+                            "recipient": "@items('Loop_through_users')?['User']?['Email']"
+                          },
+                          "host": {
+                            "connection": {
+                              "name": "@parameters('$connections')['teams']['connectionId']"
+                            }
+                          },
+                          "method": "post",
+                          "path": "/v1.0/teams/conversation/adaptivecard/poster/Flow bot/location/@{encodeURIComponent('Chat with Flow bot')}"
+                        }
+                      },
+                      "Set_SendCard_variable_-_visible_to_empty": {
+                        "runAfter": {},
+                        "type": "SetVariable",
+                        "inputs": {
+                          "name": "SendCard",
+                          "value": "@true"
+                        }
+                      }
+                    }
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@variables('HasVisibleTo')",
+                          "@true"
+                        ]
+                      }
+                    ]
+                  },
+                  "type": "If"
+                }
+              },
+              "runAfter": {
+                "Get_users": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Foreach"
+            },
+            "Update_quest_to_notified": {
+              "runAfter": {
+                "Loop_through_users": [
+                  "Succeeded"
+                ]
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "body": {
+                  "ItemCount": "@triggerBody()?['ItemCount']",
+                  "Notified": true,
+                  "ShortDescription": "@triggerBody()?['ShortDescription']",
+                  "Title": "@triggerBody()?['Title']",
+                  "XP": "@triggerBody()?['XP']"
+                },
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "patch",
+                "path": "[concat('/datasets/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('adoptifySiteUrl'),variables('singlequote'),'))}/tables/@{encodeURIComponent(encodeURIComponent(',variables('singlequote'),parameters('questsListId'),variables('singlequote'),'))}/items/@{encodeURIComponent(triggerBody()?[',variables('singlequote'),'ID',variables('singlequote'),'])}')]"
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "office365groups": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-office365groups')]",
+                "connectionName": "adoptify-office365groups",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/office365groups')]"
+
+              },
+              "sharepointonline": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-spo')]",
+                "connectionName": "adoptify-spo",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/sharepointonline')]"
+              },
+              "teams": {
+                "connectionId": "[concat('/subscriptions/',parameters('subscriptionId'),'/resourceGroups/',parameters('resourceGroupName'),'/providers/Microsoft.Web/connections/adoptify-teams')]",
+                "connectionName": "adoptify-teams",
+                "id": "[concat('/subscriptions/',parameters('subscriptionId'),'/providers/Microsoft.Web/locations/',parameters('location'),'/managedApis/teams')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

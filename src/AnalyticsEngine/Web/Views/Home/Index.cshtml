@@ -1,0 +1,110 @@
+﻿@model Web.AnalyticsWeb.Models.SystemStatus
+
+@{
+    ViewBag.Title = "Home";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+}
+
+<br />
+<h5 class="card-header text-center">Office 365 Advanced Analytics Engine - @Model.BuildLabel -  Service Home</h5>
+<br />
+
+<h3>Tracking Data Overview</h3>
+<p>Here's a summary of the data in your database:</p>
+<table class="table" style="width: 500px">
+    <tr>
+        <td>Hits</td>
+        <td>@Model.HitCount</td>
+    </tr>
+    <tr>
+        <td>Activity Imports</td>
+        <td>@Model.ActivityCount</td>
+    </tr>
+    <tr>
+        <td>Teams Discovered</td>
+        <td>@Model.TeamsCount</td>
+    </tr>
+    <tr>
+        <td>Teams with Tracking Enabled</td>
+        <td>@Model.TeamsBeingTrackedCount</td>
+    </tr>
+</table>
+<p>
+    Enable Teams analytics by enabling @Html.ActionLink("Teams Deep Analytics", "TeamsAuthApp", "Home")
+</p>
+<hr />
+<h3>System Configuration</h3>
+<p>These are the basics of your system configuration:</p>
+<table class="table">
+    <tr>
+        <td class="header">Graph Call Webhook Enpoint</td>
+        <td>
+            @{ string url = Model.WebAppBaseURL + "api/CallRecordWebhook"; }
+            @url - 
+            <a href="@url?validationToken=test" onclick="testWebhook(this); return false;">test webhook with validation POST</a>
+        </td>
+    </tr>
+    <tr>
+        <td class="header">SQL Server</td>
+        <td>
+            @Model.WebAppConfigSQL
+        </td>
+    </tr>
+    <tr>
+        <td>Redis SSL Endpoint</td>
+        <td>
+            @Model.WebAppConfigRedis
+        </td>
+    </tr>
+    <tr>
+        <td>Cognitive Services Endpoint</td>
+        <td>
+            @Model.WebAppConfigCognitive
+        </td>
+    </tr>
+    <tr>
+        <td>Cognitive Services Enabled</td>
+        <td>
+            @if (Model.CognitiveServiceEnabled)
+            {
+                <p>Yes - cognitive analytics will be available</p>
+            }
+            else
+            {
+                <div>No - cognitive analytics are disabled</div>
+            }
+        </td>
+    </tr>
+    <tr>
+        <td>Service Bus</td>
+        <td>
+            @Model.WebAppConfigServiceBus
+        </td>
+    </tr>
+</table>
+
+<p>Last applied configuration JSon:</p>
+<code>
+    @Model.ConfigJson
+</code>
+
+<script>
+    function testWebhook(sender) {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function () {
+            if (xhttp.readyState == XMLHttpRequest.DONE) {
+                if (xhttp.responseText === "test") {
+                    alert('Success. Got back test-token "' + xhttp.responseText + '"');
+                }
+                else {
+                    alert('Unexpected response. Got back response body "' + xhttp.responseText + '"');
+                }
+                return false;
+            }
+        };
+        xhttp.open("POST", sender.href, true);
+        xhttp.send();
+
+        return false;
+    }
+</script>

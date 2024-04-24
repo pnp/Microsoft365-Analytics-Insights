@@ -1,0 +1,31 @@
+[
+  {
+    "CreationTime": "2018-04-10T05:19:01",
+    "Id": "16124be1-d537-4f99-bdbc-08d59ea2924e",
+    "Operation": "SharingSet",
+    "OrganizationId": "e307563d-5fcd-4e12-a554-9927f388b1cf",
+    "RecordType": 14,
+    "UserKey": "i:0h.f|membership|10030000974e5923@live.com",
+    "UserType": 0,
+    "Version": 1,
+    "Workload": "SharePoint",
+    "ClientIP": "213.52.202.3",
+    "ObjectId": "https://sometenant.sharepoint.com/teams/secure-52253/JL 1/Dokumenttien versionhallinta.docx",
+    "UserId": "first.last@customer.com",
+    "CorrelationId": "b1025c9e-2001-5000-7fbb-ec1d2f03fc3e",
+    "EventSource": "SharePoint",
+    "ItemType": "File",
+    "ListId": "294535e1-fad1-4cd9-9d29-04e3c075091d",
+    "ListItemUniqueId": "a299fe66-2984-4085-bd9f-e7aafc1b49e7",
+    "Site": "100eaf42-3a14-462f-90ab-b8eeb959c74a",
+    "UserAgent": "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
+    "WebId": "167bb658-bbb7-4d82-bb62-e4be5fd37217",
+    "EventData": "<Permissions granted>Osallistuja</Permissions granted>",
+    "SourceFileExtension": "docx",
+    "TargetUserOrGroupType": "Member",
+    "SiteUrl": "https://sometenant.sharepoint.com/teams/secure-52253",
+    "SourceFileName": "Dokumenttien versionhallinta.docx",
+    "SourceRelativeUrl": "JL 1/Dokumenttien versionhallinta.docx",
+    "TargetUserOrGroupName": "first.last@customer.com"
+  }
+]

@@ -1,0 +1,72 @@
+[
+  {
+    "Title": "AppId",
+    "Description": "ID de la aplicación Power App de Adoptify",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "AppId",
+        "insertValue": "00000000-0000-0000-0000-000000000000" // Insert this value for "value" if there's no setting with title "AppId"
+      }
+    }
+  },
+  {
+    "Title": "InactiveDays",
+    "Description": "Número de días inactivos antes de que se le recuerde a un usuario que abra Adoptify",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "InactiveDays",
+        "insertValue": 11 // Insert this value for "value" if there's no setting with title "InactiveDays"
+      }
+    }
+  },
+  {
+    "Title": "FirstLaunchBadgeID",
+    "Description": "ID de la insignia para otorgar a un usuario en su primer lanzamiento de Adoptify",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "FirstLaunchBadgeID",
+        "insertValue": { // Insert this query lookup value for "value" if there's no setting with title "FirstLaunchBadgeID"
+          "lookupType": "IdLookup",
+          "required": true,
+          "lookupParams": {
+            "listTitle": "Badges",
+            "fieldName": "BadgeName",
+            "fieldValue": "Principiante"
+          }
+        }
+      }
+    }
+  },
+  {
+    "Title": "DisableRewards",
+    "Description": "Deshabilitar la funcionalidad de premios",
+    "Value": "false"
+  },
+  {
+    "Title": "LanguageOverride",
+    "Description": "Código ISO de idioma predeterminado. Si está en blanco, se detectará automáticamente.",
+    "Value": ""
+  },
+  {
+    "Title": "SupportEmail",
+    "Description": "Dirección de correo electrónico de un contacto que dará soporte a Adoptify internamente",
+    "Value": {
+      "lookupType": "InsertValueIfNotExists",
+      "lookupParams": {
+        "listTitle": "Settings",
+        "fieldName": "Title",
+        "fieldValue": "SupportEmail",
+        "insertValue": "adoptify@contoso.local"
+      }
+    }
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "CreationTime": "2020-03-24T14:50:32",
+  "Id": "d259c359-07f1-5dc8-9f4c-37449059e0ab",
+  "Operation": "MemberAdded",
+  "OrganizationId": "2e1d1b32-bab7-48f3-b0db-3a93158d447e",
+  "RecordType": 25,
+  "UserKey": "61ccd33a-41c0-4a63-a735-09453209f215",
+  "UserType": 0,
+  "Version": 1,
+  "Workload": "MicrosoftTeams",
+  "UserId": "admin@M365x176143.onmicrosoft.com",
+  "CommunicationType": "Team",
+  "Members": [
+    {
+      "DisplayName": "MOD Administrator",
+      "Role": 2,
+      "UPN": "admin@M365x176143.onmicrosoft.com"
+    }
+  ],
+  "TeamGuid": "19:955a47c6555c4d258356d8b56ebdcdd9@thread.tacv2",
+  "ItemName": "Test Team",
+  "TeamName": "Test Team"
+}

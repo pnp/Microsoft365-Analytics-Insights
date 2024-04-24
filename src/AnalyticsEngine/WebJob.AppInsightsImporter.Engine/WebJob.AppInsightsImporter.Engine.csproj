@@ -1,0 +1,190 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{974B3B6C-B89A-45E6-A5A3-A0292BEB1BA4}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>WebJob.AppInsightsImporter.Engine</RootNamespace>
+    <AssemblyName>WebJob.AppInsightsImporter.Engine</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <TargetFrameworkProfile />
+    <NuGetPackageImportStamp>
+    </NuGetPackageImportStamp>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup>
+    <SignAssembly>false</SignAssembly>
+  </PropertyGroup>
+  <PropertyGroup>
+    <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="Microsoft.VisualBasic" />
+    <Reference Include="System" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.IdentityModel" />
+    <Reference Include="System.Net" />
+    <Reference Include="System.Net.Http.WebRequest" />
+    <Reference Include="System.Numerics" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="APIResponseParsers\Abstract.cs" />
+    <Compile Include="APIResponseParsers\AppInsightsResultClasses.cs" />
+    <Compile Include="APIResponseParsers\CustomEvents\CustomEventsResultCollection.cs" />
+    <Compile Include="APIResponseParsers\CustomEvents\BaseCustomEventAppInsightsQueryResult.cs" />
+    <Compile Include="APIResponseParsers\CustomEvents\ClickEventAppInsightsQueryResult.cs" />
+    <Compile Include="APIResponseParsers\CustomEvents\EventCustomPropClasses.cs" />
+    <Compile Include="APIResponseParsers\CustomEvents\PageExitEventAppInsightsQueryResult.cs" />
+    <Compile Include="APIResponseParsers\CustomEvents\PageUpdateEventAppInsightsQueryResult.cs" />
+    <Compile Include="APIResponseParsers\CustomEvents\SearchEventAppInsightsQueryResult.cs" />
+    <Compile Include="APIResponseParsers\PageViewClasses.cs" />
+    <Compile Include="APIResponseParsers\PageViewCollection.cs" />
+    <Compile Include="APIResponseParsers\AppInsightsQueryResultPropertyAttribute.cs" />
+    <Compile Include="AppInsightsAPIClient.cs" />
+    <Compile Include="AppInsightsColumn.cs" />
+    <Compile Include="AppInsightsImporter.cs" />
+    <Compile Include="Constants.cs" />
+    <Compile Include="PageUpdates\PageCommentsExtensions.cs" />
+    <Compile Include="PageUpdates\PageUpdateManager.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Properties\Resources.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+    <Compile Include="Sql\HitUpdatesSqlExtension.cs" />
+    <Compile Include="Sql\ImportDbHacks.cs" />
+    <Compile Include="Sql\Models\ClickTempEntity.cs" />
+    <Compile Include="Sql\Models\HitTempEntity.cs" />
+    <Compile Include="Sql\Models\HitUpdate.cs" />
+    <Compile Include="Sql\PageClicksSaveExtension.cs" />
+    <Compile Include="Sql\PageViewsSaveExtension.cs" />
+    <Compile Include="Sql\PageUpdatesSaveExtension.cs" />
+    <Compile Include="Sql\SearchesSaveExtension.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="app.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">
+      <Project>{b8da83ac-9151-4922-b255-12d105b33dc6}</Project>
+      <Name>Common.DataUtils</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\Common\Entities\Entities.csproj">
+      <Project>{637930bd-073b-421e-9f33-fe90bf2103c5}</Project>
+      <Name>Common.Entities</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Resources\Create Searches Import Temp Table.sql" />
+    <Content Include="Resources\Create Update Temp Table.sql" />
+    <Content Include="Resources\Create Import Temp Table.sql" />
+    <Content Include="Resources\Delete Duplicate Hits and Create ReqID IDX.sql" />
+    <Content Include="Resources\Migrate clicks from staging.sql" />
+    <Content Include="Resources\Migrate New Comments.sql" />
+    <Content Include="Resources\Migrate Searches Import.sql" />
+    <Content Include="Resources\Update Hits From Staging.sql" />
+    <Content Include="Resources\Migrate Hits Import into Hits.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.AI.TextAnalytics">
+      <Version>5.3.0</Version>
+    </PackageReference>
+    <PackageReference Include="Azure.Core">
+      <Version>1.38.0</Version>
+    </PackageReference>
+    <PackageReference Include="EntityFramework">
+      <Version>6.4.4</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.ApplicationInsights">
+      <Version>2.22.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Azure.KeyVault.Core">
+      <Version>3.0.5</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.CSharp">
+      <Version>4.7.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
+      <Version>6.0.1</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory">
+      <Version>5.2.9</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.IdentityModel.Tokens">
+      <Version>6.35.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NETCore.Platforms">
+      <Version>6.0.2</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NETCore.Targets">
+      <Version>5.0.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Rest.ClientRuntime">
+      <Version>2.3.24</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Rest.ClientRuntime.Azure">
+      <Version>3.3.19</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Rest.ClientRuntime.Azure.Authentication">
+      <Version>2.4.1</Version>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json">
+      <Version>13.0.1</Version>
+    </PackageReference>
+    <PackageReference Include="System.Memory.Data">
+      <Version>6.0.0</Version>
+    </PackageReference>
+    <PackageReference Include="System.Runtime">
+      <Version>4.3.1</Version>
+    </PackageReference>
+    <PackageReference Include="System.Runtime.InteropServices.RuntimeInformation">
+      <Version>4.3.0</Version>
+    </PackageReference>
+    <PackageReference Include="System.Security.Cryptography.Algorithms">
+      <Version>4.3.1</Version>
+    </PackageReference>
+    <PackageReference Include="System.Security.Cryptography.X509Certificates">
+      <Version>4.3.2</Version>
+    </PackageReference>
+    <PackageReference Include="System.Text.Json">
+      <Version>6.0.2</Version>
+    </PackageReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
