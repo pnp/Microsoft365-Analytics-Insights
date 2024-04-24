@@ -13,6 +13,8 @@ There are several prerequisites needed though so please take time to check if th
 Troubleshooting guides for common errors and problems are also in the readme files.
 
 ### System Docs
+_Note_: please note that all the documentation has been converted from DOCX format, so may have some formatting issues. 
+
 [Prerequisites](docs/prerequisites.md)
 
 [Installation](docs/install.md)
@@ -37,20 +39,20 @@ For all the data to be recorded for each area various permissions are needed, bu
 
 Usage focused on web-traffic & file usage activity.
 
-| Element                                         | Description                                                                                                                                                                                                                                                                                                                                        |
-|-------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Element | Description |
+|--|--|
 | Web-browsing: page hits, clicks & user sessions | Browser sessions (start & end browsing). Hits in each session with time on page. Performance data – server-side & client-side rendering times. User location information: country, province, city. Browser & device used. Hit associated site-collection & web. Links clicked on in each page of a session\* Link text, CSS class names, and URL.  |
-| File activity                                   | File events: view, edit, delete etc, for any files in the configured sites.                                                                                                                                                                                                                                                                        |
-| Searches                                        | Searches made from the SharePoint Online website.                                                                                                                                                                                                                                                                                                  |
-| Pages metadata                                  | All page properties & metadata associated with visited pages; list properties & taxonomies.                                                                                                                                                                                                                                                        |
-| Page comments and likes                         | For SharePoint pages with comments and likes (for the page), they are read by the JavaScript tracker and stored in the SQL database.  Comments are stored too with a sentiment score & detected language if a text analytics service is configured.                                                                                                |
+| File activity                                   | File events: view, edit, delete etc, for any files in the configured sites. |
+| Searches | Searches made from the SharePoint Online website.|
+| Pages metadata | All page properties & metadata associated with visited pages; list properties & taxonomies. |
+| Page comments and likes | For SharePoint pages with comments and likes (for the page), they are read by the JavaScript tracker and stored in the SQL database.  Comments are stored too with a sentiment score & detected language if a text analytics service is configured. |
 
 \*Link clicks tracked where possible. Some links suppress click events so cannot be seen by our tracking code.
 
 ## SharePoint Usage
 
-| Element                                                                                                                                                                                                                                                                                                                                                                                                                       | Description                                                                                                                                                                                                                                            |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Element | Description  |
+|-|-|
 | SharePoint user activity, daily. More information on fields in activity reports: [https://docs.microsoft.com/en-us/microsoft-365/admin/activity-reports/activity-reports?view=o365-worldwide\#which-activity-reports-are-available-in-the-admin-center](https://docs.microsoft.com/en-us/microsoft-365/admin/activity-reports/activity-reports?view=o365-worldwide#which-activity-reports-are-available-in-the-admin-center)  | By user: Files viewed or edited. Files synced. Files shared internally. Files shared externally.                                                                                                                                                       |
 | SharePoint site activity, weekly                                                                                                                                                                                                                                                                                                                                                                                              | By site per week: External Sharing count File Count Active File Count Page View Count Visited Page Count Anonymous Link Count Company Link Count Secure Link for Guest Count Secure Link for Member Count Storage Used (Byte) Storage Allocated (Byte) |
 
