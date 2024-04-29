@@ -195,7 +195,7 @@ For the web application to correctly authenticate users, its URL must be set up 
 
     Add your web application URL as seen in the configuration wizard:
 
-    ![App Service URL in the installer](media/d3e84ffc6593908f7c9f3aa42a5ef6af.png)
+    ![App Service URL in the installer](media/installer-app-service-url.png)
 
     Once the web-app is created (so you know the name is valid), copy the root URL into the application registration configuration.
 
@@ -467,3 +467,10 @@ Enabling this extension will provision additional tables in the SQL database. Th
 ![Activity Analytics report screenshot](media/activity-analytics-report.png)
 
 Review the instructions here to setup the analytics extensions: [Set up analytics](analytics/README.md)
+
+## Further reading
+
+- [Verify the deployment](verify.md)
+- [Troubleshooting](troubleshooting.md)
+- [Known issues](knownissues.md)
+- [Database Schema](dbschema.md)

@@ -8,6 +8,10 @@ A new set of tables is created in the database that aggregate the data from the 
 
 Since the data available in the database/report shows aggregated usage and activity per user per week, it allows anyone, not only tenant admins to analyze this data and make decisions about adoption plans, license usage, etc.
 
+### Available metrics and data
+
+TBD
+
 ## Dependent Azure resources
 
 The resources that automate the weekly aggregation of the data used by the Power BI report are:
