@@ -8,12 +8,24 @@ A complete list of data this engine can collect is below.
 
 Troubleshooting guides for common errors and problems are also in the readme files.
 
-### System Docs
+## System Docs
 _Note_: please note that all the documentation has been converted from DOCX format, so may have some formatting issues. 
 
 [Prerequisites](docs/prerequisites.md)
 
-[Installation](docs/install.md)
+### Installation Procedures
+
+[Installation (with installer)](docs/install.md)
+
+[Manual installation](docs/install_manually.md)
+    
+- [Optional: enable private endpoints](docs/privateendpoints.md)
+
+- [Optional: use certificates for application authentication](docs/certappauth.md)
+
+[Updating solution with new versions](docs/updatingsolution.md)
+
+### Post Install Tasks
 
 [Verify deployment](docs/verify.md)
 
@@ -21,7 +33,13 @@ _Note_: please note that all the documentation has been converted from DOCX form
 
 [Troubleshooting](docs/troubleshooting.md)
 
+### Miscellaneous
+
+[Product notes](docs/productnotes.md)
+
 [Known issues](docs/knownissues.md)
+
+[Uninstallation](docs/uninstall.md)
 
 # Data Collection Map
 
