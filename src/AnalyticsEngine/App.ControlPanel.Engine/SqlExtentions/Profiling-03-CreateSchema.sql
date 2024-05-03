@@ -562,8 +562,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertTeams] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @teams AS ut_teams_user_activity_log;
+
   INSERT INTO @teams (
     [user_id], [date],
     [private_chat_count], [team_chat_count], [calls_count],
@@ -586,6 +586,7 @@ BEGIN
   FROM dbo.[teams_user_activity_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [Teams Private Chats] = tvp.[private_chat_count],
@@ -608,6 +609,7 @@ BEGIN
     [Teams Urgent Messages] = tvp.[urgent_messages]
   FROM #ActivitiesStaging AS t
   INNER JOIN @teams AS tvp ON t.user_id = tvp.user_id AND t.date = tvp.date;
+
   INSERT #ActivitiesStaging (
     user_id, date,
     [Teams Private Chats], [Teams Team Chats], [Teams Calls],
@@ -629,7 +631,6 @@ BEGIN
     [post_messages], [reply_messages], [urgent_messages]
   FROM @teams as tvp
   WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
-  COMMIT TRANSACTION;
 END
 GO
 
@@ -638,8 +639,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertOneDrive] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @onedrive AS ut_onedrive_user_activity_log;
+
   INSERT INTO @onedrive (
     [user_id], [date],
     [viewed_or_edited], [synced], [shared_internally], [shared_externally]
@@ -650,6 +651,7 @@ BEGIN
   FROM dbo.[onedrive_user_activity_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [OneDrive Viewed/Edited] = tvp.[viewed_or_edited],
@@ -658,6 +660,7 @@ BEGIN
     [OneDrive Shared Externally] = tvp.[shared_externally]
   FROM #ActivitiesStaging AS t
   INNER JOIN @onedrive AS tvp ON t.user_id = tvp.user_id AND t.date = tvp.date;
+
   INSERT #ActivitiesStaging (
     user_id, date,
     [OneDrive Viewed/Edited], [OneDrive Synced], [OneDrive Shared Internally], [OneDrive Shared Externally]
@@ -666,8 +669,7 @@ BEGIN
     user_id, date,
     [viewed_or_edited], [synced], [shared_internally], [shared_externally]
   FROM @onedrive as tvp
-  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);;
-  COMMIT TRANSACTION;
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
 END
 GO
 
@@ -676,8 +678,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertSharePoint] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @sharepoint AS ut_sharepoint_user_activity_log;
+
   INSERT INTO @sharepoint (
     [user_id], [date],
     [viewed_or_edited], [synced], [shared_internally], [shared_externally]
@@ -688,6 +690,7 @@ BEGIN
   FROM dbo.[sharepoint_user_activity_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [SPO Viewed/Edited] = tvp.[viewed_or_edited],
@@ -696,6 +699,7 @@ BEGIN
     [SPO Shared Externally] = tvp.[shared_externally]
   FROM #ActivitiesStaging AS t
   INNER JOIN @sharepoint AS tvp ON t.user_id = tvp.user_id AND t.date = tvp.date;
+
   INSERT #ActivitiesStaging (
     user_id, date,
     [SPO Viewed/Edited], [SPO Synced], [SPO Shared Internally], [SPO Shared Externally]
@@ -705,7 +709,6 @@ BEGIN
     [viewed_or_edited], [synced], [shared_internally], [shared_externally]
   FROM @sharepoint as tvp
   WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
-  COMMIT TRANSACTION;
 END
 GO
 
@@ -714,8 +717,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertOutlook] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @outlook AS ut_outlook_user_activity_log;
+
   INSERT INTO @outlook (
     [user_id], [date],
     [email_send_count], [email_receive_count], [email_read_count],
@@ -728,6 +731,7 @@ BEGIN
   FROM dbo.[outlook_user_activity_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [Emails Sent] = tvp.[email_send_count],
@@ -737,6 +741,7 @@ BEGIN
     [Outlook Meetings Interacted] = tvp.[meeting_interacted_count]
   FROM #ActivitiesStaging AS t
   INNER JOIN @outlook AS tvp ON t.user_id = tvp.user_id AND t.date = tvp.date;
+
   INSERT #ActivitiesStaging (
     user_id, date,
     [Emails Sent], [Emails Received], [Emails Read],
@@ -748,7 +753,6 @@ BEGIN
     [meeting_created_count], [meeting_interacted_count]
   FROM @outlook as tvp
   WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
-  COMMIT TRANSACTION;
 END
 GO
 
@@ -757,8 +761,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertYammer] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @yammer AS ut_yammer_user_activity_log;
+
   INSERT INTO @yammer (
     [user_id], [date],
     [posted_count], [read_count], [liked_count]
@@ -769,6 +773,7 @@ BEGIN
   FROM dbo.[yammer_user_activity_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [Yammer Posted] = tvp.[posted_count],
@@ -776,6 +781,7 @@ BEGIN
     [Yammer Liked] = tvp.[liked_count]
   FROM #ActivitiesStaging AS t
   INNER JOIN @yammer AS tvp ON t.user_id = tvp.user_id AND t.date = tvp.date;
+
   INSERT #ActivitiesStaging (
     user_id, date,
     [Yammer Posted], [Yammer Read], [Yammer Liked]
@@ -785,7 +791,6 @@ BEGIN
     [posted_count], [read_count], [liked_count]
   FROM @yammer as tvp
   WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
-  COMMIT TRANSACTION;
 END
 GO
 
@@ -794,8 +799,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertTeamsDevices] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @ut_staging AS ut_teams_user_device_usage_log;
+
   INSERT INTO @ut_staging (
     [user_id], [date],
     [used_web], [used_mac], [used_windows], [used_linux], [used_chrome_os],
@@ -804,12 +809,15 @@ BEGIN
   SELECT
     [user_id], @StartDate,
     -- multiplication here converts the bit column into an int so that aggregation works
-    MAX(1*[used_web]), MAX(1*[used_mac]), MAX(1*[used_windows]), MAX(1*[used_linux]), MAX(1*[used_chrome_os]),
+    MAX(1*[used_web]), MAX(1*[used_mac]), MAX(1*[used_windows]),
+    -- Use COALESCE here to fix #1
+    MAX(1*COALESCE([used_linux], 0)), MAX(1*COALESCE([used_chrome_os], 0)),
     MAX(1*[used_win_phone] + 1*[used_ios] + 1*[used_android]), -- used mobile
     MAX(1*[used_win_phone]), MAX(1*[used_ios]), MAX(1*[used_android])
   FROM dbo.[teams_user_device_usage_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [Teams Used Web] = staging.[used_web],
@@ -823,6 +831,7 @@ BEGIN
     [Teams Used Android] = staging.[used_android]
   FROM #UsageStaging AS t
   INNER JOIN @ut_staging AS staging ON t.user_id = staging.user_id AND t.date = staging.date;
+
   INSERT #UsageStaging (
     [user_id], [date],
     [Teams Used Web], [Teams Used Mac], [Teams Used Windows], [Teams Used Linux], [Teams Used Chrome OS],
@@ -833,8 +842,7 @@ BEGIN
     [used_web], [used_mac], [used_windows], [used_linux], [used_chrome_os],
     [used_mobile], [used_win_phone], [used_ios], [used_android]
   FROM @ut_staging as staging
-  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);;
-  COMMIT TRANSACTION;
+  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);
 END
 GO
 
@@ -843,8 +851,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertM365Apps] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @ut_staging AS ut_platform_user_activity_log;
+
   INSERT INTO @ut_staging (
     [user_id], [date],
     [windows], [mac], [mobile], [web],
@@ -865,6 +873,7 @@ BEGIN
   FROM dbo.[platform_user_activity_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [Office Windows] = staging.[windows],
@@ -903,6 +912,7 @@ BEGIN
     [Office Teams Web] = staging.[teams_web]
   FROM #UsageStaging AS t
   INNER JOIN @ut_staging AS staging ON t.user_id = staging.user_id AND t.date = staging.date;
+
   INSERT #UsageStaging (
     [user_id], [date],
     [Office Windows], [Office Mac], [Office Mobile], [Office Web],
@@ -921,8 +931,7 @@ BEGIN
     [outlook_mobile], [word_mobile], [excel_mobile], [powerpoint_mobile], [onenote_mobile], [teams_mobile],
     [outlook_web], [word_web], [excel_web], [powerpoint_web], [onenote_web], [teams_web]
   FROM @ut_staging as staging
-  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);;
-  COMMIT TRANSACTION;
+  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);
 END
 GO
 
@@ -931,8 +940,8 @@ CREATE PROCEDURE [profiling].[usp_UpsertYammerDevices] (
 ) AS
 BEGIN
   SET NOCOUNT ON;
-  BEGIN TRANSACTION;
   DECLARE @ut_staging AS ut_yammer_device_activity_log;
+
   INSERT INTO @ut_staging (
     [user_id], [date],
     [used_count], [used_web], [used_mobile], [used_others],
@@ -952,6 +961,7 @@ BEGIN
   FROM [dbo].[yammer_device_activity_log]
   WHERE @StartDate <= [date] AND [date] <= @EndDate
   GROUP BY [user_id];
+
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     [Yammer Platform Count] = staging.[used_count],
@@ -964,6 +974,7 @@ BEGIN
     [Yammer Used iPhone] = staging.[used_iphone]
   FROM #UsageStaging AS t
   INNER JOIN @ut_staging AS staging ON t.user_id = staging.user_id AND t.date = staging.date;
+
   INSERT #UsageStaging (
     user_id, date,
     [Yammer Platform Count], [Yammer Used Web], [Yammer Used Mobile], [Yammer Used Others],
@@ -975,7 +986,6 @@ BEGIN
     [used_win_phone], [used_android], [used_ipad], [used_iphone]
   FROM @ut_staging as staging
   WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);
-  COMMIT TRANSACTION;
 END
 GO
 
@@ -989,8 +999,8 @@ CREATE PROCEDURE [profiling].[usp_CompileWeekActivityRows] (
   @Monday DATE -- Start day of the week to aggregate
 ) AS
 BEGIN
+  SET NOCOUNT ON;
   BEGIN TRY
-    SET NOCOUNT ON;
     INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
     SELECT GETDATE(), N'[usp_CompileWeekActivityRows] Starting: ' + CAST(@Monday AS NVARCHAR);
     INSERT INTO [profiling].[ActivitiesWeekly]
@@ -1038,8 +1048,8 @@ CREATE PROCEDURE [profiling].[usp_CompileWeekActivityColumns] (
   @Monday DATE -- Start day of the week to aggregate
 ) AS
 BEGIN
+  SET NOCOUNT ON;
   BEGIN TRY
-    SET NOCOUNT ON;
     INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
     SELECT GETDATE(), N'[usp_CompileWeekActivityColumns] Starting: ' + CAST(@Monday AS NVARCHAR);
     INSERT INTO [profiling].[ActivitiesWeeklyColumns] (
@@ -1103,9 +1113,9 @@ CREATE PROCEDURE [profiling].[usp_CompileUsageWeek] (
   @Monday DATE -- Start day of the week to aggregate
 ) AS
 BEGIN
+  SET NOCOUNT ON;
   BEGIN TRY
     -- SET NOCOUNT ON added to prevent extra result sets from interfering with SELECT statements.
-    SET NOCOUNT ON;
     INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
     SELECT GETDATE(), N'[usp_CompileUsageWeek] Starting: ' + CAST(@Monday AS NVARCHAR);
 
@@ -1232,9 +1242,9 @@ CREATE PROCEDURE [profiling].[usp_CompileActivityWeek] (
   @Monday DATE -- Start day of the week to aggregate
 ) AS
 BEGIN
+  -- SET NOCOUNT ON added to prevent extra result sets from interfering with SELECT statements.
+  SET NOCOUNT ON;
   BEGIN TRY
-    -- SET NOCOUNT ON added to prevent extra result sets from interfering with SELECT statements.
-    SET NOCOUNT ON;
     INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
     SELECT GETDATE(), N'[usp_CompileActivityWeek] Starting: ' + CAST(@Monday AS NVARCHAR);
     DECLARE
@@ -1339,21 +1349,21 @@ BEGIN
   DECLARE @RetentionDate DATE = DATEADD(WEEK, -1 * @WeeksToKeep, @ThisWeeksMonday);
   -- Get last aggregated date in the table, it will be a Monday
   DECLARE
-    @LastDateInTable DATE
-    ,@MaxActitiesWeekly DATE;
+    @LastDateInTables DATE
+    ,@MaxActitiesWeekly DATE
+    ,@MaxActitiesWeeklyColumns DATE
+    ,@MaxUsageWeekly DATE;
   SELECT @MaxActitiesWeekly = MAX(MetricDate) FROM [profiling].[ActivitiesWeekly];
-  DECLARE @MaxActitiesWeeklyColumns DATE;
   SELECT @MaxActitiesWeeklyColumns = MAX([date]) FROM [profiling].[ActivitiesWeeklyColumns];
-  DECLARE @MaxUsageWeekly DATE;
   SELECT @MaxUsageWeekly = MAX([date]) FROM [profiling].[UsageWeekly];
-  SELECT @LastDateInTable = MIN([date]) FROM (VALUES (@MaxActitiesWeekly), (@MaxActitiesWeeklyColumns), (@MaxUsageWeekly)) AS x([date])
+  SELECT @LastDateInTables = MIN([date]) FROM (VALUES (@MaxActitiesWeekly), (@MaxActitiesWeeklyColumns), (@MaxUsageWeekly)) AS x([date])
 
-  IF @LastDateInTable IS NULL OR @All = 1
+  IF @LastDateInTables IS NULL OR @All = 1
       -- Start from the retention date
-      SET @LastDateInTable = @RetentionDate;
+      SET @LastDateInTables = @RetentionDate;
 
   -- Week by week, aggregate the data
-  DECLARE @Monday DATE = DATEADD(DAY, 7, @LastDateInTable);
+  DECLARE @Monday DATE = DATEADD(DAY, 7, @LastDateInTables);
   INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
   SELECT GETDATE(), N'Weekly aggregation requested, from ' + CAST(@Monday as NVARCHAR) + ' to possibly ' + CAST(@ThisWeeksMonday as NVARCHAR);
   WHILE @ThisWeeksMonday > @Monday
