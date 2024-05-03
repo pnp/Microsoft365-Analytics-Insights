@@ -1,16 +1,16 @@
-*-Source coming soon-*
+![Design Header](docs/media/design.jpg)
 
-This document describes the steps required to deploy and verify the “Office 365 Advanced Analytics Engine” for any solutions based on it.
+Welcome to the "Office 365 Advanced Analytics" project home. This is an analytics engine that extracts much more analytics from M365 than is available out of the box. The core part of this solution is an ingestion engine that collects enhanced M365 usage data and stores it into a single SQL Server database. Other solutions then use this dataset to offer enhanced funcionality or reporting. 
 
-Each delivery will have solution specific steps you need to address too – **review the solution specific deployment document before continuing**.
+A complete list of data this engine can collect is below.
 
-There are several prerequisites needed though so please take time to check if these are in place before starting this deployment for the first time.
+**Important**: this guide explains the full setup for all areas of the analytics engine. You may not need all parts/data the solution provides, so please be clear which areas of data-collection are needed first, so the right permissions & prerequisites are clear too. 
 
-**Important**: this guide explains the full setup for all areas of the analytics engine. You may not need all parts of the solution, so please be clear which areas of data-collection are needed first, so the right permissions & prerequisites are clear too.
-
-A complete list of data this engine can collect is below. Troubleshooting guides for common errors and problems are also in this document.
+Troubleshooting guides for common errors and problems are also in the readme files.
 
 ### System Docs
+_Note_: please note that all the documentation has been converted from DOCX format, so may have some formatting issues. 
+
 [Prerequisites](docs/prerequisites.md)
 
 [Installation](docs/install.md)
@@ -35,20 +35,20 @@ For all the data to be recorded for each area various permissions are needed, bu
 
 Usage focused on web-traffic & file usage activity.
 
-| Element                                         | Description                                                                                                                                                                                                                                                                                                                                        |
-|-------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Element | Description |
+|--|--|
 | Web-browsing: page hits, clicks & user sessions | Browser sessions (start & end browsing). Hits in each session with time on page. Performance data – server-side & client-side rendering times. User location information: country, province, city. Browser & device used. Hit associated site-collection & web. Links clicked on in each page of a session\* Link text, CSS class names, and URL.  |
-| File activity                                   | File events: view, edit, delete etc, for any files in the configured sites.                                                                                                                                                                                                                                                                        |
-| Searches                                        | Searches made from the SharePoint Online website.                                                                                                                                                                                                                                                                                                  |
-| Pages metadata                                  | All page properties & metadata associated with visited pages; list properties & taxonomies.                                                                                                                                                                                                                                                        |
-| Page comments and likes                         | For SharePoint pages with comments and likes (for the page), they are read by the JavaScript tracker and stored in the SQL database.  Comments are stored too with a sentiment score & detected language if a text analytics service is configured.                                                                                                |
+| File activity                                   | File events: view, edit, delete etc, for any files in the configured sites. |
+| Searches | Searches made from the SharePoint Online website.|
+| Pages metadata | All page properties & metadata associated with visited pages; list properties & taxonomies. |
+| Page comments and likes | For SharePoint pages with comments and likes (for the page), they are read by the JavaScript tracker and stored in the SQL database.  Comments are stored too with a sentiment score & detected language if a text analytics service is configured. |
 
 \*Link clicks tracked where possible. Some links suppress click events so cannot be seen by our tracking code.
 
 ## SharePoint Usage
 
-| Element                                                                                                                                                                                                                                                                                                                                                                                                                       | Description                                                                                                                                                                                                                                            |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Element | Description  |
+|-|-|
 | SharePoint user activity, daily. More information on fields in activity reports: [https://docs.microsoft.com/en-us/microsoft-365/admin/activity-reports/activity-reports?view=o365-worldwide\#which-activity-reports-are-available-in-the-admin-center](https://docs.microsoft.com/en-us/microsoft-365/admin/activity-reports/activity-reports?view=o365-worldwide#which-activity-reports-are-available-in-the-admin-center)  | By user: Files viewed or edited. Files synced. Files shared internally. Files shared externally.                                                                                                                                                       |
 | SharePoint site activity, weekly                                                                                                                                                                                                                                                                                                                                                                                              | By site per week: External Sharing count File Count Active File Count Page View Count Visited Page Count Anonymous Link Count Company Link Count Secure Link for Guest Count Secure Link for Member Count Storage Used (Byte) Storage Allocated (Byte) |
 
@@ -158,3 +158,5 @@ Expected data-range for a medium-sized environment:
 -   Up to 1 year of data-collection. Longer retention rates will require higher SQL performance tiers.
 
 Some components can be moved out of Azure; the app-service and the SQL database if needed, but we recommend keeping it in Azure so the automatic installer update process will work with the architecture.
+
+![Architecture diagram](docs/media/architecture.jpg)

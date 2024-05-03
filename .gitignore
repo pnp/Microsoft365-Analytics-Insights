@@ -24,3 +24,6 @@
 /src/Misc/BuildsSite/Web/ClientApp/.env
 /src/Misc/BuildsSite/Web/appsettings.Development.json
 /src/Misc/BuildsSite/Web/Properties/ServiceDependencies/m365advancedanalytics - Web Deploy
+
+# Avoid having the pbix files in the repo
+/reports/Usage Analytics/*.pbix
