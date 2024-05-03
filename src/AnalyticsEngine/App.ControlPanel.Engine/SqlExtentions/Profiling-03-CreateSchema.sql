@@ -1223,11 +1223,16 @@ BEGIN
         [Yammer Used Web], [Yammer Used Mobile], [Yammer Used Others],
         [Yammer Used WinPhone], [Yammer Used Android], [Yammer Used iPad], [Yammer Used iPhone]
       FROM #UsageStaging;
+
+      DROP TABLE #UsageStaging;
     END
   END TRY
   BEGIN CATCH
     INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
     SELECT GETDATE(), N'Catch [usp_CompileUsageWeek]: ' + ERROR_MESSAGE();
+
+    IF OBJECT_ID('tempdb..#UsageStaging') IS NOT NULL
+      DROP TABLE #UsageStaging;
   END CATCH
 END
 GO
@@ -1319,11 +1324,16 @@ BEGIN
         EXECUTE [profiling].[usp_CompileWeekActivityColumns] @Monday;
       IF @RowsDone = 0
         EXECUTE [profiling].[usp_CompileWeekActivityRows] @Monday;
+      
+      DROP TABLE #ActivitiesStaging;
     END
   END TRY
   BEGIN CATCH
     INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
     SELECT GETDATE(), N'[usp_CompileActivityWeek] Catch: ' + ERROR_MESSAGE();
+
+    IF OBJECT_ID('tempdb..#ActivitiesStaging') IS NOT NULL
+      DROP TABLE #ActivitiesStaging;
   END CATCH
 END
 GO
