@@ -48,7 +48,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                // Ensure plan has system assigned identity
+                // Ensure app has system assigned identity
                 if (webApp.HasData && webApp.Data.Identity == null)
                 {
                     webApp.Data.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
@@ -58,6 +58,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     {
                         Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
                     };
+                    base.EnsureTagsOnNew(webAppUpdateInfo.Tags);     // Add configured tags
                     var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo);
                 }
 
