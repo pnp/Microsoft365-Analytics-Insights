@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<Elements xmlns="http://schemas.microsoft.com/sharepoint/">
-    <CustomAction
-        Title="AiTrackerModern"
-        Location="ClientSideExtension.ApplicationCustomizer"
-        ClientSideComponentId="a4e24884-9cfd-41ac-87af-747a47055f25"
-        ClientSideComponentProperties="{&quot;testMessage&quot;:&quot;Test message&quot;}">
-    </CustomAction>
-</Elements>

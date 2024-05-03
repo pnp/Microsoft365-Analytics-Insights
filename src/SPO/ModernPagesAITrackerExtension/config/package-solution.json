@@ -1,0 +1,46 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "Office 365 Advanced Analytics - SharePoint SPFx Tracker",
+    "id": "610a9794-be9b-4d64-97c7-39377a624979",
+    "version": "1.0.1.51",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.16.1"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "Office 365 Advanced Analytics - SharePoint SPFx Tracker"
+      },
+      "longDescription": {
+        "default": "Office 365 Advanced Analytics - SharePoint SPFx Tracker"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "Application Extension - Deployment of custom action",
+        "description": "Deploys a custom action with ClientSideComponentId association",
+        "id": "0cc21883-5927-4ed9-af69-130a54251d5a",
+        "version": "1.0.0.0",
+        "assets": {
+          "elementManifests": [
+            "elements.xml",
+            "ClientSideInstance.xml"
+          ]
+        }
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/spoinsights-modern-ui-aitracker.sppkg"
+  }
+}

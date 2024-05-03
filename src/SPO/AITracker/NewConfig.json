@@ -1,0 +1,12 @@
+{
+  "EnvironmentName": "New Config File",
+  "Description": "Deployment config file for SPO Insights AITracker.js",
+  "AdminUsername": "admin@mytenant.onmicrosoft.com",
+  "TargetSites": [
+    "https://mytenant.sharepoint.com/sites/spoinsightsModern",
+    "https://mytentant.sharepoint.com/sites/spoinsights"
+  ],
+  "ApplicationInsightsConnectionString": "--Paste AI connection string here--",
+  "SourceFileRelativeDestination": "/SPOInsights/AITracker.js",
+  "SPOInsightDocLibTitle": "SPOInsights"
+}
