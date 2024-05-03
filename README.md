@@ -19,9 +19,9 @@ _Note_: please note that all the documentation has been converted from DOCX form
 
 [Manual installation](docs/install_manually.md)
     
-- [Optional: enable private endpoints](docs/privateendpoints.md)
+[Optional: enable private endpoints](docs/privateendpoints.md)
 
-- [Optional: use certificates for application authentication](docs/certappauth.md)
+[Optional: use certificates for application authentication](docs/certappauth.md)
 
 [Updating solution with new versions](docs/updatingsolution.md)
 
