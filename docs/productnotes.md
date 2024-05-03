@@ -24,11 +24,3 @@ This is all designed so the system can scale with lots of users/pages, without c
 
 All the above does mean however, that if you’re testing with just a couple of users to browse a site.
 
-## Unexpected SharePoint Page Properties
-If you're not seeing the properties you're expecting for pages in SP and you've verified the page has been refreshed with the notes above, the next step is to check the API call the tracking JS makes to read page properties.
-
-![Page Properties API Call](media/page_props_apicall.jpg)
-
-These are the fields that'll be sent to update for the page in question. Verify the field you're expecting is in this list. 
-
-If you can't see this request when you visit the page, you're expecting to see the field on, you should clear the "AITrackerPagesMetadataUploaded" cookie (see above).
