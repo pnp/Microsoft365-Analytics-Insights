@@ -20,18 +20,12 @@ TODO:
 SELECT
 	ev.user_id
 	,chats.app_host
-	,files.file_name
-	,meet.name as meeting_name
+	,count(ev.time_stamp) event_count
 FROM [dbo].[audit_events] ev
 join dbo.event_meta_general g on ev.id = g.event_id
 left join dbo.event_copilot_chats chats on ev.id = chats.event_id
--- Files
-left join dbo.event_copilot_files c_files on chats.event_id = c_files.copilot_chat_id
-left join dbo.event_file_names files on c_files.file_name_id = files.id
--- Meetings
-left join dbo.event_copilot_meetings c_meet on chats.event_id = c_meet.copilot_chat_id
-left join dbo.online_meetings meet on c_meet.meeting_id = meet.id
-where chats.app_host is not null;
+where chats.app_host is not null
+group by user_id, app_host;
 
 with
 copilot_events as (
