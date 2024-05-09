@@ -81,6 +81,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                     try
                     {
                         thisAuditLogReport = JsonConvert.DeserializeObject<CopilotAuditLogContent>(logJson);
+                        var asCopilotReport = (CopilotAuditLogContent)thisAuditLogReport;
+                        asCopilotReport.EventRaw = JsonConvert.SerializeObject(asCopilotReport.CopilotEventData);
                     }
                     catch (JsonReaderException)
                     {
