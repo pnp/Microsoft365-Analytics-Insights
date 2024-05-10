@@ -1,6 +1,7 @@
 ﻿using Common.DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -51,7 +52,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             var logs = new WebActivityReportSet();
 
             // A report download can have multiple reports in a Json array.
-            var allReportsData = Newtonsoft.Json.Linq.JArray.Parse(jSonBody);
+            JArray allReportsData;
+            try
+            {
+                allReportsData = JArray.Parse(jSonBody);
+            }
+            catch (Exception ex)
+            {
+                // Random errors decoding an object expected to be an array but isn't
+                _telemetry.LogError(ex, $"Got error '{ex.Message}' parsing a JSON: {jSonBody}. Will try again on next cycle.");
+                return new WebActivityReportSet();
+            }
+
             var reportsArray = allReportsData.Children();
             foreach (var reportItem in reportsArray)
             {
@@ -81,9 +93,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                     try
                     {
                         thisAuditLogReport = JsonConvert.DeserializeObject<CopilotAuditLogContent>(logJson);
+                        // We want to store the CopilotEventData but its current schema may change in the future. Keeping the full CopilotEventData object for now.
                         var asCopilotReport = (CopilotAuditLogContent)thisAuditLogReport;
-                        // TODO: This is not really raw, remember to do it correctly
-                        asCopilotReport.EventRaw = JsonConvert.SerializeObject(asCopilotReport.CopilotEventData);
+                        dynamic obj = JsonConvert.DeserializeObject<dynamic>(logJson);
+                        asCopilotReport.EventRaw = JsonConvert.SerializeObject(obj.CopilotEventData);
                     }
                     catch (JsonReaderException)
                     {

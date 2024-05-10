@@ -17,49 +17,55 @@ TODO:
 ![img](copilot1.png)
 
 ```SQL
-SELECT
-	ev.user_id
-	,chats.app_host
-	,count(ev.time_stamp) event_count
-FROM [dbo].[audit_events] ev
-join dbo.event_meta_general g on ev.id = g.event_id
-left join dbo.event_copilot_chats chats on ev.id = chats.event_id
-where chats.app_host is not null
-group by user_id, app_host;
+select app_host
+from dbo.event_copilot_chats
+group by app_host;
 
-with
-copilot_events as (
-	SELECT
-		ev.user_id
-		,chats.app_host
-		,files.file_name
-		,meet.name as meeting_name
-	FROM [dbo].[audit_events] ev
-	join dbo.event_meta_general g on ev.id = g.event_id
-	left join dbo.event_copilot_chats chats on ev.id = chats.event_id
-	-- Files
-	left join dbo.event_copilot_files c_files on chats.event_id = c_files.copilot_chat_id
-	left join dbo.event_file_names files on c_files.file_name_id = files.id
-	-- Meetings
-	left join dbo.event_copilot_meetings c_meet on chats.event_id = c_meet.copilot_chat_id
-	left join dbo.online_meetings meet on c_meet.meeting_id = meet.id
-	where chats.app_host is not null
-),
-file_events as (
-	select user_id, app_host, count(file_name) as related_count
-	from copilot_events
-	where file_name is not null
-	group by user_id, app_host
-),
-meeting_events as (
-	select user_id, app_host, count(meeting_name) as related_count
-	from copilot_events
-	where meeting_name is not null
-	group by user_id, app_host
+DECLARE
+	@monday DATETIME = '2024-04-29',
+	@sunday DATETIME = '2024-05-06';
+
+WITH copilot_pivoted AS (
+	SELECT * FROM (
+		SELECT
+			app_host,
+			user_id,
+			@monday AS [date],
+			event_id
+		FROM
+			dbo.event_copilot_chats c
+			JOIN dbo.audit_events au ON c.event_id = au.id
+			WHERE @monday <= au.time_stamp AND au.time_stamp <= @sunday
+	) t
+	PIVOT (
+		COUNT(event_id)
+		for app_host IN  (
+			[Bing],
+			[bizchat],
+			[Excel],
+			[Loop],
+			[Office],
+			[PowerPoint],
+			[Teams],
+			[Word]
+		)
+	) AS pivoted
 )
-select * from file_events
-union
-select * from meeting_events
+SELECT
+	user_id, date,
+	[Bing],
+	[bizchat] AS [M365 Chat] , -- M365 Chat experience on Bing and Teams
+	[Excel],
+	[Loop],
+	[Office],
+	[PowerPoint],
+	[Teams],
+	[Word]
+FROM copilot_pivoted
+```
+
+```SQL
+
 ```
 
 ## Notes
@@ -75,9 +81,9 @@ begin try
 begin transaction
 truncate table dbo.event_copilot_files
 truncate table dbo.event_copilot_meetings
-delete from  dbo.event_copilot_chats
+delete FROM  dbo.event_copilot_chats
 truncate table [dbo].[event_meta_general]
-delete from dbo.audit_events where operation_id = 1
+delete FROM dbo.audit_events WHERE operation_id = 1
 commit transaction
 end try
 begin catch
