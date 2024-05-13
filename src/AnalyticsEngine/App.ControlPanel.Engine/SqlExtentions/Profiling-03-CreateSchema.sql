@@ -654,6 +654,74 @@ GO
 
 ------------------------------------------------
 
+CREATE PROCEDURE [profiling].[usp_UpsertCopilot] (
+  @StartDate DATE,
+  @EndDate DATE
+)
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  -- Temporary table to store interim results
+  CREATE TABLE #ActivitiesStaging (
+    [user_id] INT,
+    [date] DATE,
+    [copilot_chats_count] BIGINT,
+    [copilot_meetings_count] BIGINT,
+    [copilot_files_count] BIGINT
+  );
+
+  -- Declare variables for the CTE
+  DECLARE @monday DATETIME = '2024-04-29',
+          @sunday DATETIME = '2024-05-06';
+
+  -- Common table expression to pivot copilot data
+  ;WITH copilot_pivoted AS (
+    SELECT *
+    FROM (
+      SELECT
+        app_host,
+        user_id,
+        @monday AS [date],
+        event_id
+      FROM
+        dbo.event_copilot_chats c
+        JOIN dbo.audit_events au ON c.event_id = au.id
+      WHERE @monday <= au.time_stamp AND au.time_stamp <= @sunday
+    ) t
+    PIVOT (
+      COUNT(event_id)
+      FOR app_host IN  (
+        [PowerPoint],
+        [Teams],
+        [Word]
+      )
+    ) AS pivoted
+  )
+
+  -- Insert data from the CTE into the temporary table
+  INSERT INTO @copilot (
+    [user_id],
+    [date],
+    [copilot_chats_count],
+    [copilot_meetings_count],
+    [copilot_files_count]
+  )
+  SELECT
+    user_id,
+    [date],
+    [PowerPoint],
+    [Teams],
+    [Word]
+  FROM copilot_pivoted;
+
+  -- Clean up
+  DROP TABLE IF EXISTS #ActivitiesStaging;
+END;
+
+
+----------------------------------------------
+
 
 CREATE PROCEDURE [profiling].[usp_UpsertTeams] (
     @StartDate DATE, @EndDate DATE
