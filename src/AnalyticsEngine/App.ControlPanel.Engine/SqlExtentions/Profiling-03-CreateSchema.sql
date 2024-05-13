@@ -631,9 +631,9 @@ BEGIN
 
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
-    [Copilot ChatsCount] = tvp.[copilot_chats_count],
-    [Copilot MeetingsCount] = tvp.[copilot_meetings_count],
-    [Copilot FilesCount] = tvp.[copilot_files_count]
+    [Copilot Chats Count] = tvp.[copilot_chats_count],
+    [Copilot Meetings Count] = tvp.[copilot_meetings_count],
+    [Copilot Files Count] = tvp.[copilot_files_count]
  
 
   FROM #ActivitiesStaging AS t
@@ -641,7 +641,7 @@ BEGIN
 
   INSERT #ActivitiesStaging (
     user_id, date,
-    [Copilot ChatsCount], [Copilot MeetingsCount], [Copilot FilesCount]
+    [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
  
   )
   SELECT
@@ -653,6 +653,9 @@ END
 GO
 
 ------------------------------------------------
+
+
+
 
 CREATE PROCEDURE [profiling].[usp_UpsertCopilot] (
   @StartDate DATE,
@@ -1198,7 +1201,7 @@ BEGIN
 
         -- TODO
 
-        [Copilot ChatsCount], [Copilot MeetingsCount], [Copilot FilesCount]
+        [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
 
       )
     ) AS Unpivoted
@@ -1249,7 +1252,7 @@ BEGIN
       -- Add here Copilot fields
 
       -- TODO
-      [Copilot ChatsCount], [Copilot MeetingsCount], [Copilot FilesCount]
+      [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
 
 
     )
@@ -1278,7 +1281,7 @@ BEGIN
       --Add here Copilot fields
 
       -TODO
-      [Copilot ChatsCount], [Copilot MeetingsCount], [Copilot FilesCount]
+      [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
 
 
     FROM #ActivitiesStaging;
@@ -1376,15 +1379,6 @@ BEGIN
         [Yammer Used iPad] [bit] NOT NULL DEFAULT 0,
         [Yammer Used iPhone] [bit] NOT NULL DEFAULT 0,
 
-        -- Add COPILOT fields here
-
-        -- TODO
-        [Copilot ChatsCount] [bit] NOT NULL DEFAULT 0, 
-        [Copilot MeetingsCount] [bit] NOT NULL DEFAULT 0,
-        [Copilot FilesCount] [bit] NOT NULL DEFAULT 0
-
-
-
       );
 
       EXECUTE [profiling].[usp_UpsertTeamsDevices] @Monday, @Sunday;
@@ -1408,7 +1402,7 @@ BEGIN
         -- Add Copilot fields here
 
         -- TODO
-        [Copilot ChatsCount], [Copilot MeetingsCount], [Copilot FilesCount]
+        [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
 
       )
       SELECT
@@ -1428,7 +1422,7 @@ BEGIN
 
         -- Add Copilot fields here
         -- TODO
-        [Copilot ChatsCount], [Copilot MeetingsCount], [Copilot FilesCount]
+        [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
 
       FROM #UsageStaging;
 
@@ -1523,9 +1517,9 @@ BEGIN
 
         -- Add Copilot fields here
         -- TODO
-        [Copilot ChatsCount] BIGINT DEFAULT 0,
-        [Copilot MeetingsCount] BIGINT DEFAULT 0,
-        [Copilot FilesCount] BIGINT DEFAULT 0
+        [Copilot Chats Count] BIGINT DEFAULT 0,
+        [Copilot Meetings Count] BIGINT DEFAULT 0,
+        [Copilot Files Count] BIGINT DEFAULT 0
       );
 
       -- Insert only the activities between the dates
