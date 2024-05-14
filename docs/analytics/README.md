@@ -154,7 +154,7 @@ Run again the `Aggregation_Status` runbook. If you see data in the profiling.* t
 
 ### 4. Connect and publish the reports
 
-There are two report templates in this folder: [Analytics reports](/reports/Usage%20Analytics/README.md)
+There are two report templates in this folder: [Analytics reports](/reports/Usage%20Analytics/)
 
 #### 1st report: Data model
 
