@@ -9,6 +9,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     public class CopilotAuditLogContent : AbstractAuditLogContent
     {
         public CopilotEventData CopilotEventData { get; set; } = null;
+        public string EventRaw { get; set; } = null;
         public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, Office365Event relatedAuditEvent)
         {
             await sessionContext.CopilotEventResolver.SaveSingleCopilotEventToSql(CopilotEventData, relatedAuditEvent);

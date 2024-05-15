@@ -231,6 +231,11 @@ namespace WebJob.Office365ActivityImporter.Engine
                 this.UrlBase = spLog.SiteUrl;
                 this.EventData = spLog.EventData;
             }
+
+            if (abtractLog is CopilotAuditLogContent) {
+                var copilotLog = (CopilotAuditLogContent)abtractLog;
+                this.EventData = copilotLog.EventRaw;
+            }
         }
 
         [Column("log_id")]

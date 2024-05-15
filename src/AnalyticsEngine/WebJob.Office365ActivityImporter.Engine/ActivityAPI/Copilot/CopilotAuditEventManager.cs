@@ -4,6 +4,7 @@ using Common.Entities;
 using Common.Entities.Entities.AuditLog;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
@@ -101,6 +102,19 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                         _logger.LogWarning($"No file info found for copilot context type '{context.Type}' with ID {context.Id}");
                     }
                 }
+            }
+
+            var additionalAppHosts = new[] { "Teams", "bizchat", "Loop", "Whiteboard", "Bing", "Office" };
+
+            // Some events don't have contexts, but may be just chats with Copilot in Teams or Bing
+            if (eventData.Contexts.Count == 0 && additionalAppHosts.Any(x => x.Equals(eventData.AppHost)))
+            {
+                var copilotEvent = new CopilotChat
+                {
+                    EventID = baseOfficeEvent.Id,
+                    AppHost = eventData.AppHost
+                };
+                _db.CopilotChats.Add(copilotEvent);
             }
 
             if (meetingsCount > 0 || filesCount > 0)
