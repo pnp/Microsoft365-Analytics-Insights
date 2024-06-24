@@ -1,5 +1,11 @@
 # Activity Analytics
 
+In this section:
+- [Description](#description)
+- [Dependent Azure resources](#dependent-azure-resources)
+- [Reports deployment](#reports-deployment)
+- [Data model description and available metrics](data_model.md)
+
 ## Description
 
 Using the M365 Advanced Analytics database, this feature aims to allow an administrator to create profiles for different types users depending on their usage of the different M365 services used.
@@ -7,10 +13,6 @@ Using the M365 Advanced Analytics database, this feature aims to allow an admini
 A new set of tables is created in the database that aggregate the data from the activity tables of the M365 Advanced Analytics engine. These tables are then used in a Power BI report that allows to analyze the users' activity.
 
 Since the data available in the database/report shows aggregated usage and activity per user per week, it allows anyone, not only tenant admins to analyze this data and make decisions about adoption plans, license usage, etc.
-
-### Available metrics and data
-
-TBD
 
 ## Dependent Azure resources
 
@@ -70,7 +72,7 @@ Name|Username|Password
 SQLCredential|*sqladmin (default)*|*SQL password*
 
 
-## Installation
+## Reports deployment
 
 Once the installation of the engine is completed follow these steps to set up the analytics reports:
 
@@ -152,4 +154,41 @@ Run again the `Aggregation_Status` runbook. If you see data in the profiling.* t
 
 ### 4. Connect and publish the reports
 
-TBD
+There are two report templates in this folder: [Analytics reports](/reports/Usage%20Analytics/)
+
+#### 1st report: Data model
+
+File: `Analytics_DataModel.pbit`
+
+This report is intended for creating the tables in the Power BI service. This report is not intended to be consumed directly by end users. The idea is to keep this report unchanged. This way, if the data model changes after an update, the report that users see will not break.
+
+1. Open the report directly from the file explorer. This way, after loading, it's request to fill in the following parameters:
+- Database server URL: `yourserver.database.windows.net`
+- Database name.
+- The `Use Yammer` parameter will filter out some Yammer metrics if not needed. Use `true` or `false` here.
+
+If you open the template from Power BI, the parameters dialog will not appear and you'll have to manually change them in the **Transform data** menu.
+
+2. Once the parameters are completed, Power BI will try to make the connection to the database server. At that moment a message will appear to authenticate the connection. In the new dialog, on the left, select database and then fill in the database user and password. The default user is sqladmin.
+
+3. Once authentication is completed, the report will load the data and, if everything goes well, the data will be shown in the report.
+
+4. On the toolbar click Publish. The workspaces to which the user has access will appear in the publishing dialog. Choose the appropriate workspace and publish the report. If the report has already been published before, it will ask for confirmation before overwriting.
+
+Note: If you haven't authenticated before when you open the Power BI Desktop app, it will now ask for authentication. You must sign in with a user who has a Pro license or access to a Premium Power BI workspace.
+
+#### 2nd report: Generic report
+
+File: `Analytics_Report.pbit`
+
+This report template connects live to the data model you've just published in Power BI and the one that should be used by end users.
+The information is displayed in the matrix that can be changed dynamically based on the metrics you choose in the metrics selector.
+
+1. When loading the report, Power BI will return an error because you'll not be able to access the development cube. This is expected. Close the error message and the report will be displayed, albeit with errors.
+3. In the toolbar click on the **Transform Data** menu and from that menu select **Data Source Configuration**.
+4. A new window will appear where there will be a DirectQuery connection against a data model. Select that connection from the list, right-click, and then click Change Source.
+5. A new dialog will appear where the data model that we created in the previous point should appear: `Analytics_DataModel`.
+6. Once the data loads, the report should display correctly.
+7. At this point, we can publish the report to the same workspace as the previous one.
+
+>**Important!** If you want to extend the report to load additional data, create new calculated columns or measures, you should use this report template and not `Analytics_DataModel.pbit`.
