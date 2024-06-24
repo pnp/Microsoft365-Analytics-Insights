@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.Identity" Version="1.11.0" />
+    <PackageReference Include="Azure.Identity" Version="1.11.4" />
     <PackageReference Include="Azure.ResourceManager.AppService" Version="1.0.0" />
     <PackageReference Include="Azure.ResourceManager.CognitiveServices" Version="1.2.0" />
     <PackageReference Include="Azure.ResourceManager.KeyVault" Version="1.1.0" />
