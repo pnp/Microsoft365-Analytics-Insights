@@ -91,7 +91,7 @@ namespace WebJob.Office365ActivityImporter
                 telemetry.LogInformation($"Starting activity import for {spFilterList.OrgUrlConfigs.Count} url filters");
 
                 // Start new O365 activity download session
-                const int MAX_IMPORTS_PER_BATCH = 100000;
+                const int MAX_IMPORTS_PER_BATCH = 20000;
                 var importer = new ActivityWebImporter(configuredSettings, telemetry, MAX_IMPORTS_PER_BATCH);
 
                 var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, telemetry, configuredSettings);
