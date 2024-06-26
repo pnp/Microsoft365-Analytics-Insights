@@ -1016,6 +1016,7 @@ namespace Tests.UnitTests
 
                 // Use all fields
                 const int CLICKS_INSERTS = 10;
+                const string URL_BASE = "http://web/page?param=val#bookmark";
                 for (int testDataCreateIndex = 0; testDataCreateIndex < CLICKS_INSERTS; testDataCreateIndex++)
                 {
                     // Match events on same req id
@@ -1025,7 +1026,7 @@ namespace Tests.UnitTests
                         {
                             AltText = testDataCreateIndex.ToString(),
                             ClassNames = testDataCreateIndex.ToString(),
-                            HRef = testDataCreateIndex.ToString(),
+                            HRef = URL_BASE + testDataCreateIndex,
                             LinkText = testDataCreateIndex.ToString(),
                             PageRequestId = testHit.page_request_id
                         },
@@ -1053,7 +1054,7 @@ namespace Tests.UnitTests
                 foreach (var c in clicksInserted.OrderBy(h => h.Url.FullUrl))
                 {
                     Assert.IsTrue(c.ClassNames.AllClassNames == testDataVerifyIndex.ToString());
-                    Assert.IsTrue(c.Url.FullUrl == testDataVerifyIndex.ToString());
+                    Assert.IsTrue(c.Url.FullUrl == URL_BASE + testDataVerifyIndex);
                     Assert.IsTrue(c.Title.Name == testDataVerifyIndex.ToString());
                     Assert.IsTrue(c.ClassNames.AllClassNames == testDataVerifyIndex.ToString());
                     Assert.IsTrue(c.PageView.page_request_id == testHit.page_request_id);

@@ -18,7 +18,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             _siteInstallAdaptor = siteInstallAdaptor ?? throw new ArgumentNullException(nameof(siteInstallAdaptor));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            if (!Uri.IsWellFormedUriString(_siteInstallAdaptor.SiteUrl, UriKind.Absolute))
+            if (!StringUtils.IsValidAbsoluteUrl(_siteInstallAdaptor.SiteUrl))
             {
                 throw new ArgumentException($"'{nameof(_siteInstallAdaptor.SiteUrl)}' needs to be a well-formed URL", nameof(_siteInstallAdaptor.SiteUrl));
             }
