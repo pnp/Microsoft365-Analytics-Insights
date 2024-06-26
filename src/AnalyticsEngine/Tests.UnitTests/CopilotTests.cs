@@ -25,6 +25,7 @@ namespace Tests.UnitTests
             _config = new TestsAppConfig();
         }
 
+        // https://learn.microsoft.com/en-us/office/office-365-management-api/copilot-schema
         [TestMethod]
         public async Task CopilotEventManagerSaveTest()
         {
@@ -54,8 +55,15 @@ namespace Tests.UnitTests
                 var commonEventMeeting = new Office365Event
                 {
                     TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "Op" + DateTime.Now.Ticks },
+                    Operation = new EventOperation { Name = "Meeting Op" + DateTime.Now.Ticks },
                     User = new User { AzureAdId = "test", UserPrincipalName = "test meeting user " + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+                var commonOutlook = new Office365Event
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Outlook Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test outlook user " + DateTime.Now.Ticks },
                     Id = Guid.NewGuid()
                 };
 
@@ -74,7 +82,7 @@ namespace Tests.UnitTests
                 };
                 var docEvent = new CopilotEventData
                 {
-                    AppHost = "test",
+                    AppHost = "Word",
                     Contexts = new List<Context>
                     {
                         new Context
@@ -84,9 +92,9 @@ namespace Tests.UnitTests
                         }
                     }
                 };
-                var justaChat = new CopilotEventData
+                var teamsChat = new CopilotEventData
                 {
-                    AppHost = "test",
+                    AppHost = "Teams",
                     Contexts = new List<Context>
                     {
                         new Context
@@ -95,6 +103,15 @@ namespace Tests.UnitTests
                             Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
                         }
                     }
+                };
+
+                var outlook = new CopilotEventData
+                {
+                    AppHost = "Outlook",
+                    AccessedResources = new List<AccessedResource> 
+                    {
+                        new AccessedResource{ Type = "http://schema.skype.com/HyperLink" }
+                    },
                 };
 
 
@@ -107,12 +124,14 @@ namespace Tests.UnitTests
                 db.AuditEventsCommon.Add(commonEventDocEdit);
                 db.AuditEventsCommon.Add(commonEventMeeting);
                 db.AuditEventsCommon.Add(commonEventChat);
+                db.AuditEventsCommon.Add(commonOutlook);
                 await db.SaveChangesAsync();
 
                 // Save events
                 await copilotEventAdaptor.SaveSingleCopilotEventToSql(meeting, commonEventMeeting);
                 await copilotEventAdaptor.SaveSingleCopilotEventToSql(docEvent, commonEventDocEdit);
-                await copilotEventAdaptor.SaveSingleCopilotEventToSql(justaChat, commonEventChat);
+                await copilotEventAdaptor.SaveSingleCopilotEventToSql(teamsChat, commonEventChat);
+                await copilotEventAdaptor.SaveSingleCopilotEventToSql(outlook, commonOutlook);
                 await copilotEventAdaptor.CommitAllChanges();
 
                 // Verify counts have increased
@@ -122,7 +141,7 @@ namespace Tests.UnitTests
 
                 Assert.IsTrue(fileEventsPostCount == fileEventsPreCount + 1);
                 Assert.IsTrue(meetingEventsPostCount == meetingEventsPreCount + 1);
-                Assert.IsTrue(allCopilotEventsPostCount == allCopilotEventsPreCount + 3); // 3 new events - 1 meeting, 1 file, 1 chat
+                Assert.IsTrue(allCopilotEventsPostCount == allCopilotEventsPreCount + 4); // 4 new events - 1 meeting, 1 file, 1 chat, 1 outlook
             }
         }
 
