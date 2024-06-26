@@ -81,7 +81,7 @@ namespace WebJob.Office365ActivityImporter
             // Verify config
             var webhookUrl = configuredSettings.WebAppURL + "api/CallRecordWebhook";
             Uri webHookUrl = null;
-            if (Uri.IsWellFormedUriString(webhookUrl, UriKind.Absolute))
+            if (StringUtils.IsValidAbsoluteUrl(webhookUrl))
             {
                 webHookUrl = new Uri(webhookUrl);
             }
@@ -96,7 +96,7 @@ namespace WebJob.Office365ActivityImporter
                     if (args.Length >= argIdx + 2)
                     {
                         var nextArg = args[argIdx + 1];
-                        if (Uri.IsWellFormedUriString(nextArg, UriKind.Absolute))
+                        if (StringUtils.IsValidAbsoluteUrl(nextArg))
                         {
                             webHookUrl = new Uri(nextArg);
                             Console.WriteLine($"DEBUG: Using custom webhook '{webHookUrl}' URL from args");
