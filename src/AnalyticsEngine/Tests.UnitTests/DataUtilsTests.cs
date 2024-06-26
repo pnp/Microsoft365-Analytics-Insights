@@ -100,9 +100,9 @@ namespace Tests.UnitTests
             const string expectedResult = "https://contoso.sharepoint.com/sites/site/Shared%20Documents/";
 
             const string input = "https://contoso.sharepoint.com/sites/site/Shared Documents/";
-            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl(input));
+            Assert.IsFalse(Uri.IsWellFormedUriString(input, UriKind.Absolute));
             Assert.IsTrue(StringUtils.ConvertSharePointUrl(input) == expectedResult);
-            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl(expectedResult));
+            Assert.IsTrue(Uri.IsWellFormedUriString(expectedResult, UriKind.Absolute));
 
         }
         [TestMethod]

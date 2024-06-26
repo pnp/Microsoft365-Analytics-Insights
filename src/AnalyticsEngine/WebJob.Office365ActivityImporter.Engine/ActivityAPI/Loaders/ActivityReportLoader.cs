@@ -1,6 +1,7 @@
 ﻿using Common.DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -51,7 +52,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             var logs = new WebActivityReportSet();
 
             // A report download can have multiple reports in a Json array.
-            var allReportsData = Newtonsoft.Json.Linq.JArray.Parse(jSonBody);
+            JArray allReportsData = null;
+            try
+            {
+                allReportsData = JArray.Parse(jSonBody);
+            }
+            catch (JsonReaderException)
+            {
+                _telemetry.LogWarning($"Invalid JSon body '{jSonBody}' for URL '{newUri}'. Ignoring");
+                return new WebActivityReportSet();
+            }
+
             var reportsArray = allReportsData.Children();
             foreach (var reportItem in reportsArray)
             {
