@@ -137,7 +137,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (ServiceException)
             {
-                // Test below if the site exists
+                // We can't get the drive via the site address, for some reason. Most of the time we can, but sometimes it doesn't work...
+                // Load just the site and then try getting the drive using the loaded site ID
             }
 
             if (siteDrive == null)
@@ -152,12 +153,28 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     _logger.LogWarning(ex, "Error getting site info for site {siteUrl}", siteUrl);
                     return null;
                 }
-
                 if (site != null)
                 {
-                    // Site exists but no drive for some reason
-                    _logger.LogWarning("No drive found for site {siteUrl}", siteUrl);
-                    return null;
+                    try
+                    {
+                        // Try one more time using site ID
+                        siteDrive = await _graphServiceClient.Sites[site.Id].Drive.Request().Select("SharePointIds").GetAsync() ?? throw new ArgumentOutOfRangeException(siteAddress);
+                    }
+                    catch (ServiceException)
+                    {
+                        // Ignore. Handle logging below
+                    }
+
+                    if (siteDrive == null)
+                    {
+                        // Site exists but no drive for some reason
+                        _logger.LogWarning($"No drive found for site ID {site.Id}");
+                        return null;
+                    }
+                    else
+                    {
+                        return siteDrive;
+                    }
                 }
                 else
                 {
