@@ -21,6 +21,20 @@ namespace Tests.UnitTests
     [TestClass]
     public class DataUtilsTests
     {
+        [TestMethod]
+        public void IsValidUrlTests()
+        {
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl(null));
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl(""));
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl("asdfasdf"));
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl("http://"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com/"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com/asdfasdf"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com/asdfasdf/"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("https://contoso.sharepoint.com/sites/site1/_layouts/15/Doc.aspx?sourcedoc=%7BF2CB77E7-186C-4F9A-B949-FA078F48AA53%7D&file=RD%20Consejer%C3%ADa%20en%20el%20exterior%20v.1.docx&action=default&mobileredirect=true"));
+        }
 
         [TestMethod]
         public void DatabaseUpgraderTests()
@@ -86,9 +100,9 @@ namespace Tests.UnitTests
             const string expectedResult = "https://contoso.sharepoint.com/sites/site/Shared%20Documents/";
 
             const string input = "https://contoso.sharepoint.com/sites/site/Shared Documents/";
-            Assert.IsFalse(Uri.IsWellFormedUriString(input, UriKind.Absolute));
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl(input));
             Assert.IsTrue(StringUtils.ConvertSharePointUrl(input) == expectedResult);
-            Assert.IsTrue(Uri.IsWellFormedUriString(expectedResult, UriKind.Absolute));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl(expectedResult));
 
         }
         [TestMethod]

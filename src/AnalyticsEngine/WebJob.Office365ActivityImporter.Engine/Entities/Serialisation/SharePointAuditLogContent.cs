@@ -28,7 +28,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
             else
             {
-                if (Uri.IsWellFormedUriString(StringUtils.ConvertSharePointUrl(this.ObjectId), UriKind.Absolute))
+                if (StringUtils.IsValidAbsoluteUrl(StringUtils.ConvertSharePointUrl(this.ObjectId)))
                 {
                     await AssignWeb(saveBatch, this.ObjectId, false);   // Do not create site if we can't find already
                     return true;
