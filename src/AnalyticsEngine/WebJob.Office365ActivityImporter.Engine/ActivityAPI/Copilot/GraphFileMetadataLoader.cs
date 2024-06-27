@@ -75,11 +75,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             var driveItemId = StringUtils.GetDriveItemId(copilotDocContextId);
 
+            ListItem item = null;
+            var site = await _siteGraphCache.GetResourceOrNullIfNotExists(spSiteId);
             if (driveItemId != null)
             {
-                var site = await _siteGraphCache.GetResourceOrNullIfNotExists(spSiteId);
-
-                ListItem item = null;
                 try
                 {
                     item = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items[driveItemId]
@@ -95,6 +94,30 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             else
             {
+                // We might have a direct URL as the copilot context ID, so we need to search for the item in the list.
+                // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_onmicrosoft_com/Documents/MyDoc.docx
+                try
+                {
+                    // Currently we can't filter by webUrl, so we have to get all items and filter client side
+                    var listItems = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items
+                        .Request().Select("id,webUrl").GetAsync();
+                    if (listItems != null)
+                    {
+                        foreach (var i in listItems)
+                        {
+                            if (i.WebUrl == copilotDocContextId)
+                            {
+                                return new SpoDocumentFileInfo(i, site);
+                            }
+                        }
+                    }
+                }
+                catch (ServiceException ex)
+                {
+                    _logger.LogWarning(ex, "Error getting items info for list {spListId} on site {siteUrl}", spListId, siteUrl);
+                    return null;
+                }
+
                 _logger.LogWarning("No driveItemId found in copilotDocContextId {copilotDocContextId}", copilotDocContextId);
                 return null;
             }
