@@ -34,7 +34,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             _db = new AnalyticsEntitiesContext();
         }
-
         public async Task SaveSingleCopilotEventToSql(CopilotEventData eventData, Office365Event baseOfficeEvent)
         {
             _logger.LogInformation($"Saving copilot event metadata to SQL for event {baseOfficeEvent.Id}");
@@ -44,7 +43,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             if (eventData.Contexts != null && eventData.Contexts.Count > 0)
             {
-                // Process events with context (Teams meeting, file etc)
+                // Process events with context (Teams meeting, file etc).
+                // Normally only one context per event, but we'll loop through them all just in case.
                 foreach (var context in eventData.Contexts)
                 {
                     // There are some known context types for Teams etc. Everything else is assumed to be a file type. 
@@ -72,6 +72,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                         });
 
                         meetingsCount++;
+                        break;  // Only one meeting per event
                     }
                     else if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT)
                     {
@@ -101,6 +102,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 UrlBase = spFileInfo.SiteUrl
                             });
                             filesCount++;
+                            break;  // Normally only one file per event.
+                                    // There can be more documents in the context if one references another, but we only care about the doc the user is in.
                         }
                         else
                         {
