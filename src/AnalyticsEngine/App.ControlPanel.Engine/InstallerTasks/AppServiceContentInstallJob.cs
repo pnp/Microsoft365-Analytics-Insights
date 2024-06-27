@@ -5,11 +5,11 @@ using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
+using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Common.Entities.Installer;
 
 namespace App.ControlPanel.Engine.InstallerTasks
 {

@@ -1,5 +1,5 @@
-﻿using Common.DataUtils;
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;

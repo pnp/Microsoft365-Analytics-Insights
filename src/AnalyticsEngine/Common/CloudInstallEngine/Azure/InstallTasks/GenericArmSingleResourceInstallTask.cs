@@ -15,7 +15,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
     /// </summary>
     public abstract class GenericArmSingleResourceInstallTask<TASKRESULTINGRESOURCE> : InstallTaskInAzResourceGroup<TASKRESULTINGRESOURCE>
     {
-        public GenericArmSingleResourceInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) 
+        public GenericArmSingleResourceInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
             : base(config, logger, azureLocation, tags)
         {
         }
@@ -66,7 +66,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             if (string.IsNullOrEmpty(type)) throw new ArgumentException($"'{nameof(type)}' cannot be null or empty.", nameof(type));
             if (newCreationParams is null) throw new ArgumentNullException(nameof(newCreationParams));
             if (string.IsNullOrEmpty(templateJson)) throw new ArgumentException($"'{nameof(templateJson)}' cannot be null or empty.", nameof(templateJson));
-            
+
             var resource = GetGenericAzResource(name, type);
 
             if (resource == null)

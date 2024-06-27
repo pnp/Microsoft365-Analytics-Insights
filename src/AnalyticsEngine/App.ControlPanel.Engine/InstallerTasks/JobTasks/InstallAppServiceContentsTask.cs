@@ -24,7 +24,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         private readonly InstallerFtpConfig _ftpConfig;
 
-        public InstallAppServiceContentsTask(InstallerFtpConfig ftpConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) 
+        public InstallAppServiceContentsTask(InstallerFtpConfig ftpConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
             : base(config, logger, azureLocation, tags)
         {
             _ftpConfig = ftpConfig;

@@ -1,7 +1,7 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.ActivityReports;
 using Common.Entities.LookupCaches;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;

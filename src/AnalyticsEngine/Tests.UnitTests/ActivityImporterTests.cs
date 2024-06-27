@@ -1,9 +1,9 @@
-﻿using Common.DataUtils;
-using Common.DataUtils.Http;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
+using DataUtils;
+using DataUtils.Http;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
@@ -19,7 +19,6 @@ using Tests.UnitTests.Properties;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
-using WebJob.Office365ActivityImporter.Engine.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 

@@ -1,4 +1,4 @@
-﻿using Common.DataUtils.Http;
+﻿using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;

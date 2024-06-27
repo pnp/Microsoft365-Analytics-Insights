@@ -1,6 +1,6 @@
-﻿using Azure.ResourceManager.Resources.Models;
+﻿using Azure;
 using Azure.ResourceManager.Resources;
-using Azure;
+using Azure.ResourceManager.Resources.Models;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;

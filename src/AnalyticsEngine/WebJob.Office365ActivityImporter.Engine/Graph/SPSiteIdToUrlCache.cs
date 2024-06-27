@@ -1,10 +1,9 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using System;
 using System.Data.Entity;
-using System.Data.Entity.Infrastructure;
 using System.Linq;
 using System.Threading.Tasks;
 

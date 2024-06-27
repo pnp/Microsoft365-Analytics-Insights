@@ -1,7 +1,7 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.ActivityReports;
 using Common.Entities.Config;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using System;

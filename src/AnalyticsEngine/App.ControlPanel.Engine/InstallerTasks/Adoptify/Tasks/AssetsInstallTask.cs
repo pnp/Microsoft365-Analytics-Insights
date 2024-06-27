@@ -1,6 +1,6 @@
 ﻿using App.ControlPanel.Engine.InstallerTasks.Adoptify.Models;
 using CloudInstallEngine;
-using Common.DataUtils;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.SharePoint.Client;
 using System.IO;
@@ -35,7 +35,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
             var listBaseUrl = list.RootFolder.ServerRelativeUrl.TrimStringFromStart(_clientContext.Web.ServerRelativeUrl);
 
             var filesUploaded = 0;
-            var rr = new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+            var rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
             using (var archive = new ZipArchive(rr.GetAssemblyManifest(ResourceNameConstants.SPAssets), ZipArchiveMode.Read))
             {
                 foreach (var item in archive.Entries)

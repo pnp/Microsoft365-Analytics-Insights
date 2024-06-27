@@ -1,9 +1,9 @@
-﻿using Common.DataUtils;
+﻿using DataUtils;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 
-namespace Common.UsageReporting
+namespace UsageReporting
 {
     /// <summary>
     /// Something that has to go in Cosmos DB
@@ -42,7 +42,7 @@ namespace Common.UsageReporting
         {
             public string TableName { get; set; }
             public decimal TotalSpaceMB { get; set; }
-            public Int64 Rows { get; set; }
+            public long Rows { get; set; }
 
             public override string ToString()
             {
@@ -59,27 +59,27 @@ namespace Common.UsageReporting
             {
                 if (updateFromClientWithNewId.TableStats != null)
                 {
-                    this.TableStats = new List<TableStat>(updateFromClientWithNewId.TableStats);
+                    TableStats = new List<TableStat>(updateFromClientWithNewId.TableStats);
                 }
 
                 if (!string.IsNullOrEmpty(updateFromClientWithNewId.ConfiguredImportsEnabledDescription))
                 {
-                    this.ConfiguredImportsEnabledDescription = updateFromClientWithNewId.ConfiguredImportsEnabledDescription;
+                    ConfiguredImportsEnabledDescription = updateFromClientWithNewId.ConfiguredImportsEnabledDescription;
                 }
                 if (!string.IsNullOrEmpty(updateFromClientWithNewId.ConfiguredSolutionsEnabledDescription))
                 {
-                    this.ConfiguredSolutionsEnabledDescription = updateFromClientWithNewId.ConfiguredSolutionsEnabledDescription;
+                    ConfiguredSolutionsEnabledDescription = updateFromClientWithNewId.ConfiguredSolutionsEnabledDescription;
                 }
                 if (!string.IsNullOrEmpty(updateFromClientWithNewId.BuildVersionLabel))
                 {
-                    this.BuildVersionLabel = updateFromClientWithNewId.BuildVersionLabel;
+                    BuildVersionLabel = updateFromClientWithNewId.BuildVersionLabel;
                 }
                 if (updateFromClientWithNewId.DataPointsFromAITotal.HasValue)
                 {
-                    this.DataPointsFromAITotal = updateFromClientWithNewId.DataPointsFromAITotal;
+                    DataPointsFromAITotal = updateFromClientWithNewId.DataPointsFromAITotal;
                 }
 
-                this.Generated = updateFromClientWithNewId.Generated;
+                Generated = updateFromClientWithNewId.Generated;
             }
 
             return this;
@@ -96,7 +96,7 @@ namespace Common.UsageReporting
         public bool IsValidSecretForThisObject(string cipher, string sharedSecretValue)
         {
             CheckEncryptionParamsValid();
-            return StringUtils.IsHashedMatch(sharedSecretValue + this.Generated.Value.Ticks, cipher);
+            return StringUtils.IsHashedMatch(sharedSecretValue + Generated.Value.Ticks, cipher);
         }
 
         /// <summary>
@@ -105,12 +105,12 @@ namespace Common.UsageReporting
         public string GenerateSecretFromObjectProps(string sharedSecretValue)
         {
             CheckEncryptionParamsValid();
-            return StringUtils.GetHashedStringWithSalt(sharedSecretValue + this.Generated.Value.Ticks);
+            return StringUtils.GetHashedStringWithSalt(sharedSecretValue + Generated.Value.Ticks);
         }
 
         private void CheckEncryptionParamsValid()
         {
-            if (!this.Generated.HasValue)
+            if (!Generated.HasValue)
             {
                 throw new InvalidOperationException("Invalid ");
             }
@@ -129,7 +129,7 @@ namespace Common.UsageReporting
         public HistoricalUpdate(AnonUsageStatsModel update) : this()
         {
             Update = update;
-            this.id = Update != null && Update.Generated != null && Update.Generated.HasValue ? $"{Update.AnonClientId}-{Update.Generated.Value.Ticks}" : null;
+            id = Update != null && Update.Generated != null && Update.Generated.HasValue ? $"{Update.AnonClientId}-{Update.Generated.Value.Ticks}" : null;
         }
 
 
@@ -145,8 +145,8 @@ namespace Common.UsageReporting
 
         public TelemetryPayload(AnonUsageStatsModel stats, string sharedSecretValue) : this()
         {
-            this.StatsModel = stats;
-            this.Secret = stats.GenerateSecretFromObjectProps(sharedSecretValue);
+            StatsModel = stats;
+            Secret = stats.GenerateSecretFromObjectProps(sharedSecretValue);
         }
 
         public AnonUsageStatsModel StatsModel { get; set; }

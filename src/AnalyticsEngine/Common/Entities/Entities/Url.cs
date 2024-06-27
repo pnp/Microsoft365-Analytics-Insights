@@ -1,5 +1,5 @@
-using Common.DataUtils;
 using Common.Entities.Entities;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;

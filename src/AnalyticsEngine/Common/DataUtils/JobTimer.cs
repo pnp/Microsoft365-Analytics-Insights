@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using static Common.DataUtils.AnalyticsLogger;
+using static DataUtils.AnalyticsLogger;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     /// <summary>
     /// For tracking the time something takes

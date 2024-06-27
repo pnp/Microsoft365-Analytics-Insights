@@ -1,5 +1,5 @@
-﻿using Common.DataUtils;
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
+using DataUtils;
 using Microsoft.ApplicationInsights;
 using System;
 using System.Threading.Tasks;

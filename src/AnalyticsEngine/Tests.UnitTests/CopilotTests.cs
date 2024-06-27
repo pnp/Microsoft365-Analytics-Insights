@@ -1,6 +1,6 @@
 ﻿using ActivityImporter.Engine.ActivityAPI.Copilot;
-using Common.DataUtils;
 using Common.Entities;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -108,7 +108,7 @@ namespace Tests.UnitTests
                 var outlook = new CopilotEventData
                 {
                     AppHost = "Outlook",
-                    AccessedResources = new List<AccessedResource> 
+                    AccessedResources = new List<AccessedResource>
                     {
                         new AccessedResource{ Type = "http://schema.skype.com/HyperLink" }
                     },
