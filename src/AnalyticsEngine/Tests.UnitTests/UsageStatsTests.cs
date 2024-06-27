@@ -1,7 +1,6 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Installer;
-using Common.UsageReporting;
+using DataUtils;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -11,6 +10,7 @@ using System.Configuration;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using UsageReporting;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 
 namespace Tests.UnitTests

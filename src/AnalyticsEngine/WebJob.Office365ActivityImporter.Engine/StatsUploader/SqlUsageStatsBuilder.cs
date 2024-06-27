@@ -1,6 +1,5 @@
 ﻿using Common.Entities;
 using Common.Entities.Installer;
-using Common.UsageReporting;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -8,6 +7,7 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
+using UsageReporting;
 
 namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 {

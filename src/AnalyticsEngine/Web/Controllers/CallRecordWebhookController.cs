@@ -1,7 +1,7 @@
 ﻿using Azure.Messaging.ServiceBus;
-using Common.DataUtils;
 using Common.Entities.Config;
 using Common.Entities.Models;
+using DataUtils;
 using Microsoft.Graph;
 using System.Collections.Generic;
 using System.Net;

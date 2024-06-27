@@ -1,6 +1,6 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Entities;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System.Data.Entity;
 using System.Linq;

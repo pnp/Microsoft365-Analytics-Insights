@@ -1,9 +1,9 @@
 ﻿using Azure;
 using Azure.AI.TextAnalytics;
-using Common.DataUtils;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;

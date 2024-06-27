@@ -3,8 +3,8 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager;
-using Common.DataUtils;
 using Common.Entities.Installer;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -158,16 +158,16 @@ namespace App.ControlPanel.Frames.InstallWizardPages
             }
         }
 
-        public List<AzTag> Tags 
-        { 
-            get 
-            { 
+        public List<AzTag> Tags
+        {
+            get
+            {
                 return tagsEditor.Tags;
-            } 
-            set 
+            }
+            set
             {
                 tagsEditor.Tags = value;
-            } 
+            }
         }
 
         #endregion

@@ -1,4 +1,4 @@
-﻿using Common.DataUtils.Http;
+﻿using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 
 namespace WebJob.Office365ActivityImporter.Engine

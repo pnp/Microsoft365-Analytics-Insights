@@ -4,7 +4,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils.Http
+namespace DataUtils.Http
 {
     public class AutoThrottleHttpClient : HttpClient
     {

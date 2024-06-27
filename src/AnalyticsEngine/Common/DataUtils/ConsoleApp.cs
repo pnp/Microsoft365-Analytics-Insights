@@ -2,7 +2,7 @@
 using System;
 using System.Configuration;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     /// <summary>
     /// Provides utilities for console apps.

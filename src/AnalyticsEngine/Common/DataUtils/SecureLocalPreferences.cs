@@ -2,7 +2,7 @@
 using System;
 using System.IO;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     /// <summary>
     /// A class to load/save preferences securely on the local machine

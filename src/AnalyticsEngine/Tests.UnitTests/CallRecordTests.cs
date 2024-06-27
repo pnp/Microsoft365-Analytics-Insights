@@ -1,5 +1,5 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
+using DataUtils;
 using Microsoft.Graph;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;

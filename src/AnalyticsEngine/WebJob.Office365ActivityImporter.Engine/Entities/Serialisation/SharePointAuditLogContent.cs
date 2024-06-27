@@ -1,6 +1,5 @@
-﻿using Common.DataUtils;
-using Common.Entities;
-using System;
+﻿using Common.Entities;
+using DataUtils;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 

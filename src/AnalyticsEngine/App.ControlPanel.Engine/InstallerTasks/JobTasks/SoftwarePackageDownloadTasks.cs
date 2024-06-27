@@ -3,7 +3,7 @@ using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using CloudInstallEngine;
-using Common.DataUtils;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO;

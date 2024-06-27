@@ -3,13 +3,13 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public abstract class BaseAnalyticsLogger : ILogger
     {
         public bool IsEnabled(LogLevel logLevel)
         {
-            return (logLevel == LogLevel.Information || logLevel == LogLevel.Warning || logLevel == LogLevel.Error || logLevel == LogLevel.Critical);
+            return logLevel == LogLevel.Information || logLevel == LogLevel.Warning || logLevel == LogLevel.Error || logLevel == LogLevel.Critical;
         }
 
         public IDisposable BeginScope<TState>(TState state)

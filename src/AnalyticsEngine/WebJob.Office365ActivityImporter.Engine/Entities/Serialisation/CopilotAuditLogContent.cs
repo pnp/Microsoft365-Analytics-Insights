@@ -1,6 +1,4 @@
 ﻿using Common.Entities;
-using Newtonsoft.Json.Linq;
-using StackExchange.Redis;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;

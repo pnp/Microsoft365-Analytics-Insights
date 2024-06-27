@@ -1,6 +1,6 @@
-﻿using Common.DataUtils.Sql;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
