@@ -413,6 +413,16 @@ IF OBJECT_ID(N'profiling.usp_UpsertM365Apps') IS NOT NULL DROP PROCEDURE [profil
 GO
 IF OBJECT_ID(N'profiling.usp_UpsertYammerDevices') IS NOT NULL DROP PROCEDURE [profiling].[usp_UpsertYammerDevices];
 GO
+
+-- Add Copilot Upsert DROP PROCEDURE here
+
+-- TODO
+
+IF OBJECT_ID(N'profiling.usp_UpsertCopilot') IS NOT NULL DROP PROCEDURE [profiling].[usp_UpsertCopilot];
+GO
+
+-------------
+
 IF TYPE_ID(N'ut_teams_user_activity_log') IS NOT NULL DROP TYPE ut_teams_user_activity_log;
 GO
 IF TYPE_ID(N'ut_onedrive_user_activity_log') IS NOT NULL DROP TYPE ut_onedrive_user_activity_log;
@@ -429,6 +439,15 @@ IF TYPE_ID(N'ut_platform_user_activity_log') IS NOT NULL DROP TYPE ut_platform_u
 GO
 IF TYPE_ID(N'ut_yammer_device_activity_log') IS NOT NULL DROP TYPE ut_yammer_device_activity_log;
 GO
+
+--Add Copilot DROP TYPE here
+
+-- TODO
+
+IF TYPE_ID(N'ut_copilot_activity_log') IS NOT NULL DROP TYPE ut_copilot_activity_log;
+GO
+
+
 -- Add Table Types
 IF TYPE_ID(N'ut_teams_user_activity_log') IS NULL CREATE TYPE ut_teams_user_activity_log AS TABLE (
   [user_id] INT NOT NULL,
@@ -450,7 +469,16 @@ IF TYPE_ID(N'ut_teams_user_activity_log') IS NULL CREATE TYPE ut_teams_user_acti
   [screenshare_duration_seconds] INT NOT NULL,
   [post_messages] BIGINT NOT NULL,
   [reply_messages] BIGINT NOT NULL,
-  [urgent_messages] BIGINT NOT NULL
+  [urgent_messages] BIGINT NOT NULL,
+
+  -- ADD Copilot fields here
+  -- TODO
+
+  [copilot_chats_count] BIGINT NOT NULL,
+  [copilot_meetings_count] BIGINT NOT NULL,
+  [copilot_files_count] BIGINT NOT NULL
+
+
 );
 GO
 IF TYPE_ID(N'ut_onedrive_user_activity_log') IS NULL CREATE TYPE ut_onedrive_user_activity_log AS TABLE (
@@ -556,7 +584,148 @@ IF TYPE_ID(N'ut_yammer_device_activity_log') IS NULL CREATE TYPE ut_yammer_devic
 );
 GO
 
+
+-- Add Copilot TYPE
+
+-- TODO
+
+IF TYPE_ID(N'ut_copilot_activity_log') IS NULL CREATE TYPE ut_copilot_activity_log AS TABLE (
+  [user_id] INT NOT NULL,
+  [date] DATETIME NOT NULL,
+
+  [copilot_chats_count] BIGINT NOT NULL,
+  [copilot_meetings_count] BIGINT NOT NULL,
+  [copilot_files_count] BIGINT NOT NULL
+);
+GO
+
+
+
 -- Add SPs
+
+
+-- ADD COPILOT PRODECURE here
+
+-- TODO
+
+CREATE PROCEDURE [profiling].[usp_UpsertCopilot] (
+  @StartDate DATE, @EndDate DATE
+) AS
+BEGIN
+  SET NOCOUNT ON;
+  DECLARE @copilot AS ut_copilot_activity_log;
+
+  INSERT INTO @copilot (
+    [user_id], [date],
+    [copilot_chats_count],  [copilot_meetings_count], [copilot_files_count]
+
+
+  )
+  SELECT
+    [user_id], @StartDate,
+    SUM([copilot_chats_count]), SUM([copilot_meetings_count]), SUM([copilot_files_count])
+
+  FROM dbo.[copilot_activity_log]
+  WHERE @StartDate <= [date] AND [date] <= @EndDate
+  GROUP BY [user_id];
+
+  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  SET
+    [Copilot Chats Count] = tvp.[copilot_chats_count],
+    [Copilot Meetings Count] = tvp.[copilot_meetings_count],
+    [Copilot Files Count] = tvp.[copilot_files_count]
+ 
+
+  FROM #ActivitiesStaging AS t
+  INNER JOIN @copilot AS tvp ON t.user_id = tvp.user_id AND t.date = tvp.date;
+
+  INSERT #ActivitiesStaging (
+    user_id, date,
+    [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
+ 
+  )
+  SELECT
+    user_id, date,
+    [copilot_chats_count], [copilot_meetings_count], [copilot_files_count]
+  FROM @copilot as tvp
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
+END
+GO
+
+------------------------------------------------
+
+
+
+
+CREATE PROCEDURE [profiling].[usp_UpsertCopilot] (
+  @StartDate DATE,
+  @EndDate DATE
+)
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  -- Temporary table to store interim results
+  CREATE TABLE #ActivitiesStaging (
+    [user_id] INT,
+    [date] DATE,
+    [copilot_chats_count] BIGINT,
+    [copilot_meetings_count] BIGINT,
+    [copilot_files_count] BIGINT
+  );
+
+  -- Declare variables for the CTE
+  DECLARE @monday DATETIME = '2024-04-29',
+          @sunday DATETIME = '2024-05-06';
+
+  -- Common table expression to pivot copilot data
+  ;WITH copilot_pivoted AS (
+    SELECT *
+    FROM (
+      SELECT
+        app_host,
+        user_id,
+        @monday AS [date],
+        event_id
+      FROM
+        dbo.event_copilot_chats c
+        JOIN dbo.audit_events au ON c.event_id = au.id
+      WHERE @monday <= au.time_stamp AND au.time_stamp <= @sunday
+    ) t
+    PIVOT (
+      COUNT(event_id)
+      FOR app_host IN  (
+        [PowerPoint],
+        [Teams],
+        [Word]
+      )
+    ) AS pivoted
+  )
+
+  -- Insert data from the CTE into the temporary table
+  INSERT INTO @copilot (
+    [user_id],
+    [date],
+    [copilot_chats_count],
+    [copilot_meetings_count],
+    [copilot_files_count]
+  )
+  SELECT
+    user_id,
+    [date],
+    [PowerPoint],
+    [Teams],
+    [Word]
+  FROM copilot_pivoted;
+
+  -- Clean up
+  DROP TABLE IF EXISTS #ActivitiesStaging;
+END;
+
+
+----------------------------------------------
+
+
 CREATE PROCEDURE [profiling].[usp_UpsertTeams] (
     @StartDate DATE, @EndDate DATE
 ) AS
@@ -1026,7 +1195,14 @@ BEGIN
         [Teams Scheduled Recurring Meetings Attended], [Teams Scheduled Recurring Meetings Organized],
         [Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds],
         [Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages],
-        [Yammer Posted], [Yammer Read], [Yammer Liked]
+        [Yammer Posted], [Yammer Read], [Yammer Liked],
+
+        -- Add here Copilot fields
+
+        -- TODO
+
+        [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
+
       )
     ) AS Unpivoted
     GROUP BY user_id, Metric;
@@ -1071,7 +1247,14 @@ BEGIN
       [Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds],
       [Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages],
 
-      [Yammer Posted], [Yammer Read], [Yammer Liked]
+      [Yammer Posted], [Yammer Read], [Yammer Liked],
+
+      -- Add here Copilot fields
+
+      -- TODO
+      [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
+
+
     )
     SELECT
       user_id,
@@ -1093,7 +1276,14 @@ BEGIN
       [Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds],
       [Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages],
 
-      [Yammer Posted], [Yammer Read], [Yammer Liked]
+      [Yammer Posted], [Yammer Read], [Yammer Liked],
+
+      --Add here Copilot fields
+
+      -TODO
+      [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
+
+
     FROM #ActivitiesStaging;
   END TRY
   BEGIN CATCH
@@ -1187,7 +1377,8 @@ BEGIN
         [Yammer Used WinPhone] [bit] NOT NULL DEFAULT 0,
         [Yammer Used Android] [bit] NOT NULL DEFAULT 0,
         [Yammer Used iPad] [bit] NOT NULL DEFAULT 0,
-        [Yammer Used iPhone] [bit] NOT NULL DEFAULT 0
+        [Yammer Used iPhone] [bit] NOT NULL DEFAULT 0,
+
       );
 
       EXECUTE [profiling].[usp_UpsertTeamsDevices] @Monday, @Sunday;
@@ -1206,7 +1397,13 @@ BEGIN
         [Office Outlook Web], [Office Word Web], [Office Excel Web], [Office Powerpoint Web], [Office Onenote Web], [Office Teams Web],
         [Yammer Platform Count],
         [Yammer Used Web], [Yammer Used Mobile], [Yammer Used Others],
-        [Yammer Used WinPhone], [Yammer Used Android], [Yammer Used iPad], [Yammer Used iPhone]
+        [Yammer Used WinPhone], [Yammer Used Android], [Yammer Used iPad], [Yammer Used iPhone],
+
+        -- Add Copilot fields here
+
+        -- TODO
+        [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
+
       )
       SELECT
         user_id,
@@ -1222,6 +1419,11 @@ BEGIN
         [Yammer Platform Count],
         [Yammer Used Web], [Yammer Used Mobile], [Yammer Used Others],
         [Yammer Used WinPhone], [Yammer Used Android], [Yammer Used iPad], [Yammer Used iPhone]
+
+        -- Add Copilot fields here
+        -- TODO
+        [Copilot Chats Count], [Copilot Meetings Count], [Copilot Files Count]
+
       FROM #UsageStaging;
 
       DROP TABLE #UsageStaging;
@@ -1310,7 +1512,14 @@ BEGIN
 
         [Yammer Posted] BIGINT DEFAULT 0,
         [Yammer Read] BIGINT DEFAULT 0,
-        [Yammer Liked] BIGINT DEFAULT 0
+        [Yammer Liked] BIGINT DEFAULT 0,
+
+
+        -- Add Copilot fields here
+        -- TODO
+        [Copilot Chats Count] BIGINT DEFAULT 0,
+        [Copilot Meetings Count] BIGINT DEFAULT 0,
+        [Copilot Files Count] BIGINT DEFAULT 0
       );
 
       -- Insert only the activities between the dates
@@ -1319,6 +1528,12 @@ BEGIN
       EXECUTE [profiling].[usp_UpsertSharePoint] @Monday, @Sunday;
       EXECUTE [profiling].[usp_UpsertOutlook] @Monday, @Sunday;
       EXECUTE [profiling].[usp_UpsertYammer] @Monday, @Sunday;
+     
+     -- ADD COPILOT upsertCopilot NEW
+     -- TODO
+      EXECUTE [profiling].[usp_UpsertCopilot] @Monday, @Sunday;
+
+
 
       IF @ColumnsDone = 0
         EXECUTE [profiling].[usp_CompileWeekActivityColumns] @Monday;
