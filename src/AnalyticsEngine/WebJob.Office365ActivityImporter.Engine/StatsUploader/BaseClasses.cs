@@ -1,8 +1,8 @@
 ﻿using Common.Entities.Installer;
-using Common.UsageReporting;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
+using UsageReporting;
 
 namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 {

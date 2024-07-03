@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     /// <summary>
     /// Process a big list of objects in parallel, via configurable chunk sizes.

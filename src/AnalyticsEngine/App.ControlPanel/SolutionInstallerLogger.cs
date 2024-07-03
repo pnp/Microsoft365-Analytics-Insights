@@ -1,6 +1,6 @@
 ﻿using App.ControlPanel.Engine.Models;
 using App.ControlPanel.Frames;
-using Common.DataUtils;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;

@@ -4,9 +4,9 @@
 // IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
 // PARTICULAR PURPOSE.
 
-using Common.DataUtils;
 using Common.Entities;
 using Common.Entities.Config;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;

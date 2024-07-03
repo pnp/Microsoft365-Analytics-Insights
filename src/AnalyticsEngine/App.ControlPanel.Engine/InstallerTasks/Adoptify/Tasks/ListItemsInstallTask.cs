@@ -1,8 +1,8 @@
 ﻿using App.ControlPanel.Engine.InstallerTasks.Adoptify.Models;
 using App.ControlPanel.Engine.SharePointModelBuilder;
 using CloudInstallEngine;
-using Common.DataUtils;
 using Common.Entities.Installer;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.SharePoint.Client;
 using System.Threading.Tasks;
@@ -34,28 +34,28 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
 
             _logger.LogInformation($"Installing default content in language-code '{code}' to {_clientContext.Web.Url}");
 
-            var rr = new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+            var rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
             var defaultDataQuestsJson = string.Empty;
             var defaultDataBadgesJson = string.Empty;
             var defaultDataLevelsJson = string.Empty;
-            var defaultDataStatsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultStats);
+            var defaultDataStatsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultStats);
             var defaultDataSettingsJson = string.Empty;
             var defaultDataCardsJson = string.Empty;
             if (code == TargetSolutionConfig.LANG_ESPAÑOL)
             {
-                defaultDataSettingsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultSettingsES);
-                defaultDataQuestsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultQuestsES);
-                defaultDataLevelsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultLevelsES);
-                defaultDataBadgesJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultBadgesES);
-                defaultDataCardsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultCardsES);
+                defaultDataSettingsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultSettingsES);
+                defaultDataQuestsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultQuestsES);
+                defaultDataLevelsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultLevelsES);
+                defaultDataBadgesJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultBadgesES);
+                defaultDataCardsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultCardsES);
             }
             else
             {
-                defaultDataSettingsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultSettingsEN);
-                defaultDataQuestsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultQuestsEN);
-                defaultDataLevelsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultLevelsEN);
-                defaultDataBadgesJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultBadgesEN);
-                defaultDataCardsJson = rr.ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SPDataDefaultCardsEN);
+                defaultDataSettingsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultSettingsEN);
+                defaultDataQuestsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultQuestsEN);
+                defaultDataLevelsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultLevelsEN);
+                defaultDataBadgesJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultBadgesEN);
+                defaultDataCardsJson = rr.ReadResourceString(ResourceNameConstants.SPDataDefaultCardsEN);
             }
 
             // Update field placerholders

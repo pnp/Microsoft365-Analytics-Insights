@@ -1,4 +1,4 @@
-﻿using Common.DataUtils.Sql.Inserts;
+﻿using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
 using System.Data.Entity;
 

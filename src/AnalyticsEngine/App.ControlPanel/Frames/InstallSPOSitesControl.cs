@@ -1,7 +1,7 @@
 ﻿using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
-using Common.DataUtils;
+using DataUtils;
 using System;
 using System.Configuration;
 using System.Windows.Forms;
@@ -146,7 +146,7 @@ namespace App.ControlPanel.Frames
             azureBaseConfigControl1.ResourceGroup = config.ResourceGroupName;
             azureBaseConfigControl1.AzureSubscription = config.Subscription;
             azureBaseConfigControl1.AzureLocationString = config.AzureLocation;
-            azureBaseConfigControl1.EnvironmentType = config.EnvironmentType;            
+            azureBaseConfigControl1.EnvironmentType = config.EnvironmentType;
             azureBaseConfigControl1.Tags = config.Tags;
 
             azureStorageConfigControl1.SQLDb = config.SQLServerDatabaseName;

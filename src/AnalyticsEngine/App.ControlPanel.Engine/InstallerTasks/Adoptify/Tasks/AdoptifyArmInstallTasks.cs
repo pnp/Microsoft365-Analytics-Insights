@@ -2,7 +2,7 @@
 using Azure.ResourceManager.Resources;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
-using Common.DataUtils;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -20,7 +20,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
         private readonly string _resourceType;
         private readonly string _json;
 
-        protected AdoptifySingleResourceArmInstallTask(string resourceName, TaskConfig configWithTemplateParams, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, string resourceType, string json) 
+        protected AdoptifySingleResourceArmInstallTask(string resourceName, TaskConfig configWithTemplateParams, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, string resourceType, string json)
             : base(configWithTemplateParams, logger, azureLocation, tags)
         {
             _resourceName = resourceName;
@@ -76,7 +76,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
             // Todo: add tags to these templates
             _logger.LogInformation($"Creating API connections");
 
-            var json = new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ApiConnections);
+            var json = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ApiConnections);
             var armParams = _config.FilterParams(ArmParamNames).ToArmParamsObject(new { tagsArray = new { value = Tags } });
             var created = await base.ApplyTemplate(armParams, json);
 
@@ -88,7 +88,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessDeviceUsageInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessDeviceUsageInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessDeviceUsage)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessDeviceUsage)) { }
 
         public override string[] ArmParamNames => new string[]
         {
@@ -99,7 +99,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessCallModalityTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessCallModalityTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessCallModality)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessCallModality)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "badgesListId", "userBadgesListId", "userListId", "questsListId",
@@ -109,7 +109,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessChatsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessChatsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessChats)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessChats)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "badgesListId", "userBadgesListId", "userListId", "questsListId",
@@ -119,7 +119,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessCountsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessCountsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessCounts)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessCounts)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "badgesListId", "userBadgesListId", "userListId", "questsListId",
@@ -129,7 +129,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessMeetingsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessMeetingsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessMeetings)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessMeetings)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "badgesListId", "userBadgesListId", "userListId", "questsListId",
@@ -139,7 +139,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessRedeemedRewardsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessRedeemedRewardsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessRedeemedRewards)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessRedeemedRewards)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "userListId", "settingsListId",
@@ -149,7 +149,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessUsageRemindersInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessUsageRemindersInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessUsageReminders)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessUsageReminders)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "userListId", "settingsListId", "rewardsListId", "cardsListId"
@@ -158,7 +158,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessQuestNotificationsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessQuestNotificationsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.QuestNotification)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.QuestNotification)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "userListId", "questsListId", "settingsListId", "cardsListId"
@@ -168,7 +168,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessReactionsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessReactionsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessReactions)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessReactions)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "badgesListId", "levelsListId",
@@ -180,7 +180,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class SyncTeamsAppsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public SyncTeamsAppsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.SyncTeamsApps)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.SyncTeamsApps)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "teamsAppsListId", "insightsAppId", "tenantId"
@@ -190,7 +190,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Adoptify
     public class ProcessTeamsAppsInstallTask : AdoptifySingleLogicAppInstallTask
     {
         public ProcessTeamsAppsInstallTask(string resourceName, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
-            : base(resourceName, config, logger, azureLocation, tags, new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceStringFromExecutingAssembly(ResourceNameConstants.ProcessTeamsApps)) { }
+            : base(resourceName, config, logger, azureLocation, tags, new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly()).ReadResourceString(ResourceNameConstants.ProcessTeamsApps)) { }
         public override string[] ArmParamNames => new string[]
         {
             "resourceGroupName", "subscriptionId", "location", "adoptifySiteUrl", "questsListId", "questProcessingListId", "userListId", "userQuestsListId",

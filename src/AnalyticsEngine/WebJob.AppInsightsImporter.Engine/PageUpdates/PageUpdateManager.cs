@@ -1,10 +1,10 @@
 ﻿using Azure;
 using Azure.AI.TextAnalytics;
-using Common.DataUtils;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.LookupCaches;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;

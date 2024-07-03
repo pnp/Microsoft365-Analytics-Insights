@@ -6,7 +6,7 @@ using System;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public class AuthHelper
     {

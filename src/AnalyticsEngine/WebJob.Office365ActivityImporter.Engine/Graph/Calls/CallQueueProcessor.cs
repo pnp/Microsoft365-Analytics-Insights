@@ -1,9 +1,9 @@
 ﻿using Azure.Messaging.ServiceBus;
-using Common.DataUtils;
-using Common.DataUtils.Http;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Models;
+using DataUtils;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Newtonsoft.Json;

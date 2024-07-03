@@ -1,4 +1,4 @@
-﻿using Common.DataUtils;
+﻿using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using System;
@@ -75,11 +75,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             var driveItemId = StringUtils.GetDriveItemId(copilotDocContextId);
 
+            ListItem item = null;
+            var site = await _siteGraphCache.GetResourceOrNullIfNotExists(spSiteId);
             if (driveItemId != null)
             {
-                var site = await _siteGraphCache.GetResourceOrNullIfNotExists(spSiteId);
-
-                ListItem item = null;
                 try
                 {
                     item = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items[driveItemId]
@@ -95,6 +94,30 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             else
             {
+                // We might have a direct URL as the copilot context ID, so we need to search for the item in the list.
+                // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_onmicrosoft_com/Documents/MyDoc.docx
+                try
+                {
+                    // Currently we can't filter by webUrl, so we have to get all items and filter client side
+                    var listItems = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items
+                        .Request().Select("id,webUrl").GetAsync();
+                    if (listItems != null)
+                    {
+                        foreach (var i in listItems)
+                        {
+                            if (i.WebUrl == copilotDocContextId)
+                            {
+                                return new SpoDocumentFileInfo(i, site);
+                            }
+                        }
+                    }
+                }
+                catch (ServiceException ex)
+                {
+                    _logger.LogWarning(ex, "Error getting items info for list {spListId} on site {siteUrl}", spListId, siteUrl);
+                    return null;
+                }
+
                 _logger.LogWarning("No driveItemId found in copilotDocContextId {copilotDocContextId}", copilotDocContextId);
                 return null;
             }
@@ -137,7 +160,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (ServiceException)
             {
-                // Test below if the site exists
+                // We can't get the drive via the site address, for some reason. Most of the time we can, but sometimes it doesn't work...
+                // Load just the site and then try getting the drive using the loaded site ID
             }
 
             if (siteDrive == null)
@@ -152,12 +176,28 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     _logger.LogWarning(ex, "Error getting site info for site {siteUrl}", siteUrl);
                     return null;
                 }
-
                 if (site != null)
                 {
-                    // Site exists but no drive for some reason
-                    _logger.LogWarning("No drive found for site {siteUrl}", siteUrl);
-                    return null;
+                    try
+                    {
+                        // Try one more time using site ID
+                        siteDrive = await _graphServiceClient.Sites[site.Id].Drive.Request().Select("SharePointIds").GetAsync() ?? throw new ArgumentOutOfRangeException(siteAddress);
+                    }
+                    catch (ServiceException)
+                    {
+                        // Ignore. Handle logging below
+                    }
+
+                    if (siteDrive == null)
+                    {
+                        // Site exists but no drive for some reason
+                        _logger.LogWarning($"No drive found for site ID {site.Id}");
+                        return null;
+                    }
+                    else
+                    {
+                        return siteDrive;
+                    }
                 }
                 else
                 {

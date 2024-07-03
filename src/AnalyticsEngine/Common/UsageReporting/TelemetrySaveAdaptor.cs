@@ -2,7 +2,7 @@
 using System;
 using System.Threading.Tasks;
 
-namespace Common.UsageReporting
+namespace UsageReporting
 {
     /// <summary>
     /// Something that save telemetry data somewhere

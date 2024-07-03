@@ -1,8 +1,8 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using Azure.Core;
-using Common.DataUtils;
 using Common.Entities.Installer;
+using DataUtils;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;

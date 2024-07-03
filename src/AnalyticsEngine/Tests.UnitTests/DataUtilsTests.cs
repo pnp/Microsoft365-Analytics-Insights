@@ -1,10 +1,10 @@
 ﻿using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Models;
-using Common.DataUtils;
-using Common.DataUtils.Sql;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.LookupCaches;
+using DataUtils;
+using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Concurrent;
@@ -21,6 +21,20 @@ namespace Tests.UnitTests
     [TestClass]
     public class DataUtilsTests
     {
+        [TestMethod]
+        public void IsValidUrlTests()
+        {
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl(null));
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl(""));
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl("asdfasdf"));
+            Assert.IsFalse(StringUtils.IsValidAbsoluteUrl("http://"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com/"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com/asdfasdf"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("http://asdfasdf.com/asdfasdf/"));
+            Assert.IsTrue(StringUtils.IsValidAbsoluteUrl("https://contoso.sharepoint.com/sites/site1/_layouts/15/Doc.aspx?sourcedoc=%7BF2CB77E7-186C-4F9A-B949-FA078F48AA53%7D&file=RD%20Consejer%C3%ADa%20en%20el%20exterior%20v.1.docx&action=default&mobileredirect=true"));
+        }
 
         [TestMethod]
         public void DatabaseUpgraderTests()
