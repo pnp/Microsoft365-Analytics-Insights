@@ -57,7 +57,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Identity">
-      <Version>1.11.0</Version>
+      <Version>1.11.4</Version>
     </PackageReference>
     <PackageReference Include="BCrypt.Net-Next">
       <Version>4.0.3</Version>

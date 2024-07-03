@@ -1,6 +1,6 @@
 ﻿using System.Collections.Generic;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public static class IUrlObjectResolver
     {

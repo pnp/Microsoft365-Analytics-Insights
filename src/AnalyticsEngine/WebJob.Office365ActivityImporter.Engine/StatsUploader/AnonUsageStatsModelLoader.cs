@@ -1,7 +1,7 @@
-﻿using Common.DataUtils;
-using Common.Entities.Installer;
-using Common.UsageReporting;
+﻿using Common.Entities.Installer;
+using DataUtils;
 using System;
+using UsageReporting;
 
 namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 {

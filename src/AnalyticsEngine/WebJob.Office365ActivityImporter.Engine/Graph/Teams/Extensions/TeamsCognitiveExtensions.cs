@@ -1,7 +1,7 @@
 ﻿using Azure.AI.TextAnalytics;
-using Common.DataUtils;
 using Common.Entities.Config;
 using Common.Entities.Redis;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Newtonsoft.Json;

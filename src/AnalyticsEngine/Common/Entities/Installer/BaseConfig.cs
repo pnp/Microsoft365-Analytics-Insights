@@ -1,4 +1,4 @@
-﻿using System;
+﻿using DataUtils;
 using System.Collections.Generic;
 
 namespace Common.Entities.Installer
@@ -23,7 +23,7 @@ namespace Common.Entities.Installer
         /// </summary>
         protected bool IsValidSPSiteCollectionURL(string url)
         {
-            return Uri.IsWellFormedUriString(url, UriKind.Absolute) && !url.EndsWith("/");
+            return StringUtils.IsValidAbsoluteUrl(url) && !url.EndsWith("/");
         }
     }
 }

@@ -34,7 +34,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
     }
     public class ProfilingScriptAggregationStatusPSRunbookUploadTask : RunbookUploadTask<AzStorageRunbookFileLocations>
     {
-        public ProfilingScriptAggregationStatusPSRunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) 
+        public ProfilingScriptAggregationStatusPSRunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
             : base(config, logger, azureLocation, tags)
         {
         }
@@ -53,7 +53,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
     }
     public class ProfilingScriptDatabaseMaintenancePSRunbookUploadTask : RunbookUploadTask<AzStorageRunbookFileLocations>
     {
-        public ProfilingScriptDatabaseMaintenancePSRunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) 
+        public ProfilingScriptDatabaseMaintenancePSRunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
             : base(config, logger, azureLocation, tags)
         {
         }

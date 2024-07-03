@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public class CommonExceptionHandler
     {

@@ -1,6 +1,6 @@
-﻿using Common.DataUtils;
-using Common.DataUtils.Http;
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
+using DataUtils;
+using DataUtils.Http;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 {

@@ -6,7 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils.Sql.Inserts
+namespace DataUtils.Sql.Inserts
 {
     /// <summary>
     /// For inserting & merging a lot of records quickly. Used when EF is too slow.

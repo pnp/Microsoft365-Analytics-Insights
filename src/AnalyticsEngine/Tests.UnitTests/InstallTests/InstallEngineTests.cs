@@ -8,7 +8,6 @@ using App.ControlPanel.Engine.SharePointModelBuilder;
 using App.ControlPanel.Engine.SharePointModelBuilder.ValueLookups;
 using Azure.Core;
 using Azure.Identity;
-using Azure.ResourceManager.Resources.Models;
 using CloudInstallEngine;
 using CloudInstallEngine.Models;
 using Common.Entities.Config;
@@ -146,7 +145,7 @@ namespace Tests.UnitTests
             {
                 { "testKey", "testVal" }
             };
-            var cObj2 = c.ToArmParamsObject(new { tagsArray = new { value = tagsDict }});
+            var cObj2 = c.ToArmParamsObject(new { tagsArray = new { value = tagsDict } });
 
             Assert.IsNotNull(cObj2);
 

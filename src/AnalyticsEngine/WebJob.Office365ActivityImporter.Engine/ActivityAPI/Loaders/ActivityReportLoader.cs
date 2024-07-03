@@ -1,4 +1,4 @@
-﻿using Common.DataUtils.Http;
+﻿using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -52,15 +52,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             var logs = new WebActivityReportSet();
 
             // A report download can have multiple reports in a Json array.
-            JArray allReportsData;
+            JArray allReportsData = null;
             try
             {
                 allReportsData = JArray.Parse(jSonBody);
             }
-            catch (Exception ex)
+            catch (JsonReaderException)
             {
-                // Random errors decoding an object expected to be an array but isn't
-                _telemetry.LogError(ex, $"Got error '{ex.Message}' parsing a JSON: {jSonBody}. Will try again on next cycle.");
+                _telemetry.LogWarning($"Invalid JSon body '{jSonBody}' for URL '{newUri}'. Ignoring");
                 return new WebActivityReportSet();
             }
 

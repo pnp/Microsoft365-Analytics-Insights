@@ -6,7 +6,7 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils.Http
+namespace DataUtils.Http
 {
     /// <summary>
     /// HttpClient that can handle HTTP 429s automatically

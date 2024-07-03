@@ -1,7 +1,7 @@
 ﻿using Microsoft.Azure.Cosmos;
 using System.Threading.Tasks;
 
-namespace Common.UsageReporting
+namespace UsageReporting
 {
     public interface IStatsServiceCosmosConfig
     {

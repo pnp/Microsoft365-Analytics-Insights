@@ -8,13 +8,33 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Web;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public static class StringUtils
     {
+        /// <summary>
+        /// Hack for https://github.com/dotnet/runtime/issues/21626
+        /// </summary>
+        public static bool IsValidAbsoluteUrl(string url)
+        {
+            try
+            {
+                new Uri(url);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+            catch (UriFormatException)
+            {
+                return false;
+            }
+            return true;
+        }
+
         public static string GetOnlineMeetingId(string copilotDocContextId, string userGuid)
         {
-            var meetingIdFragment = StringUtils.GetMeetingIdFragmentFromMeetingThreadUrl(copilotDocContextId);
+            var meetingIdFragment = GetMeetingIdFragmentFromMeetingThreadUrl(copilotDocContextId);
             if (meetingIdFragment == null)
             {
                 throw new Exception($"Could not parse meeting id from url {copilotDocContextId}");
@@ -38,7 +58,7 @@ namespace Common.DataUtils
         }
         public static string GetSiteUrl(string copilotDocContextId)
         {
-            if (!Uri.IsWellFormedUriString(copilotDocContextId, UriKind.Absolute))
+            if (!IsValidAbsoluteUrl(copilotDocContextId))
             {
                 return null;
             }

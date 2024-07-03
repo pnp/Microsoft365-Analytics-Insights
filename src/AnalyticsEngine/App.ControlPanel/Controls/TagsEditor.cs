@@ -1,5 +1,4 @@
-﻿using Azure.ResourceManager.Resources.Models;
-using Common.Entities.Installer;
+﻿using Common.Entities.Installer;
 using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
@@ -94,7 +93,7 @@ namespace App.ControlPanel.Controls
 
             lstTags.Items.Add(new TagLVI(new AzTag(name, val)));
             txtTagName.Text = string.Empty;
-            txtTagVal.Text = string.Empty;  
+            txtTagVal.Text = string.Empty;
 
             UpdateDisplayControls(View.List);
         }

@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public class TextAnalysisSample<T> where T : class
     {
@@ -52,7 +52,7 @@ namespace Common.DataUtils
             {
                 // Break down API calls into chunks of 10 max and compile results
                 var listProcessorLang = new ParallelCallsForSingleReturnListHander<TextAnalysisSample<T>, DetectLanguageResult>();
-                detectedLanguages = await listProcessorLang.CallAndCompileToSingleList(inputData, async (List<TextAnalysisSample<T>> chunk) =>
+                detectedLanguages = await listProcessorLang.CallAndCompileToSingleList(inputData, async (chunk) =>
                 {
                     var languageBatchInput = new List<DetectLanguageInput>();
                     foreach (var d in inputData)
@@ -127,7 +127,7 @@ namespace Common.DataUtils
                 try
                 {
                     // Break down API calls into chunks of 10 max and compile results
-                    allAnalyzeSentimentResults = await listProcessorSentiment.CallAndCompileToSingleList(sentimentBatchInput, async (List<TextDocumentInput> chunk) =>
+                    allAnalyzeSentimentResults = await listProcessorSentiment.CallAndCompileToSingleList(sentimentBatchInput, async (chunk) =>
                     {
                         var result = await client.AnalyzeSentimentBatchAsync(chunk);
                         return result.Value.ToList();

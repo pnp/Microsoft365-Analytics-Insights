@@ -1,9 +1,6 @@
-﻿using Azure;
-using Azure.Core;
+﻿using Azure.Core;
 using Azure.ResourceManager.Resources;
-using Azure.ResourceManager.Resources.Models;
 using Microsoft.Extensions.Logging;
-using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 

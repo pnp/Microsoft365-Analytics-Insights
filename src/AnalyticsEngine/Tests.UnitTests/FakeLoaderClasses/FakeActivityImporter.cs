@@ -1,5 +1,5 @@
-﻿using Common.DataUtils;
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
+using DataUtils;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 
 namespace Tests.UnitTests.FakeLoaderClasses
