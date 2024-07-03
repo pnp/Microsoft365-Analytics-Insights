@@ -186,7 +186,20 @@ IF OBJECT_ID(N'profiling.ActivitiesWeeklyColumns') IS NULL
     [Teams Meetings Organized] BIGINT NOT NULL DEFAULT 0,
     [Yammer Posted] BIGINT NOT NULL DEFAULT 0,
     [Yammer Read] BIGINT NOT NULL DEFAULT 0,
-    [Yammer Liked] BIGINT NOT NULL DEFAULT 0,
+    [Yammer Liked] BIGINT NOT NULL DEFAULT 0
+
+    ,[Copilot Chats] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot Meetings] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot Files] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App M365 Chat] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Bing] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Loop] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Office] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Excel] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App PowerPoint] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Word] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Teams] BIGINT NOT NULL DEFAULT 0
+
     CONSTRAINT [PK_ActivitiesWeeklyColumns] PRIMARY KEY CLUSTERED ([user_id] ASC, [date] ASC) WITH (
       STATISTICS_NORECOMPUTE = OFF,
       IGNORE_DUP_KEY = OFF,
@@ -223,7 +236,7 @@ IF NOT EXISTS(SELECT OBJECT_NAME(OBJECT_ID) FROM sys.objects WHERE type_desc LIK
   CONSTRAINT df_yammer_liked DEFAULT 0 FOR [Yammer Liked];
 GO
 
--- Add new metric columns
+-- Add new Teams columns
 IF NOT EXISTS(SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ActivitiesWeeklyColumns' AND TABLE_SCHEMA = 'profiling' AND COLUMN_NAME = 'Teams Adhoc Meetings Attended')
   ALTER TABLE [profiling].[ActivitiesWeeklyColumns]
   ADD
@@ -239,6 +252,23 @@ IF NOT EXISTS(SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAM
     ,[Teams Post Messages] BIGINT NOT NULL DEFAULT 0
     ,[Teams Reply Messages] BIGINT NOT NULL DEFAULT 0
     ,[Teams Urgent Messages] BIGINT NOT NULL DEFAULT 0;
+GO
+
+-- Add new Copilot columns
+IF NOT EXISTS(SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ActivitiesWeeklyColumns' AND TABLE_SCHEMA = 'profiling' AND COLUMN_NAME = 'Copilot Chats')
+  ALTER TABLE [profiling].[ActivitiesWeeklyColumns]
+  ADD
+    [Copilot Chats] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot Meetings] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot Files] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App M365 Chat] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Bing] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Loop] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Office] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Excel] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App PowerPoint] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Word] BIGINT NOT NULL DEFAULT 0
+    ,[Copilot App Teams] BIGINT NOT NULL DEFAULT 0;
 GO
 
 IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = N'IX_date' AND object_id = OBJECT_ID('profiling.ActivitiesWeeklyColumns'))
@@ -413,6 +443,9 @@ IF OBJECT_ID(N'profiling.usp_UpsertM365Apps') IS NOT NULL DROP PROCEDURE [profil
 GO
 IF OBJECT_ID(N'profiling.usp_UpsertYammerDevices') IS NOT NULL DROP PROCEDURE [profiling].[usp_UpsertYammerDevices];
 GO
+IF OBJECT_ID(N'profiling.usp_UpsertCopilot') IS NOT NULL DROP PROCEDURE [profiling].[usp_UpsertCopilot];
+GO
+
 IF TYPE_ID(N'ut_teams_user_activity_log') IS NOT NULL DROP TYPE ut_teams_user_activity_log;
 GO
 IF TYPE_ID(N'ut_onedrive_user_activity_log') IS NOT NULL DROP TYPE ut_onedrive_user_activity_log;
@@ -429,6 +462,9 @@ IF TYPE_ID(N'ut_platform_user_activity_log') IS NOT NULL DROP TYPE ut_platform_u
 GO
 IF TYPE_ID(N'ut_yammer_device_activity_log') IS NOT NULL DROP TYPE ut_yammer_device_activity_log;
 GO
+IF TYPE_ID(N'ut_copilot_activities') IS NOT NULL DROP TYPE ut_copilot_activities;
+GO
+
 -- Add Table Types
 IF TYPE_ID(N'ut_teams_user_activity_log') IS NULL CREATE TYPE ut_teams_user_activity_log AS TABLE (
   [user_id] INT NOT NULL,
@@ -549,14 +585,37 @@ IF TYPE_ID(N'ut_yammer_device_activity_log') IS NULL CREATE TYPE ut_yammer_devic
   [used_web] [int] NOT NULL,
   [used_mobile] [int] NOT NULL,
   [used_others] [int] NOT NULL,
-	[used_win_phone] [int] NOT NULL,
-	[used_android] [int] NOT NULL,
-	[used_ipad] [int] NOT NULL,
-	[used_iphone] [int] NOT NULL
+  [used_win_phone] [int] NOT NULL,
+  [used_android] [int] NOT NULL,
+  [used_ipad] [int] NOT NULL,
+  [used_iphone] [int] NOT NULL
+);
+GO
+IF TYPE_ID(N'ut_copilot_activities') IS NULL CREATE TYPE ut_copilot_activities AS TABLE (
+  [user_id] INT NOT NULL
+  ,[date] DATETIME NOT NULL
+  ,[copilot_chats] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_meetings] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_files] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_m365_chat] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_bing] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_loop] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_office] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_excel] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_power_point] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_word] BIGINT NOT NULL DEFAULT 0
+  ,[copilot_teams] BIGINT NOT NULL DEFAULT 0
 );
 GO
 
 -- Add SPs
+/*
+Upsert procedures should get the raw data from the database, process it and push it to the staging temporary table.
+There are two staging tables, depending on the type of data:
+  - Activity count data (user sent X emails that day) goes into #ActivitiesStaging
+  - Boolean data (Teams mobile was used or not that day) goes into #UsageStaging
+*/
+
 CREATE PROCEDURE [profiling].[usp_UpsertTeams] (
     @StartDate DATE, @EndDate DATE
 ) AS
@@ -629,8 +688,8 @@ BEGIN
     [scheduled_recurring_meetings_attended_count], [scheduled_recurring_meetings_organized_count],
     [audio_duration_seconds], [video_duration_seconds], [screenshare_duration_seconds],
     [post_messages], [reply_messages], [urgent_messages]
-  FROM @teams as tvp
-  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
+  FROM @teams AS tvp
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging AS t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
 END
 GO
 
@@ -668,8 +727,8 @@ BEGIN
   SELECT
     user_id, date,
     [viewed_or_edited], [synced], [shared_internally], [shared_externally]
-  FROM @onedrive as tvp
-  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
+  FROM @onedrive AS tvp
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging AS t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
 END
 GO
 
@@ -707,8 +766,8 @@ BEGIN
   SELECT
     user_id, date,
     [viewed_or_edited], [synced], [shared_internally], [shared_externally]
-  FROM @sharepoint as tvp
-  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
+  FROM @sharepoint AS tvp
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging AS t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
 END
 GO
 
@@ -751,8 +810,8 @@ BEGIN
     user_id, date,
     [email_send_count], [email_receive_count], [email_read_count],
     [meeting_created_count], [meeting_interacted_count]
-  FROM @outlook as tvp
-  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
+  FROM @outlook AS tvp
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging AS t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
 END
 GO
 
@@ -789,8 +848,8 @@ BEGIN
   SELECT
     user_id, date,
     [posted_count], [read_count], [liked_count]
-  FROM @yammer as tvp
-  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging as t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
+  FROM @yammer AS tvp
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging AS t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
 END
 GO
 
@@ -841,8 +900,8 @@ BEGIN
     [user_id], [date],
     [used_web], [used_mac], [used_windows], [used_linux], [used_chrome_os],
     [used_mobile], [used_win_phone], [used_ios], [used_android]
-  FROM @ut_staging as staging
-  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);
+  FROM @ut_staging AS staging
+  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging AS t WHERE t.user_id = staging.user_id AND t.date = staging.date);
 END
 GO
 
@@ -930,8 +989,8 @@ BEGIN
     [outlook_mac], [word_mac], [excel_mac], [powerpoint_mac], [onenote_mac], [teams_mac],
     [outlook_mobile], [word_mobile], [excel_mobile], [powerpoint_mobile], [onenote_mobile], [teams_mobile],
     [outlook_web], [word_web], [excel_web], [powerpoint_web], [onenote_web], [teams_web]
-  FROM @ut_staging as staging
-  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);
+  FROM @ut_staging AS staging
+  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging AS t WHERE t.user_id = staging.user_id AND t.date = staging.date);
 END
 GO
 
@@ -984,8 +1043,119 @@ BEGIN
     user_id, date,
     [used_count], [used_web], [used_mobile], [used_others],
     [used_win_phone], [used_android], [used_ipad], [used_iphone]
-  FROM @ut_staging as staging
-  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging as t WHERE t.user_id = staging.user_id AND t.date = staging.date);
+  FROM @ut_staging AS staging
+  WHERE NOT EXISTS (SELECT 1 FROM #UsageStaging AS t WHERE t.user_id = staging.user_id AND t.date = staging.date);
+END
+GO
+
+CREATE PROCEDURE [profiling].[usp_UpsertCopilot] (
+  @StartDate DATE, @EndDate DATE
+) AS
+BEGIN
+  SET NOCOUNT ON;
+  DECLARE @copilot AS ut_copilot_activities;
+
+  WITH hosts_pivoted AS (
+    SELECT * FROM (
+      SELECT [app_host], @StartDate as [date], [user_id], [event_id]
+      FROM dbo.event_copilot_chats AS c
+      JOIN dbo.audit_events AS au ON c.event_id = au.id
+      WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
+    ) t
+    PIVOT (
+      COUNT(event_id)
+      FOR app_host IN (
+        -- AS more hosts appear, they need to be added here AS they are in the JSON
+        -- bizchat is M365 Chat experience on Bing and Teams
+        [bizchat] ,[Bing] ,[Loop]
+        ,[Office] ,[Excel] ,[PowerPoint] ,[Word]
+        ,[Teams]
+      )
+    ) AS pivoted
+  ),
+  host_activities AS (
+    SELECT
+      [user_id], [date]
+      ,[bizchat] AS [copilot_m365_chat]
+      ,[Bing] AS [copilot_bing]
+      ,[Loop] AS [copilot_loop]
+      ,[Office] AS [copilot_office]
+      ,[Excel] AS [copilot_excel]
+      ,[PowerPoint] AS [copilot_power_point]
+      ,[Word] AS [copilot_word]
+      ,[Teams] AS [copilot_teams]
+    FROM hosts_pivoted
+  ),
+  events AS (
+    SELECT
+      [user_id]
+      ,@StartDate AS [date]
+      ,c.event_id AS [chat_id]
+      ,f.copilot_chat_id AS [has_file]
+      ,m.copilot_chat_id AS [has_meeting]
+    FROM dbo.event_copilot_chats AS c
+      JOIN dbo.audit_events AS au ON c.event_id = au.id
+      LEFT JOIN dbo.event_copilot_files AS f ON c.event_id = f.copilot_chat_id
+      LEFT JOIN dbo.event_copilot_meetings AS m ON c.event_id = m.copilot_chat_id
+    WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
+  ),
+  event_counts AS (
+    SELECT
+      [user_id], [date]
+      ,count(chat_id) AS [chat_count]
+      ,count(has_file) AS [file_count]
+      ,count(has_meeting) AS [meeting_count]
+    FROM events
+    GROUP BY [user_id], [date]
+  )
+  INSERT INTO @copilot (
+    [user_id], [date]
+    ,[copilot_chats] ,[copilot_meetings] ,[copilot_files]
+    ,[copilot_m365_chat] ,[copilot_bing] ,[copilot_loop]
+    ,[copilot_office] ,[copilot_excel] ,[copilot_power_point] ,[copilot_word]
+    ,[copilot_teams]
+  )
+  SELECT
+    a.[user_id], @StartDate
+    ,SUM(c.chat_count) ,SUM(c.meeting_count) ,SUM(c.file_count)
+    ,SUM([copilot_m365_chat]) ,SUM([copilot_bing]) ,SUM([copilot_loop])
+    ,SUM([copilot_office]) ,SUM([copilot_excel]) ,SUM([copilot_power_point]) ,SUM([copilot_word])
+    ,SUM([copilot_teams])
+  FROM host_activities AS a
+  JOIN event_counts AS c ON a.user_id = c.user_id
+  GROUP BY a.[user_id];
+
+  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  SET
+    [Copilot Chats] = tvp.[copilot_chats]
+    ,[Copilot Meetings] = tvp.[copilot_meetings]
+    ,[Copilot Files] = tvp.[copilot_files]
+    ,[Copilot App M365 Chat] = tvp.[copilot_m365_chat]
+    ,[Copilot App Bing] = tvp.[copilot_bing]
+    ,[Copilot App Loop] = tvp.[copilot_loop]
+    ,[Copilot App Office] = tvp.[copilot_office]
+    ,[Copilot App Excel] = tvp.[copilot_excel]
+    ,[Copilot App PowerPoint] = tvp.[copilot_power_point]
+    ,[Copilot App Word] = tvp.[copilot_word]
+    ,[Copilot App Teams] = tvp.[copilot_teams]
+  FROM #ActivitiesStaging AS t
+  INNER JOIN @copilot AS tvp ON t.user_id = tvp.user_id AND t.date = tvp.date;
+
+  INSERT #ActivitiesStaging (
+    [user_id], [date]
+    ,[Copilot Chats] ,[Copilot Meetings] ,[Copilot Files]
+    ,[Copilot App M365 Chat] ,[Copilot App Bing] ,[Copilot App Loop]
+    ,[Copilot App Office] ,[Copilot App Excel] ,[Copilot App PowerPoint] ,[Copilot App Word]
+    ,[Copilot App Teams]
+  )
+  SELECT
+    [user_id], [date]
+    ,[copilot_chats] ,[copilot_meetings] ,[copilot_files]
+    ,[copilot_m365_chat] ,[copilot_bing] ,[copilot_loop]
+    ,[copilot_office] ,[copilot_excel] ,[copilot_power_point] ,[copilot_word]
+    ,[copilot_teams]
+  FROM @copilot AS tvp
+  WHERE NOT EXISTS (SELECT 1 FROM #ActivitiesStaging AS t WHERE t.user_id = tvp.user_id AND t.date = tvp.date);
 END
 GO
 
@@ -1005,31 +1175,33 @@ BEGIN
     SELECT GETDATE(), N'[usp_CompileWeekActivityRows] Starting: ' + CAST(@Monday AS NVARCHAR);
     INSERT INTO [profiling].[ActivitiesWeekly]
     SELECT
-      user_id,
-      @Monday as MetricDate,
-      Metric,
-      Sum(Value) as Sum
+      [user_id],
+      @Monday AS [MetricDate],
+      [Metric],
+      Sum(Value) AS [Sum]
     FROM #ActivitiesStaging AS Pivoted
     UNPIVOT (
       -- Convert columns into rows
       Value FOR Metric IN (
-        [OneDrive Viewed/Edited], [OneDrive Synced],
-        [OneDrive Shared Internally], [OneDrive Shared Externally],
-        [Emails Sent], [Emails Received], [Emails Read],
-        [Outlook Meetings Created], [Outlook Meetings Interacted],
-        [SPO Viewed/Edited], [SPO Synced],
-        [SPO Shared Internally], [SPO Shared Externally],
-        [Teams Private Chats], [Teams Team Chats], [Teams Calls],
-        [Teams Meetings], [Teams Meetings Attended], [Teams Meetings Organized],
-        [Teams Adhoc Meetings Attended], [Teams Adhoc Meetings Organized],
-        [Teams Scheduled Onetime Meetings Attended], [Teams Scheduled Onetime Meetings Organized],
-        [Teams Scheduled Recurring Meetings Attended], [Teams Scheduled Recurring Meetings Organized],
-        [Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds],
-        [Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages],
-        [Yammer Posted], [Yammer Read], [Yammer Liked]
+        [OneDrive Viewed/Edited] ,[OneDrive Synced] ,[OneDrive Shared Internally] ,[OneDrive Shared Externally]
+        ,[Emails Sent] ,[Emails Received] ,[Emails Read]
+        ,[Outlook Meetings Created] ,[Outlook Meetings Interacted]
+        ,[SPO Viewed/Edited] ,[SPO Synced] ,[SPO Shared Internally] ,[SPO Shared Externally]
+        ,[Teams Private Chats] ,[Teams Team Chats] ,[Teams Calls]
+        ,[Teams Meetings] ,[Teams Meetings Attended] ,[Teams Meetings Organized]
+        ,[Teams Adhoc Meetings Attended] ,[Teams Adhoc Meetings Organized]
+        ,[Teams Scheduled Onetime Meetings Attended] ,[Teams Scheduled Onetime Meetings Organized]
+        ,[Teams Scheduled Recurring Meetings Attended] ,[Teams Scheduled Recurring Meetings Organized]
+        ,[Teams Audio Duration Seconds] ,[Teams Video Duration Seconds] ,[Teams Screenshare Duration Seconds]
+        ,[Teams Post Messages] ,[Teams Reply Messages] ,[Teams Urgent Messages]
+        ,[Yammer Posted] ,[Yammer Read] ,[Yammer Liked]
+        ,[Copilot Chats] ,[Copilot Meetings] ,[Copilot Files]
+        ,[Copilot App M365 Chat] ,[Copilot App Bing] ,[Copilot App Loop]
+        ,[Copilot App Office] ,[Copilot App Excel] ,[Copilot App PowerPoint] ,[Copilot App Word]
+        ,[Copilot App Teams]
       )
     ) AS Unpivoted
-    GROUP BY user_id, Metric;
+    GROUP BY [user_id], [Metric];
   END TRY
   BEGIN CATCH
     INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
@@ -1054,46 +1226,46 @@ BEGIN
     SELECT GETDATE(), N'[usp_CompileWeekActivityColumns] Starting: ' + CAST(@Monday AS NVARCHAR);
     INSERT INTO [profiling].[ActivitiesWeeklyColumns] (
       user_id, date,
-      [OneDrive Viewed/Edited], [OneDrive Synced],
-      [OneDrive Shared Internally], [OneDrive Shared Externally],
-
-      [Emails Sent], [Emails Received], [Emails Read],
-      [Outlook Meetings Created], [Outlook Meetings Interacted],
-
-      [SPO Viewed/Edited], [SPO Synced],
-      [SPO Shared Internally], [SPO Shared Externally],
-
-      [Teams Private Chats], [Teams Team Chats], [Teams Calls],
-      [Teams Meetings], [Teams Meetings Attended], [Teams Meetings Organized],
-      [Teams Adhoc Meetings Attended], [Teams Adhoc Meetings Organized],
-      [Teams Scheduled Onetime Meetings Attended], [Teams Scheduled Onetime Meetings Organized],
-      [Teams Scheduled Recurring Meetings Attended], [Teams Scheduled Recurring Meetings Organized],
-      [Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds],
-      [Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages],
-
-      [Yammer Posted], [Yammer Read], [Yammer Liked]
+      [OneDrive Viewed/Edited], [OneDrive Synced]
+      ,[OneDrive Shared Internally], [OneDrive Shared Externally]
+      ,[Emails Sent], [Emails Received], [Emails Read]
+      ,[Outlook Meetings Created], [Outlook Meetings Interacted]
+      ,[SPO Viewed/Edited], [SPO Synced]
+      ,[SPO Shared Internally], [SPO Shared Externally]
+      ,[Teams Private Chats], [Teams Team Chats], [Teams Calls]
+      ,[Teams Meetings], [Teams Meetings Attended], [Teams Meetings Organized]
+      ,[Teams Adhoc Meetings Attended], [Teams Adhoc Meetings Organized]
+      ,[Teams Scheduled Onetime Meetings Attended], [Teams Scheduled Onetime Meetings Organized]
+      ,[Teams Scheduled Recurring Meetings Attended], [Teams Scheduled Recurring Meetings Organized]
+      ,[Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds]
+      ,[Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages]
+      ,[Yammer Posted], [Yammer Read], [Yammer Liked]
+      ,[Copilot Chats] ,[Copilot Meetings] ,[Copilot Files]
+      ,[Copilot App M365 Chat] ,[Copilot App Bing] ,[Copilot App Loop]
+      ,[Copilot App Office] ,[Copilot App Excel] ,[Copilot App PowerPoint] ,[Copilot App Word]
+      ,[Copilot App Teams]
     )
     SELECT
       user_id,
-      @Monday as date,
-      [OneDrive Viewed/Edited], [OneDrive Synced],
-      [OneDrive Shared Internally], [OneDrive Shared Externally],
-
-      [Emails Sent], [Emails Received], [Emails Read],
-      [Outlook Meetings Created], [Outlook Meetings Interacted],
-
-      [SPO Viewed/Edited], [SPO Synced],
-      [SPO Shared Internally], [SPO Shared Externally],
-
-      [Teams Private Chats], [Teams Team Chats], [Teams Calls],
-      [Teams Meetings], [Teams Meetings Attended], [Teams Meetings Organized],
-      [Teams Adhoc Meetings Attended], [Teams Adhoc Meetings Organized],
-      [Teams Scheduled Onetime Meetings Attended], [Teams Scheduled Onetime Meetings Organized],
-      [Teams Scheduled Recurring Meetings Attended], [Teams Scheduled Recurring Meetings Organized],
-      [Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds],
-      [Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages],
-
-      [Yammer Posted], [Yammer Read], [Yammer Liked]
+      @Monday AS date,
+      [OneDrive Viewed/Edited], [OneDrive Synced]
+      ,[OneDrive Shared Internally], [OneDrive Shared Externally]
+      ,[Emails Sent], [Emails Received], [Emails Read]
+      ,[Outlook Meetings Created], [Outlook Meetings Interacted]
+      ,[SPO Viewed/Edited], [SPO Synced]
+      ,[SPO Shared Internally], [SPO Shared Externally]
+      ,[Teams Private Chats], [Teams Team Chats], [Teams Calls]
+      ,[Teams Meetings], [Teams Meetings Attended], [Teams Meetings Organized]
+      ,[Teams Adhoc Meetings Attended], [Teams Adhoc Meetings Organized]
+      ,[Teams Scheduled Onetime Meetings Attended], [Teams Scheduled Onetime Meetings Organized]
+      ,[Teams Scheduled Recurring Meetings Attended], [Teams Scheduled Recurring Meetings Organized]
+      ,[Teams Audio Duration Seconds], [Teams Video Duration Seconds], [Teams Screenshare Duration Seconds]
+      ,[Teams Post Messages], [Teams Reply Messages], [Teams Urgent Messages]
+      ,[Yammer Posted], [Yammer Read], [Yammer Liked]
+      ,[Copilot Chats] ,[Copilot Meetings] ,[Copilot Files]
+      ,[Copilot App M365 Chat] ,[Copilot App Bing] ,[Copilot App Loop]
+      ,[Copilot App Office] ,[Copilot App Excel] ,[Copilot App PowerPoint] ,[Copilot App Word]
+      ,[Copilot App Teams]
     FROM #ActivitiesStaging;
   END TRY
   BEGIN CATCH
@@ -1210,7 +1382,7 @@ BEGIN
       )
       SELECT
         user_id,
-        @Monday as date,
+        @Monday AS date,
         [Teams Used Web], [Teams Used Mac], [Teams Used Windows], [Teams Used Linux], [Teams Used Chrome OS],
         [Teams Used Mobile], [Teams Used WinPhone], [Teams Used iOS], [Teams Used Android], 
         [Office Windows], [Office Mac], [Office Mobile], [Office Web],
@@ -1270,47 +1442,53 @@ BEGIN
     IF @RowsDone = 0 OR @ColumnsDone = 0
     BEGIN
       CREATE TABLE #ActivitiesStaging (
-        [user_id] BIGINT,
-        [date] DATE,
-
-        [OneDrive Viewed/Edited] BIGINT DEFAULT 0,
-        [OneDrive Synced] BIGINT DEFAULT 0,
-        [OneDrive Shared Internally] BIGINT DEFAULT 0,
-        [OneDrive Shared Externally] BIGINT DEFAULT 0,
-
-        [SPO Viewed/Edited] BIGINT DEFAULT 0,
-        [SPO Synced] BIGINT DEFAULT 0,
-        [SPO Shared Internally] BIGINT DEFAULT 0,
-        [SPO Shared Externally] BIGINT DEFAULT 0,
-
-        [Emails Sent] BIGINT DEFAULT 0,
-        [Emails Received] BIGINT DEFAULT 0,
-        [Emails Read] BIGINT DEFAULT 0,
-        [Outlook Meetings Created] BIGINT DEFAULT 0,
-        [Outlook Meetings Interacted] BIGINT DEFAULT 0,
-
-        [Teams Private Chats] BIGINT DEFAULT 0,
-        [Teams Team Chats] BIGINT DEFAULT 0,
-        [Teams Calls] BIGINT DEFAULT 0,
-        [Teams Meetings] BIGINT DEFAULT 0,
-        [Teams Meetings Attended] BIGINT DEFAULT 0,
-        [Teams Meetings Organized] BIGINT DEFAULT 0,
-        [Teams Adhoc Meetings Attended] BIGINT DEFAULT 0,
-        [Teams Adhoc Meetings Organized] BIGINT DEFAULT 0,
-        [Teams Scheduled Onetime Meetings Attended] BIGINT DEFAULT 0,
-        [Teams Scheduled Onetime Meetings Organized] BIGINT DEFAULT 0,
-        [Teams Scheduled Recurring Meetings Attended] BIGINT DEFAULT 0,
-        [Teams Scheduled Recurring Meetings Organized] BIGINT DEFAULT 0,
-        [Teams Audio Duration Seconds] BIGINT DEFAULT 0,
-        [Teams Video Duration Seconds] BIGINT DEFAULT 0,
-        [Teams Screenshare Duration Seconds] BIGINT DEFAULT 0,
-        [Teams Post Messages] BIGINT DEFAULT 0,
-        [Teams Reply Messages] BIGINT DEFAULT 0,
-        [Teams Urgent Messages] BIGINT DEFAULT 0,
-
-        [Yammer Posted] BIGINT DEFAULT 0,
-        [Yammer Read] BIGINT DEFAULT 0,
-        [Yammer Liked] BIGINT DEFAULT 0
+        [user_id] BIGINT
+        ,[date] DATE
+        ,[OneDrive Viewed/Edited] BIGINT DEFAULT 0
+        ,[OneDrive Synced] BIGINT DEFAULT 0
+        ,[OneDrive Shared Internally] BIGINT DEFAULT 0
+        ,[OneDrive Shared Externally] BIGINT DEFAULT 0
+        ,[SPO Viewed/Edited] BIGINT DEFAULT 0
+        ,[SPO Synced] BIGINT DEFAULT 0
+        ,[SPO Shared Internally] BIGINT DEFAULT 0
+        ,[SPO Shared Externally] BIGINT DEFAULT 0
+        ,[Emails Sent] BIGINT DEFAULT 0
+        ,[Emails Received] BIGINT DEFAULT 0
+        ,[Emails Read] BIGINT DEFAULT 0
+        ,[Outlook Meetings Created] BIGINT DEFAULT 0
+        ,[Outlook Meetings Interacted] BIGINT DEFAULT 0
+        ,[Teams Private Chats] BIGINT DEFAULT 0
+        ,[Teams Team Chats] BIGINT DEFAULT 0
+        ,[Teams Calls] BIGINT DEFAULT 0
+        ,[Teams Meetings] BIGINT DEFAULT 0
+        ,[Teams Meetings Attended] BIGINT DEFAULT 0
+        ,[Teams Meetings Organized] BIGINT DEFAULT 0
+        ,[Teams Adhoc Meetings Attended] BIGINT DEFAULT 0
+        ,[Teams Adhoc Meetings Organized] BIGINT DEFAULT 0
+        ,[Teams Scheduled Onetime Meetings Attended] BIGINT DEFAULT 0
+        ,[Teams Scheduled Onetime Meetings Organized] BIGINT DEFAULT 0
+        ,[Teams Scheduled Recurring Meetings Attended] BIGINT DEFAULT 0
+        ,[Teams Scheduled Recurring Meetings Organized] BIGINT DEFAULT 0
+        ,[Teams Audio Duration Seconds] BIGINT DEFAULT 0
+        ,[Teams Video Duration Seconds] BIGINT DEFAULT 0
+        ,[Teams Screenshare Duration Seconds] BIGINT DEFAULT 0
+        ,[Teams Post Messages] BIGINT DEFAULT 0
+        ,[Teams Reply Messages] BIGINT DEFAULT 0
+        ,[Teams Urgent Messages] BIGINT DEFAULT 0
+        ,[Yammer Posted] BIGINT DEFAULT 0
+        ,[Yammer Read] BIGINT DEFAULT 0
+        ,[Yammer Liked] BIGINT DEFAULT 0
+        ,[Copilot Chats] BIGINT DEFAULT 0
+        ,[Copilot Meetings] BIGINT DEFAULT 0
+        ,[Copilot Files] BIGINT DEFAULT 0
+        ,[Copilot App M365 Chat] BIGINT DEFAULT 0
+        ,[Copilot App Bing] BIGINT DEFAULT 0
+        ,[Copilot App Loop] BIGINT DEFAULT 0
+        ,[Copilot App Office] BIGINT DEFAULT 0
+        ,[Copilot App Excel] BIGINT DEFAULT 0
+        ,[Copilot App PowerPoint] BIGINT DEFAULT 0
+        ,[Copilot App Word] BIGINT DEFAULT 0
+        ,[Copilot App Teams] BIGINT DEFAULT 0
       );
 
       -- Insert only the activities between the dates
@@ -1319,6 +1497,7 @@ BEGIN
       EXECUTE [profiling].[usp_UpsertSharePoint] @Monday, @Sunday;
       EXECUTE [profiling].[usp_UpsertOutlook] @Monday, @Sunday;
       EXECUTE [profiling].[usp_UpsertYammer] @Monday, @Sunday;
+      EXECUTE [profiling].[usp_UpsertCopilot] @Monday, @Sunday;
 
       IF @ColumnsDone = 0
         EXECUTE [profiling].[usp_CompileWeekActivityColumns] @Monday;
@@ -1360,13 +1539,15 @@ BEGIN
   -- Get last aggregated date in the table, it will be a Monday
   DECLARE
     @LastDateInTables DATE
-    ,@MaxActitiesWeekly DATE
-    ,@MaxActitiesWeeklyColumns DATE
+    ,@MaxActivitiesWeekly DATE
+    ,@MaxActivitiesWeeklyColumns DATE
     ,@MaxUsageWeekly DATE;
-  SELECT @MaxActitiesWeekly = MAX(MetricDate) FROM [profiling].[ActivitiesWeekly];
-  SELECT @MaxActitiesWeeklyColumns = MAX([date]) FROM [profiling].[ActivitiesWeeklyColumns];
+  SELECT @MaxActivitiesWeekly = MAX(MetricDate) FROM [profiling].[ActivitiesWeekly];
+  SELECT @MaxActivitiesWeeklyColumns = MAX([date]) FROM [profiling].[ActivitiesWeeklyColumns];
   SELECT @MaxUsageWeekly = MAX([date]) FROM [profiling].[UsageWeekly];
-  SELECT @LastDateInTables = MIN([date]) FROM (VALUES (@MaxActitiesWeekly), (@MaxActitiesWeeklyColumns), (@MaxUsageWeekly)) AS x([date])
+  SELECT @LastDateInTables = MIN([date]) FROM (
+    VALUES (@MaxActivitiesWeekly), (@MaxActivitiesWeeklyColumns), (@MaxUsageWeekly)
+  ) AS x([date])
 
   IF @LastDateInTables IS NULL OR @All = 1
       -- Start from the retention date
@@ -1375,7 +1556,8 @@ BEGIN
   -- Week by week, aggregate the data
   DECLARE @Monday DATE = DATEADD(DAY, 7, @LastDateInTables);
   INSERT INTO [profiling].[TraceLogs] ([Datetime], [Message])
-  SELECT GETDATE(), N'Weekly aggregation requested, from ' + CAST(@Monday as NVARCHAR) + ' to possibly ' + CAST(@ThisWeeksMonday as NVARCHAR);
+  SELECT GETDATE(), N'Weekly aggregation requested, from '
+    + CAST(@Monday AS NVARCHAR) + ' to possibly ' + CAST(@ThisWeeksMonday AS NVARCHAR);
   WHILE @ThisWeeksMonday > @Monday
   BEGIN
       DECLARE @Sunday DATE = DATEADD(DAY, 6, @Monday);
