@@ -5,11 +5,13 @@
 import { InMemoryPageStateManager } from '../src/PageProps/PageState';
 import { LocalStoragePageStateManager } from '../src/PageProps/SpoImplementation/LocalStoragePageStateManager';
 import { MetadataInfo } from '../src/PageProps/Models/MetadataInfo';
-import { TestPageDataService, TestPagePropertyManager } from './TestPagePropertyManager';
+import { TestConfigLoader, TestPageDataService, TestPagePropertyManager } from './MockLoaders';
 import { PageProps } from '../src/PageProps/Models/PageProps';
 import { isValidGuid, uuidv4 } from '../src/DataFunctions';
 import { DuplicateClickHandler } from '../src/DuplicateClickHandler';
 import { ClickData } from '../src/Definitions';
+import { ConfigHandler } from '../src/ConfigHandler';
+import { AITrackerConfig } from '../src/Models';
 
 const listTitle: string = "list 1";
 const pageItemId: number = 2;
@@ -42,21 +44,20 @@ describe('Page metadata tests', () => {
     const m = new TestPagePropertyManager(testVal, stateManager, new TestPageDataService());
 
     // Handle new page nav & then check statemanager has seen page
-    m.HandleNewPage(listTitle, pageItemId, url, (loadedProps: PageProps) => {
+    m.handleNewPage(pageItemId, url, listTitle, (loadedProps: PageProps) => {
       expect(loadedProps).toBeDefined();
-
     }).then(pagePropsLoaded => {
       expect(stateManager.pageSeen(listTitle, pageItemId)).toBeTruthy();
       expect(pagePropsLoaded).toBeTruthy();
     });
 
     // Try navigating to a url that's not got a page ID
-    m.HandleNewPage("Title", -1, url).then(pagePropsLoaded => {
+    m.handleNewPage(-1, url).then(pagePropsLoaded => {
       expect(pagePropsLoaded).toBeFalsy();
     });
 
     // ..or title
-    m.HandleNewPage(null, 1, url).then(pagePropsLoaded => {
+    m.handleNewPage(1, url).then(pagePropsLoaded => {
       expect(pagePropsLoaded).toBeFalsy();
     });
   });
@@ -72,6 +73,31 @@ describe('DataFunctions tests', () => {
     test('uuidv4', () => {
       expect(uuidv4() !== '').toBeTruthy();
     })
+});
+
+describe('Config load tests', () => {
+  test('ConfigHandler', () => {
+    const m = new ConfigHandler(new TestConfigLoader());
+
+    m.clearConfigCache();
+    expect(m.haveValidCachedConfig()).toBeFalsy();
+
+    // Cache a default config
+    m.setConfigCache(AITrackerConfig.GetDefault());
+    expect(m.haveValidCachedConfig()).toBeTruthy();
+
+    // Clear again
+    m.clearConfigCache();
+    expect(m.haveValidCachedConfig()).toBeFalsy();
+
+    m.getConfigFromCacheOrAppService().then(config => {
+      expect(config).toBeDefined();
+
+      // Load from cache and check it's valid
+      m.setConfigCache(AITrackerConfig.GetDefault());
+      expect(m.haveValidCachedConfig()).toBeTruthy();
+    });
+  });
 });
 
 describe('Model tests', () => {
@@ -118,8 +144,8 @@ describe('DuplicateClickHandler tests', () => {
     let count: number = 0;
     const c: DuplicateClickHandler = new DuplicateClickHandler();
 
-    const clickData1 : ClickData = {altText: "alt", classNames: "", href: "url", linkText: "link1" };
-    const clickData2 : ClickData = {altText: "alt", classNames: "", href: "url", linkText: "link2" };
+    const clickData1: ClickData = { altText: "alt", classNames: "", href: "url", linkText: "link1" };
+    const clickData2: ClickData = { altText: "alt", classNames: "", href: "url", linkText: "link2" };
 
     // Click twice quickly
     c.registerClick(clickData1, () => count++);

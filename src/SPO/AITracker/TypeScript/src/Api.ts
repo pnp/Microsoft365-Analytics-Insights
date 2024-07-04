@@ -1,13 +1,16 @@
 import { debug, error } from "./Logger"
 
-export function spApiJson<T>(url: string): Promise<T> {
-    return spApi(url).then(t=> JSON.parse(t));
+export function getApiReturnJson<T>(url: string): Promise<T> {
+    return callApiReturnString(url, "GET").then(t=> JSON.parse(t));
 }
 
-export function spApi(url: string): Promise<string> {
+export function postApiReturnJson<T>(url: string): Promise<T> {
+    return callApiReturnString(url, "POST").then(t=> JSON.parse(t));
+}
 
-    const method = "GET";
-    debug(`Calling SPO URL '${url}'...`);
+export function callApiReturnString(url: string, method : string): Promise<string> {
+
+    debug(`Calling URL '${url}'...`);
     return fetch(url, {
         headers: {
             'Accept': 'application/json;odata=verbose',

@@ -43,17 +43,4 @@ export class LocalStoragePageStateManager extends BasePageStateManager {
         }
         return pageConfig;
     }
-
-    static isLocalStorageAvailable() {
-        var test = 'localstorage test';
-        try {
-            localStorage.setItem(test, test);
-            localStorage.removeItem(test);
-            return true;
-        } catch (e) {
-            return false;
-        }
-    }
 }
-
-

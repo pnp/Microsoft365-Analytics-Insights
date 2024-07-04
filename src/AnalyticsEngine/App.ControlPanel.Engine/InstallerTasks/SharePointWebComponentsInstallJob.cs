@@ -14,7 +14,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class SharePointWebComponentsInstallJob : BaseInstallProcess
     {
 
-        public SharePointWebComponentsInstallJob(SolutionInstallConfig config, ILogger logger) : base(config, logger)
+        public SharePointWebComponentsInstallJob(SolutionInstallConfig config, ILogger logger, string defaultHostName) : base(config, logger)
         {
         }
 
@@ -51,7 +51,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             // Install into sites. Hard-code library name "SPOInsights" for now
             var siteInstaller = new SpoSiteListInstaller(_logger);
-            await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString, "SPOInsights");
+            await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString, "SPOInsights", base.Config.AppServiceWebAppName);
 
             _logger.LogInformation("Installed AITracker to target SharePoint sites via CSOM.");
         }

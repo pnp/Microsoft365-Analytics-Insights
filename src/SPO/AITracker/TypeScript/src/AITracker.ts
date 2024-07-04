@@ -13,6 +13,9 @@ import { AI_TRACKER_VER } from './AiTrackerConstants';
 import { ClickData, spPageContextInfo } from './Definitions';
 import { LocalStoragePageStateManager } from './PageProps/SpoImplementation/LocalStoragePageStateManager';
 import { DuplicateClickHandler } from './DuplicateClickHandler';
+import { AITrackerConfig } from './Models';
+import { ApiConfigLoader, ConfigHandler } from './ConfigHandler';
+import { LocalStorageUtils } from './LocalStorageUtils';
 
 export { };
 
@@ -20,10 +23,13 @@ var ai: AppInsightsWrapper | null = null;
 var pageTracker: PageViewTracker | null = null;
 const clickHandler: DuplicateClickHandler = new DuplicateClickHandler();
 
+var config: AITrackerConfig = AITrackerConfig.GetDefault();
+
 declare global {
     interface Window {
         _spPageContextInfo: spPageContextInfo,
         appInsightsConnectionStringHash: string | undefined,
+        apiWebRootUrlHash: string | undefined,
         modernPageNav: Function
     }
 }
@@ -133,7 +139,7 @@ function initAppInsights(): void {
         if (pageTracker === null) {
             // Use local storage for remembering pages properties sent for
             let pageStateManager: BasePageStateManager;
-            if (LocalStoragePageStateManager.isLocalStorageAvailable()) {
+            if (LocalStorageUtils.isLocalStorageAvailable()) {
                 pageStateManager = new LocalStoragePageStateManager();
                 log("Using LocalStoragePageStateManager for page metadata upload logic");
             }
@@ -224,8 +230,20 @@ function checkIfUserSearched(): void {
     }
 }
 
+function setScriptConfig(): void {
+    if (window.apiWebRootUrlHash && window.apiWebRootUrlHash !== "") {
+
+        const apiBaseUrl = atob(window.apiWebRootUrlHash);
+        log("Loading insights config from '" + apiBaseUrl + "'");
+        const m = new ConfigHandler(new ApiConfigLoader(apiBaseUrl));
+        m.getConfigFromCacheOrAppService().then((r: AITrackerConfig) => {
+            config = r;
+        });
+    }
+}
 
 // Do the things that can't wait until document loaded or if this JS file loads after page-load (modern pages, through SPFx extension loading the file)
 // Can't wait until pageload, as AppInsights needs to start timing page-load before that.
 initPageControls();
 initAppInsights();
+setScriptConfig();

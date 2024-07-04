@@ -100,8 +100,11 @@ interface PageComment {
     parentId?: number;
 }
 
-interface PagesList {
+interface PagesList extends ObjectWithExpiry{
     pagesUploadedFor: string[],
+}
+
+interface ObjectWithExpiry {
     expiry: Date
 }
 
