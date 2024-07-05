@@ -14,8 +14,9 @@ import { ClickData, spPageContextInfo } from './Definitions';
 import { LocalStoragePageStateManager } from './PageProps/SpoImplementation/LocalStoragePageStateManager';
 import { DuplicateClickHandler } from './DuplicateClickHandler';
 import { AITrackerConfig } from './Models';
-import { ApiConfigLoader, ConfigHandler } from './ConfigHandler';
 import { LocalStorageUtils } from './LocalStorageUtils';
+import { ConfigHandler } from './Config/ConfigHandler';
+import { ApiConfigLoader } from './Config/ApiConfigLoader';
 
 export { };
 
@@ -231,11 +232,11 @@ function checkIfUserSearched(): void {
 }
 
 function setScriptConfig(): void {
-    if (window.apiWebRootUrlHash && window.apiWebRootUrlHash !== "") {
+    if (window.apiWebRootUrlHash && window.apiWebRootUrlHash !== "" && window.appInsightsConnectionStringHash) {
 
         const apiBaseUrl = atob(window.apiWebRootUrlHash);
         log("Loading insights config from '" + apiBaseUrl + "'");
-        const m = new ConfigHandler(new ApiConfigLoader(apiBaseUrl));
+        const m = new ConfigHandler(new ApiConfigLoader(apiBaseUrl, window.appInsightsConnectionStringHash));
         m.getConfigFromCacheOrAppService().then((r: AITrackerConfig) => {
             config = r;
         });

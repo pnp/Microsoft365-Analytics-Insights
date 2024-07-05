@@ -60,7 +60,7 @@ namespace Tests.UnitTests
         public async Task SPOSiteInstallAdaptorTests()
         {
             const string URL_SP = "https://moderncomms933270.sharepoint.com/sites/ProjectFalcon-UXtest";
-            const string URL_WEB_APP = "https://o365analyticsdev.azurewebsites.net";
+            const string URL_WEB_APP = "https://localhost:44307";
             using (var adaptor = new SpoSiteInstallAdaptor(URL_SP, _logger))
             {
                 var c = new TrackerInstallConfig("1232", "SPOInsights", System.Text.Encoding.UTF8.GetBytes("AITrackerUpload"));

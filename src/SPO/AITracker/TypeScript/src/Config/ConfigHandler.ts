@@ -1,23 +1,7 @@
-import { postApiReturnJson } from "./Api";
-import { LocalStorageUtils } from "./LocalStorageUtils";
-import { debug, log } from "./Logger";
-import { AITrackerConfig } from "./Models";
-
-export interface IConfigLoader {
-    loadConfig(): Promise<AITrackerConfig>;
-}
-
-// Load config from API
-export class ApiConfigLoader implements IConfigLoader {
-    baseUrl: string;
-    constructor(baseUrl: string) {
-        this.baseUrl = baseUrl;
-    }
-
-    loadConfig(): Promise<AITrackerConfig> {
-        return postApiReturnJson(this.baseUrl + "/");
-    }
-}
+import { LocalStorageUtils } from "../LocalStorageUtils";
+import { debug, log } from "../Logger";
+import { AITrackerConfig } from "../Models";
+import { IConfigLoader } from "./interfaces";
 
 export class ConfigHandler {
     loader: IConfigLoader;
