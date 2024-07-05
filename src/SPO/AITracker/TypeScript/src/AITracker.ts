@@ -30,7 +30,7 @@ declare global {
     interface Window {
         _spPageContextInfo: spPageContextInfo,
         appInsightsConnectionStringHash: string | undefined,
-        apiWebRootUrlHash: string | undefined,
+        insightsWebRootUrlHash: string | undefined,
         modernPageNav: Function
     }
 }
@@ -142,7 +142,7 @@ function initAppInsights(): void {
             let pageStateManager: BasePageStateManager;
             if (LocalStorageUtils.isLocalStorageAvailable()) {
                 pageStateManager = new LocalStoragePageStateManager();
-                log("Using LocalStoragePageStateManager for page metadata upload logic");
+                debug("Using LocalStoragePageStateManager for page metadata upload logic");
             }
             else {
                 pageStateManager = new InMemoryPageStateManager();
@@ -232,14 +232,17 @@ function checkIfUserSearched(): void {
 }
 
 function setScriptConfig(): void {
-    if (window.apiWebRootUrlHash && window.apiWebRootUrlHash !== "" && window.appInsightsConnectionStringHash) {
+    if (window.insightsWebRootUrlHash && window.insightsWebRootUrlHash !== "" && window.appInsightsConnectionStringHash) {
 
-        const apiBaseUrl = atob(window.apiWebRootUrlHash);
-        log("Loading insights config from '" + apiBaseUrl + "'");
+        const apiBaseUrl = atob(window.insightsWebRootUrlHash);
         const m = new ConfigHandler(new ApiConfigLoader(apiBaseUrl, window.appInsightsConnectionStringHash));
         m.getConfigFromCacheOrAppService().then((r: AITrackerConfig) => {
             config = r;
-        });
+        })
+        .catch((e) => { error("Failed to load config from API. Using default config."); })
+    }
+    else {
+        error("No valid API URL or App Insights connection string found in header!");
     }
 }
 

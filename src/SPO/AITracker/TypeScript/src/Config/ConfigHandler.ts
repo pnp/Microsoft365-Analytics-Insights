@@ -1,9 +1,11 @@
 import { LocalStorageUtils } from "../LocalStorageUtils";
 import { debug, log } from "../Logger";
 import { AITrackerConfig } from "../Models";
-import { IConfigLoader } from "./interfaces";
+import { ConfigLoadResult, IConfigLoader } from "./interfaces";
 
+const cacheName = 'AITrackerConfig';
 export class ConfigHandler {
+
     loader: IConfigLoader;
     _localStorageWorking: boolean;
     constructor(loader: IConfigLoader) {
@@ -14,7 +16,7 @@ export class ConfigHandler {
     getConfigFromCacheOrAppService(): Promise<AITrackerConfig> {
         let config: AITrackerConfig | null = null;
         if (this._localStorageWorking) {
-            const configString = localStorage.getItem('AITrackerConfig');
+            const configString = localStorage.getItem(cacheName);
             if (configString) {
                 config = JSON.parse(configString);
             }
@@ -24,17 +26,22 @@ export class ConfigHandler {
         }
 
         debug("Config not found in cache, loading from API");
-        return this.loader.loadConfig().then((t: AITrackerConfig) => {
-            debug("Config loaded from API");
-            this.setConfigCache(t);
-            return t;
+        return this.loader.loadConfig().then((t: ConfigLoadResult) => {
+            if (t.success) {
+                log("Script config succesfully loaded from API");
+                this.setConfigCache(t.config);
+            }
+            else {
+                log("Script config not loaded from API, using default");
+            }
+            return t.config;
         }
         );
     }
 
     haveValidCachedConfig(): boolean {
         if (this._localStorageWorking) {
-            const configString = localStorage.getItem('AITrackerConfig');
+            const configString = localStorage.getItem(cacheName);
             if (configString) {
                 if (configString) {
                     const config : AITrackerConfig = JSON.parse(configString);

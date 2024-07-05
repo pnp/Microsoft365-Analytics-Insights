@@ -5,7 +5,7 @@ import { PageProps } from "../src/PageProps/Models/PageProps";
 import { PagePropertyManager } from "../src/PageProps/PagePropertyManager";
 import { BasePageStateManager } from "../src/PageProps/PageState";
 import { AITrackerConfig } from "../src/Models";
-import { IConfigLoader } from "../src/ConfigHandler";
+import { ConfigLoadResult, IConfigLoader } from "../src/Config/interfaces";
 
 export class TestPagePropertyManager extends PagePropertyManager {
     loadLikes(listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
@@ -45,7 +45,7 @@ export class TestPageDataService implements IPageDataService {
 }
 
 export class TestConfigLoader implements IConfigLoader {
-    loadConfig(): Promise<AITrackerConfig> {
-        return Promise.resolve(AITrackerConfig.GetDefault());
+    loadConfig(): Promise<ConfigLoadResult> {
+        return Promise.resolve({ config: AITrackerConfig.GetDefault(), success: true });
     }
 }
