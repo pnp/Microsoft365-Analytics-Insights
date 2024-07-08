@@ -92,6 +92,15 @@ BEGIN
 END
 GO
 
+IF NOT EXISTS (
+  SELECT name FROM sys.indexes
+  WHERE name = N'IX_user_id' AND object_id = OBJECT_ID('dbo.user_license_type_lookups')
+)
+BEGIN
+  CREATE NONCLUSTERED INDEX IX_user_id ON dbo.user_license_type_lookups ("user_id");
+END
+GO
+
 -- =====================================
 -- =====                           =====
 -- =====          CLEANUP          =====
