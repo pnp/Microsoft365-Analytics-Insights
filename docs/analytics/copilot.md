@@ -9,9 +9,39 @@ Additional required **application** permissions:
 * Files.Read.All
 * OnlineMeetings.Read.All
 
+## List of app hosts
+
+[Audit copilot schema definitions](https://learn.microsoft.com/en-us/office/office-365-management-api/copilot-schema#audit-copilot-schema-definitions)
+
+Current list of app hosts:
+* Assist365
+* Bing
+* BashTool
+* DevUI
+* Excel
+* Loop
+* M365AdminCenter
+* M365App
+* Office
+* OneNote
+* Outlook
+* Planner
+* PowerPoint
+* SharePoint
+* Stream
+* Teams
+* VivaCopilot
+* VivaEngage
+* VivaGoals
+* Whiteboard
+* Word
+
 ## SQL stuff
 
-### List of app hosts
+SQL queries that can be used to review the current Copilot data.
+
+### AppHosts in this tenant
+
 ```SQL
 SELECT [app_host]
 FROM dbo.event_copilot_chats
@@ -19,10 +49,12 @@ GROUP BY [app_host];
 ```
 
 ### App host metrics
+
 ```SQL
 DECLARE
   @StartDate DATETIME = '2024-04-29',
   @EndDate DATETIME = '2024-05-06';
+SET @EndDate = GETDATE();
 
 WITH copilot_pivoted AS (
   SELECT * FROM (
@@ -39,36 +71,43 @@ WITH copilot_pivoted AS (
     COUNT(event_id)
     FOR app_host IN  (
       -- As more hosts appear, they need to be added here as they are in the JSON
-      [Bing]
-      ,[bizchat]
-      ,[Excel]
-      ,[Loop]
-      ,[Office]
-      ,[PowerPoint]
-      ,[Teams]
-      ,[Word]
+      Bing
+      ,bizchat
+      ,Excel
+      ,Loop
+      ,M365App
+      ,Office
+      ,Outlook
+      ,PowerPoint
+      ,Teams
+      ,Word
     )
   ) AS pivoted
 )
 SELECT
   [user_id], [date]
   -- M365 Chat experience on Bing and Teams
-  ,[bizchat] AS [Copilot M365 Chat]
-  ,[Bing] AS [Copilot Bing]
-  ,[Loop] AS [Copilot Loop]
-  ,[Office] AS [Copilot Office]
-  ,[Excel] AS [Copilot Excel]
-  ,[PowerPoint] AS [Copilot PowerPoint]
-  ,[Word] AS [Copilot Word]
-  ,[Teams] AS [Copilot Teams]
+  ,bizchat AS "Copilot M365 Chat"
+  ,Bing AS "Copilot Bing"
+  ,Loop AS "Copilot Loop"
+  ,Office AS "Copilot Office"
+  ,Excel AS "Copilot Excel"
+  ,PowerPoint AS "Copilot PowerPoint"
+  ,Word AS "Copilot Word"
+  ,Teams AS "Copilot Teams"
+  ,M365App AS "Copilot M365App"
+  ,Outlook AS "Copilot Outlook"
 FROM copilot_pivoted
 ```
 
 ### App host metrics pivoted
+
 ```SQL
 DECLARE
   @StartDate DATETIME = '2024-04-29',
   @EndDate DATETIME = '2024-05-06';
+SET @EndDate = GETDATE();
+
 WITH
 copilot_rows AS (
   SELECT
@@ -76,7 +115,7 @@ copilot_rows AS (
     [profiling].[udf_GetMonday](au.time_stamp) AS [MetricDate],
     'Copilot ' + (
       CASE
-        WHEN app_host = 'bizchat' THEN 'M365 Chat'
+        WHEN app_host = 'bizchat' THEN 'M365App'
         ELSE app_host
       END
     ) AS [Metric]
@@ -96,7 +135,6 @@ WITH copilot_events AS (
   SELECT
     [user_id]
     ,@StartDate AS [date]
-    ,[app_host]
     ,c.event_id AS [chat_id]
     ,f.copilot_chat_id AS [has_file]
     ,m.copilot_chat_id AS [has_meeting]
