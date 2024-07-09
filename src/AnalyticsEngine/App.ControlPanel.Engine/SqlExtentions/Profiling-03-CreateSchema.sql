@@ -2717,6 +2717,71 @@ BEGIN
 END;
 GO
 
+-- ============================================================
+-- Find the min and max date from the activity and usage tables
+-- ============================================================
+
+IF OBJECT_ID(N'profiling.usp_FindDates') IS NOT NULL
+BEGIN
+  DROP PROCEDURE profiling.usp_FindDates;
+END
+GO
+
+CREATE PROCEDURE profiling.usp_FindDates
+(
+  @activity DATE OUTPUT,
+  @weekly DATE OUTPUT
+)
+AS
+BEGIN
+  /*
+  We need to understand if we can do a weekly aggregation.
+  This function will return two dates:
+  - From the raw activity and usage tables, find the earliest last date from all the
+  tables. On that day, we know that all tables will have data and we won't miss anything.
+  - From the aggregated tables, find the same date. The three tables should have the
+  same date, but if one has an earlier date, we give the process a chance and we will
+  retry that missing week again.
+  */
+
+  -- Dates in the raw activity/usage tables
+  WITH
+    dates AS (
+      SELECT MAX(time_stamp) AS activity_max FROM dbo.audit_events
+      UNION
+      SELECT MAX("date") FROM dbo.onedrive_user_activity_log
+      UNION
+      SELECT MAX("date") FROM dbo.outlook_user_activity_log
+      UNION
+      SELECT MAX("date") FROM dbo.platform_user_activity_log
+      UNION
+      SELECT MAX("date") FROM dbo.sharepoint_user_activity_log
+      UNION
+      SELECT MAX("date") FROM dbo.teams_user_activity_log
+      UNION
+      SELECT MAX("date") FROM dbo.teams_user_device_usage_log
+      UNION
+      SELECT MAX("date") FROM dbo.yammer_user_activity_log
+      UNION
+      SELECT MAX("date") FROM dbo.yammer_device_activity_log
+    )
+  SELECT @activity = MIN(activity_max)
+  FROM dates;
+
+  -- Dates in the aggregated weekly tables
+  WITH
+    dates AS (
+      SELECT MAX(MetricDate) AS "date" FROM profiling.ActivitiesWeekly
+      UNION
+      SELECT MAX("date") FROM profiling.ActivitiesWeeklyColumns
+      UNION
+      SELECT MAX("date") FROM profiling.UsageWeekly
+    )
+  SELECT @weekly = MIN("date")
+  FROM dates;
+END;
+GO
+
 -- =============================================
 -- Aggregates all possible weekly analytics data
 -- =============================================
@@ -2735,44 +2800,42 @@ CREATE PROCEDURE profiling.usp_CompileWeekly
 AS
 BEGIN
   SET NOCOUNT ON;
-  -- Today is the first day that there should be data, which usually is Today-4 days
-  DECLARE @Today DATE = DATEADD(DAY, -4, GETDATE());
-  -- Day when aggregation should stop
+  DECLARE @Today DATE = DATEADD(DAY, 0, GETDATE());
+  -- Day when the weekly aggregation should stop
+  -- Should be this week's Monday
   DECLARE @ThisWeeksMonday DATE = profiling.udf_GetMonday (@Today);
+  -- Force an aggregation on Thursday
+  DECLARE @ForceAggregationDate DATE = DATEADD(DAY, 3, @ThisWeeksMonday);
   -- When data aggregation starts
+  -- The very first Monday for the whole period we want to keep in the database
+  -- Everything before this day should be deleted
   DECLARE @RetentionDate DATE = DATEADD(WEEK, -1 * @WeeksToKeep, @ThisWeeksMonday);
-  -- Get last aggregated date in the table, it will be a Monday
   DECLARE
-    @LastDateInTables DATE,
-    @MaxActivitiesWeekly DATE,
-    @MaxActivitiesWeeklyColumns DATE,
-    @MaxUsageWeekly DATE;
+    -- Last aggregated date in the table, it will be a Monday
+    @LastAggregatedDate DATE,
+    -- Last date on the raw tables for which we are certain all tables have data
+    @LastAvailableDateForAggregation DATE;
+  
+  EXEC profiling.usp_FindDates
+    @activity = @LastAvailableDateForAggregation OUTPUT,
+    @weekly = @LastAggregatedDate OUTPUT;
 
-  SELECT @MaxActivitiesWeekly = MAX(MetricDate)
-  FROM profiling.ActivitiesWeekly;
-
-  SELECT @MaxActivitiesWeeklyColumns = MAX("date")
-  FROM profiling.ActivitiesWeeklyColumns;
-
-  SELECT @MaxUsageWeekly = MAX("date")
-  FROM profiling.UsageWeekly;
-
-  SELECT @LastDateInTables = MIN("date")
-  FROM (
-    VALUES
-      (@MaxActivitiesWeekly),
-      (@MaxActivitiesWeeklyColumns),
-      (@MaxUsageWeekly)
-  ) AS x ("date");
-
-  IF @LastDateInTables IS NULL OR @All = 1
+  IF @ForceAggregationDate > @Today
+    AND @LastAvailableDateForAggregation < @ThisWeeksMonday
   BEGIN
+    -- The raw tables are not yet updated enough to compile a week.
+    RETURN;
+  END
+
+  IF @LastAggregatedDate IS NULL OR @All = 1
+  BEGIN
+    -- Tables empty or full aggregation
     -- Start from the retention date
-    SET @LastDateInTables = @RetentionDate;
+    SELECT @LastAggregatedDate = @RetentionDate;
   END
 
   -- Week by week, aggregate the data
-  DECLARE @Monday DATE = DATEADD(DAY, 7, @LastDateInTables);
+  DECLARE @Monday DATE = DATEADD(DAY, 7, @LastAggregatedDate);
 
   INSERT INTO profiling.TraceLogs ("Datetime", Message)
   SELECT
@@ -2790,10 +2853,9 @@ BEGIN
       N'Week from ' + CAST(@Monday AS NVARCHAR(50)) + ' to ' + CAST(@Sunday AS NVARCHAR(50));
 
     EXECUTE profiling.usp_CompileActivityWeek @Monday;
-
     EXECUTE profiling.usp_CompileUsageWeek @Monday;
 
-    SET @Monday = DATEADD(DAY, 7, @Monday);
+    SELECT @Monday = DATEADD(DAY, 7, @Monday);
   END
 
   -- Cleanup. Remove data in the tables before the retention date
