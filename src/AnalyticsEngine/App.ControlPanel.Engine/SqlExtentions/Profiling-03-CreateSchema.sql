@@ -1826,6 +1826,7 @@ BEGIN
         "user_id",
         "date",
         bizchat,
+        appchat,
         Assist365,
         Bing,
         BashTool,
@@ -1862,7 +1863,9 @@ BEGIN
         FOR app_host IN (
           -- AS more hosts appear, they need to be added here AS they are in the JSON
           -- bizchat is M365 Chat experience on Bing and Teams
+          -- appchat refers to the copilot experiences on apps like Excel, PowerPoint, Teams, and more
           bizchat,
+          appchat,
           Assist365,
           Bing,
           BashTool,
@@ -1899,7 +1902,7 @@ BEGIN
         Loop AS copilot_loop,
         M365AdminCenter AS copilot_m365admincenter,
         (bizchat + M365App) AS copilot_m365app,
-        Office AS copilot_office,
+        (appchat + Office) AS copilot_office,
         OneNote AS copilot_onenote,
         Outlook AS copilot_outlook,
         Planner AS copilot_planner,
