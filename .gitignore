@@ -27,3 +27,4 @@
 
 # Avoid having the pbix files in the repo
 /reports/Usage Analytics/*.pbix
+/src/SPO/AITracker/TypeScript/node_modules
