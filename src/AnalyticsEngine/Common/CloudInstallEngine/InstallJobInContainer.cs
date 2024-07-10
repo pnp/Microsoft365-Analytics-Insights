@@ -37,9 +37,10 @@ namespace CloudInstallEngine
                     {
                         previousRunResult = await ProcessTask(thisTask, previousRunResult);
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
                         Logger.LogError($"Unexpected error on stage {thisTask.TaskName}:");
+                        Logger.LogError(ex, ex.Message);
                         throw;      // Error will be logged by parent
                     }
 
