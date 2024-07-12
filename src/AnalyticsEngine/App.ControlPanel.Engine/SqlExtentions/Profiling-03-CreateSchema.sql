@@ -310,6 +310,7 @@ BEGIN
   INSERT INTO profiling.TraceLogs ("Datetime", Message)
   SELECT GETDATE(), @FormattedMessage;
 END
+GO
 
 -- ======================================================
 -- Weekly aggregated activity data per user. Data in rows
