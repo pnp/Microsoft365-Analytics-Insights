@@ -150,7 +150,7 @@ The application should be now created. You need the client ID, secret value, and
 
 The runtime service principal must have permissions granted to the activity and Graph API. This is not something granted by default, so needs to be added after registration.
 
-The list of permissions can be found in the [prerequisites docs](prerequisites.md#prerequisite-permissions).
+The list of permissions can be found in the [prerequisites docs](prerequisites.md#permissions).
 
 In the runtime app registration, add the permissions in the following screenshot. Click "API permissions" and then "Add a permission".
 
