@@ -1,3 +1,5 @@
+/* tsqllint-disable warning set-transaction-isolation-level */
+
 SET ANSI_NULLS ON;
 GO
 
@@ -329,7 +331,7 @@ BEGIN
         -- ,OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF
       )
   );
-END
+END;
 GO
 
 IF NOT EXISTS (
@@ -731,11 +733,12 @@ BEGIN
     @ThisDayWasMonday INT;
 
   -- Set the first day of the week to Monday
-  SET @ThisDayWasMonday = DATEPART(WEEKDAY, '20230102');
-  SET @Result = @CurrentDate;
+  SELECT
+    @ThisDayWasMonday = DATEPART(WEEKDAY, '20230102'),
+    @Result = @CurrentDate;
   WHILE @ThisDayWasMonday <> DATEPART(WEEKDAY, @Result)
   BEGIN
-    SET @Result = CONVERT(DATE, DATEADD(DAY, -1, @Result));
+    SELECT @Result = CONVERT(DATE, DATEADD(DAY, -1, @Result));
   END
   RETURN @Result;
 END;
@@ -1115,6 +1118,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "Teams Private Chats" = tvp.private_chat_count,
@@ -1138,6 +1142,7 @@ BEGIN
   FROM #ActivitiesStaging AS t
     INNER JOIN @teams AS tvp
       ON t."user_id" = tvp."user_id" AND t."date" = tvp."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #ActivitiesStaging
   (
@@ -1221,6 +1226,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "OneDrive Viewed/Edited" = tvp.viewed_or_edited,
@@ -1230,6 +1236,7 @@ BEGIN
   FROM #ActivitiesStaging AS t
     INNER JOIN @onedrive AS tvp
       ON t."user_id" = tvp."user_id" AND t."date" = tvp."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #ActivitiesStaging
   (
@@ -1285,6 +1292,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "SPO Viewed/Edited" = tvp.viewed_or_edited,
@@ -1294,6 +1302,7 @@ BEGIN
   FROM #ActivitiesStaging AS t
     INNER JOIN @sharepoint AS tvp
       ON t."user_id" = tvp."user_id" AND t."date" = tvp."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #ActivitiesStaging
   (
@@ -1351,6 +1360,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "Emails Sent" = tvp.email_send_count,
@@ -1361,6 +1371,7 @@ BEGIN
   FROM #ActivitiesStaging AS t
     INNER JOIN @outlook AS tvp
       ON t."user_id" = tvp."user_id" AND t."date" = tvp."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #ActivitiesStaging
   (
@@ -1416,6 +1427,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "Yammer Posted" = tvp.posted_count,
@@ -1424,6 +1436,7 @@ BEGIN
   FROM #ActivitiesStaging AS t
     INNER JOIN @yammer AS tvp
       ON t."user_id" = tvp."user_id" AND t."date" = tvp."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #ActivitiesStaging
   (
@@ -1491,6 +1504,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "Teams Used Web" = staging.used_web,
@@ -1505,6 +1519,8 @@ BEGIN
   FROM #UsageStaging AS t
     INNER JOIN @ut_staging AS staging
       ON t."user_id" = staging."user_id" AND t."date" = staging."date";
+  /* tsqllint-enable warning update-where */
+
   INSERT #UsageStaging
   (
     "user_id",
@@ -1629,6 +1645,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "Office Windows" = staging.windows,
@@ -1668,6 +1685,7 @@ BEGIN
   FROM #UsageStaging AS t
     INNER JOIN @ut_staging AS staging ON t."user_id" = staging."user_id"
       AND t."date" = staging."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #UsageStaging
   (
@@ -1792,6 +1810,7 @@ BEGIN
   WHERE @StartDate <= "date" AND "date" <= @EndDate
   GROUP BY "user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "Yammer Platform Count" = staging.used_count,
@@ -1805,6 +1824,7 @@ BEGIN
   FROM #UsageStaging AS t
     INNER JOIN @ut_staging AS staging
       ON t."user_id" = staging."user_id" AND t."date" = staging."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #UsageStaging
   (
@@ -2028,6 +2048,7 @@ BEGIN
     JOIN event_counts AS c ON a."user_id" = c."user_id"
   GROUP BY a."user_id";
 
+  /* tsqllint-disable warning update-where */
   UPDATE t WITH (UPDLOCK, SERIALIZABLE)
   SET
     "Copilot Chats" = tvp.copilot_chats,
@@ -2057,6 +2078,7 @@ BEGIN
   FROM #ActivitiesStaging AS t
     INNER JOIN @copilot AS tvp
       ON t."user_id" = tvp."user_id" AND t."date" = tvp."date";
+  /* tsqllint-enable warning update-where */
 
   INSERT #ActivitiesStaging
   (
