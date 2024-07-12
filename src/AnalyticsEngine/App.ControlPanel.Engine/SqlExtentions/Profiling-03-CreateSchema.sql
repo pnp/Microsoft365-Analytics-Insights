@@ -309,7 +309,7 @@ BEGIN
 
   INSERT INTO profiling.TraceLogs ("Datetime", Message)
   SELECT GETDATE(), @FormattedMessage;
-END
+END;
 GO
 
 -- ======================================================
