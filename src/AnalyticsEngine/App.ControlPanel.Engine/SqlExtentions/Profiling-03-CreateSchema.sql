@@ -281,6 +281,34 @@ BEGIN
 END
 GO
 
+-- =============================================
+-- Aggregates all possible weekly analytics data
+-- =============================================
+
+IF OBJECT_ID(N'profiling.usp_Trace') IS NOT NULL
+BEGIN
+  DROP PROCEDURE profiling.usp_Trace;
+END
+GO
+
+CREATE PROCEDURE profiling.usp_Trace
+(
+  @Message NVARCHAR(500),
+  @p1 NVARCHAR(50) = NULL,
+  @p2 NVARCHAR(50) = NULL,
+  @p3 NVARCHAR(50) = NULL,
+  @p4 NVARCHAR(50) = NULL,
+  @p5 NVARCHAR(50) = NULL
+)
+AS
+BEGIN
+  DECLARE @FormattedMessage NVARCHAR(MAX);
+  SELECT @FormattedMessage = FORMATMESSAGE(@Message, CAST(@p1 AS NVARCHAR(50)), CAST(@p2 AS NVARCHAR(50)), CAST(@p3 AS NVARCHAR(50)), CAST(@p4 AS NVARCHAR(50)), CAST(@p5 AS NVARCHAR(50)));
+
+  INSERT INTO profiling.TraceLogs ("Datetime", Message)
+  SELECT GETDATE(), @FormattedMessage;
+END
+
 -- ======================================================
 -- Weekly aggregated activity data per user. Data in rows
 -- ======================================================
@@ -2114,10 +2142,7 @@ AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT
-      GETDATE(),
-      N'[usp_CompileWeekActivityRows] Starting: ' + CAST(@Monday AS NVARCHAR(50));
+    EXEC profiling.usp_Trace '[usp_CompileWeekActivityRows] Starting: %s', @Monday;
 
     INSERT INTO profiling.ActivitiesWeekly
     SELECT
@@ -2192,8 +2217,9 @@ BEGIN
     GROUP BY "user_id", Metric;
   END TRY
   BEGIN CATCH
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT GETDATE(), N'[usp_CompileWeekActivityRows] Catch: ' + ERROR_MESSAGE();
+    DECLARE @ErrorMessage NVARCHAR(4000);
+    SELECT @ErrorMessage = ERROR_MESSAGE();
+    EXEC profiling.usp_Trace '[usp_CompileWeekActivityRows] Catch: %s', @ErrorMessage;
   END CATCH;
 END;
 GO
@@ -2217,10 +2243,7 @@ AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT
-      GETDATE(),
-      N'[usp_CompileWeekActivityColumns] Starting: ' + CAST(@Monday AS NVARCHAR(50));
+    EXEC profiling.usp_Trace '[usp_CompileWeekActivityColumns] Starting: %s', @Monday;
 
     INSERT INTO profiling.ActivitiesWeeklyColumns
     (
@@ -2349,8 +2372,9 @@ BEGIN
     FROM #ActivitiesStaging;
   END TRY
   BEGIN CATCH
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT GETDATE(), N'[usp_CompileWeekActivityColumns] Catch: ' + ERROR_MESSAGE();
+    DECLARE @ErrorMessage NVARCHAR(4000);
+    SELECT @ErrorMessage = ERROR_MESSAGE();
+    EXEC profiling.usp_Trace '[usp_CompileWeekActivityColumns] Catch: %s', @ErrorMessage;
   END CATCH;
 END;
 GO
@@ -2374,10 +2398,7 @@ AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT
-      GETDATE(),
-      N'[usp_CompileUsageWeek] Starting: ' + CAST(@Monday AS NVARCHAR(50));
+    EXEC profiling.usp_Trace '[usp_CompileUsageWeek] Starting: %s', @Monday;
 
     DECLARE
       @Sunday DATE = DATEADD(DAY, 6, @Monday),
@@ -2567,10 +2588,9 @@ BEGIN
     END
   END TRY
   BEGIN CATCH
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT
-      GETDATE(),
-      N'Catch [usp_CompileUsageWeek]: ' + ERROR_MESSAGE();
+    DECLARE @ErrorMessage NVARCHAR(4000);
+    SELECT @ErrorMessage = ERROR_MESSAGE();
+    EXEC profiling.usp_Trace 'Catch [usp_CompileUsageWeek]: %s', @ErrorMessage;
     IF OBJECT_ID('tempdb..#UsageStaging') IS NOT NULL
     BEGIN
       DROP TABLE #UsageStaging;
@@ -2598,10 +2618,7 @@ AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT
-      GETDATE(),
-      N'[usp_CompileActivityWeek] Starting: ' + CAST(@Monday AS NVARCHAR(50));
+    EXEC profiling.usp_Trace '[usp_CompileActivityWeek] Starting: %s', @Monday;
 
     DECLARE
       @Sunday DATE = DATEADD(DAY, 6, @Monday),
@@ -2705,10 +2722,9 @@ BEGIN
     END
   END TRY
   BEGIN CATCH
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT
-      GETDATE(),
-      N'[usp_CompileActivityWeek] Catch: ' + ERROR_MESSAGE();
+    DECLARE @ErrorMessage NVARCHAR(4000);
+    SELECT @ErrorMessage = ERROR_MESSAGE();
+    EXEC profiling.usp_Trace '[usp_CompileActivityWeek] Catch: %s', @ErrorMessage;
     IF OBJECT_ID('tempdb..#ActivitiesStaging') IS NOT NULL
     BEGIN
       DROP TABLE #ActivitiesStaging;
@@ -2742,65 +2758,48 @@ BEGIN
   -- When data aggregation starts
   DECLARE @RetentionDate DATE = DATEADD(WEEK, -1 * @WeeksToKeep, @ThisWeeksMonday);
   -- Get last aggregated date in the table, it will be a Monday
-  DECLARE
-    @LastDateInTables DATE,
-    @MaxActivitiesWeekly DATE,
-    @MaxActivitiesWeeklyColumns DATE,
-    @MaxUsageWeekly DATE;
+  DECLARE @LastDateInTables DATE;
 
-  SELECT @MaxActivitiesWeekly = MAX(MetricDate)
-  FROM profiling.ActivitiesWeekly;
-
-  SELECT @MaxActivitiesWeeklyColumns = MAX("date")
-  FROM profiling.ActivitiesWeeklyColumns;
-
-  SELECT @MaxUsageWeekly = MAX("date")
-  FROM profiling.UsageWeekly;
-
+  -- Dates in the aggregated weekly tables
+  WITH
+    dates AS (
+      SELECT MAX(MetricDate) AS "date" FROM profiling.ActivitiesWeekly
+      UNION
+      SELECT MAX("date") FROM profiling.ActivitiesWeeklyColumns
+      UNION
+      SELECT MAX("date") FROM profiling.UsageWeekly
+    )
   SELECT @LastDateInTables = MIN("date")
-  FROM (
-    VALUES
-      (@MaxActivitiesWeekly),
-      (@MaxActivitiesWeeklyColumns),
-      (@MaxUsageWeekly)
-  ) AS x ("date");
+  FROM dates;
 
   IF @LastDateInTables IS NULL OR @All = 1
   BEGIN
     -- Start from the retention date
-    SET @LastDateInTables = @RetentionDate;
+    SELECT @LastDateInTables = @RetentionDate;
   END
 
   -- Week by week, aggregate the data
   DECLARE @Monday DATE = DATEADD(DAY, 7, @LastDateInTables);
 
-  INSERT INTO profiling.TraceLogs ("Datetime", Message)
-  SELECT
-    GETDATE(),
-    N'Weekly aggregation requested, from ' + CAST(@Monday AS NVARCHAR(50))
-    + ' to possibly ' + CAST(@ThisWeeksMonday AS NVARCHAR(50));
+  EXEC profiling.usp_Trace
+    N'Weekly aggregation requested. First: %s. Last: %s',
+    @Monday,
+    @ThisWeeksMonday;
 
   WHILE @ThisWeeksMonday > @Monday
   BEGIN
     DECLARE @Sunday DATE = DATEADD(DAY, 6, @Monday);
 
-    INSERT INTO profiling.TraceLogs ("Datetime", Message)
-    SELECT
-      GETDATE(),
-      N'Week from ' + CAST(@Monday AS NVARCHAR(50)) + ' to ' + CAST(@Sunday AS NVARCHAR(50));
+    EXEC profiling.usp_Trace 'Week from %s to %s', @Monday, @Sunday;
 
     EXECUTE profiling.usp_CompileActivityWeek @Monday;
-
     EXECUTE profiling.usp_CompileUsageWeek @Monday;
 
-    SET @Monday = DATEADD(DAY, 7, @Monday);
+    SELECT @Monday = DATEADD(DAY, 7, @Monday);
   END
 
   -- Cleanup. Remove data in the tables before the retention date
-  INSERT INTO profiling.TraceLogs ("Datetime", Message)
-  SELECT
-    GETDATE(),
-    N'Starting cleanup. Retention date: ' + CAST(@RetentionDate AS NVARCHAR(50));
+  EXEC profiling.usp_Trace 'Starting cleanup. Retention date: %s', @RetentionDate;
 
   DELETE FROM profiling.ActivitiesWeekly
   WHERE MetricDate < @RetentionDate;
@@ -2811,7 +2810,6 @@ BEGIN
   DELETE FROM profiling.UsageWeekly
   WHERE "date" < @RetentionDate;
 
-  INSERT INTO profiling.TraceLogs ("Datetime", Message)
-  SELECT GETDATE(), N'Aggregation finished';
+  EXEC profiling.usp_Trace 'Aggregation finished';
 END;
 GO
