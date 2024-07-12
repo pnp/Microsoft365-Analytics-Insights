@@ -2151,7 +2151,7 @@ GO
 
 IF OBJECT_ID(N'profiling.usp_CompileWeekActivityRows') IS NOT NULL
 BEGIN
-DROP PROCEDURE profiling.usp_CompileWeekActivityRows;
+  DROP PROCEDURE profiling.usp_CompileWeekActivityRows;
 END
 GO
 
