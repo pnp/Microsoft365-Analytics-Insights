@@ -66,7 +66,7 @@ jobs:
       - name: List NuGet Packages
         if: ${{ steps.nuget-packages.outputs.cache-hit == 'true' }}
         continue-on-error: true
-        run: ls -lh ~/.nuget/packages
+        run: ls ~/.nuget/packages
       # - name: Decode the pfx
       #   run: |
       #     $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.Base64_Encoded_Pfx }}")
@@ -81,7 +81,17 @@ jobs:
         #/p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx /p:PackageCertificatePassword=${{ secrets.Pfx_Key }}
         env:
           Configuration: ${{ matrix.configuration }}
-      # Execute all unit tests in the solution
+      - name: Check ${{ matrix.configuration }} output folder
+        run: |
+          ls $env:Solution_Directory\bin\$env:Configuration
+        env:
+            Configuration: ${{ matrix.configuration }}
+      - name: Check ${{ matrix.configuration }} output folder 2
+        run: |
+          ls ${{ env.Solution_Directory }}\bin\$env:Configuration
+        env:
+            Configuration: ${{ matrix.configuration }}
+        # Execute all unit tests in the solution
       - name: Execute unit tests
         uses: microsoft/vstest-action@v1.0.0 # https://github.com/microsoft/vstest-action
         with:
