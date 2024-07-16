@@ -1,6 +1,6 @@
-﻿using Common.DataUtils.Sql;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
@@ -230,6 +230,11 @@ namespace WebJob.Office365ActivityImporter.Engine
                 this.ExtensionName = spLog.SourceFileExtension;
                 this.UrlBase = spLog.SiteUrl;
                 this.EventData = spLog.EventData;
+            }
+
+            if (abtractLog is CopilotAuditLogContent) {
+                var copilotLog = (CopilotAuditLogContent)abtractLog;
+                this.EventData = copilotLog.EventRaw;
             }
         }
 

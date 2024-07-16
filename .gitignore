@@ -18,6 +18,7 @@
 /src/Misc/packages
 **/.vscode
 *.tmp
+*.tmp.*
 /src/SPO/Scripts.AITrackerInstaller/AITracker/builduntdeploy.ps1
 /src/AnalyticsEngine/Web/Properties/PublishProfiles
 /src/SPO/Scripts.AITrackerInstaller/DevConfig.json
@@ -27,3 +28,4 @@
 
 # Avoid having the pbix files in the repo
 /reports/Usage Analytics/*.pbix
+/src/SPO/AITracker/DevConfig.json

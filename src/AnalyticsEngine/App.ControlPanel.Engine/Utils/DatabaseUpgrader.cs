@@ -1,6 +1,6 @@
 ﻿using App.ControlPanel.Engine.Models;
-using Common.DataUtils;
 using Common.Entities;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -43,7 +43,7 @@ namespace App.ControlPanel.Engine
             }
 
             // Run custom SQL scripts
-            var rr = new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+            var rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
             try
             {
                 using (var context = new AnalyticsEntitiesContext(initInfo.ConnectionString, true, false))
@@ -53,7 +53,7 @@ namespace App.ControlPanel.Engine
                     foreach (var scriptName in sqlScriptNames)
                     {
                         log?.Invoke($"--Running script '{scriptName}'...");
-                        var script = rr.ReadResourceStringFromExecutingAssembly(scriptName);
+                        var script = rr.ReadResourceString(scriptName);
 
                         var statements = SplitSqlStatements(script);
                         foreach (var statement in statements)

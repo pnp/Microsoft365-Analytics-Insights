@@ -101,7 +101,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Only support adding accounts from same tenant as KV
             if (tenantId != vaultResource.Data.Properties.TenantId)
             {
-                throw new InstallException($"Application ID {clientId} does not exist in the Key Vault tenant ID {vaultResource.Data.Properties.TenantId}");
+                _logger.LogError($"Key Vault permissions configuration error: Entra ID application ID {clientId} does not exist in the Key Vault tenant ID {vaultResource.Data.Properties.TenantId}");
+                _logger.LogError("Continuing anyway, but your Key Vault is NOT configured due to an unsupported setup - both Office 365 and Azure should be in the same Entra ID tenant");
+                return;
             }
 
             _logger.LogInformation($"Adding Azure AD application with client ID '{clientId}' to key vault {vaultResource.Data.Name} for secret read & list; certificate read");

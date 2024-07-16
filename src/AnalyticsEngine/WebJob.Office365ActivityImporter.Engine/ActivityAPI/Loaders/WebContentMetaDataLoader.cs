@@ -1,5 +1,5 @@
-﻿using Common.DataUtils.Http;
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;

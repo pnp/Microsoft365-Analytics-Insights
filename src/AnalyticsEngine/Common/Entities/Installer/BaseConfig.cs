@@ -1,5 +1,4 @@
-﻿using Common.DataUtils;
-using System;
+﻿using DataUtils;
 using System.Collections.Generic;
 
 namespace Common.Entities.Installer

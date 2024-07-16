@@ -8,7 +8,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Web;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public static class StringUtils
     {
@@ -34,7 +34,7 @@ namespace Common.DataUtils
 
         public static string GetOnlineMeetingId(string copilotDocContextId, string userGuid)
         {
-            var meetingIdFragment = StringUtils.GetMeetingIdFragmentFromMeetingThreadUrl(copilotDocContextId);
+            var meetingIdFragment = GetMeetingIdFragmentFromMeetingThreadUrl(copilotDocContextId);
             if (meetingIdFragment == null)
             {
                 throw new Exception($"Could not parse meeting id from url {copilotDocContextId}");
@@ -58,7 +58,7 @@ namespace Common.DataUtils
         }
         public static string GetSiteUrl(string copilotDocContextId)
         {
-            if (!StringUtils.IsValidAbsoluteUrl(copilotDocContextId))
+            if (!IsValidAbsoluteUrl(copilotDocContextId))
             {
                 return null;
             }

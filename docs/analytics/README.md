@@ -192,3 +192,17 @@ The information is displayed in the matrix that can be changed dynamically based
 7. At this point, we can publish the report to the same workspace as the previous one.
 
 >**Important!** If you want to extend the report to load additional data, create new calculated columns or measures, you should use this report template and not `Analytics_DataModel.pbit`.
+
+## Additional considerations
+
+### Audit events
+
+For audit events to be crawled, the table dbo.OrgUrls must have at least one row. If you are not using SPO Advanced Analytics your table will be empty.
+
+By default, `Audit.SharePoint` and `Audit.General` are crawled.
+
+You can add a new row with any content to enable audit logging crawling:
+
+```SQL
+INSERT [dbo].[org_urls] ([url_base]) VALUES ('this-is-here-so-audit-data-can-be-imported');
+```

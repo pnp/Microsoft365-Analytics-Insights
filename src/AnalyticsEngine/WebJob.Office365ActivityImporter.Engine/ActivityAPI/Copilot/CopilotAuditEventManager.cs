@@ -1,9 +1,10 @@
-﻿using Common.DataUtils;
-using Common.DataUtils.Sql.Inserts;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Entities.AuditLog;
+using DataUtils;
+using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
@@ -34,7 +35,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             _db = new AnalyticsEntitiesContext();
         }
-
         public async Task SaveSingleCopilotEventToSql(CopilotEventData eventData, Office365Event baseOfficeEvent)
         {
             _logger.LogInformation($"Saving copilot event metadata to SQL for event {baseOfficeEvent.Id}");
@@ -44,7 +44,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             if (eventData.Contexts != null && eventData.Contexts.Count > 0)
             {
-                // Process events with context (Teams meeting, file etc)
+                // Process events with context (Teams meeting, file etc).
+                // Normally only one context per event, but we'll loop through them all just in case.
                 foreach (var context in eventData.Contexts)
                 {
                     // There are some known context types for Teams etc. Everything else is assumed to be a file type. 
@@ -72,6 +73,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                         });
 
                         meetingsCount++;
+                        break;  // Only one meeting per event
                     }
                     else if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT)
                     {
@@ -101,6 +103,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 UrlBase = spFileInfo.SiteUrl
                             });
                             filesCount++;
+                            break;  // Normally only one file per event.
+                                    // There can be more documents in the context if one references another, but we only care about the doc the user is in.
                         }
                         else
                         {
@@ -130,16 +134,16 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         public async Task CommitAllChanges()
         {
-            var rr = new ResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
-            var docsMergeSql = rr.ReadResourceStringFromExecutingAssembly("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql")
+            var rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+            var docsMergeSql = rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql")
                 .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME,
                 ActivityImportConstants.STAGING_TABLE_COPILOT_SP);
-            var teamsMergeSql = rr.ReadResourceStringFromExecutingAssembly("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql")
+            var teamsMergeSql = rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql")
                 .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME,
                 ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS);
 
 
-            var chatOnlyMergeSql = rr.ReadResourceStringFromExecutingAssembly("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_chat_only_copilot_events_from_staging_table.sql")
+            var chatOnlyMergeSql = rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_chat_only_copilot_events_from_staging_table.sql")
                 .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME,
                 ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY);
 

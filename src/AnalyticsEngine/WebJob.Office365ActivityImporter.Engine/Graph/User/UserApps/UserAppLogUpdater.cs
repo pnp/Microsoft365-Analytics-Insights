@@ -1,6 +1,6 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
+using DataUtils;
 using Microsoft.Graph;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps;

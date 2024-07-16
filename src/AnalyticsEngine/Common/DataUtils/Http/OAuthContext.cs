@@ -5,7 +5,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils.Http
+namespace DataUtils.Http
 {
     /// <summary>
     /// Provides OAuth tokens for application-identity (client credentials)

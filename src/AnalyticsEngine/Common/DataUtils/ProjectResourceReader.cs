@@ -4,18 +4,18 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
-    public class ResourceReader
+    public class ProjectResourceReader
     {
         private readonly Assembly _assembly;
 
-        public ResourceReader(Assembly assembly)
+        public ProjectResourceReader(Assembly assembly)
         {
             _assembly = assembly;
         }
 
-        public string ReadResourceStringFromExecutingAssembly(string resourcePath)
+        public string ReadResourceString(string resourcePath)
         {
             using (var stream = GetAssemblyManifest(resourcePath))
 
