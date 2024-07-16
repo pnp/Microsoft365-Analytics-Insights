@@ -70,7 +70,7 @@ jobs:
           Configuration: ${{ matrix.configuration }}
       # Execute all unit tests in the solution
       - name: Execute unit tests
-        uses: microsoft-approved-actions/vstest@v1 # https://github.com/microsoft/vstest-action
+        uses: microsoft/vstest-action@v1.0.0 # https://github.com/microsoft/vstest-action
         with:
           testAssembly: Tests.UnitTests.dll
           searchFolder: $env:Solution_Directory
