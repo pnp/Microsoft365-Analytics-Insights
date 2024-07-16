@@ -1,9 +1,9 @@
 ﻿using Azure.Messaging.ServiceBus;
-using Common.DataUtils;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Models;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.SharePoint.Client;

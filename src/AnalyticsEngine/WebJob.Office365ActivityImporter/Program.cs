@@ -5,10 +5,10 @@
 // PARTICULAR PURPOSE.
 
 #region Usings
-using Common.DataUtils;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Installer;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;

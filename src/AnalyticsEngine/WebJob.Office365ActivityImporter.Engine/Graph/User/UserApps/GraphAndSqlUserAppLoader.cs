@@ -1,5 +1,5 @@
-﻿using Common.DataUtils;
-using Common.Entities;
+﻿using Common.Entities;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Newtonsoft.Json;

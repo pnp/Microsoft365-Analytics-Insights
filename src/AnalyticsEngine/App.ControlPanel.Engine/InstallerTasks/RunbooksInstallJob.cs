@@ -1,6 +1,5 @@
 ﻿using App.ControlPanel.Engine.InstallerTasks.JobTasks;
 using App.ControlPanel.Engine.Models;
-using Azure.Core;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
@@ -18,7 +17,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class RunbooksInstallJob : InstallJobInContainerJob<ResourceGroupResource>
     {
         public RunbooksInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription, StorageAccountResource storageAccount,
-            AutomationAccountResource automationAccount) 
+            AutomationAccountResource automationAccount)
             : base(logger, new ResourceGroupContainerLoader(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, subscription, config.AzureLocation, config.Tags.ToDictionary()))
         {
             // Upload automation PS files to storage account

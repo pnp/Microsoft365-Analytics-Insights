@@ -2,7 +2,6 @@
 using Azure.Core;
 using Azure.ResourceManager.Sql;
 using Microsoft.Extensions.Logging;
-using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 

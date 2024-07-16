@@ -1,6 +1,6 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
-using Common.DataUtils;
+using DataUtils;
 
 namespace App.ControlPanel
 {

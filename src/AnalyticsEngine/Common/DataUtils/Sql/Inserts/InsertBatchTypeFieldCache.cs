@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 
-namespace Common.DataUtils.Sql.Inserts
+namespace DataUtils.Sql.Inserts
 {
     /// <summary>
     /// Build SQL defintion from a InsertBatchType class

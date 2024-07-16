@@ -1,6 +1,6 @@
-﻿using Common.DataUtils;
-using Common.Entities.Redis;
+﻿using Common.Entities.Redis;
 using Common.Entities.Redis.Teams;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using System;

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     public abstract class ObjectByIdCache<T> where T : class
     {

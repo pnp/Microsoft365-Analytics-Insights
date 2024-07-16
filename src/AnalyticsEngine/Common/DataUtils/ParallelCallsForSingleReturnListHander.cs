@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace Common.DataUtils
+namespace DataUtils
 {
     /// <summary>
     /// When you have a big list of items to process in parallel chunks, this class can help.

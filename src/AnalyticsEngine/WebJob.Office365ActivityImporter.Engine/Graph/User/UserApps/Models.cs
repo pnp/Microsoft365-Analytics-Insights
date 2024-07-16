@@ -1,4 +1,4 @@
-﻿using Common.DataUtils.Sql;
+﻿using DataUtils.Sql;
 using Microsoft.Graph;
 using System;
 using System.Collections.Generic;

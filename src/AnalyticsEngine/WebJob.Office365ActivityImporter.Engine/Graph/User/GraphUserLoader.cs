@@ -1,6 +1,6 @@
-﻿using Common.DataUtils;
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
 using Common.Entities.Redis;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;

@@ -1,4 +1,7 @@
-## master - NEW
+## master - build 1400
+Reliability updates for copilot event processing. Previously, SharePoint metadata lookups failed for file specific actions. Also now misc chats are better imported for Copilot actions in Outlook and other app-hosts. 
+
+## master - build 1375
 Fixes for SharePoint site aggregation usage stats. When looking up a site ID for a previously imported site (with no ID set), the site lookup save would crash. 
 
 No SQL schema changes.

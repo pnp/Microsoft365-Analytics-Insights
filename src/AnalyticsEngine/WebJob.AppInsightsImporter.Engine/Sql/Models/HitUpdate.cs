@@ -1,4 +1,4 @@
-﻿using Common.DataUtils.Sql;
+﻿using DataUtils.Sql;
 using System;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 

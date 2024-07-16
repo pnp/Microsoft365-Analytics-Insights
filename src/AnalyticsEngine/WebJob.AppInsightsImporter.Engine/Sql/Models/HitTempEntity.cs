@@ -1,5 +1,5 @@
-﻿using Common.DataUtils;
-using Common.DataUtils.Sql;
+﻿using DataUtils;
+using DataUtils.Sql;
 using System;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 
