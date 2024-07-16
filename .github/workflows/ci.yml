@@ -101,7 +101,3 @@ jobs:
 #   - Clean AI Tracker
 #   - Zip files
 #   - Publish artifacts
-
-  build:
-    name: Build solution
-
