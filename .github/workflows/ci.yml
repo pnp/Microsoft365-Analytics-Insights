@@ -48,7 +48,7 @@ jobs:
         configuration: [Release] # [Debug, Release]
     env:
       Solution_Name: Tests.UnitTests.csproj
-      Solution_Directory: src/AnalyticsEngine/Tests.UnitTests
+      Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -73,9 +73,11 @@ jobs:
         uses: microsoft/vstest-action@v1.0.0 # https://github.com/microsoft/vstest-action
         with:
           testAssembly: Tests.UnitTests.dll
-          searchFolder: $env:Solution_Directory
+          searchFolder: $env:Solution_Directory\bin\$env:Configuration\
           runInParallel: true
-      # Remove the pfx
+        env:
+          Configuration: ${{ matrix.configuration }}
+        # Remove the pfx
       # - name: Remove the pfx
       #   run: Remove-Item -Path SPOInsightsBinaries.pfx
       
