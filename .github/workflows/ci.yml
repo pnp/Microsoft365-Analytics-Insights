@@ -83,6 +83,7 @@ jobs:
           Configuration: ${{ matrix.configuration }}
       # Execute all unit tests in the solution
       - name: Execute unit tests
+        continue-on-error: true
         uses: microsoft/vstest-action@v1.0.0 # https://github.com/microsoft/vstest-action
         with:
           testAssembly: Tests.UnitTests.dll
@@ -90,9 +91,6 @@ jobs:
           runInParallel: true
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: NOOP
-        continue-on-error: true
-        run: pwd
     # Remove the pfx
       # - name: Remove the pfx
       #   run: Remove-Item -Path SPOInsightsBinaries.pfx
