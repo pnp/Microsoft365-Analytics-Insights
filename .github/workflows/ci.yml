@@ -33,22 +33,22 @@ on:
 # * dotnet projects and AI Tracker can be paralellized
 
 env:
-  Build.Platform: anycpu
-  App.ClientID: ${{ secrets.APP_CLIENTID }}
-  App.ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-  App.TenantGUID: ${{ secrets.APP_TENANTGUID }}
-  App.TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
-  App.CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
-  App.CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  App.CosmosDbTestContainerCurrent: stats
-  App.CosmosDbTestContainerHistory: history
-  App.CosmosDbTestDatabaseName: UnitTestDevOps
-  App.CosmosDb: ${{ secrets.APP_COSMOSDB }}
-  # ConnectionStrings.SPOInsightsEntities
-  # ConnectionStrings.UnitTestingOffice365Services
-  ConnectionStrings.redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
-  ConnectionStrings.ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  ConnectionStrings.Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+  Build_Platform: anycpu
+  App_ClientID: ${{ secrets.APP_CLIENTID }}
+  App_ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
+  App_TenantGUID: ${{ secrets.APP_TENANTGUID }}
+  App_TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+  App_CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
+  App_CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
+  App_CosmosDbTestContainerCurrent: stats
+  App_CosmosDbTestContainerHistory: history
+  App_CosmosDbTestDatabaseName: UnitTestDevOps
+  App_CosmosDb: ${{ secrets.APP_COSMOSDB }}
+  # ConnectionStrings_SPOInsightsEntities
+  # ConnectionStrings_UnitTestingOffice365Services
+  ConnectionStrings_redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
+  ConnectionStrings_ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
+  ConnectionStrings_Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
 
 jobs:
   # Tests job
@@ -87,15 +87,15 @@ jobs:
       - name: Config transform - Unit tests
         uses: microsoft/variable-substitution@v1
         with:
-          files: '${{ env.Solution_Directory }}\App.Release.config, ${{ env.Solution_Directory }}\App.config'
+          files: '${{ env.Solution_Directory }}\App.Release.config'
         env:
-          ConnectionStrings.Default: ${{ secrets.SOME_CONNECTION_STRING }}
+          appSettings.ClientID: ${{ env.App_ClientID }}
       - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build.Platform }}Configuration=${{ env.Configuration }}
+        run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }}Configuration=${{ env.Configuration }}
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Build solution
-        run: msbuild ${{ env.Solution_Directory }} -p:Platform=${{ env.Build.Platform }}Configuration=${{ env.Configuration }}
+        run: msbuild ${{ env.Solution_Directory }} -p:Platform=${{ env.Build_Platform }}Configuration=${{ env.Configuration }}
         #-p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx -p:PackageCertificatePassword=${{ secrets.Pfx_Key }}
         env:
           Configuration: ${{ matrix.configuration }}
