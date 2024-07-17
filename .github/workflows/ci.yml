@@ -94,7 +94,8 @@ jobs:
         run: |
           .\.github\utils\transform.bat ${{ env.Solution_Directory }}\App.Template.config App.${{ env.Configuration }}.config
         env:
-          Configuration: ${{ matrix.configuration }}      - name: Restore the application
+          Configuration: ${{ matrix.configuration }}
+      - name: Restore the application
         run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }};Configuration=${{ env.Configuration }}
         env:
           Configuration: ${{ matrix.configuration }}
