@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - gh-actions
   workflow_dispatch:
     inputs:
       publish-files:
@@ -34,21 +35,21 @@ on:
 
 env:
   Build_Platform: anycpu
-  App_ClientID: ${{ secrets.APP_CLIENTID }}
-  App_ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-  App_TenantGUID: ${{ secrets.APP_TENANTGUID }}
-  App_TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
-  App_CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
-  App_CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  App_CosmosDbTestContainerCurrent: stats
-  App_CosmosDbTestContainerHistory: history
-  App_CosmosDbTestDatabaseName: UnitTestDevOps
-  App_CosmosDb: ${{ secrets.APP_COSMOSDB }}
-  # ConnectionStrings_SPOInsightsEntities
-  # ConnectionStrings_UnitTestingOffice365Services
-  ConnectionStrings_redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
-  ConnectionStrings_ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  ConnectionStrings_Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+  ClientID: ${{ secrets.APP_CLIENTID }}
+  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
+  TenantGUID: ${{ secrets.APP_TENANTGUID }}
+  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
+  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
+  CosmosDbTestContainerCurrent: stats
+  CosmosDbTestContainerHistory: history
+  CosmosDbTestDatabaseName: UnitTestDevOps
+  CosmosDb: ${{ secrets.APP_COSMOSDB }}
+  # SPOInsightsEntities
+  # UnitTestingOffice365Services
+  redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
+  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
+  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
 
 jobs:
   # Tests job
@@ -78,23 +79,12 @@ jobs:
         env:
           cache-name: nuget-package-cache
         with:
-          path: ~/.nuget-packages
+          path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
-      # - name: List cached NuGet Packages
-      #   if: ${{ steps.nuget-packages.outputs.cache-hit == 'true' }}
-      #   continue-on-error: true
-      #   run: ls ~/.nuget-packages
       - name: Config substitution - Unit tests
         uses: microsoft/variable-substitution@v1
         with:
           files: '${{ env.Solution_Directory }}\App.Release.config'
-        env:
-          ClientID: ${{ env.App_ClientID }}
-      - name: Config transform - Unit tests
-        run: |
-          .\.github\utils\transform.bat ${{ env.Solution_Directory }}\App.Template.config ${{ env.Configuration }}
-        env:
-          Configuration: ${{ matrix.configuration }}
       - name: Restore the application
         run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
         env:
