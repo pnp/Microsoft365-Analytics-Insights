@@ -92,15 +92,15 @@ jobs:
           ClientID: ${{ env.App_ClientID }}
       - name: Config transform - Unit tests
         run: |
-          .\.github\utils\transform.bat ${{ env.Solution_Directory }}\App.Template.config App.${{ env.Configuration }}.config
+          .\.github\utils\transform.bat ${{ env.Solution_Directory }}\App.Template.config ${{ env.Configuration }}
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }};Configuration=${{ env.Configuration }}
+        run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Build solution
-        run: msbuild ${{ env.Solution_Directory }} -p:Platform=${{ env.Build_Platform }};Configuration=${{ env.Configuration }}
+        run: msbuild ${{ env.Solution_Directory }} -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
         #-p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx -p:PackageCertificatePassword=${{ secrets.Pfx_Key }}
         env:
           Configuration: ${{ matrix.configuration }}
