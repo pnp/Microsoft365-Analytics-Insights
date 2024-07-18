@@ -1,13 +1,16 @@
+import moment from "moment";
 import { IPageDataService, LikesUserEntity, PageComment } from "../Definitions";
-import { debug } from "../Logger";
+import { debug, log } from "../Logger";
 import { PageProps } from "./Models/PageProps";
 import { BasePageStateManager } from "./PageState";
 
 // Handles whether to upload page information to App Insights.
 // Should only do it once per session to avoid generating excessive updates
 export abstract class PagePropertyManager {
+    
     stateManager: BasePageStateManager;
     dataService: IPageDataService;
+    pageUpdateIntervalMinutes: number = 60 * 24; // Default to once a day
     constructor(pageStateManager: BasePageStateManager, pageDataService: IPageDataService) {
         this.stateManager = pageStateManager;
         this.dataService = pageDataService;
@@ -20,6 +23,11 @@ export abstract class PagePropertyManager {
 
     abstract loadComments(listTitle: string, pageItemId: number, url: string): Promise<PageComment[]>;
 
+    setPageUpdateIntervalMinutes(interval: number) {
+        log(`Setting page update interval to ${interval} minutes`);
+        this.pageUpdateIntervalMinutes = interval;
+    }
+
     // Decide whether to register page properties or not.
     // Return if props were loaded or not
     handleNewPage(pageItemId: number, url: string, listTitle?: string, newPagePropsLoaded?: Function): Promise<boolean> {
@@ -28,7 +36,11 @@ export abstract class PagePropertyManager {
             return Promise.resolve(false);
         }
 
-        if (!this.stateManager.pageSeen(listTitle, pageItemId)) {
+        const pageResult = this.stateManager.pageSeen(listTitle, pageItemId);
+        const expiry = moment().add(this.pageUpdateIntervalMinutes, 'minutes');
+        const expiryDate = expiry.toDate();
+
+        if (!pageResult || pageResult > expiryDate) {
             debug("Not read & submitted page properties recently...");
 
             // Load all page props, comments, and likes
@@ -74,9 +86,7 @@ export abstract class PagePropertyManager {
 
                     // Don't keep registering page props
                     this.stateManager.registerPageSeen(listTitle, pageItemId);
-
                 }
-
 
                 return Promise.resolve(true);
             });

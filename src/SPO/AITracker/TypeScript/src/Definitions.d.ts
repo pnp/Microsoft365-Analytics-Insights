@@ -1,4 +1,5 @@
 import { PageProps } from "./PageProps/Models/PageProps"
+import { pageSeenOn } from "./PageProps/PageState"
 
 // Custom properties we send to App Insights
 interface BaseCustomProps {
@@ -89,7 +90,8 @@ interface SPSharingPrincipal {
 
 // Something to record page properties. Usually to App Insights as a custom event
 interface IPageDataService {
-    recordPageProps(props: PageProps): void
+    recordPageProps(props: PageProps): void;
+    setPageUpdateInterval(interval: number): void;
 }
 interface PageComment {
     id: string;
@@ -100,8 +102,8 @@ interface PageComment {
     parentId?: number;
 }
 
-interface PagesList extends ObjectWithExpiry{
-    pagesUploadedFor: string[],
+interface PagesList {
+    pagesUploadedFor: pageSeenOn[],
 }
 
 interface ObjectWithExpiry {

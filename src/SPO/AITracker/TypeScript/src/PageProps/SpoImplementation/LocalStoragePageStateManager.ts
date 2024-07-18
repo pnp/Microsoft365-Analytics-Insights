@@ -1,15 +1,24 @@
-const moment = require('moment');
 import { BasePageStateManager } from "../PageState";
-import { error } from "../../Logger";
+import { debug, error } from "../../Logger";
 import { PagesList } from "../../Definitions";
 
 export class LocalStoragePageStateManager extends BasePageStateManager {
-    static PAGES_SEEN_STORAGE_KEY = "AITrackerPagesMetadataUploaded";
-    static TOMORROW = moment().add(1, 'days');
+    clear(): void {
+        debug("Clearing local storage");
+        localStorage.removeItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY);
+    }
 
-    registerPageSeen(listTitle: string, pageItemId: number): void {
+    static PAGES_SEEN_STORAGE_KEY = "AITrackerPagesMetadataUploaded";
+
+    registerPageSeen(listTitle: string, pageItemId: number): Date {
         const pagesConfig = this.loadCurrentOrDefault();
-        pagesConfig.pagesUploadedFor.push(this.getPageId(listTitle, pageItemId))
+
+        const date = new Date();
+        const r = pagesConfig.pagesUploadedFor.find(p => p.pageId === this.getPageId(listTitle, pageItemId));
+        if (r != null) {
+            r.seenOn = date;
+        } else
+            pagesConfig.pagesUploadedFor.push({ pageId: this.getPageId(listTitle, pageItemId), seenOn: new Date() });
 
         try {
             localStorage.setItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY, JSON.stringify(pagesConfig));
@@ -17,30 +26,28 @@ export class LocalStoragePageStateManager extends BasePageStateManager {
             error("Couldn't set local storage with page info - see JS console");
             error(e);
         }
+
+        return date;
     }
 
-    pageSeen(listTitle: string, pageItemId: number): boolean {
+    pageSeen(listTitle: string, pageItemId: number): Date | null {
         const pagesConfig = this.loadCurrentOrDefault();
-        return pagesConfig.pagesUploadedFor.indexOf(this.getPageId(listTitle, pageItemId)) > -1
+
+        const r = pagesConfig.pagesUploadedFor.find(p => p.pageId === this.getPageId(listTitle, pageItemId));
+
+        return r != null ? new Date(r.seenOn) : null;
     }
 
     loadCurrentOrDefault(): PagesList {
         const storagePagesVal = localStorage.getItem(LocalStoragePageStateManager.PAGES_SEEN_STORAGE_KEY);
 
-        let newPageConfig: PagesList = {expiry: LocalStoragePageStateManager.TOMORROW.toDate(), pagesUploadedFor: []};
-        let pageConfig: PagesList = newPageConfig;
-        let validConfig = false;
+        let newPageConfig: PagesList = { pagesUploadedFor: [] };
         if (storagePagesVal) {
-            pageConfig = JSON.parse(storagePagesVal);
+            const pageConfig = JSON.parse(storagePagesVal);
             if (pageConfig) {
-                const expiry = new Date(pageConfig.expiry);
-                if (expiry > new Date()) {
-                    // Config is valid and still within expiry
-                    validConfig = true;
-                }
+                return pageConfig;
             }
-            if (!validConfig) pageConfig = newPageConfig;
         }
-        return pageConfig;
+        return newPageConfig;
     }
 }

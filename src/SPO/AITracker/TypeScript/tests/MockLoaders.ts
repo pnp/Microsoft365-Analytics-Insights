@@ -36,6 +36,9 @@ export class TestPagePropertyManager extends PagePropertyManager {
 }
 
 export class TestPageDataService implements IPageDataService {
+    setPageUpdateInterval(interval: number): void {
+        throw new Error("Method not implemented.");
+    }
 
     recordPageProps(props: PageProps): void {
 

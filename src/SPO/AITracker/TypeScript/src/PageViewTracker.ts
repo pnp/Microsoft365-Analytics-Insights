@@ -52,6 +52,10 @@ export class PageViewTracker {
         ClearLastPageStatsVal();
     }
 
+    setPageUpdateIntervalMinutes(interval: number) {
+        this._pagePropLoader.setPageUpdateIntervalMinutes(interval);
+    }
+
     // Save last page stats to cookie, then track page view same as classic page
     handleModernPageNav(webUrl: string, webTitle: string, siteUrl: string, url: string, listTitle?: string, listItemId?: number) {
         log('Modern page navigation called from SPFx component. New URL: ' + url);

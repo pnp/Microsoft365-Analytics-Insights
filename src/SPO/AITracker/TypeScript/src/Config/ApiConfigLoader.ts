@@ -7,6 +7,7 @@ import { ConfigLoadResult, IConfigLoader } from "./interfaces";
 export class ApiConfigLoader implements IConfigLoader {
     baseUrl: string;
     appInsightsStringEncoded: string;
+    
     constructor(baseUrl: string, appInsightsStringEncoded: string) {
         this.baseUrl = baseUrl;
         this.appInsightsStringEncoded = appInsightsStringEncoded;

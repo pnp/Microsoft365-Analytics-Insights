@@ -24,7 +24,8 @@ var ai: AppInsightsWrapper | null = null;
 var pageTracker: PageViewTracker | null = null;
 const clickHandler: DuplicateClickHandler = new DuplicateClickHandler();
 
-var config: AITrackerConfig = AITrackerConfig.GetDefault();
+var scriptConfig: AITrackerConfig = AITrackerConfig.GetDefault();
+debug("Default config loaded until we get a response from the App Service API");
 
 declare global {
     interface Window {
@@ -231,18 +232,23 @@ function checkIfUserSearched(): void {
     }
 }
 
-function setScriptConfig(): void {
+function loadAndSetScriptConfig(): Promise<void> {
     if (window.insightsWebRootUrlHash && window.insightsWebRootUrlHash !== "" && window.appInsightsConnectionStringHash) {
 
         const apiBaseUrl = atob(window.insightsWebRootUrlHash);
         const m = new ConfigHandler(new ApiConfigLoader(apiBaseUrl, window.appInsightsConnectionStringHash));
-        m.getConfigFromCacheOrAppService().then((r: AITrackerConfig) => {
-            config = r;
-        })
-        .catch((e) => { error("Failed to load config from API. Using default config."); })
+        return m.getConfigFromCacheOrAppService().then((r: AITrackerConfig) => {
+            scriptConfig = r;
+            log("Script config loaded: " + JSON.stringify(scriptConfig));
+            
+            // Set page update interval from loaded config
+            pageTracker?.setPageUpdateIntervalMinutes(r.metadataRefreshMinutes);
+        }).catch(() => error("Failed to load config from API. Using default config."));
+
     }
     else {
         error("No valid API URL or App Insights connection string found in header!");
+        return Promise.reject("No valid API URL or App Insights connection string found in header!");
     }
 }
 
@@ -250,4 +256,6 @@ function setScriptConfig(): void {
 // Can't wait until pageload, as AppInsights needs to start timing page-load before that.
 initPageControls();
 initAppInsights();
-setScriptConfig();
+loadAndSetScriptConfig();
+
+debug("AITracker loaded");

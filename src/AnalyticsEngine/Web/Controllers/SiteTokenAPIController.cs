@@ -6,7 +6,6 @@ using System.Web.Http;
 
 namespace Web.AnalyticsWeb.Controllers
 {
-
     [Authorize]
     public class SiteTokenAPIController : BaseAPIController
     {
@@ -26,6 +25,4 @@ namespace Web.AnalyticsWeb.Controllers
             return new JSonToken(auth);
         }
     }
-
-
 }

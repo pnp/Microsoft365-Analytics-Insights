@@ -22,6 +22,7 @@ export class ConfigHandler {
             }
         }
         if (config && AITrackerConfig.isValid(config)) {
+            log("Config found in local storage cache");
             return Promise.resolve(config);
         }
 

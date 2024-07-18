@@ -20,17 +20,24 @@ describe('Page metadata tests', () => {
     const m = new InMemoryPageStateManager();
 
     expect(m.pageSeen(listTitle, pageItemId)).toBeFalsy();
-    m.registerPageSeen(listTitle, pageItemId);
-    expect(m.pageSeen(listTitle, pageItemId)).toBeTruthy();
+    const dateRegistered = m.registerPageSeen(listTitle, pageItemId).getTime();
+    const dateSeen = m.pageSeen(listTitle, pageItemId)!.getTime();
+    expect(dateSeen === dateRegistered).toBeTruthy();
 
   });
 
   test('LocalStoragePageStateManager', () => {
     const m = new LocalStoragePageStateManager();
 
+    m.clear();
     expect(m.pageSeen(listTitle, pageItemId)).toBeFalsy();
-    m.registerPageSeen(listTitle, pageItemId);
-    expect(m.pageSeen(listTitle, pageItemId)).toBeTruthy();
+    const dateRegistered = m.registerPageSeen(listTitle, pageItemId).getTime();
+    const dateSeen = m.pageSeen(listTitle, pageItemId);
+    expect(dateSeen).toBeDefined(); // Not null
+
+    const dateSeenTime = dateSeen!.getTime();
+    expect(dateSeenTime === dateRegistered).toBeTruthy();
+
 
   });
 
@@ -40,23 +47,43 @@ describe('Page metadata tests', () => {
     const stateManager = new InMemoryPageStateManager();
     const m = new TestPagePropertyManager(testVal, stateManager, new TestPageDataService());
 
+    // Make sure page hasn't been seen before
+    expect(stateManager.pageSeen(listTitle, pageItemId) === null).toBeTruthy();
+
     // Handle new page nav & then check statemanager has seen page
     m.handleNewPage(pageItemId, url, listTitle, (loadedProps: PageProps) => {
       expect(loadedProps).toBeDefined();
     }).then(pagePropsLoaded => {
       expect(stateManager.pageSeen(listTitle, pageItemId)).toBeTruthy();
       expect(pagePropsLoaded).toBeTruthy();
+
+
+      // Handle same legit page nav as before. This time we shouldn't load the page props again
+      m.handleNewPage(pageItemId, url, listTitle).then(pagePropsLoadedAgain => {
+        expect(pagePropsLoadedAgain).toBeFalsy();
+
+        // Now override the page update interval to make sure page cache marker will have expired in value and check we load again properties
+        m.setPageUpdateIntervalMinutes(-1);
+
+        m.handleNewPage(pageItemId, url, listTitle).then(pagePropsLoadedOneMoreTime => {
+          expect(pagePropsLoadedOneMoreTime).toBeTruthy();
+  
+        });
+      });
+
     });
 
-    // Try navigating to a url that's not got a page ID
+    // Try navigating to a url that's not got a page ID - pagePropsLoaded should be false
     m.handleNewPage(-1, url).then(pagePropsLoaded => {
       expect(pagePropsLoaded).toBeFalsy();
     });
-
     // ..or title
     m.handleNewPage(1, url).then(pagePropsLoaded => {
       expect(pagePropsLoaded).toBeFalsy();
     });
+
+
+
   });
 });
 
