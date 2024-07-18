@@ -98,7 +98,7 @@ jobs:
       - name: Execute unit tests
         continue-on-error: true
         # uses: microsoft/vstest-action@v1.0.0 # https://github.com/microsoft/vstest-action
-        uses: jesusfer/vstest-action # https://github.com/microsoft/vstest-action
+        uses: jesusfer/vstest-action@main # https://github.com/microsoft/vstest-action
         with:
           testAssembly: Tests.UnitTests.dll
           searchFolder: ${{ env.Solution_Directory }}\bin\${{ env.Configuration }}\
