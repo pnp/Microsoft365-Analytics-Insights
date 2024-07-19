@@ -1,4 +1,4 @@
-name: ci
+name: tests
 
 on:
   push:
@@ -7,12 +7,6 @@ on:
       - dev
       - gh-actions
   workflow_dispatch:
-    inputs:
-      publish-files:
-        description: Should files be published as a release?
-        type: boolean
-        default: false
-        required: false
 
 # Original
 # Preparation:
@@ -35,7 +29,6 @@ on:
 
 env:
   Build_Platform: anycpu
-  Build_ProcessorArchitecture: x86
   ClientID: ${{ secrets.APP_CLIENTID }}
   ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
   TenantGUID: ${{ secrets.APP_TENANTGUID }}
@@ -53,37 +46,26 @@ env:
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
 
 jobs:
-  build_dotnet:
-    # Preparation:
-    #   - Get signing certificate
-    #   - Transform configuration files
-    #   - Restore dependencies
-    # Build:
-    #   - Build .Net projects
-    # Test:
-    #   - Run test suite
-    # Output:
-    #   - Clean .Net builds
-    #   - Copy PS scripts
-    #   - Zip files
-    #   - Publish artifacts
+  # Tests job
+  # Preparation:
+  #   - Transform configuration files
+  #   - Restore dependencies
+  # Build:
+  #   - Build .Net projects
+  # Test:
+  #   - Run test suite
+  unit_tests:
     runs-on: windows-latest
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
     env:
-      Solution_Directory: src\AnalyticsEngine\
+      Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
-      - name: Decode the PFX
-        continue-on-error: true # TODO
-        run: |
-          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          $certificatePath = Join-Path -Path $env:Wap_Project_Directory -ChildPath SPOInsightsBinaries.pfx
-          [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v4
@@ -95,14 +77,14 @@ jobs:
       - name: Config substitution - Unit tests
         uses: microsoft/variable-substitution@v1
         with:
-          files: '${{ env.Solution_Directory }}\*\App.Release.config'
+          files: '${{ env.Solution_Directory }}\App.Release.config'
       - name: Restore the application
         run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Build solution
         run: msbuild ${{ env.Solution_Directory }} -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
-        #-p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx -p:PackageCertificatePassword=${{ secrets.PFX_KEY }}
+        #-p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx -p:PackageCertificatePassword=${{ secrets.Pfx_Key }}
         env:
           Configuration: ${{ matrix.configuration }}
       # Execute all unit tests in the solution
@@ -118,9 +100,21 @@ jobs:
           vstestLocation: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\Extensions\\TestPlatform\\vstest.console.exe"
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: Remove the PFX
-        continue-on-error: true # TODO
-        run: Remove-Item -Path SPOInsightsBinaries.pfx
+      
+# Preparation:
+#   - Get signing certificate
+#   - Transform configuration files
+#   - Restore dependencies
+# Build:
+#   - Build .Net projects
+# Test:
+#   - Run test suite
+# Output:
+#   - Clean .Net builds
+#   - Clean AI Tracker
+#   - Copy PS scripts
+#   - Zip files
+#   - Publish artifacts
 
 # NPM ai tracker
 # Test:
@@ -131,4 +125,11 @@ jobs:
 #   - Publish artifacts
 
 
-
+      # - name: Decode the pfx
+      #   run: |
+      #     $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.Base64_Encoded_Pfx }}")
+      #     $certificatePath = Join-Path -Path $env:Wap_Project_Directory -ChildPath SPOInsightsBinaries.pfx
+      #     [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
+      # Remove the pfx
+      # - name: Remove the pfx
+      #   run: Remove-Item -Path SPOInsightsBinaries.pfx
