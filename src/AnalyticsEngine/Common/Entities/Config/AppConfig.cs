@@ -64,9 +64,12 @@ namespace Common.Entities.Config
             var metadataRefreshMinutes = ConfigurationManager.AppSettings.Get("MetadataRefreshMinutes");
             if (!string.IsNullOrEmpty(metadataRefreshMinutes))
             {
-                int metadataRefreshMinutesInt = 0;
+                int metadataRefreshMinutesInt = 24 * 60; // 24 hours
                 int.TryParse(metadataRefreshMinutes, out metadataRefreshMinutesInt);
-                this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
+                if (metadataRefreshMinutesInt < -1)
+                {
+                    this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
+                }
             }
         }
 
