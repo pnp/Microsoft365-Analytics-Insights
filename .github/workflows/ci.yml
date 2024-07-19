@@ -92,6 +92,7 @@ jobs:
         run: echo ${{ env.BuildLabel }}
       - name: Prepare output folder
         id: prep
+        shell: bash
         run: |
           mkdir -p "${{ env.ZipsFolder }}"
           echo "zips_folder=${{ env.ZipsFolder }}" >> "$GITHUB_OUTPUT"
@@ -116,7 +117,7 @@ jobs:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
       # Configuration files
-      - name: Config substitution - Unit tests
+      - name: Config substitutions
         uses: microsoft/variable-substitution@v1
         with:
           files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
