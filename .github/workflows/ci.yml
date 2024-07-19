@@ -34,6 +34,10 @@ on:
 # * dotnet projects and AI Tracker can be paralellized
 
 env:
+  BuildLabel:
+  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
+  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
+  StatsApiUrl: ${{ secrets.STATSAPIURL }}
   Solution_Directory: src\AnalyticsEngine\
   Build_Platform: Any CPU
   Build_ProcessorArchitecture: x86
@@ -73,6 +77,12 @@ jobs:
       matrix:
         configuration: [Release] # [Debug, Release]
     steps:
+      - name: Output Run ID
+        run: echo ${{ github.run_id }}
+      - name: Output Run Number
+        run: echo ${{ github.run_number }}
+      - name: Output Run Attempt
+        run: echo ${{ github.run_attempt }}
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
@@ -94,7 +104,7 @@ jobs:
       - name: Config substitution - Unit tests
         uses: microsoft/variable-substitution@v1
         with:
-          files: '${{ env.Solution_Directory }}\*\App.Release.config'
+          files: '${{ env.Solution_Directory }}\*\App.Release.config, Web.Release.config'
       - name: Restore the application
         run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
         env:
