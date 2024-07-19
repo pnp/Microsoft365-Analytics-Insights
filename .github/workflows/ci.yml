@@ -34,7 +34,7 @@ on:
 # * dotnet projects and AI Tracker can be paralellized
 
 env:
-  BuildLabel:
+  BuildLabel: ${{ github.run_number }}
   SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
   StatsApiSecret: ${{ secrets.STATSAPISECRET }}
   StatsApiUrl: ${{ secrets.STATSAPIURL }}
@@ -58,6 +58,14 @@ env:
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
 
 jobs:
+  setup_build:
+    runs-on: ubuntu-latest
+    outputs:
+      build_number: ${{ steps.build-number.outputs.number }}
+    steps:
+      - name: Calculate build number
+        id: build-number
+        run: echo "number=$((100+${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
   build_dotnet:
     # Preparation:
     #   - Get signing certificate
@@ -73,6 +81,7 @@ jobs:
     #   - Zip files
     #   - Publish artifacts
     runs-on: windows-latest
+    needs: setup_build
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
@@ -81,6 +90,8 @@ jobs:
         run: echo ${{ github.run_id }}
       - name: Output Run Number
         run: echo ${{ github.run_number }}
+      - name: Output Run Number Offset
+        run: echo ${{ needs.setup_build.outputs.build_number }}
       - name: Output Run Attempt
         run: echo ${{ github.run_attempt }}
       - name: Checkout source
