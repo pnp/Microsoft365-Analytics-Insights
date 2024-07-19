@@ -85,6 +85,7 @@ jobs:
       matrix:
         configuration: [Release] # [Debug, Release]
     env:
+      BuildId: ${{ needs.setup_build.outputs.build_number }}
       BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
     steps:
       - name: Output Build label
@@ -133,6 +134,13 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
+      - name: List output contents
+        run: ls -r ${{ runner.temp }}\AppInsightsImporter
+      - name: Archive AppInsightsImporter
+        run: Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
+          -DestinationPath "${{ env.ZipsFolder }}\AppInsightsImporter.zip"
+        env:
+          ZipsFolder: ${{ runner.temp }}\zips\${{ github.ref_name }} - build ${{ env.BuildId }}
       # Wrap up
       - name: Remove the PFX
         continue-on-error: true # TODO
