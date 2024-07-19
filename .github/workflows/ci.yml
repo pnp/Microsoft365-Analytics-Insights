@@ -93,7 +93,7 @@ jobs:
       - name: Prepare output folder
         id: prep
         run: |
-          mkdir -p ${{ env.ZipsFolder }}
+          mkdir -p "${{ env.ZipsFolder }}"
           echo "zips_folder=${{ env.ZipsFolder }}" >> "$GITHUB_OUTPUT"
         env:
           ZipsFolder: ${{ runner.temp }}\zips\${{ github.ref_name }} - build ${{ env.BuildId }}
