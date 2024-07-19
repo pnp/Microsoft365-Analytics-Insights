@@ -9,7 +9,6 @@ export class WebPageDataService implements IPageDataService
     constructor(appInsightsWrapper : AppInsightsWrapper) {
         this._ai = appInsightsWrapper;
     }
-
     recordPageProps(props: PageProps): void {
         this._ai.updatePageProps(props);
     }

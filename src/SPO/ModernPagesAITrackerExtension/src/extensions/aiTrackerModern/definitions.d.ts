@@ -13,5 +13,6 @@ export interface SitesTrackedByExtension {
 
 export interface IAiTrackerModernApplicationCustomizerProperties {
   appInsightsConnectionStringHash: string;
+  insightsWebRootUrlHash?: string;
   cacheToken: string;
 }

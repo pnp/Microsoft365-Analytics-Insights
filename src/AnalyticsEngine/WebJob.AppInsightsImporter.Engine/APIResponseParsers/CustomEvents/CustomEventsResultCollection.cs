@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -58,9 +59,8 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         /// <summary>
         /// Apply hit patches, save searches & clicks
         /// </summary>
-        public async Task SaveAllEventTypesToSql(AnalyticsLogger telemetry)
+        public async Task SaveAllEventTypesToSql(AnalyticsLogger telemetry, AppConfig config)
         {
-
             using (var database = new AnalyticsEntitiesContext())
             {
                 // Hack to change/ensure correct DB schema. Needs moving to a migration
@@ -81,7 +81,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
 
                 var pageUpdatesTimer = new JobTimer(telemetry, "Page updates");
                 pageUpdatesTimer.Start();
-                var pagesUpdated = await this.SavePageUpdatesToSQL(telemetry);
+                var pagesUpdated = await this.SavePageUpdatesToSQL(telemetry, config);
                 pageUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
                 telemetry.LogInformation($"Page updates imported - {pagesUpdated.ToString("n0")}");
 

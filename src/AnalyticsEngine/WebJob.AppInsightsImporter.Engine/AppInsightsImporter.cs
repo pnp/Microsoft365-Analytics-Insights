@@ -107,7 +107,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         try
                         {
                             await pageViewsResult.SaveToSQL(db, _telemetry, filterUrls);
-                            await events.SaveAllEventTypesToSql(_telemetry);
+                            await events.SaveAllEventTypesToSql(_telemetry, _importConfig);
                         }
                         catch (SqlException ex)
                         {

@@ -16,7 +16,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             _logger = logger;
         }
 
-        public async Task InstallToSites(IEnumerable<string> siteUrls, FileInfo aiTrackerFileName, string appInsightsConnectionString, string docLibTitle)
+        public async Task InstallToSites(IEnumerable<string> siteUrls, FileInfo aiTrackerFileName, string appInsightsConnectionString, string docLibTitle, string solutionWebsiteBaseUrl)
         {
             if (!aiTrackerFileName.Exists)
                 throw new ArgumentException($"Can't find AITracker file '{aiTrackerFileName}'", nameof(aiTrackerFileName));
@@ -29,7 +29,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
                     var cfg = new TrackerInstallConfig(appInsightsConnectionString, docLibTitle, fileContents);
                     var installer = new SiteAITrackerInstaller<WEBTYPE>(adaptor, _logger);
 
-                    await installer.InstallWebComponentsToSite(cfg);
+                    await installer.InstallWebComponentsToSite(cfg, solutionWebsiteBaseUrl);
                 }
             }
         }

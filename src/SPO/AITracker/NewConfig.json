@@ -1,7 +1,7 @@
 {
   "EnvironmentName": "New Config File",
   "Description": "Deployment config file for SPO Insights AITracker.js",
-  "AdminUsername": "admin@mytenant.onmicrosoft.com",
+  "SolutionWebsiteBaseUrl": "https://o365analyticscontoso.azurewebsites.net",
   "TargetSites": [
     "https://mytenant.sharepoint.com/sites/spoinsightsModern",
     "https://mytentant.sharepoint.com/sites/spoinsights"
