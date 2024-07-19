@@ -34,7 +34,8 @@ on:
 # * dotnet projects and AI Tracker can be paralellized
 
 env:
-  Build_Platform: anycpu
+  Solution_Directory: src\AnalyticsEngine\
+  Build_Platform: Any CPU
   Build_ProcessorArchitecture: x86
   ClientID: ${{ secrets.APP_CLIENTID }}
   ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
@@ -71,8 +72,6 @@ jobs:
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
-    env:
-      Solution_Directory: src\AnalyticsEngine\
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -82,7 +81,7 @@ jobs:
         continue-on-error: true # TODO
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          $certificatePath = Join-Path -Path $env:Wap_Project_Directory -ChildPath SPOInsightsBinaries.pfx
+          $certificatePath = Join-Path -Path "${{ env.Solution_Directory }}" -ChildPath SPOInsightsBinaries.pfx
           [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
       - name: Cache NuGet Packages
         id: nuget-packages
