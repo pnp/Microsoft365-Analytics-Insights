@@ -25,7 +25,7 @@ var pageTracker: PageViewTracker | null = null;
 const clickHandler: DuplicateClickHandler = new DuplicateClickHandler();
 
 var scriptConfig: AITrackerConfig = AITrackerConfig.GetDefault();
-debug("Default config loaded until we get a response from the App Service API");
+debug("Default config set until we get one from either local cache or App Service API");
 
 declare global {
     interface Window {
@@ -258,4 +258,4 @@ initPageControls();
 initAppInsights();
 loadAndSetScriptConfig();
 
-debug("AITracker loaded");
+debug("AITracker init complete");

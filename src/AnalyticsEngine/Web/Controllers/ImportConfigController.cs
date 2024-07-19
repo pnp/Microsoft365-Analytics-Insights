@@ -3,15 +3,18 @@ using System;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web.Http;
-using System.Web.Http.Cors;
 
 namespace Web.AnalyticsWeb.Controllers
 {
+    /// <summary>
+    /// Get the import config for the client-side AITracker.
+    /// Protected by CORs and a GUID in the AppInsights connection string.
+    /// </summary>
     public class ImportConfigController : ApiController
     {
         // Get App Insights import config
         // POST: api/ImportConfig?appInsightsStringEncoded=base64encodedstring
-        [EnableCors(origins: "*", headers: "*", methods: "post")]
+        [AllowCorsForOrgUrls()]
         [HttpPost]
         public ImportConfig Post(string appInsightsStringEncoded = "")
         {
@@ -22,8 +25,9 @@ namespace Web.AnalyticsWeb.Controllers
             var bytes = Convert.FromBase64String(appInsightsStringEncoded);
             var decodedString = Encoding.UTF8.GetString(bytes);
 
-
             // Match to app insights instrumentation key
+            // It's a bit of a hack, as there's usually two GUIDs in the connection string.
+            // But it's _a_ way of checking the client-side is sending to the right server-side.
             var config = new AppConfig();
             var paramPassedGuid = FindGuidInString(decodedString);
             var configuredGuid = FindGuidInString(config.AppInsightsConnectionString);
@@ -34,7 +38,7 @@ namespace Web.AnalyticsWeb.Controllers
             return new ImportConfig
             {
                 Expiry = DateTime.Now.AddDays(1),
-                MetadataRefreshMinutes = 60 * 24
+                MetadataRefreshMinutes = config.MetadataRefreshMinutes,
             };
         }
 

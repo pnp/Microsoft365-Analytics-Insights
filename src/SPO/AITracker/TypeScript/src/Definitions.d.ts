@@ -91,7 +91,6 @@ interface SPSharingPrincipal {
 // Something to record page properties. Usually to App Insights as a custom event
 interface IPageDataService {
     recordPageProps(props: PageProps): void;
-    setPageUpdateInterval(interval: number): void;
 }
 interface PageComment {
     id: string;

@@ -10,10 +10,10 @@ namespace Web.AnalyticsWeb.Controllers
     public class SiteTokenAPIController : BaseAPIController
     {
         // POST: api/SiteTokenAPI
-        // For returning to JS app the server-side generated OAuth token for user
+        // For returning to teams-permission-grant JS app the server-side generated OAuth token for user
         public async Task<JSonToken> Post()
         {
-            var auth = await base.GetUserAccessTokenAsync();
+            var auth = await base.GetCachedUserAccessTokenAsync();
 
             // Test graph call
             var httpClient = new HttpClient();

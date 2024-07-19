@@ -1,6 +1,3 @@
-import { debug } from "./Logger";
-
-const moment = require('moment');
 
 export class LocalStorageUtils  {
     

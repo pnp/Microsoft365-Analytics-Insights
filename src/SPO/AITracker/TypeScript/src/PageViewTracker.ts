@@ -1,7 +1,7 @@
 import { AppInsightsWrapper } from "./AppInsightsWrapper";
 import { ClearLastPageStatsVal, GetLastPageStatsVal, GetLastTrackedPageVal, SetLastPageStatsVal } from "./Cookies";
 import { getSPRequestDuration } from "./DataFunctions";
-import { debug, error, log, warn } from "./Logger";
+import { debug, error, log } from "./Logger";
 import TimeMe from 'timeme.js'
 import { PagePropertyManager } from "./PageProps/PagePropertyManager";
 import { spPageContextInfo } from "./Definitions";

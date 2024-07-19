@@ -1,5 +1,5 @@
 import { postApiReturnJson } from "../Api";
-import { debug, error } from "../Logger";
+import { error } from "../Logger";
 import { AITrackerConfig } from "../Models";
 import { ConfigLoadResult, IConfigLoader } from "./interfaces";
 
@@ -14,13 +14,14 @@ export class ApiConfigLoader implements IConfigLoader {
     }
 
     loadConfig(): Promise<ConfigLoadResult> {
-        const url = this.baseUrl + "/api/ImportConfig?appInsightsStringEncoded=" + this.appInsightsStringEncoded;
-        console.debug("SPOI: Loading config from " + url);
+        const baseUrl = this.baseUrl + "/api/ImportConfig";
+        const url = baseUrl + "?appInsightsStringEncoded=" + this.appInsightsStringEncoded;
+        console.debug("SPOI: Loading config from " + baseUrl);
         return postApiReturnJson<AITrackerConfig>(url)
             .then((config) => { return { config: config, success: true } })
             .catch((err) => {
                 // If we can't load the config, we'll just use the default
-                error("Failed to load config from " + url + ". Check JS console");
+                error("Failed to load config from " + baseUrl + ". Check App Service URL, status, and CORS settings.");
                 error(err);
                 return { config: AITrackerConfig.GetDefault(), success: false };
             });
