@@ -143,10 +143,20 @@ jobs:
           Configuration: ${{ matrix.configuration }}
       - name: List output contents
         run: ls -r ${{ runner.temp }}\AppInsightsImporter
+
       - name: Archive AppInsightsImporter
         run: Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
-          -DestinationPath "${{ steps.prep.outputs.zips_folder }}\AppInsightsImporter.zip"
+          -DestinationPath "${{ env.folder }}\AppInsightsImporter.zip"
+        env:
+          folder: ${{ steps.prep.outputs.zips_folder }}
+
       # Wrap up
+      - uses: actions/upload-artifact@v4
+        with:
+          path: ${{ steps.prep.outputs.zips_folder }}
+          name: artifacts
+          if-no-files-found: error
+
       - name: Remove the PFX
         continue-on-error: true # TODO
         run: Remove-Item -Path SPOInsightsBinaries.pfx
