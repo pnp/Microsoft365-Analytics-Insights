@@ -128,6 +128,7 @@ jobs:
           -p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx `
           -p:PackageCertificatePassword=${{ secrets.PFX_KEY }} `
           -p:OutDir=${{ runner.temp }}\AppInsightsImporter `
+          -p:OutputPath=${{ env.Configuration }} `
           -p:AllowedReferenceRelatedFileExtensions=none `
           -p:EmitCompilerGeneratedFiles=false
         env:
