@@ -104,13 +104,13 @@ jobs:
       - name: Config substitution - Unit tests
         uses: microsoft/variable-substitution@v1
         with:
-          files: '${{ env.Solution_Directory }}\*\App.Release.config, Web.Release.config'
+          files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
       - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
+        run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Configuration=${{ env.Configuration }} -p:Platform="${{ env.Build_Platform }}" -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Build solution
-        run: msbuild ${{ env.Solution_Directory }} -p:Platform=${{ env.Build_Platform }} -p:Configuration=${{ env.Configuration }}
+        run: msbuild ${{ env.Solution_Directory }} -p:Configuration=${{ env.Configuration }} -p:Platform="${{ env.Build_Platform }}" -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
         #-p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx -p:PackageCertificatePassword=${{ secrets.PFX_KEY }}
         env:
           Configuration: ${{ matrix.configuration }}

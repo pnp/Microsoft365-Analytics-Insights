@@ -6,6 +6,11 @@ on:
       - main
       - dev
       - gh-actions
+  pull_request:
+    branches:
+      - dev
+    types: 
+      - opened
   workflow_dispatch:
 
 # Original
