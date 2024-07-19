@@ -30,7 +30,7 @@ namespace Tests.UnitTests
                 var c = new TrackerInstallConfig("1232", "SPOInsights", new byte[] { byte.MaxValue });
                 var installer = new SiteAITrackerInstaller<FakeWeb>(adaptor, _logger);
 
-                await installer.InstallWebComponentsToSite(c, null);
+                await installer.InstallWebComponentsToSite(c, "https://localhost");
                 await installer.UninstallWebComponentsFromSite(c.DocLibTitle);
             }
         }
@@ -42,7 +42,8 @@ namespace Tests.UnitTests
             System.IO.File.WriteAllText(tempFile.FullName, "AITracker contents");
             var fakeInstaller = new FakeSiteListInstaller(_logger);
 
-            await fakeInstaller.InstallToSites(new string[] { "https://contoso.sharepoint.com", "https://contoso.sharepoint.com/sites/site2" }, tempFile, "1232", "SPOInsights", null);
+            await fakeInstaller.InstallToSites(new string[] { "https://contoso.sharepoint.com", "https://contoso.sharepoint.com/sites/site2" }, 
+                tempFile, "1232", "SPOInsights", "https://localhost");
 
             try
             {
