@@ -34,10 +34,6 @@ on:
 # * dotnet projects and AI Tracker can be paralellized
 
 env:
-  BuildLabel: ${{ github.run_number }}
-  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
-  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
-  StatsApiUrl: ${{ secrets.STATSAPIURL }}
   Solution_Directory: src\AnalyticsEngine\
   Build_Platform: Any CPU
   Build_ProcessorArchitecture: x86
@@ -56,6 +52,9 @@ env:
   redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
+  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
+  StatsApiUrl: ${{ secrets.STATSAPIURL }}
 
 jobs:
   setup_build:
@@ -65,7 +64,7 @@ jobs:
     steps:
       - name: Calculate build number
         id: build-number
-        run: echo "number=$((100+${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
+        run: echo "number=$((100 + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
   build_dotnet:
     # Preparation:
     #   - Get signing certificate
@@ -85,15 +84,11 @@ jobs:
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
+    env:
+      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
     steps:
-      - name: Output Run ID
-        run: echo ${{ github.run_id }}
-      - name: Output Run Number
-        run: echo ${{ github.run_number }}
-      - name: Output Run Number Offset
-        run: echo ${{ needs.setup_build.outputs.build_number }}
-      - name: Output Run Attempt
-        run: echo ${{ github.run_attempt }}
+      - name: Output Build label
+        run: echo ${{ env.BuildLabel }}
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
@@ -112,32 +107,32 @@ jobs:
         with:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
+      # Configuration files
       - name: Config substitution - Unit tests
         uses: microsoft/variable-substitution@v1
         with:
           files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
       - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }} -t:Restore -p:Configuration=${{ env.Configuration }} -p:Platform="${{ env.Build_Platform }}" -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
+        run: msbuild ${{ env.Solution_Directory }} -t:Restore `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform="${{ env.Build_Platform }}" `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: Build solution
-        run: msbuild ${{ env.Solution_Directory }} -p:Configuration=${{ env.Configuration }} -p:Platform="${{ env.Build_Platform }}" -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
-        #-p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx -p:PackageCertificatePassword=${{ secrets.PFX_KEY }}
+      # Projects building
+      - name: Build WebJob.AppInsightsImporter
+        run: msbuild ${{ env.Solution_Directory }}WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform="${{ env.Build_Platform }}" `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
+          -p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx `
+          -p:PackageCertificatePassword=${{ secrets.PFX_KEY }} `
+          -p:OutDir=${{ runner.temp }}\AppInsightsImporter `
+          -p:AllowedReferenceRelatedFileExtensions=none `
+          -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
-      # Execute all unit tests in the solution
-      - name: Execute unit tests
-        # continue-on-error: true
-        # uses: microsoft/vstest-action@v1.0.0 # https://github.com/microsoft/vstest-action
-        uses: jesusfer/vstest-action@main # https://github.com/microsoft/vstest-action
-        with:
-          testAssembly: Tests.UnitTests.dll
-          searchFolder: ${{ env.Solution_Directory }}\bin\${{ env.Configuration }}\
-          runInParallel: true
-          vstestLocationMethod: location
-          vstestLocation: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\Extensions\\TestPlatform\\vstest.console.exe"
-        env:
-          Configuration: ${{ matrix.configuration }}
+      # Wrap up
       - name: Remove the PFX
         continue-on-error: true # TODO
         run: Remove-Item -Path SPOInsightsBinaries.pfx
