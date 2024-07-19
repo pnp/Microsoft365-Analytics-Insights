@@ -90,6 +90,13 @@ jobs:
     steps:
       - name: Output Build label
         run: echo ${{ env.BuildLabel }}
+      - name: Prepare output folder
+        id: prep
+        run: |
+          mkdir -p ${{ env.ZipsFolder }}
+          echo "zips_folder=${{ env.ZipsFolder }}" >> "$GITHUB_OUTPUT"
+        env:
+          ZipsFolder: ${{ runner.temp }}\zips\${{ github.ref_name }} - build ${{ env.BuildId }}
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
@@ -122,7 +129,7 @@ jobs:
           Configuration: ${{ matrix.configuration }}
       # Projects building
       - name: Build WebJob.AppInsightsImporter
-        run: msbuild ${{ env.Solution_Directory }}WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj `
+        run: msbuild ${{ env.Solution_Directory }}\WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj `
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
@@ -138,9 +145,7 @@ jobs:
         run: ls -r ${{ runner.temp }}\AppInsightsImporter
       - name: Archive AppInsightsImporter
         run: Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
-          -DestinationPath "${{ env.ZipsFolder }}\AppInsightsImporter.zip"
-        env:
-          ZipsFolder: ${{ runner.temp }}\zips\${{ github.ref_name }} - build ${{ env.BuildId }}
+          -DestinationPath "${{ steps.prep.outputs.zips_folder }}\AppInsightsImporter.zip"
       # Wrap up
       - name: Remove the PFX
         continue-on-error: true # TODO
