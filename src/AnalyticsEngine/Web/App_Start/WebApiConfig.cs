@@ -1,4 +1,5 @@
 ﻿using System.Web.Http;
+using System.Web.Http.Cors;
 
 namespace Web.AnalyticsWeb
 {
@@ -7,6 +8,9 @@ namespace Web.AnalyticsWeb
         public static void Register(HttpConfiguration config)
         {
             config.MapHttpAttributeRoutes();
+
+            config.SetCorsPolicyProviderFactory(new AllowCorsForOrgUrlsFactory());
+            config.EnableCors();
 
             config.Routes.MapHttpRoute(
                 name: "DefaultApi",

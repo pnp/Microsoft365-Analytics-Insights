@@ -49,7 +49,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             // Get redis-cached token we got on login in Startup.ConfigureAuth
-            var auth = await base.GetUserAccessTokenAsync();
+            var auth = await base.GetCachedUserAccessTokenAsync();
 
             var cache = GetConnectionManager();
             foreach (var teamIdToAuth in authTeamData.TeamIdsToAuth)

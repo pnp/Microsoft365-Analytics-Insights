@@ -28,13 +28,16 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly ILogger _debugTracer;
         private readonly int _chunkSize;
         private readonly TextAnalyticsClient _textAnalyticsClient = null;
-        public PageUpdateManager(ILogger debugTracer) : this(debugTracer, 1000)
+        private readonly AppConfig _config;
+
+        public PageUpdateManager(ILogger debugTracer, AppConfig config) : this(debugTracer, 1000, config)
         {
         }
-        public PageUpdateManager(ILogger debugTracer, int chunkSize)
+        public PageUpdateManager(ILogger debugTracer, int chunkSize, AppConfig config)
         {
             _debugTracer = debugTracer ?? throw new ArgumentNullException(nameof(debugTracer));
             _chunkSize = chunkSize;
+            _config = config;
             if (chunkSize < 0)
             {
                 throw new ArgumentOutOfRangeException("Chunk size must be > 0", nameof(chunkSize));
@@ -89,6 +92,9 @@ namespace WebJob.AppInsightsImporter.Engine
             return uniqueUpdatedUrls;
         }
 
+        /// <summary>
+        /// Saves URLs unless they have been updated in the last 24 hours
+        /// </summary>
         async Task SaveChunk(List<PageUpdateEventAppInsightsQueryResult> chunk, List<string> updatedUrls)
         {
 #if DEBUG
@@ -102,8 +108,10 @@ namespace WebJob.AppInsightsImporter.Engine
                 var langCache = new LanguageCache(context);
                 var urlsForPageUpdateChunk = chunk.Select(e => StringUtils.GetUrlBaseAddressIfValidUrl(e.CustomProperties?.Url)).Distinct().ToList();
 
+                // Get all URLs that have not been updated recently
+                var minusMetadataRefreshMinutes = _config.MetadataRefreshMinutes * -1;
                 var matchingUrlsNotUpdatedRecently = await context.urls
-                    .Where(u => urlsForPageUpdateChunk.Contains(u.FullUrl) && (u.MetadataLastRefreshed == null || u.MetadataLastRefreshed < DbFunctions.AddDays(DateTime.Now, -1)))
+                    .Where(u => urlsForPageUpdateChunk.Contains(u.FullUrl) && (u.MetadataLastRefreshed == null || u.MetadataLastRefreshed < DbFunctions.AddMinutes(DateTime.Now, minusMetadataRefreshMinutes)))
                     .ToListAsync();
 
                 foreach (var urlToUpdate in matchingUrlsNotUpdatedRecently)

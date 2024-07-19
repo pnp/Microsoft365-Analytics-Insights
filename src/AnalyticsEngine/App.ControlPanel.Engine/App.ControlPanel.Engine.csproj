@@ -82,6 +82,7 @@
     <Compile Include="Models\AzStorageConnectionInfo.cs" />
     <Compile Include="SolutionUninstaller.cs" />
     <None Include="SqlExtentions\readme.md" />
+    <Compile Include="SPO\SiteTrackerInstaller\Models.cs" />
     <Compile Include="Utils\AzurePublicCloudEnumerator.cs" />
     <Compile Include="Utils\DatabaseUpgrader.cs" />
     <Compile Include="Utils\FtpClientFactory.cs" />
