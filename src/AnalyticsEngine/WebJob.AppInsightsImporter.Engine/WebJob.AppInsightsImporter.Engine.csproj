@@ -1,43 +1,11 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project Sdk="Microsoft.NET.Sdk">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-  <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{974B3B6C-B89A-45E6-A5A3-A0292BEB1BA4}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>WebJob.AppInsightsImporter.Engine</RootNamespace>
-    <AssemblyName>WebJob.AppInsightsImporter.Engine</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <TargetFrameworkProfile />
-    <NuGetPackageImportStamp>
-    </NuGetPackageImportStamp>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  <PropertyGroup>
-    <SignAssembly>false</SignAssembly>
-  </PropertyGroup>
-  <PropertyGroup>
-    <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
-  </PropertyGroup>
+
+	<PropertyGroup>
+		<TargetFramework>net8.0-windows</TargetFramework>
+	</PropertyGroup>
+  
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="Microsoft.VisualBasic" />
@@ -56,41 +24,7 @@
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="APIResponseParsers\Abstract.cs" />
-    <Compile Include="APIResponseParsers\AppInsightsResultClasses.cs" />
-    <Compile Include="APIResponseParsers\CustomEvents\CustomEventsResultCollection.cs" />
-    <Compile Include="APIResponseParsers\CustomEvents\BaseCustomEventAppInsightsQueryResult.cs" />
-    <Compile Include="APIResponseParsers\CustomEvents\ClickEventAppInsightsQueryResult.cs" />
-    <Compile Include="APIResponseParsers\CustomEvents\EventCustomPropClasses.cs" />
-    <Compile Include="APIResponseParsers\CustomEvents\PageExitEventAppInsightsQueryResult.cs" />
-    <Compile Include="APIResponseParsers\CustomEvents\PageUpdateEventAppInsightsQueryResult.cs" />
-    <Compile Include="APIResponseParsers\CustomEvents\SearchEventAppInsightsQueryResult.cs" />
-    <Compile Include="APIResponseParsers\PageViewClasses.cs" />
-    <Compile Include="APIResponseParsers\PageViewCollection.cs" />
-    <Compile Include="APIResponseParsers\AppInsightsQueryResultPropertyAttribute.cs" />
-    <Compile Include="AppInsightsAPIClient.cs" />
-    <Compile Include="AppInsightsColumn.cs" />
-    <Compile Include="AppInsightsImporter.cs" />
-    <Compile Include="Constants.cs" />
-    <Compile Include="PageUpdates\PageCommentsExtensions.cs" />
-    <Compile Include="PageUpdates\PageUpdateManager.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Properties\Resources.Designer.cs">
-      <AutoGen>True</AutoGen>
-      <DesignTime>True</DesignTime>
-      <DependentUpon>Resources.resx</DependentUpon>
-    </Compile>
-    <Compile Include="Sql\HitUpdatesSqlExtension.cs" />
-    <Compile Include="Sql\ImportDbHacks.cs" />
-    <Compile Include="Sql\Models\ClickTempEntity.cs" />
-    <Compile Include="Sql\Models\HitTempEntity.cs" />
-    <Compile Include="Sql\Models\HitUpdate.cs" />
-    <Compile Include="Sql\PageClicksSaveExtension.cs" />
-    <Compile Include="Sql\PageViewsSaveExtension.cs" />
-    <Compile Include="Sql\PageUpdatesSaveExtension.cs" />
-    <Compile Include="Sql\SearchesSaveExtension.cs" />
-  </ItemGroup>
+
   <ItemGroup>
     <None Include="app.config" />
   </ItemGroup>
@@ -104,12 +38,7 @@
       <Name>Common.Entities</Name>
     </ProjectReference>
   </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="Properties\Resources.resx">
-      <Generator>ResXFileCodeGenerator</Generator>
-      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
-    </EmbeddedResource>
-  </ItemGroup>
+	
   <ItemGroup>
     <Content Include="Resources\Create Searches Import Temp Table.sql" />
     <Content Include="Resources\Create Update Temp Table.sql" />
@@ -186,5 +115,5 @@
       <Version>6.0.2</Version>
     </PackageReference>
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  
 </Project>

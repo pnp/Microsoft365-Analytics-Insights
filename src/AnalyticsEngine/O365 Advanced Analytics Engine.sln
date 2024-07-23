@@ -9,19 +9,19 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Entities", "Common\Entities
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tests.UnitTests", "Tests.UnitTests\Tests.UnitTests.csproj", "{5CF5FBB7-F3F1-4177-BFF1-D243FDB46A7D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebJob.AppInsightsImporter", "WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj", "{29729D5A-CD3F-4556-8805-AFC00ECC9527}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebJob.AppInsightsImporter", "WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj", "{29729D5A-CD3F-4556-8805-AFC00ECC9527}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebJob.Office365ActivityImporter", "WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj", "{24CCA4F8-6551-4F69-9ED4-4ABEE9C20651}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebJob.Office365ActivityImporter", "WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj", "{24CCA4F8-6551-4F69-9ED4-4ABEE9C20651}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebJob.Office365ActivityImporter.Engine", "WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj", "{1919BDE6-C311-426D-ADB3-A1487133E397}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebJob.Office365ActivityImporter.Engine", "WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj", "{1919BDE6-C311-426D-ADB3-A1487133E397}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebJob.AppInsightsImporter.Engine", "WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj", "{974B3B6C-B89A-45E6-A5A3-A0292BEB1BA4}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebJob.AppInsightsImporter.Engine", "WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj", "{974B3B6C-B89A-45E6-A5A3-A0292BEB1BA4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App.ControlPanel.WinForms", "App.ControlPanel\App.ControlPanel.WinForms.csproj", "{166141E8-D936-454A-AF8A-1CB825748909}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "App.ControlPanel.WinForms", "App.ControlPanel\App.ControlPanel.WinForms.csproj", "{166141E8-D936-454A-AF8A-1CB825748909}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App.ControlPanel.Engine", "App.ControlPanel.Engine\App.ControlPanel.Engine.csproj", "{B9BE1134-F5FE-41A9-9498-F411261D9A9C}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "App.ControlPanel.Engine", "App.ControlPanel.Engine\App.ControlPanel.Engine.csproj", "{B9BE1134-F5FE-41A9-9498-F411261D9A9C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Web", "Web\Web.csproj", "{944C6021-D995-4F92-8BF9-DC91FC514250}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Web", "Web\Web.csproj", "{944C6021-D995-4F92-8BF9-DC91FC514250}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Installer", "Installer", "{9FCD5323-2F91-45A7-96EA-9E70D0C1F2F4}"
 EndProject

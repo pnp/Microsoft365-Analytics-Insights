@@ -1,69 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+<Project Sdk="Microsoft.NET.Sdk">
+
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\WebApplications\Microsoft.WebApplication.targets" />
-  <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{166141E8-D936-454A-AF8A-1CB825748909}</ProjectGuid>
-    <OutputType>WinExe</OutputType>
-    <RootNamespace>App.ControlPanel</RootNamespace>
-    <AssemblyName>AnalyticsInstaller</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-    <IsWebBootstrapper>false</IsWebBootstrapper>
-    <TargetFrameworkProfile />
-    <PublishUrl>publish\</PublishUrl>
-    <Install>true</Install>
-    <InstallFrom>Disk</InstallFrom>
-    <UpdateEnabled>false</UpdateEnabled>
-    <UpdateMode>Foreground</UpdateMode>
-    <UpdateInterval>7</UpdateInterval>
-    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
-    <UpdatePeriodically>false</UpdatePeriodically>
-    <UpdateRequired>false</UpdateRequired>
-    <MapFileExtensions>true</MapFileExtensions>
-    <ApplicationRevision>0</ApplicationRevision>
-    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
-    <UseApplicationTrust>false</UseApplicationTrust>
-    <BootstrapperEnabled>true</BootstrapperEnabled>
-    <NuGetPackageImportStamp>
-    </NuGetPackageImportStamp>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <PlatformTarget>AnyCPU</PlatformTarget>
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <Prefer32Bit>true</Prefer32Bit>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <PlatformTarget>AnyCPU</PlatformTarget>
-    <DebugSymbols>false</DebugSymbols>
-    <DebugType>None</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <AllowedReferenceRelatedFileExtensions>
-      <!-- Prevent default XML and PDB files copied to output in RELEASE. 
-           Only *.allowedextension files will be included, which doesn't exist in my case.
-       -->
-      .allowedextension
-    </AllowedReferenceRelatedFileExtensions>
-  </PropertyGroup>
-  <PropertyGroup>
-    <SignAssembly>false</SignAssembly>
-  </PropertyGroup>
-  <PropertyGroup>
-    <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
-  </PropertyGroup>
+
+	<PropertyGroup>
+		<TargetFramework>net8.0-windows</TargetFramework>
+		<OutputType>Exe</OutputType>
+	</PropertyGroup>
+
   <PropertyGroup>
     <ApplicationIcon>office_icon.ico</ApplicationIcon>
   </PropertyGroup>
@@ -87,196 +31,8 @@
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="AboutForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="AboutForm.Designer.cs">
-      <DependentUpon>AboutForm.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Controls\TagsEditor.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Controls\TagsEditor.Designer.cs">
-      <DependentUpon>TagsEditor.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\AzureBaseConfigControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\AzureBaseConfigControl.Designer.cs">
-      <DependentUpon>AzureBaseConfigControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\TargetSolutionConfigControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\TargetSolutionConfigControl.Designer.cs">
-      <DependentUpon>TargetSolutionConfigControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="DatabaseUpgradeForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="DatabaseUpgradeForm.Designer.cs">
-      <DependentUpon>DatabaseUpgradeForm.cs</DependentUpon>
-    </Compile>
-    <Compile Include="CommonUIThings.cs" />
-    <Compile Include="Controls\AppLoginDetailsControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Controls\AppLoginDetailsControl.Designer.cs">
-      <DependentUpon>AppLoginDetailsControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Controls\FileSelection.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Controls\FileSelection.Designer.cs">
-      <DependentUpon>FileSelection.cs</DependentUpon>
-    </Compile>
-    <Compile Include="EnterPasswordForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="EnterPasswordForm.Designer.cs">
-      <DependentUpon>EnterPasswordForm.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Enums.cs" />
-    <Compile Include="Frames\InstallSPOSitesControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallSPOSitesControl.Designer.cs">
-      <DependentUpon>InstallSPOSitesControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\AzurePaaSConfigControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\AzurePaaSConfigControl.Designer.cs">
-      <DependentUpon>AzurePaaSConfigControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\AzureStorageConfigControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\AzureStorageConfigControl.Designer.cs">
-      <DependentUpon>AzureStorageConfigControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\InstallSolutionControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\InstallSolutionControl.Designer.cs">
-      <DependentUpon>InstallSolutionControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\SharePointConfigControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\SharePointConfigControl.Designer.cs">
-      <DependentUpon>SharePointConfigControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\SystemCredentialsControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\SystemCredentialsControl.Designer.cs">
-      <DependentUpon>SystemCredentialsControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="InstallerPreferences.cs" />
-    <Compile Include="ISolutionConfigurableComponent.cs" />
-    <Compile Include="MainForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="MainForm.Designer.cs">
-      <DependentUpon>MainForm.cs</DependentUpon>
-    </Compile>
-    <Compile Include="NewSaltForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="NewSaltForm.Designer.cs">
-      <DependentUpon>NewSaltForm.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Program.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="ProxyConfigForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="ProxyConfigForm.Designer.cs">
-      <DependentUpon>ProxyConfigForm.cs</DependentUpon>
-    </Compile>
-    <Compile Include="SolutionInstallerLogger.cs" />
-    <Compile Include="TestSettingsForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="TestSettingsForm.Designer.cs">
-      <DependentUpon>TestSettingsForm.cs</DependentUpon>
-    </Compile>
-    <EmbeddedResource Include="AboutForm.resx">
-      <DependentUpon>AboutForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Controls\TagsEditor.resx">
-      <DependentUpon>TagsEditor.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\AzureBaseConfigControl.resx">
-      <DependentUpon>AzureBaseConfigControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\TargetSolutionConfigControl.resx">
-      <DependentUpon>TargetSolutionConfigControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="DatabaseUpgradeForm.resx">
-      <DependentUpon>DatabaseUpgradeForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Controls\AppLoginDetailsControl.resx">
-      <DependentUpon>AppLoginDetailsControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Controls\FileSelection.resx">
-      <DependentUpon>FileSelection.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="EnterPasswordForm.resx">
-      <DependentUpon>EnterPasswordForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallSPOSitesControl.resx">
-      <DependentUpon>InstallSPOSitesControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\AzurePaaSConfigControl.resx">
-      <DependentUpon>AzurePaaSConfigControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\AzureStorageConfigControl.resx">
-      <DependentUpon>AzureStorageConfigControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\InstallSolutionControl.resx">
-      <DependentUpon>InstallSolutionControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\SharePointConfigControl.resx">
-      <DependentUpon>SharePointConfigControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\SystemCredentialsControl.resx">
-      <DependentUpon>SystemCredentialsControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="MainForm.resx">
-      <DependentUpon>MainForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="NewSaltForm.resx">
-      <DependentUpon>NewSaltForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Properties\Resources.resx">
-      <Generator>ResXFileCodeGenerator</Generator>
-      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
-      <SubType>Designer</SubType>
-    </EmbeddedResource>
-    <Compile Include="Properties\Resources.Designer.cs">
-      <AutoGen>True</AutoGen>
-      <DependentUpon>Resources.resx</DependentUpon>
-      <DesignTime>True</DesignTime>
-    </Compile>
-    <EmbeddedResource Include="ProxyConfigForm.resx">
-      <DependentUpon>ProxyConfigForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="TestSettingsForm.resx">
-      <DependentUpon>TestSettingsForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <None Include="Properties\Settings.settings">
-      <Generator>SettingsSingleFileGenerator</Generator>
-      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
-    </None>
-    <Compile Include="Properties\Settings.Designer.cs">
-      <AutoGen>True</AutoGen>
-      <DependentUpon>Settings.settings</DependentUpon>
-      <DesignTimeSharedInput>True</DesignTimeSharedInput>
-    </Compile>
-  </ItemGroup>
+
+  
   <ItemGroup>
     <Content Include="App.config">
     </Content>
@@ -309,18 +65,7 @@
       <Name>Common.Entities</Name>
     </ProjectReference>
   </ItemGroup>
-  <ItemGroup>
-    <BootstrapperPackage Include=".NETFramework,Version=v4.6.1">
-      <Visible>False</Visible>
-      <ProductName>Microsoft .NET Framework 4.6.1 %28x86 and x64%29</ProductName>
-      <Install>true</Install>
-    </BootstrapperPackage>
-    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
-      <Visible>False</Visible>
-      <ProductName>.NET Framework 3.5 SP1</ProductName>
-      <Install>false</Install>
-    </BootstrapperPackage>
-  </ItemGroup>
+
   <ItemGroup>
     <None Include="Resources\OpenFolder_16x.png" />
   </ItemGroup>
@@ -448,7 +193,6 @@
       <Version>9.3.3</Version>
     </PackageReference>
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Target Name="BeforeBuild">
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
