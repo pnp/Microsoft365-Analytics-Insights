@@ -5,6 +5,10 @@
 	<PropertyGroup>
 		<TargetFramework>net8.0-windows</TargetFramework>
 	</PropertyGroup>
+
+	<ItemGroup>
+	  <Compile Remove="HitPatch.cs" />
+	</ItemGroup>
   
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />

@@ -5,6 +5,10 @@
 		<TargetFramework>net8.0-windows</TargetFramework>
 	</PropertyGroup>
 
+	<ItemGroup>
+	  <Compile Remove="Entities\AuditLog\SharePoint_Event.cs" />
+	</ItemGroup>
+
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System" />
