@@ -5,6 +5,13 @@
   </PropertyGroup>
   
   <ItemGroup>
+    <Compile Remove="App_Data\**" />
+    <Content Remove="App_Data\**" />
+    <EmbeddedResource Remove="App_Data\**" />
+    <None Remove="App_Data\**" />
+  </ItemGroup>
+  
+  <ItemGroup>
     <PackageReference Include="Azure.Identity">
       <Version>1.11.4</Version>
     </PackageReference>
@@ -138,7 +145,6 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="App_Data\" />
     <Folder Include="Scripts\teams-permission-grant\build\static\" />
   </ItemGroup>
   <ItemGroup>

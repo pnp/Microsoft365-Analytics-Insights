@@ -1,8 +1,10 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Redis;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Caching.Memory;
 using System.Collections.Generic;
-using System.Runtime.Caching;
+using System.IO;
 using System.Threading.Tasks;
 using System.Web.Mvc;
 using Web.AnalyticsWeb.Models;
@@ -12,6 +14,15 @@ namespace Web.AnalyticsWeb.Controllers
     [Authorize]
     public class HomeController : Controller
     {
+        private readonly IWebHostEnvironment _webHostEnvironment;
+        private readonly IMemoryCache _cache;
+
+        public HomeController(IWebHostEnvironment webHostEnvironment, IMemoryCache cache)
+        {
+            _cache = cache;
+            _webHostEnvironment = webHostEnvironment;
+        }
+
         public async Task<ActionResult> Index()
         {
 
@@ -30,26 +41,23 @@ namespace Web.AnalyticsWeb.Controllers
         public ActionResult TeamsAuthApp()
         {
             // Inject content from react output
-            var cache = MemoryCache.Default;
-            var fileContents = cache["filecontents"] as string;
+            var fileContents = _cache.Get<string>("filecontents");
 
             if (fileContents == null)
             {
-                CacheItemPolicy policy = new CacheItemPolicy();
+                string webRootPath = _webHostEnvironment.WebRootPath;
+                string contentRootPath = _webHostEnvironment.ContentRootPath;
 
-                List<string> filePaths = new List<string>();
-                string templateFile = Server.MapPath("~/Scripts/teams-permission-grant/build/index.html");
+                var filePaths = new List<string>();
+                var templateFile = Path.Combine(webRootPath, "/Scripts/teams-permission-grant/build/index.html");
 
                 filePaths.Add(templateFile);
-
-                policy.ChangeMonitors.Add(new
-                HostFileChangeMonitor(filePaths));
 
                 // Fetch the file contents.  
                 fileContents = System.IO.File.ReadAllText(templateFile);
 
 #if !DEBUG
-                cache.Set("filecontents", fileContents, policy);
+                _cache.Set("filecontents", fileContents);
 #endif
 
             }
@@ -57,6 +65,5 @@ namespace Web.AnalyticsWeb.Controllers
             this.ViewBag.Contents = fileContents;
             return View();
         }
-
     }
 }
