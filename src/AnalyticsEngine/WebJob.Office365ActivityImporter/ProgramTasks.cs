@@ -46,7 +46,7 @@ namespace WebJob.Office365ActivityImporter
             {
 
                 // Don't make a drama if Graph permissions aren't assigned yet.
-                if (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                if (ex.ResponseStatusCode == (int)System.Net.HttpStatusCode.Forbidden)
                 {
                     telemetry.LogWarning("ERROR: Can't access Teams user data - are application permissions configured correctly?");
                     return;
