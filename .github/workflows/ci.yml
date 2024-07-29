@@ -108,7 +108,7 @@ jobs:
         # continue-on-error: true # TODO
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          $certificatePath = Join-Path -Path "${{ env.Solution_Directory }}" -ChildPath SPOInsightsBinaries.pfx
+          $certificatePath = Join-Path -Resolve -Path "${{ env.Solution_Directory }}" -ChildPath SPOInsightsBinaries.pfx
           [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
           echo "pfx_path=$certificatePath" >> "$GITHUB_OUTPUT"
       - name: Cache NuGet Packages
