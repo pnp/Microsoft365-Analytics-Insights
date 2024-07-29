@@ -108,9 +108,10 @@ jobs:
         # continue-on-error: true # TODO
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          $certificatePath = Join-Path -Path "$(Get-Location)" -ChildPath "src/AnalyticsEngine" -AdditionalChildPath SPOInsightsBinaries.pfx
-          [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
-          echo "path=$certificatePath" >> "$GITHUB_OUTPUT"
+          $pfx_path = Join-Path -Path "$(Get-Location)" -ChildPath "src/AnalyticsEngine" -AdditionalChildPath SPOInsightsBinaries.pfx
+          [IO.File]::WriteAllBytes("$pfx_path", $pfx_cert_byte)
+          "path=$pfx_path" >> "$GITHUB_OUTPUT"
+      - run: echo ${{ steps.pfx.outputs.path }}
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v4
@@ -240,8 +241,8 @@ jobs:
       - name: Remove the PFX
         # continue-on-error: true # TODO
         run: |
-          $certificatePath = Join-Path -Path "${{ env.Solution_Directory }}" -ChildPath SPOInsightsBinaries.pfx
-          Remove-Item -Path $certificatePath
+          $pfx_path = Join-Path -Path "$(Get-Location)" -ChildPath "src/AnalyticsEngine" -AdditionalChildPath SPOInsightsBinaries.pfx
+          Remove-Item -Path $pfx_path
   build_aitracker:
     # NPM ai tracker
     # Build:
