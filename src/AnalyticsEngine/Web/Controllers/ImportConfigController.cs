@@ -37,7 +37,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             return new ImportConfig
             {
-                Expiry = DateTime.Now.AddDays(1),
+                Expiry = DateTime.Now.AddMinutes(config.MetadataRefreshMinutes),
                 MetadataRefreshMinutes = config.MetadataRefreshMinutes,
             };
         }
