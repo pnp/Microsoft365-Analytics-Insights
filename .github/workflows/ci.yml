@@ -104,7 +104,7 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
       - name: Decode the PFX
-        continue-on-error: true # TODO
+        # continue-on-error: true # TODO
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
           $certificatePath = Join-Path -Path "${{ env.Solution_Directory }}" -ChildPath SPOInsightsBinaries.pfx
@@ -232,7 +232,7 @@ jobs:
           if-no-files-found: error
 
       - name: Remove the PFX
-        continue-on-error: true # TODO
+        # continue-on-error: true # TODO
         run: Remove-Item -Path SPOInsightsBinaries.pfx
   build_aitracker:
     # NPM ai tracker
