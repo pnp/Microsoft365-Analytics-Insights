@@ -216,10 +216,11 @@ jobs:
         run: |
           & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
           sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
-          /f "${{ steps.pfx.outputs.pfx_path }}" /p "${{ secrets.PFX_KEY}}" `
+          /f "${{ env.PfxPath }}" /p "${{ secrets.PFX_KEY}}" `
           "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
         env:
           Configuration: ${{ matrix.configuration }}
+          PfxPath: ${{ steps.pfx.outputs.pfx_path }}
       - name: List output contents
         run: ls -r ${{ runner.temp }}
       - name: Archive ControlPanelApp
