@@ -97,12 +97,12 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             // Schedules
             _logger.LogInformation($"Creating/updating automation schedules for '{_config.ResourceName}'...");
 
-            var nextSunday1pm = Next(DateTime.UtcNow.AddHours(13), DayOfWeek.Sunday);
-            var nextSunday6pm = Next(DateTime.UtcNow.AddHours(13), DayOfWeek.Sunday);
-            var nextSunday11pm = Next(DateTime.UtcNow.AddHours(13), DayOfWeek.Sunday);
+            var nextSunday1pm = NextSundayAt(13, DateTimeKind.Utc);
+            var nextSunday6pm = NextSundayAt(18, DateTimeKind.Utc);
+            var nextSunday11pm = NextSundayAt(23, DateTimeKind.Utc);
             var nextSunday1pmSchedule = new AutomationScheduleCreateOrUpdateContent("Weekly Sunday 1pm", nextSunday1pm, AutomationScheduleFrequency.Week) { Interval = BinaryData.FromString("1") };
-            var nextSunday6pmSchedule = new AutomationScheduleCreateOrUpdateContent("Weekly Sunday 6pm", nextSunday1pm, AutomationScheduleFrequency.Week) { Interval = BinaryData.FromString("1") };
-            var nextSunday11pmSchedule = new AutomationScheduleCreateOrUpdateContent("Weekly Sunday 11pm", nextSunday1pm, AutomationScheduleFrequency.Week) { Interval = BinaryData.FromString("1") };
+            var nextSunday6pmSchedule = new AutomationScheduleCreateOrUpdateContent("Weekly Sunday 6pm", nextSunday6pm, AutomationScheduleFrequency.Week) { Interval = BinaryData.FromString("1") };
+            var nextSunday11pmSchedule = new AutomationScheduleCreateOrUpdateContent("Weekly Sunday 11pm", nextSunday11pm, AutomationScheduleFrequency.Week) { Interval = BinaryData.FromString("1") };
 
             var schedules = automationAccount.GetAutomationSchedules();
             await schedules.CreateOrUpdateAsync(WaitUntil.Completed, nextSunday1pmSchedule.Name, nextSunday1pmSchedule);
@@ -131,6 +131,19 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             if (target <= start)
                 target += 7;
             return from.AddDays(target - start);
+        }
+
+        /// <summary>
+        /// Returns a DateTime object for the next Sunday at a specific time
+        /// </summary>
+        /// <param name="hour"></param>
+        /// <returns></returns>
+        /// <exception cref="NotImplementedException"></exception>
+        public static DateTime NextSundayAt(int hour24, DateTimeKind kind = DateTimeKind.Local)
+        {
+            var now = kind == DateTimeKind.Utc ? DateTime.UtcNow : DateTime.Now;
+            var nextSunday = Next(now, DayOfWeek.Sunday);
+            return new DateTime(nextSunday.Year, nextSunday.Month, nextSunday.Day, hour24, 0, 0, kind);
         }
     }
 }
