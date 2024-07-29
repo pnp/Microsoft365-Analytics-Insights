@@ -254,8 +254,9 @@ jobs:
           cd src/SPO/AITracker/TypeScript
           npm ci
           npm run build
-          rm -rf src/SPO/AITracker/TypeScript
-          zip -r AITrackerInstaller.zip src/SPO/AITracker
+          cd ../..
+          rm -rf AITracker/TypeScript
+          zip -r AITrackerInstaller.zip AITracker
       # Wrap up
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
