@@ -149,7 +149,7 @@ jobs:
         run: ls -r ${{ runner.temp }}
       - name: Archive AppInsightsImporter
         run: |
-          Remove-Item -Force -Recurse "AppInsightsImporter\_PublishedWebsites"
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "AppInsightsImporter\_PublishedWebsites"
           Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
           -DestinationPath "${{ env.folder }}\AppInsightsImporter.zip"
         env:
@@ -168,9 +168,11 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
+      - name: List output contents
+        run: ls -r ${{ runner.temp }}
       - name: Archive Office365ActivityImporter
         run: |
-          Remove-Item -Force -Recurse "Office365ActivityImporter\_PublishedWebsites"
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "Office365ActivityImporter\_PublishedWebsites"
           Copy-Item -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS/*" `
           -Destination "${{ runner.temp }}\Office365ActivityImporter\AutomationPS"
           Compress-Archive -Force -Path "${{ runner.temp }}\Office365ActivityImporter" `
@@ -191,6 +193,8 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
+      - name: List output contents
+        run: ls -r ${{ runner.temp }}
       - name: Archive Website
         run: |
           Remove-Item -Force -Recurse "Website\_PublishedWebsites\Web\bin\Scripts"
@@ -212,6 +216,8 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
+      - name: List output contents
+        run: ls -r ${{ runner.temp }}
       - name: Archive ControlPanelApp
         run: Compress-Archive -Force -Path "${{ runner.temp }}\ControlPanelApp" `
           -DestinationPath "${{ env.folder }}\ControlPanelApp.zip"
