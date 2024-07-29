@@ -34,6 +34,7 @@ on:
 # * dotnet projects and AI Tracker can be paralellized
 
 env:
+  Build_Number_Offset: 100
   Solution_Directory: src\AnalyticsEngine\
   Build_Platform: Any CPU
   Build_ProcessorArchitecture: x86
@@ -57,16 +58,16 @@ env:
   StatsApiUrl: ${{ secrets.STATSAPIURL }}
 
 jobs:
-  # This step will calculate the build number with an offset
-  # so that build numbers will follow the ones from Azure DevOps
   setup_build:
+    # This step will calculate the build number with an offset
+    # so that build numbers will follow the ones from Azure DevOps
     runs-on: ubuntu-latest
     outputs:
       build_number: ${{ steps.build-number.outputs.number }}
     steps:
       - name: Calculate build number
         id: build-number
-        run: echo "number=$((100 + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
+        run: echo "number=$((${{ env.Build_Number_Offset }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
   build_dotnet:
     # Preparation:
     #   - Get signing certificate
@@ -74,8 +75,6 @@ jobs:
     #   - Restore dependencies
     # Build:
     #   - Build .Net projects
-    # Test:
-    #   - Run test suite
     # Output:
     #   - Clean .Net builds
     #   - Copy PS scripts
@@ -235,16 +234,14 @@ jobs:
       - name: Remove the PFX
         continue-on-error: true # TODO
         run: Remove-Item -Path SPOInsightsBinaries.pfx
-
-# NPM ai tracker
-# Test:
-#   - Build AI Tracker
-# Output:
-#   - Clean AI Tracker
-#   - Zip files
-#   - Publish artifacts
-
   build_aitracker:
+    # NPM ai tracker
+    # Build:
+    #   - Build AI Tracker
+    # Output:
+    #   - Clean AI Tracker
+    #   - Zip files
+    #   - Publish artifacts
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -264,3 +261,13 @@ jobs:
           path: src/SPO/AITrackerInstaller.zip
           name: artifacts-aitracker
           if-no-files-found: error
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs:
+      - build_dotnet
+      - build_aitracker
+    steps:
+      - uses: actions/download-artifact@v4
+        id: artifacts
+      - run: ls -R ${{ steps.artifacts.outputs.download-path }}
