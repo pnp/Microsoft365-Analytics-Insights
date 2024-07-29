@@ -247,6 +247,8 @@ jobs:
   build_aitracker:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
       - name: build AITracker
         run: |
           cd src/SPO/AITracker/TypeScript
