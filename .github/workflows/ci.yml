@@ -173,7 +173,7 @@ jobs:
       - name: Archive Office365ActivityImporter
         run: |
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
-          Copy-Item -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS/*" `
+          Copy-Item -Recurse -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS/*" `
           -Destination "${{ runner.temp }}\Office365ActivityImporter\AutomationPS"
           Compress-Archive -Force -Path "${{ runner.temp }}\Office365ActivityImporter" `
           -DestinationPath "${{ env.folder }}\Office365ActivityImporter.zip"
