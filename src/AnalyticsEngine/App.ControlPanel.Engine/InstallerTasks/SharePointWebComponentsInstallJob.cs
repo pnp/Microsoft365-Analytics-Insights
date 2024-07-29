@@ -13,9 +13,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class SharePointWebComponentsInstallJob : BaseInstallProcess
     {
+        private readonly string _defaultHostName;
 
         public SharePointWebComponentsInstallJob(SolutionInstallConfig config, ILogger logger, string defaultHostName) : base(config, logger)
         {
+            _defaultHostName = defaultHostName;
         }
 
         internal async Task InstallAITracker(SharePointInstallConfig sharePointInstallConfig, LocalStorageBlobInfo aiTrackerZipFile, string appInsightsConnectionString)
@@ -51,7 +53,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             // Install into sites. Hard-code library name "SPOInsights" for now
             var siteInstaller = new SpoSiteListInstaller(_logger);
-            await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString, "SPOInsights", base.Config.AppServiceWebAppName);
+            await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString, 
+                "SPOInsights", "https://" + _defaultHostName);
 
             _logger.LogInformation("Installed AITracker to target SharePoint sites via CSOM.");
         }

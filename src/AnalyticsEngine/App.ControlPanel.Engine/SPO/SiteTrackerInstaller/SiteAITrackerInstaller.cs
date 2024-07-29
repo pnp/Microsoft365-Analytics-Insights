@@ -71,7 +71,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
             await _siteInstallAdaptor.AddAITrackerCustomActionToWeb(_siteInstallAdaptor.RootWeb, new ClassicPageCustomAction(aiTrackerUrlWithToken, trackerInstallConfig.AppInsightsConnectionString, solutionWebsiteBaseUrl));
             await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
-            await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(_siteInstallAdaptor.RootWeb, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken));
+            await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(_siteInstallAdaptor.RootWeb, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken, solutionWebsiteBaseUrl));
             foreach (var w in _siteInstallAdaptor.SubWebs)
             {
                 var webUrl = _siteInstallAdaptor.GetUrl(w);
@@ -81,7 +81,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
                 await _siteInstallAdaptor.AddAITrackerCustomActionToWeb(w, new ClassicPageCustomAction(aiTrackerUrlWithToken, trackerInstallConfig.AppInsightsConnectionString, solutionWebsiteBaseUrl));
 
                 await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(w);
-                await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(w, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken));
+                await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(w, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken, solutionWebsiteBaseUrl));
             }
             _logger.LogInformation($"Registered AITracker to all sub-webs");
         }
