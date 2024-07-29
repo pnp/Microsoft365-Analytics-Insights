@@ -1,16 +1,23 @@
 ﻿using System;
+using System.Text.Json;
 using DataUtils;
 
 namespace App.ControlPanel.Engine.SPO
 {
-
     public class ModernAppCustomAction
     {
+
         public const string DESCRIPTION = "SPO Insights ModernUI AITracker App Customizer";
         public const string LOCATION = "ClientSideExtension.ApplicationCustomizer";
-        public ModernAppCustomAction(string appInsightsConnectionString, string cacheToken)
+        public ModernAppCustomAction(string appInsightsConnectionString, string cacheToken, string insightsWebRootUrl)
         {
-            this.ClientSideComponentProperties = "{\"appInsightsConnectionStringHash\": \"" + appInsightsConnectionString.Base64Encode() + "\", \"cacheToken\": \"" + cacheToken + "\"}";
+            var props = new ModernAppCustomActionProps
+            {
+                AppInsightsConnectionStringHash = appInsightsConnectionString.Base64Encode(),
+                CacheToken = cacheToken,
+                InsightsWebRootUrlHash = insightsWebRootUrl.Base64Encode()
+            };
+            this.ClientSideComponentProperties = JsonSerializer.Serialize(props);
         }
 
         public string Name { get; } = "AiTrackerModernApplicationCustomizer";
@@ -71,6 +78,17 @@ namespace App.ControlPanel.Engine.SPO
         public string AITrackerTitle { get; } = "AITracker.js";
 
         public byte[] AiTrackerContents { get; set; } = null;
+    }
+
+    internal class ModernAppCustomActionProps
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("appInsightsConnectionStringHash")]
+        public string AppInsightsConnectionStringHash { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("cacheToken")]
+        public string CacheToken { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("insightsWebRootUrlHash")]
+        public string InsightsWebRootUrlHash { get; set; }
     }
 
 }
