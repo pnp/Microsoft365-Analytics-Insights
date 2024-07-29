@@ -108,9 +108,9 @@ jobs:
         # continue-on-error: true # TODO
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          $certificatePath = Join-Path -Resolve -Path "${{ env.Solution_Directory }}" -ChildPath SPOInsightsBinaries.pfx
+          $certificatePath = Join-Path -Path "$(Get-Location)" -ChildPath "src/AnalyticsEngine" -AdditionalChildPath SPOInsightsBinaries.pfx
           [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
-          echo "pfx_path=$certificatePath" >> "$GITHUB_OUTPUT"
+          echo "path=$certificatePath" >> "$GITHUB_OUTPUT"
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v4
@@ -220,7 +220,7 @@ jobs:
           "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
         env:
           Configuration: ${{ matrix.configuration }}
-          PfxPath: ${{ steps.pfx.outputs.pfx_path }}
+          PfxPath: ${{ steps.pfx.outputs.path }}
       - name: List output contents
         run: ls -r ${{ runner.temp }}
       - name: Archive ControlPanelApp
