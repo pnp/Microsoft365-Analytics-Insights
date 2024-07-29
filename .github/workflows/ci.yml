@@ -136,8 +136,6 @@ jobs:
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx `
-          -p:PackageCertificatePassword=${{ secrets.PFX_KEY }} `
           -p:OutDir=${{ runner.temp }}\AppInsightsImporter `
           -p:OutputPath=${{ env.Configuration }} `
           -p:AllowedReferenceRelatedFileExtensions=none `
@@ -159,8 +157,6 @@ jobs:
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx `
-          -p:PackageCertificatePassword=${{ secrets.PFX_KEY }} `
           -p:OutDir=${{ runner.temp }}\Office365ActivityImporter `
           -p:OutputPath=${{ env.Configuration }} `
           -p:AllowedReferenceRelatedFileExtensions=none `
@@ -184,8 +180,6 @@ jobs:
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx `
-          -p:PackageCertificatePassword=${{ secrets.PFX_KEY }} `
           -p:OutDir=${{ runner.temp }}\Website `
           -p:OutputPath=${{ env.Configuration }} `
           -p:AllowedReferenceRelatedFileExtensions=none `
@@ -203,7 +197,8 @@ jobs:
           folder: ${{ steps.prep.outputs.zips_folder }}
 
       - name: Build Installer
-        run: msbuild ${{ env.Solution_Directory }}\App.ControlPanel\App.ControlPanel.WinForms.csproj `
+        run: |
+          msbuild ${{ env.Solution_Directory }}\App.ControlPanel\App.ControlPanel.WinForms.csproj `
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
@@ -213,6 +208,10 @@ jobs:
           -p:OutputPath=${{ env.Configuration }} `
           -p:AllowedReferenceRelatedFileExtensions=none `
           -p:EmitCompilerGeneratedFiles=false
+          & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
+          sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
+          /f "${{ env.Solution_Directory }}\SPOInsightsBinaries.pfx" `
+          /p "${{ secrets.PFX_KEY}}" AnalyticsInstaller.exe
         env:
           Configuration: ${{ matrix.configuration }}
       - name: List output contents
