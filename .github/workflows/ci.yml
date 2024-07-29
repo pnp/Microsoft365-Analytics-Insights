@@ -149,7 +149,7 @@ jobs:
         run: ls -r ${{ runner.temp }}
       - name: Archive AppInsightsImporter
         run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "AppInsightsImporter\_PublishedWebsites"
+          Remove-Item -Force -Recurse "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
           Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
           -DestinationPath "${{ env.folder }}\AppInsightsImporter.zip"
         env:
@@ -172,7 +172,7 @@ jobs:
         run: ls -r ${{ runner.temp }}
       - name: Archive Office365ActivityImporter
         run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "Office365ActivityImporter\_PublishedWebsites"
+          Remove-Item -Force -Recurse "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
           Copy-Item -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS/*" `
           -Destination "${{ runner.temp }}\Office365ActivityImporter\AutomationPS"
           Compress-Archive -Force -Path "${{ runner.temp }}\Office365ActivityImporter" `
@@ -197,7 +197,7 @@ jobs:
         run: ls -r ${{ runner.temp }}
       - name: Archive Website
         run: |
-          Remove-Item -Force -Recurse "Website\_PublishedWebsites\Web\bin\Scripts"
+          Remove-Item -Force -Recurse "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
           Compress-Archive -Force -Path "${{ runner.temp }}\Website\_PublishedWebsites\Web" `
           -DestinationPath "${{ env.folder }}\Website.zip"
         env:
