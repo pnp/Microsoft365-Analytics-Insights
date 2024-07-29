@@ -233,7 +233,9 @@ jobs:
 
       - name: Remove the PFX
         # continue-on-error: true # TODO
-        run: Remove-Item -Path SPOInsightsBinaries.pfx
+        run: |
+          $certificatePath = Join-Path -Path "${{ env.Solution_Directory }}" -ChildPath SPOInsightsBinaries.pfx
+          Remove-Item -Path $certificatePath
   build_aitracker:
     # NPM ai tracker
     # Build:
