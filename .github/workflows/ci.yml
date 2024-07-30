@@ -256,6 +256,7 @@ jobs:
       - name: Generate Changelog
         run: |
           github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights --token ${{ github.token }}
+          sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
       - name: Download artifacts
         uses: actions/download-artifact@v4
         id: artifacts
@@ -264,8 +265,8 @@ jobs:
       - name: Generate release label
         id: release_label
         run: |
-          dev_ref=dev
-          if [ "${{ github.ref_name }}" = $dev_ref ]; then
+          dev_ref=gh-actions
+          if [ "${{ github.ref_name }}" = "$dev_ref" ]; then
               echo "LABEL=Testing ${{ env.BuildId }}" >> $GITHUB_ENV
           else
               echo "LABEL=Stable ${{ env.BuildId }}" >> $GITHUB_ENV
@@ -277,7 +278,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           draft: true
-          prerelease: ${{ github.ref_name == 'dev' }}
+          prerelease: ${{ github.ref_name == 'dev' || github.ref_name == 'gh-actions' }}
           name: ${{ env.LABEL }}
           tag: ${{ env.BuildId }}
           commit: ${{ github.ref_name }}
