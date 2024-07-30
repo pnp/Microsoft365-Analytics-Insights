@@ -60,8 +60,8 @@ jobs:
       BuildId: ${{ needs.setup_build.outputs.build_number }}
       BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
     steps:
-      - name: Output Build label
-        run: echo ${{ env.BuildLabel }}
+      - name: This is ${{ env.BuildLabel }}
+        run: echo ${{ env.BuildId }}
       - name: Prepare build
         id: prep
         shell: bash
@@ -70,7 +70,8 @@ jobs:
           echo "Zips_Folder=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
           echo "Pfx_Path=${{ env.Pfx_Path }}" >> "$GITHUB_OUTPUT"
         env:
-          Zips_Folder: ${{ runner.temp }}\zips\ #${{ github.ref_name }} - build ${{ env.BuildId }}
+          #${{ github.ref_name }} - build ${{ env.BuildId }}
+          Zips_Folder: ${{ runner.temp }}\zips\
           Pfx_Path: ${{ runner.temp }}\SPOInsightsBinaries.pfx
       - name: Decode the PFX
         run: |
