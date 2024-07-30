@@ -6,35 +6,8 @@ on:
       - main
       - dev
       - gh-actions
-  workflow_dispatch:
-    inputs:
-      publish-files:
-        description: Should files be published as a release?
-        type: boolean
-        default: false
-        required: false
-
-# Original
-# Preparation:
-#   - Get signing certificate
-#   - Transform configuration files
-#   - Restore dependencies
-# Build:
-#   - Build .Net projects
-#   - Build AI Tracker
-# Test:
-#   - Run test suite
-# Output:
-#   - Clean .Net builds
-#   - Clean AI Tracker
-#   - Copy PS scripts
-#   - Zip files
-#   - Publish artifacts
-
-# * dotnet projects and AI Tracker can be paralellized
 
 env:
-  Build_Number_Offset: 100
   Solution_Directory: src\AnalyticsEngine\
   Build_Platform: Any CPU
   Build_ProcessorArchitecture: x86
@@ -48,8 +21,6 @@ env:
   CosmosDbTestContainerHistory: history
   CosmosDbTestDatabaseName: UnitTestDevOps
   CosmosDb: ${{ secrets.APP_COSMOSDB }}
-  # SPOInsightsEntities
-  # UnitTestingOffice365Services
   redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
@@ -63,11 +34,11 @@ jobs:
     # so that build numbers will follow the ones from Azure DevOps
     runs-on: ubuntu-latest
     outputs:
-      build_number: ${{ steps.build-number.outputs.number }}
+      build_number: ${{ steps.build_number.outputs.number }}
     steps:
       - name: Calculate build number
-        id: build-number
-        run: echo "number=$((${{ env.Build_Number_Offset }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
+        id: build_number
+        run: echo "number=$((${{ vars.BUILD_NUMBER_OFFSET }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
   build_dotnet:
     # Preparation:
     #   - Get signing certificate
@@ -91,7 +62,7 @@ jobs:
     steps:
       - name: Output Build label
         run: echo ${{ env.BuildLabel }}
-      - name: Prepare output folder
+      - name: Prepare build
         id: prep
         shell: bash
         run: |
@@ -99,17 +70,17 @@ jobs:
           echo "Zips_Folder=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
           echo "Pfx_Path=${{ env.Pfx_Path }}" >> "$GITHUB_OUTPUT"
         env:
-          Zips_Folder: ${{ runner.temp }}\zips\${{ github.ref_name }} - build ${{ env.BuildId }}
+          Zips_Folder: ${{ runner.temp }}\zips\ #${{ github.ref_name }} - build ${{ env.BuildId }}
           Pfx_Path: ${{ runner.temp }}\SPOInsightsBinaries.pfx
+      - name: Decode the PFX
+        run: |
+          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
+          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.Pfx_Path }}", $pfx_cert_byte)
+
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
-      - name: Decode the PFX
-        # continue-on-error: true # TODO
-        run: |
-          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.Pfx_Path }}", $pfx_cert_byte)
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v4
@@ -118,6 +89,7 @@ jobs:
         with:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
+
       # Configuration files
       - name: Config substitutions
         uses: devops-actions/variable-substitution@v1.2
@@ -226,7 +198,6 @@ jobs:
           if-no-files-found: error
 
       - name: Remove the PFX
-        # continue-on-error: true # TODO
         run: |
           Remove-Item -Path "${{ steps.prep.outputs.Pfx_Path }}"
   build_aitracker:
@@ -260,9 +231,77 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs:
+      - setup_build
       - build_dotnet
       - build_aitracker
+    env:
+      BuildId: ${{ needs.setup_build.outputs.build_number }}
+      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         id: artifacts
-      - run: ls -R ${{ steps.artifacts.outputs.download-path }}
+      - name: Show downloaded artifacts
+        run: ls -R ${{ steps.artifacts.outputs.download-path }}
+      - name: Create release
+        uses: actions/create-release@v1
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          draft: true
+          prerelease: ${{ github.ref_name == 'dev' }}
+          release_name: ${{ env.BuildLabel }}
+          tag_name: ${{ env.BuildId }}
+          body: Release ${{ env.BuildId }}
+          body_path: CHANGELOG.md
+      - name: Upload AITrackerInstaller
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-aitracker/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}AITrackerInstaller.zip
+          asset_name: AITrackerInstaller.zip
+          asset_content_type: application/zip
+      - name: Upload AppInsightsImporter
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}AppInsightsImporter.zip
+          asset_name: AppInsightsImporter.zip
+          asset_content_type: application/zip
+      - name: Upload Office365ActivityImporter
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}Office365ActivityImporter.zip
+          asset_name: Office365ActivityImporter.zip
+          asset_content_type: application/zip
+      - name: Upload Website
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}Website.zip
+          asset_name: Website.zip
+          asset_content_type: application/zip
+      - name: Upload ControlPanelApp
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}ControlPanelApp.zip
+          asset_name: ControlPanelApp.zip
+          asset_content_type: application/zip
