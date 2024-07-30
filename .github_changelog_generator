@@ -1,0 +1,4 @@
+project=Microsoft365-Analytics-Insights
+user=pnp
+exclude-labels=duplicate,question,invalid,wontfix,dependencies
+unreleased=false
