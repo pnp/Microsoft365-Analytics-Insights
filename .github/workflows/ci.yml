@@ -189,13 +189,20 @@ jobs:
           -DestinationPath "${{ env.folder }}\ControlPanelApp.zip"
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+      - name: Archive Reports
+        run: |
+          Get-ChildItem '.\reports\Usage Analytics\*' `
+          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
+          -Force -DestinationPath "${{ env.folder }}\Analytics Reports.zip"
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
 
       # Wrap up
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           path: ${{ env.folder }}
-          name: artifacts-dotnet
+          name: drop_dotnet
           if-no-files-found: error
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
@@ -228,10 +235,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           path: src/SPO/AITrackerInstaller.zip
-          name: artifacts-aitracker
+          name: drop_aitracker
           if-no-files-found: error
 
-  deploy:
+  release:
     runs-on: ubuntu-latest
     needs:
       - setup_build
@@ -262,7 +269,7 @@ jobs:
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-aitracker/
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_aitracker/
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ env.BASE}}AITrackerInstaller.zip
@@ -272,7 +279,7 @@ jobs:
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ env.BASE}}AppInsightsImporter.zip
@@ -282,7 +289,7 @@ jobs:
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ env.BASE}}Office365ActivityImporter.zip
@@ -292,7 +299,7 @@ jobs:
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ env.BASE}}Website.zip
@@ -302,9 +309,19 @@ jobs:
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}/artifacts-dotnet/
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ${{ env.BASE}}ControlPanelApp.zip
           asset_name: ControlPanelApp.zip
+          asset_content_type: application/zip
+      - name: Upload Analytics Reports
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}Analytics Reports.zip
+          asset_name: Analytics Reports.zip
           asset_content_type: application/zip
