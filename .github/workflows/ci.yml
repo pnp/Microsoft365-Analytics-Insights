@@ -248,6 +248,12 @@ jobs:
       BuildId: ${{ needs.setup_build.outputs.build_number }}
       BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
     steps:
+      - name: Install Changelog Generator
+        run: sudo gem install github_changelog_generator
+      - name: Generate Changelog
+        run: github-changelog-generator -u pnp -p Microsoft365-Analytics-Insights
+        env:
+          CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
       - name: Download artifacts
         uses: actions/download-artifact@v4
         id: artifacts
@@ -263,8 +269,8 @@ jobs:
           prerelease: ${{ github.ref_name == 'dev' }}
           name: ${{ env.BuildLabel }}
           tag: ${{ env.BuildId }}
-          body: Release ${{ env.BuildId }}
-          # bodyFile:  CHANGELOG.md
+          # body: Release ${{ env.BuildId }}
+          bodyFile:  CHANGELOG.md
       - name: Upload Assets
         uses: alexellis/upload-assets@0.4.1
         env:
