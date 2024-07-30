@@ -244,6 +244,9 @@ jobs:
       - setup_build
       - build_dotnet
       - build_aitracker
+    permissions: 
+      # Required to create tags in the repo
+      contents: write
     env:
       BuildId: ${{ needs.setup_build.outputs.build_number }}
       BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
@@ -252,7 +255,7 @@ jobs:
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
         run: |
-          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights -token ${{ github.token }}
+          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights --token ${{ github.token }}
       - name: Download artifacts
         uses: actions/download-artifact@v4
         id: artifacts
@@ -277,6 +280,7 @@ jobs:
           prerelease: ${{ github.ref_name == 'dev' }}
           name: ${{ env.LABEL }}
           tag: ${{ env.BuildId }}
+          commit: ${{ github.ref_name }}
           # body: Release ${{ env.BuildId }}
           bodyFile:  CHANGELOG.md
       # - name: Upload Assets
