@@ -247,7 +247,7 @@ jobs:
       - name: Show downloaded artifacts
         run: ls -R ${{ steps.artifacts.outputs.download-path }}
       - name: Create release
-        uses: ncipollo/release-action
+        uses: ncipollo/release-action@v1.14.0
         id: create_release
         env:
           GITHUB_TOKEN: ${{ github.token }}
