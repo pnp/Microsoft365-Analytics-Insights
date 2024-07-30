@@ -95,23 +95,21 @@ jobs:
         id: prep
         shell: bash
         run: |
-          mkdir -p "${{ env.ZipsFolder }}"
-          echo "zips_folder=${{ env.ZipsFolder }}" >> "$GITHUB_OUTPUT"
+          mkdir -p "${{ env.Zips_Folder }}"
+          echo "Zips_Folder=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
+          echo "Pfx_Path=${{ env.Pfx_Path }}" >> "$GITHUB_OUTPUT"
         env:
-          ZipsFolder: ${{ runner.temp }}\zips\${{ github.ref_name }} - build ${{ env.BuildId }}
+          Zips_Folder: ${{ runner.temp }}\zips\${{ github.ref_name }} - build ${{ env.BuildId }}
+          Pfx_Path: ${{ runner.temp }}\SPOInsightsBinaries.pfx
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
       - name: Decode the PFX
-        id: pfx
         # continue-on-error: true # TODO
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          $pfx_path = Join-Path -Path "$(Get-Location)" -ChildPath "src/AnalyticsEngine" -AdditionalChildPath SPOInsightsBinaries.pfx
-          [IO.File]::WriteAllBytes("$pfx_path", $pfx_cert_byte)
-          "path=$pfx_path" >> "$GITHUB_OUTPUT"
-      - run: echo ${{ steps.pfx.outputs.path }}
+          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.Pfx_Path }}", $pfx_cert_byte)
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v4
@@ -153,7 +151,7 @@ jobs:
           Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
           -DestinationPath "${{ env.folder }}\AppInsightsImporter.zip"
         env:
-          folder: ${{ steps.prep.outputs.zips_folder }}
+          folder: ${{ steps.prep.outputs.Zips_Folder }}
 
       - name: Build WebJob.Office365ActivityImporter
         run: msbuild ${{ env.Solution_Directory }}\WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj `
@@ -176,7 +174,7 @@ jobs:
           Compress-Archive -Force -Path "${{ runner.temp }}\Office365ActivityImporter" `
           -DestinationPath "${{ env.folder }}\Office365ActivityImporter.zip"
         env:
-          folder: ${{ steps.prep.outputs.zips_folder }}
+          folder: ${{ steps.prep.outputs.Zips_Folder }}
 
       - name: Build Website
         run: msbuild ${{ env.Solution_Directory }}\Web\Web.csproj `
@@ -197,7 +195,7 @@ jobs:
           Compress-Archive -Force -Path "${{ runner.temp }}\Website\_PublishedWebsites\Web" `
           -DestinationPath "${{ env.folder }}\Website.zip"
         env:
-          folder: ${{ steps.prep.outputs.zips_folder }}
+          folder: ${{ steps.prep.outputs.Zips_Folder }}
 
       - name: Build Installer
         run: |
@@ -217,32 +215,30 @@ jobs:
         run: |
           & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
           sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
-          /f "${{ env.PfxPath }}" /p "${{ secrets.PFX_KEY}}" `
+          /f "${{ steps.prep.outputs.Pfx_Path }}" /p "${{ secrets.PFX_KEY}}" `
           "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
         env:
           Configuration: ${{ matrix.configuration }}
-          PfxPath: ${{ steps.pfx.outputs.path }}
       - name: List output contents
         run: ls -r ${{ runner.temp }}
       - name: Archive ControlPanelApp
         run: Compress-Archive -Force -Path "${{ runner.temp }}\ControlPanelApp" `
           -DestinationPath "${{ env.folder }}\ControlPanelApp.zip"
         env:
-          folder: ${{ steps.prep.outputs.zips_folder }}
+          folder: ${{ steps.prep.outputs.Zips_Folder }}
 
       # Wrap up
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: ${{ steps.prep.outputs.zips_folder }}
+          path: ${{ steps.prep.outputs.Zips_Folder }}
           name: artifacts-dotnet
           if-no-files-found: error
 
       - name: Remove the PFX
         # continue-on-error: true # TODO
         run: |
-          $pfx_path = Join-Path -Path "$(Get-Location)" -ChildPath "src/AnalyticsEngine" -AdditionalChildPath SPOInsightsBinaries.pfx
-          Remove-Item -Path $pfx_path
+          Remove-Item -Path "${{ steps.prep.outputs.Pfx_Path }}"
   build_aitracker:
     # NPM ai tracker
     # Build:
