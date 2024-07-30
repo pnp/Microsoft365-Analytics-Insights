@@ -247,17 +247,17 @@ jobs:
       - name: Show downloaded artifacts
         run: ls -R ${{ steps.artifacts.outputs.download-path }}
       - name: Create release
-        uses: actions/create-release@v1
+        uses: ncipollo/release-action
         id: create_release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           draft: true
           prerelease: ${{ github.ref_name == 'dev' }}
-          release_name: ${{ env.BuildLabel }}
-          tag_name: ${{ env.BuildId }}
+          name: ${{ env.BuildLabel }}
+          tag: ${{ env.BuildId }}
           body: Release ${{ env.BuildId }}
-          body_path: CHANGELOG.md
+          # bodyFile:  CHANGELOG.md
       - name: Upload AITrackerInstaller
         uses: actions/upload-release-asset@v1
         env:
