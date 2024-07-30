@@ -143,8 +143,6 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: List output contents
-        run: ls -r ${{ runner.temp }}
       - name: Archive AppInsightsImporter
         run: |
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
@@ -164,8 +162,6 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: List output contents
-        run: ls -r ${{ runner.temp }}
       - name: Archive Office365ActivityImporter
         run: |
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
@@ -187,8 +183,6 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: List output contents
-        run: ls -r ${{ runner.temp }}
       - name: Archive Website
         run: |
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
@@ -203,8 +197,6 @@ jobs:
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:PackageCertificateKeyFile=SPOInsightsBinaries.pfx `
-          -p:PackageCertificatePassword=${{ secrets.PFX_KEY }} `
           -p:OutDir=${{ runner.temp }}\ControlPanelApp `
           -p:OutputPath=${{ env.Configuration }} `
           -p:AllowedReferenceRelatedFileExtensions=none `
@@ -219,8 +211,6 @@ jobs:
           "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: List output contents
-        run: ls -r ${{ runner.temp }}
       - name: Archive ControlPanelApp
         run: Compress-Archive -Force -Path "${{ runner.temp }}\ControlPanelApp" `
           -DestinationPath "${{ env.folder }}\ControlPanelApp.zip"
