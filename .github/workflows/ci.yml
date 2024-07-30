@@ -120,7 +120,7 @@ jobs:
           key: ${{ runner.os }}-${{ env.cache-name }}
       # Configuration files
       - name: Config substitutions
-        uses: microsoft/variable-substitution@v1
+        uses: devops-actions/variable-substitution@v1.2
         with:
           files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
       - name: Restore the application
