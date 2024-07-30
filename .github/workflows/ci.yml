@@ -251,7 +251,7 @@ jobs:
       - name: Install Changelog Generator
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
-        run: github-changelog-generator -u pnp -p Microsoft365-Analytics-Insights
+        run: github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights
         env:
           CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
       - name: Download artifacts
@@ -271,71 +271,71 @@ jobs:
           tag: ${{ env.BuildId }}
           # body: Release ${{ env.BuildId }}
           bodyFile:  CHANGELOG.md
-      - name: Upload Assets
-        uses: alexellis/upload-assets@0.4.1
+      # - name: Upload Assets
+      #   uses: alexellis/upload-assets@0.4.1
+      #   env:
+      #     GITHUB_TOKEN: ${{ github.token }}
+      #     BASE: ${{ steps.artifacts.outputs.download-path }}
+      #   with:
+      #     asset_paths: '["${{ env.BASE }}/drop_dotnet/*", "${{ env.BASE }}/drop_aitracker/*"]'
+
+      - name: Upload AITrackerInstaller
+        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_aitracker/
         with:
-          asset_paths: '["${{ env.BASE }}/drop_dotnet/*", "${{ env.BASE }}/drop_aitracker/*"]'
-
-      # - name: Upload AITrackerInstaller
-      #   uses: actions/upload-release-asset@v1
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #     BASE: ${{ steps.artifacts.outputs.download-path }}/drop_aitracker/
-      #   with:
-      #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-      #     asset_path: ${{ env.BASE}}AITrackerInstaller.zip
-      #     asset_name: AITrackerInstaller.zip
-      #     asset_content_type: application/zip
-      # - name: Upload AppInsightsImporter
-      #   uses: actions/upload-release-asset@v1
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #     BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
-      #   with:
-      #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-      #     asset_path: ${{ env.BASE}}AppInsightsImporter.zip
-      #     asset_name: AppInsightsImporter.zip
-      #     asset_content_type: application/zip
-      # - name: Upload Office365ActivityImporter
-      #   uses: actions/upload-release-asset@v1
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #     BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
-      #   with:
-      #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-      #     asset_path: ${{ env.BASE}}Office365ActivityImporter.zip
-      #     asset_name: Office365ActivityImporter.zip
-      #     asset_content_type: application/zip
-      # - name: Upload Website
-      #   uses: actions/upload-release-asset@v1
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #     BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
-      #   with:
-      #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-      #     asset_path: ${{ env.BASE}}Website.zip
-      #     asset_name: Website.zip
-      #     asset_content_type: application/zip
-      # - name: Upload ControlPanelApp
-      #   uses: actions/upload-release-asset@v1
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #     BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
-      #   with:
-      #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-      #     asset_path: ${{ env.BASE}}ControlPanelApp.zip
-      #     asset_name: ControlPanelApp.zip
-      #     asset_content_type: application/zip
-      # - name: Upload Analytics Reports
-      #   uses: actions/upload-release-asset@v1
-      #   env:
-      #     GITHUB_TOKEN: ${{ github.token }}
-      #     BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
-      #   with:
-      #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-      #     asset_path: ${{ env.BASE}}Analytics Reports.zip
-      #     asset_name: Analytics Reports.zip
-      #     asset_content_type: application/zip
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}AITrackerInstaller.zip
+          asset_name: AITrackerInstaller.zip
+          asset_content_type: application/zip
+      - name: Upload AppInsightsImporter
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}AppInsightsImporter.zip
+          asset_name: AppInsightsImporter.zip
+          asset_content_type: application/zip
+      - name: Upload Office365ActivityImporter
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}Office365ActivityImporter.zip
+          asset_name: Office365ActivityImporter.zip
+          asset_content_type: application/zip
+      - name: Upload Website
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}Website.zip
+          asset_name: Website.zip
+          asset_content_type: application/zip
+      - name: Upload ControlPanelApp
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}ControlPanelApp.zip
+          asset_name: ControlPanelApp.zip
+          asset_content_type: application/zip
+      - name: Upload Analytics Reports
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.BASE}}Analytics Reports.zip
+          asset_name: Analytics Reports.zip
+          asset_content_type: application/zip
