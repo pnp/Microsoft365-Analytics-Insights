@@ -193,7 +193,7 @@ jobs:
         run: |
           Get-ChildItem '.\reports\Usage Analytics\*' `
           -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
-          -Force -DestinationPath "${{ env.folder }}\Analytics Reports.zip"
+          -Force -DestinationPath "${{ env.folder }}\Analytics_Reports.zip"
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
 
@@ -251,7 +251,8 @@ jobs:
       - name: Install Changelog Generator
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
-        run: github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights
+        run: |
+          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights -no-unreleased
         env:
           CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
       - name: Download artifacts
@@ -259,6 +260,14 @@ jobs:
         id: artifacts
       - name: Show downloaded artifacts
         run: ls -R ${{ steps.artifacts.outputs.download-path }}
+      - id: release_label
+        run: |
+          dev_ref=dev
+          if [ "${{ github.ref_name }}" = $dev_ref ]; then
+              echo "LABEL=Testing ${{ env.BuildId }}" >> $GITHUB_ENV
+          else
+              echo "LABEL=Stable ${{ env.BuildId }}" >> $GITHUB_ENV
+          fi
       - name: Create release
         uses: ncipollo/release-action@v1.14.0
         id: create_release
@@ -267,7 +276,7 @@ jobs:
         with:
           draft: true
           prerelease: ${{ github.ref_name == 'dev' }}
-          name: ${{ env.BuildLabel }}
+          name: ${{ env.LABEL }}
           tag: ${{ env.BuildId }}
           # body: Release ${{ env.BuildId }}
           bodyFile:  CHANGELOG.md
@@ -336,6 +345,6 @@ jobs:
           BASE: ${{ steps.artifacts.outputs.download-path }}/drop_dotnet/
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ env.BASE}}Analytics Reports.zip
-          asset_name: Analytics Reports.zip
+          asset_path: ${{ env.BASE}}Analytics_Reports.zip
+          asset_name: Analytics_Reports.zip
           asset_content_type: application/zip
