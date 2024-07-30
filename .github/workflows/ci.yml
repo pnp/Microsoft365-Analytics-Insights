@@ -252,9 +252,7 @@ jobs:
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
         run: |
-          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights --no-unreleased
-        env:
-          CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
+          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights -token ${{ github.token }}
       - name: Download artifacts
         uses: actions/download-artifact@v4
         id: artifacts
