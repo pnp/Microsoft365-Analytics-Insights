@@ -193,10 +193,12 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: ${{ steps.prep.outputs.Zips_Folder }}
+          path: ${{ env.folder }}
           name: artifacts-dotnet
           if-no-files-found: error
-
+        env:
+          folder: ${{ steps.prep.outputs.Zips_Folder }}
+  
       - name: Remove the PFX
         run: |
           Remove-Item -Path "${{ steps.prep.outputs.Pfx_Path }}"
