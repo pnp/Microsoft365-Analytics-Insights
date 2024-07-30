@@ -252,7 +252,7 @@ jobs:
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
         run: |
-          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights -no-unreleased
+          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights --no-unreleased
         env:
           CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
       - name: Download artifacts
@@ -260,7 +260,8 @@ jobs:
         id: artifacts
       - name: Show downloaded artifacts
         run: ls -R ${{ steps.artifacts.outputs.download-path }}
-      - id: release_label
+      - name: Generate release label
+        id: release_label
         run: |
           dev_ref=dev
           if [ "${{ github.ref_name }}" = $dev_ref ]; then
