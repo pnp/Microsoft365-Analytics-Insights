@@ -3,21 +3,14 @@
 Here are some common issues & resolutions for getting Office 365 Advanced Analytics Engine setup.
 
 Contents:
-
-[General Troubleshooting](#general-troubleshooting)
-
-[Getting Problem Logs](#getting-problem-logs)
-
-[Teams, Calls, Events Data Issues](#teams-calls-events-data-issues)
-
-[Network Restrictions for FTPS & SQL Outbound Ports](#network-restrictions-for-ftps--sql-outbound-ports)
-
-[Power BI Refresh Troubleshooting](#power-bi-refresh-troubleshooting)
-
-[Unexpected SharePoint Page Properties](#unexpected-sharepoint-page-properties)
+* [General Troubleshooting](#general-troubleshooting)
+* [Getting Problem Logs](#getting-problem-logs)
+* [Teams, Calls, Events Data Issues](#teams-calls-events-data-issues)
+* [Network Restrictions for FTPS & SQL Outbound Ports](#network-restrictions-for-ftps--sql-outbound-ports)
+* [Power BI Refresh Troubleshooting](#power-bi-refresh-troubleshooting)
+* [Unexpected SharePoint Page Properties](#unexpected-sharepoint-page-properties)
 
 ## General Troubleshooting
-
 Troubleshooting the system involves two steps:
 
 1.  Figure out which imports are working/not-working by detecting a “finished” event for each one.
@@ -56,11 +49,15 @@ On a healthy environment, with all imports enabled you will see (in no particula
 
 Check you can see these messages with this query in Application Insights:
 
-customEvents \| where name == "FinishedSectionImport" or name == "FinishedImportCycle"
+```
+customEvents | where name == "FinishedSectionImport" or name == "FinishedImportCycle"
+```
 
 This will give you all section finished events from both importer jobs. If you just want the activity imports, run this:
 
-customEvents \| where (name == "FinishedSectionImport" or name == "FinishedImportCycle") and operation_Name == "Office365ActivityImporter"
+```
+customEvents | where (name == "FinishedSectionImport" or name == "FinishedImportCycle") and operation_Name == "Office365ActivityImporter"
+```
 
 If you are missing any of those events within a 24-hour period and ImportJobSettings is set to import them, you should follow the below advice to start investigating why.
 
@@ -90,7 +87,7 @@ This data is all imported with the “Office365ActivityImporter” web-job. It i
 -   Activity import
     -   Audit-log import for SharePoint, and other enabled workloads.
 
-#### No Calls Data in Database
+### No Calls Data in Database
 
 If you have no records in the “call_records” table, this could be for any number of reasons.
 
@@ -108,48 +105,47 @@ If call records aren’t being imported into SQL, you need to:
     -   In Application Insights, log analytics: run this query:
         -   To see if the webhook subscription was created ok from the importer web-job:
 
-            traces
+```
+traces | where operation_Name == "Office365ActivityImporter" and (message contains "Verifying call webhook subscription" or message contains "Updated subscription" or message contains "Created subscription")
+```
 
-            \| where operation_Name == "Office365ActivityImporter" and (message contains "Verifying call webhook subscription" or message contains "Updated subscription" or message contains "Created subscription")
+If you want to see webhook subscription failures:
 
-        -   If you want to see webhook subscription failures:
+```
+traces
+| where operation_Name == "Office365ActivityImporter" and message contains "Couldn't create webhook"
+```
 
-            traces
+To see if the webhook has been called (which will add them to the service-bus queue for calls):
 
-            \| where operation_Name == "Office365ActivityImporter" and message contains "Couldn't create webhook"
+```
+traces
+| where operation_Name == "CallRecordWebhookController"
+```
+Check for service-bus processing messages.
 
--   To see if the webhook has been called (which will add them to the service-bus queue for calls):
-
-    traces
-
-    \| where operation_Name == "CallRecordWebhookController"
-
--   Check for service-bus processing messages.
-
-    traces
-
-    \| where message contains "ServiceBus"
+```
+traces
+| where message contains "ServiceBus"
+```
 
 This data will tell you where in the chain the call records are failing.
 
 **Note**: it can take 15-20 minutes for a call webhook to trigger, after a call.
 
 #### No Events Data in Database
-
-Imports
+Check webjobs are running and any exceptions in Application Insights. 
 
 #### “Office365ActivityImporter” Web-Job Restarts
 
 Also seen in logs: “FATAL ERROR: No org URLs found in database!”.
-
 Make sure there is at least one record in the “orgs_urls” table
 
 ![A computer screen shot of a computer screen Description automatically generated](media/489b68d58583c02828a8452bec7f118a.png)
 
 Without anything here, all activity would be imported, so if the table is empty then the web-job aborts execution & hence this error.
 
-#### No Logging in Application Insights
-
+### No Logging in Application Insights
 If you see no data in Application Insights for any of the importer web-jobs like this:
 
 ![A screenshot of a computer Description automatically generated](media/8f2d549e1057f511a921548d93a8bb95.png)
@@ -162,7 +158,7 @@ In this case, we’ve updated the system without migrating the database correctl
 
 Misc Errors
 
-#### Database Schema/Context Model Error
+### Database Schema/Context Model Error
 
 You may see this error:
 
