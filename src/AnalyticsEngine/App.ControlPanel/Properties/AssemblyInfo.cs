@@ -7,9 +7,9 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("SPO Insights Control Panel")]
 [assembly: AssemblyDescription("Manages an SPO Insights installation.")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("Microsoft Premier")]
+[assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("")]
-[assembly: AssemblyCopyright("Copyright © 2021")]
+[assembly: AssemblyCopyright("Copyright © __year__")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
