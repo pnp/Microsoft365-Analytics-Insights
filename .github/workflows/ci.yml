@@ -50,7 +50,7 @@ jobs:
               - 'reports/**'
       - name: Calculate build number
         id: build_number
-        if: steps.changes.outputs.code == 'true'
+        if: steps.changes.outputs.code == 'false'
         run: echo "number=$((${{ vars.BUILD_NUMBER_OFFSET }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
   build_dotnet:
     # Preparation:
