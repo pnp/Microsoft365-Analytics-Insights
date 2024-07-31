@@ -257,7 +257,9 @@ jobs:
       - name: Generate Changelog
         run: |
           git branch
-          last_tag=$(git describe --tags --abbrev=0)
+          if ( ! last_tag=$(git describe --tags --abbrev=0) ); then
+            last_tag = "1410"
+          fi
           echo $last_tag
           github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
             --token ${{ github.token }} \
