@@ -279,8 +279,7 @@ jobs:
         id: artifacts
       - name: Generate release label
         run: |
-          dev_ref=gh-actions
-          if [ "${{ github.ref_name }}" = "$dev_ref" ]; then
+          if [ "${{ github.ref_name }}" != "main" ]; then
             echo "LABEL=Testing build ${{ env.BuildId }}" >> $GITHUB_ENV
           else
             echo "LABEL=Stable build ${{ env.BuildId }}" >> $GITHUB_ENV
