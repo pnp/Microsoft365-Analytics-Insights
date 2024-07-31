@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("WebJob.Office365ActivityImporter.Engine")]
-[assembly: AssemblyCopyright("Copyright ©  2019")]
+[assembly: AssemblyCopyright("Copyright © __year__")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 

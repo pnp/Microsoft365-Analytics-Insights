@@ -7,9 +7,9 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("SPO Insights Office 365 Activity API Importer")]
 [assembly: AssemblyDescription("Inserts Office 365 activity data into a SPO Insights database.")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("Microsoft")]
+[assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("SPOInsights.WebJob.Office365ActivityImport")]
-[assembly: AssemblyCopyright("Copyright © 2019")]
+[assembly: AssemblyCopyright("Copyright © __year__")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
