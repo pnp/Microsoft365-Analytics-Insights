@@ -257,13 +257,12 @@ jobs:
       - name: Generate Changelog
         run: |
           git branch
-          if ( ! last_tag=$(git describe --tags --abbrev=0) ); then
-            last_tag="1410"
+          if ( ! last_tag="--since-tag $(git describe --tags --abbrev=0)" ); then
+            last_tag=""
           fi
-          echo $last_tag
-          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
+          echo $last_tag | xargs github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
             --token ${{ github.token }} \
-            --release-branch ${{ github.ref_name }} --since-tag $last_tag
+            --release-branch ${{ github.ref_name }}
           sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
       - name: Download artifacts
         uses: actions/download-artifact@v4
