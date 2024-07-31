@@ -31,14 +31,24 @@ env:
 jobs:
   setup_build:
     # This step will calculate the build number with an offset
-    # so that build numbers will follow the ones from Azure DevOps
+    # so that build numbers will follow the ones from Azure DevOps.
+    # It will also check that the important folders have been updated.
     runs-on: ubuntu-latest
     outputs:
       build_number: ${{ steps.build_number.outputs.number }}
+      changes_code: ${{ steps.changes.outputs.code == 'true' }}
     steps:
       - name: Calculate build number
         id: build_number
         run: echo "number=$((${{ vars.BUILD_NUMBER_OFFSET }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
+      - uses: dorny/paths-filter@v3
+        name: Check if code has been modified so a build is needed
+        id: changes
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'reports/**'
   build_dotnet:
     # Preparation:
     #   - Get signing certificate
@@ -53,6 +63,7 @@ jobs:
     #   - Publish artifacts
     runs-on: windows-latest
     needs: setup_build
+    if: needs.setup_build.outputs.changes_code == 'true'
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
@@ -219,10 +230,12 @@ jobs:
     #   - Zip files
     #   - Publish artifacts
     runs-on: ubuntu-latest
+    needs: setup_build
+    if: needs.setup_build.outputs.changes_code == 'true'
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-      - name: build AITracker
+      - name: Build AITracker
         run: |
           cd src/SPO/AITracker/TypeScript
           npm ci
