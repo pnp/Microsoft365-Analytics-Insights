@@ -258,7 +258,7 @@ jobs:
         run: |
           git branch
           if ( ! last_tag=$(git describe --tags --abbrev=0) ); then
-            last_tag = "1410"
+            last_tag="1410"
           fi
           echo $last_tag
           github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
