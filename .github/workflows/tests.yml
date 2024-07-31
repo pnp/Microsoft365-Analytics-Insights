@@ -41,7 +41,7 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-      - name: Check if code has been modified so a build is needed
+      - name: Check if the code has been modified so tests must be run
         id: changes
         uses: dorny/paths-filter@v3
         with:
