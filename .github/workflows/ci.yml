@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+  workflow_dispatch:
 
 env:
   Solution_Directory: src\AnalyticsEngine\
@@ -103,6 +104,11 @@ jobs:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
       # Configuration files
+      - name: Year substitution
+        shell: bash
+        run: |
+          year=$(date +%Y)
+          find ./src -name AssemblyInfo.cs | xargs sed -i "s/© __year__/© $year/""
       - name: Config substitutions
         uses: devops-actions/variable-substitution@v1.2
         with:
@@ -253,6 +259,7 @@ jobs:
       - setup_build
       - build_dotnet
       - build_aitracker
+    if: github.ref_name == 'main' || github.ref_name == 'dev'
     permissions: 
       # Required to create tags in the repo
       contents: write
