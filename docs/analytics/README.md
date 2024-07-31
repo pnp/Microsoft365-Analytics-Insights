@@ -1,6 +1,7 @@
 # Activity Analytics
 
 In this section:
+
 - [Description](#description)
 - [Dependent Azure resources](#dependent-azure-resources)
 - [Reports deployment](#reports-deployment)

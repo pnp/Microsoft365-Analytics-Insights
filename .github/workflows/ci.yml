@@ -5,10 +5,299 @@ on:
     branches:
       - main
       - dev
-  workflow_dispatch:
+
+env:
+  Solution_Directory: src\AnalyticsEngine\
+  Build_Platform: Any CPU
+  Build_ProcessorArchitecture: x86
+  ClientID: ${{ secrets.APP_CLIENTID }}
+  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
+  TenantGUID: ${{ secrets.APP_TENANTGUID }}
+  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
+  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
+  CosmosDbTestContainerCurrent: stats
+  CosmosDbTestContainerHistory: history
+  CosmosDbTestDatabaseName: UnitTestDevOps
+  CosmosDb: ${{ secrets.APP_COSMOSDB }}
+  redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
+  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
+  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
+  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
+  StatsApiUrl: ${{ secrets.STATSAPIURL }}
+
 jobs:
-  test:
-    runs-on: windows-latest
+  setup_build:
+    # This step will calculate the build number with an offset
+    # so that build numbers will follow the ones from Azure DevOps.
+    # It will also check that the important folders have been updated.
+    runs-on: ubuntu-latest
+    outputs:
+      build_number: ${{ steps.build_number.outputs.number }}
+      code_changed: ${{ steps.changes.outputs.code == 'true' }}
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
+      - name: Check if code has been modified so a build is needed
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'reports/**'
+      - name: Calculate build number
+        id: build_number
+        run: echo "number=$((${{ vars.BUILD_NUMBER_OFFSET }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
+
+  build_dotnet:
+    # Preparation:
+    #   - Get signing certificate
+    #   - Transform configuration files
+    #   - Restore dependencies
+    # Build:
+    #   - Build .Net projects
+    # Output:
+    #   - Clean .Net builds
+    #   - Copy PS scripts
+    #   - Zip files
+    #   - Publish artifacts
+    runs-on: windows-latest
+    needs: setup_build
+    if: needs.setup_build.outputs.code_changed == 'true'
+    strategy:
+      matrix:
+        configuration: [Release] # [Debug, Release]
+    env:
+      BuildId: ${{ needs.setup_build.outputs.build_number }}
+      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
+    steps:
+      - name: This is ${{ env.BuildLabel }}
+        run: echo ${{ env.BuildId }}
+      - name: Prepare build
+        id: prep
+        shell: bash
+        run: |
+          mkdir -p "${{ env.Zips_Folder }}"
+          echo "ZIPS_FOLDER=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
+          echo "PFX_PATH=${{ env.Pfx_Path }}" >> "$GITHUB_OUTPUT"
+        env:
+          #${{ github.ref_name }} - build ${{ env.BuildId }}
+          Zips_Folder: ${{ runner.temp }}/zips/
+          Pfx_Path: ${{ runner.temp }}/SPOInsightsBinaries.pfx
+      - name: Decode the PFX
+        run: |
+          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
+          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.PFX_PATH }}", $pfx_cert_byte)
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Cache NuGet Packages
+        id: nuget-packages
+        uses: actions/cache@v4
+        env:
+          cache-name: nuget-package-cache
+        with:
+          path: ~\.nuget\packages
+          key: ${{ runner.os }}-${{ env.cache-name }}
+      # Configuration files
+      - name: Config substitutions
+        uses: devops-actions/variable-substitution@v1.2
+        with:
+          files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
+      - name: Restore the application
+        run: msbuild ${{ env.Solution_Directory }} -t:Restore `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform="${{ env.Build_Platform }}" `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
+        env:
+          Configuration: ${{ matrix.configuration }}
+      # Projects building
+      - name: Build WebJob.AppInsightsImporter
+        run: msbuild ${{ env.Solution_Directory }}\WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform="${{ env.Build_Platform }}" `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
+          -p:OutDir=${{ runner.temp }}\AppInsightsImporter `
+          -p:OutputPath=${{ env.Configuration }} `
+          -p:AllowedReferenceRelatedFileExtensions=none `
+          -p:EmitCompilerGeneratedFiles=false
+        env:
+          Configuration: ${{ matrix.configuration }}
+      - name: Archive AppInsightsImporter
+        run: |
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
+          Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
+          -DestinationPath "${{ env.folder }}\AppInsightsImporter.zip"
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+      - name: Build WebJob.Office365ActivityImporter
+        run: msbuild ${{ env.Solution_Directory }}\WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform="${{ env.Build_Platform }}" `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
+          -p:OutDir=${{ runner.temp }}\Office365ActivityImporter `
+          -p:OutputPath=${{ env.Configuration }} `
+          -p:AllowedReferenceRelatedFileExtensions=none `
+          -p:EmitCompilerGeneratedFiles=false
+        env:
+          Configuration: ${{ matrix.configuration }}
+      - name: Archive Office365ActivityImporter
+        run: |
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
+          Copy-Item -Recurse -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS/*" `
+          -Destination "${{ runner.temp }}\Office365ActivityImporter\AutomationPS"
+          Compress-Archive -Force -Path "${{ runner.temp }}\Office365ActivityImporter" `
+          -DestinationPath "${{ env.folder }}\Office365ActivityImporter.zip"
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+      - name: Build Website
+        run: msbuild ${{ env.Solution_Directory }}\Web\Web.csproj `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform="${{ env.Build_Platform }}" `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
+          -p:OutDir=${{ runner.temp }}\Website `
+          -p:OutputPath=${{ env.Configuration }} `
+          -p:AllowedReferenceRelatedFileExtensions=none `
+          -p:EmitCompilerGeneratedFiles=false
+        env:
+          Configuration: ${{ matrix.configuration }}
+      - name: Archive Website
+        run: |
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
+          Compress-Archive -Force -Path "${{ runner.temp }}\Website\_PublishedWebsites\Web" `
+          -DestinationPath "${{ env.folder }}\Website.zip"
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+      - name: Build Installer
+        run: |
+          msbuild ${{ env.Solution_Directory }}\App.ControlPanel\App.ControlPanel.WinForms.csproj `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform="${{ env.Build_Platform }}" `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
+          -p:OutDir=${{ runner.temp }}\ControlPanelApp `
+          -p:OutputPath=${{ env.Configuration }} `
+          -p:AllowedReferenceRelatedFileExtensions=none `
+          -p:EmitCompilerGeneratedFiles=false
+        env:
+          Configuration: ${{ matrix.configuration }}
+      - name: Sign installer
+        run: |
+          & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
+          sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
+          /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
+          "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
+        env:
+          Configuration: ${{ matrix.configuration }}
+      - name: Archive ControlPanelApp
+        run: Compress-Archive -Force -Path "${{ runner.temp }}\ControlPanelApp" `
+          -DestinationPath "${{ env.folder }}\ControlPanelApp.zip"
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+      - name: Archive Reports
+        run: |
+          Get-ChildItem '.\reports\Usage Analytics\*' `
+          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
+          -Force -DestinationPath "${{ env.folder }}\Analytics_Reports.zip"
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+      # Wrap up
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.folder }}
+          name: drop_dotnet
+          if-no-files-found: error
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+  
+      - name: Remove the PFX
+        run: |
+          Remove-Item -Path "${{ steps.prep.outputs.PFX_PATH }}"
+
+  build_aitracker:
+    # NPM ai tracker
+    # Build:
+    #   - Build AI Tracker
+    # Output:
+    #   - Clean AI Tracker
+    #   - Zip files
+    #   - Publish artifacts
+    runs-on: ubuntu-latest
+    needs: setup_build
+    if: needs.setup_build.outputs.code_changed == 'true'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Build AITracker
+        run: |
+          cd src/SPO/AITracker/TypeScript
+          npm ci
+          npm run build
+          cd ../..
+          rm -rf AITracker/TypeScript
+          zip -r AITrackerInstaller.zip AITracker
+      # Wrap up
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: src/SPO/AITrackerInstaller.zip
+          name: drop_aitracker
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      - setup_build
+      - build_dotnet
+      - build_aitracker
+    permissions: 
+      # Required to create tags in the repo
+      contents: write
+    env:
+      BuildId: ${{ needs.setup_build.outputs.build_number }}
+      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Install Changelog Generator
+        run: sudo gem install github_changelog_generator
+      - name: Generate Changelog
+        run: |
+          git branch
+          if ( ! last_tag="--since-tag $(git describe --tags --abbrev=0)" ); then
+            last_tag=""
+          fi
+          echo $last_tag | xargs github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
+            --token ${{ github.token }} \
+            --release-branch ${{ github.ref_name }}
+          sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        id: artifacts
+      - name: Generate release label
+        run: |
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            echo "LABEL=Testing build ${{ env.BuildId }}" >> $GITHUB_ENV
+          else
+            echo "LABEL=Stable build ${{ env.BuildId }}" >> $GITHUB_ENV
+          fi
+      - name: Create release
+        uses: ncipollo/release-action@v1.14.0
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.artifacts.outputs.download-path }}
+        with:
+          draft: ${{ vars.PUBLISH_RELEASES == 'false' }}
+          prerelease: ${{ github.ref_name == 'dev' || github.ref_name == 'gh-actions' }}
+          makeLatest: ${{ github.ref_name == 'main' }}
+          name: ${{ env.LABEL }}
+          tag: ${{ env.BuildId }}
+          commit: ${{ github.sha }}
+          bodyFile:  CHANGELOG.md
+          generateReleaseNotes: true
+          artifacts: "${{ env.BASE }}/drop_dotnet/*.zip,${{ env.BASE }}/drop_aitracker/*.zip"
+          artifactContentType: application/zip
