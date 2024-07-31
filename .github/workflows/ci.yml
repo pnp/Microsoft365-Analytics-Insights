@@ -299,7 +299,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           BASE: ${{ steps.artifacts.outputs.download-path }}
         with:
-          draft: true
+          draft: ${{ vars.PUBLISH_RELEASES == 'false' }}
           prerelease: ${{ github.ref_name == 'dev' || github.ref_name == 'gh-actions' }}
           makeLatest: ${{ github.ref_name == 'main' }}
           name: ${{ env.LABEL }}
