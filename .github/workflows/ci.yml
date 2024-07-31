@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build_number: ${{ steps.build_number.outputs.number }}
-      code_changed: ${{ steps.changes.outputs.code == 'true' }}
+      code_changed: ${{ true || steps.changes.outputs.code == 'true' }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
