@@ -267,6 +267,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-tags: true
       - name: Install Changelog Generator
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
