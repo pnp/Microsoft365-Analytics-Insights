@@ -255,13 +255,15 @@ jobs:
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
         run: |
-          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights --token ${{ github.token }}
+          last_tag=$(git describe --tags --abbrev=0)
+          github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
+            --token ${{ github.token }} \
+            --release-branch ${{ github.ref_name }} --since-tag $last_tag
           sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
       - name: Download artifacts
         uses: actions/download-artifact@v4
         id: artifacts
       - name: Generate release label
-        id: release_label
         run: |
           dev_ref=gh-actions
           if [ "${{ github.ref_name }}" = "$dev_ref" ]; then
