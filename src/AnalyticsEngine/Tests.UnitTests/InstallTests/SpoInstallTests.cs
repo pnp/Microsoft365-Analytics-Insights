@@ -1,4 +1,5 @@
-﻿using App.ControlPanel.Engine.SPO.SiteTrackerInstaller;
+﻿using App.ControlPanel.Engine.SPO;
+using App.ControlPanel.Engine.SPO.SiteTrackerInstaller;
 using Microsoft.Extensions.Logging;
 using Microsoft.SharePoint.Client;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -29,7 +30,7 @@ namespace Tests.UnitTests
                 var c = new TrackerInstallConfig("1232", "SPOInsights", new byte[] { byte.MaxValue });
                 var installer = new SiteAITrackerInstaller<FakeWeb>(adaptor, _logger);
 
-                await installer.InstallWebComponentsToSite(c);
+                await installer.InstallWebComponentsToSite(c, "https://localhost");
                 await installer.UninstallWebComponentsFromSite(c.DocLibTitle);
             }
         }
@@ -41,7 +42,8 @@ namespace Tests.UnitTests
             System.IO.File.WriteAllText(tempFile.FullName, "AITracker contents");
             var fakeInstaller = new FakeSiteListInstaller(_logger);
 
-            await fakeInstaller.InstallToSites(new string[] { "https://contoso.sharepoint.com", "https://contoso.sharepoint.com/sites/site2" }, tempFile, "1232", "SPOInsights");
+            await fakeInstaller.InstallToSites(new string[] { "https://contoso.sharepoint.com", "https://contoso.sharepoint.com/sites/site2" }, 
+                tempFile, "1232", "SPOInsights", "https://localhost");
 
             try
             {
@@ -58,14 +60,15 @@ namespace Tests.UnitTests
 #endif
         public async Task SPOSiteInstallAdaptorTests()
         {
-            const string URL = "https://m365x72460609.sharepoint.com/sites/adoptifytests";
-            using (var adaptor = new SpoSiteInstallAdaptor(URL, _logger))
+            const string URL_SP = "https://moderncomms933270.sharepoint.com/sites/ProjectFalcon-UXtest";
+            const string URL_WEB_APP = "https://localhost:44307";
+            using (var adaptor = new SpoSiteInstallAdaptor(URL_SP, _logger))
             {
                 var c = new TrackerInstallConfig("1232", "SPOInsights", System.Text.Encoding.UTF8.GetBytes("AITrackerUpload"));
                 var installer = new SiteAITrackerInstaller<Web>(adaptor, _logger);
 
-                await installer.InstallWebComponentsToSite(c);
-                await installer.InstallWebComponentsToSite(c);   // Overwrite
+                await installer.InstallWebComponentsToSite(c, URL_WEB_APP);
+                await installer.InstallWebComponentsToSite(c, URL_WEB_APP);   // Overwrite
                 await installer.UninstallWebComponentsFromSite(c.DocLibTitle);
             }
         }

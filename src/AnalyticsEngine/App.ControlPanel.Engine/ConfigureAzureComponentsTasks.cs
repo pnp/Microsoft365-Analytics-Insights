@@ -72,7 +72,7 @@ namespace App.ControlPanel.Engine
                 // Install AITracker from downloaded source
                 var aiTrackerDownload = solutionSources.GetSolutionComponentLocation(SoftwareComponent.AITracker);
 
-                var spTasks = new SharePointWebComponentsInstallJob(Config, _logger);
+                var spTasks = new SharePointWebComponentsInstallJob(Config, _logger, webApp.Data.DefaultHostName);
                 await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString);
             }
         }

@@ -26,8 +26,6 @@ env:
   CosmosDbTestContainerHistory: history
   CosmosDbTestDatabaseName: UnitTestDevOps
   CosmosDb: ${{ secrets.APP_COSMOSDB }}
-  # SPOInsightsEntities
-  # UnitTestingOffice365Services
   redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}

@@ -13,6 +13,10 @@ import { AI_TRACKER_VER } from './AiTrackerConstants';
 import { ClickData, spPageContextInfo } from './Definitions';
 import { LocalStoragePageStateManager } from './PageProps/SpoImplementation/LocalStoragePageStateManager';
 import { DuplicateClickHandler } from './DuplicateClickHandler';
+import { AITrackerConfig } from './Models';
+import { LocalStorageUtils } from './LocalStorageUtils';
+import { ConfigHandler } from './Config/ConfigHandler';
+import { ApiConfigLoader } from './Config/ApiConfigLoader';
 
 export { };
 
@@ -20,10 +24,14 @@ var ai: AppInsightsWrapper | null = null;
 var pageTracker: PageViewTracker | null = null;
 const clickHandler: DuplicateClickHandler = new DuplicateClickHandler();
 
+var scriptConfig: AITrackerConfig = AITrackerConfig.GetDefault();
+debug("Default config set until we get one from either local cache or App Service API");
+
 declare global {
     interface Window {
         _spPageContextInfo: spPageContextInfo,
         appInsightsConnectionStringHash: string | undefined,
+        insightsWebRootUrlHash: string | undefined,
         modernPageNav: Function
     }
 }
@@ -133,9 +141,9 @@ function initAppInsights(): void {
         if (pageTracker === null) {
             // Use local storage for remembering pages properties sent for
             let pageStateManager: BasePageStateManager;
-            if (LocalStoragePageStateManager.isLocalStorageAvailable()) {
+            if (LocalStorageUtils.isLocalStorageAvailable()) {
                 pageStateManager = new LocalStoragePageStateManager();
-                log("Using LocalStoragePageStateManager for page metadata upload logic");
+                debug("Using LocalStoragePageStateManager for page metadata upload logic");
             }
             else {
                 pageStateManager = new InMemoryPageStateManager();
@@ -224,8 +232,30 @@ function checkIfUserSearched(): void {
     }
 }
 
+function loadAndSetScriptConfig(): Promise<void> {
+    if (window.insightsWebRootUrlHash && window.insightsWebRootUrlHash !== "" && window.appInsightsConnectionStringHash) {
+
+        const apiBaseUrl = atob(window.insightsWebRootUrlHash);
+        const m = new ConfigHandler(new ApiConfigLoader(apiBaseUrl, window.appInsightsConnectionStringHash));
+        return m.getConfigFromCacheOrAppService().then((r: AITrackerConfig) => {
+            scriptConfig = r;
+            log("Script config loaded: " + JSON.stringify(scriptConfig));
+            
+            // Set page update interval from loaded config
+            pageTracker?.setPageUpdateIntervalMinutes(r.metadataRefreshMinutes);
+        }).catch(() => error("Failed to load config from API. Using default config."));
+
+    }
+    else {
+        error("No valid API URL or App Insights connection string found in header!");
+        return Promise.reject("No valid API URL or App Insights connection string found in header!");
+    }
+}
 
 // Do the things that can't wait until document loaded or if this JS file loads after page-load (modern pages, through SPFx extension loading the file)
 // Can't wait until pageload, as AppInsights needs to start timing page-load before that.
 initPageControls();
 initAppInsights();
+loadAndSetScriptConfig();
+
+debug("AITracker init complete");
