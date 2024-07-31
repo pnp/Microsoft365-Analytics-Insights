@@ -33,6 +33,21 @@ env:
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
 
 jobs:
+  setup_build:
+    # Will check that the interesting folders have been updated.
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.changes.outputs.code == 'true' }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Check if code has been modified so a build is needed
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - 'src/**'
   unit_tests:
     # Tests job
     # Preparation:
@@ -43,6 +58,8 @@ jobs:
     # Test:
     #   - Run test suite
     runs-on: windows-latest
+    needs: setup_build
+    if: needs.setup_build.outputs.code_changed == 'true'
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
