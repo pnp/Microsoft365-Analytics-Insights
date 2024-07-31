@@ -108,7 +108,7 @@ jobs:
         shell: bash
         run: |
           year=$(date +%Y)
-          find ./src -name AssemblyInfo.cs | xargs sed -i "s/© __year__/© $year/""
+          find ./src -name AssemblyInfo.cs | xargs sed -i "s/© __year__/© $year/"
       - name: Config substitutions
         uses: devops-actions/variable-substitution@v1.2
         with:
