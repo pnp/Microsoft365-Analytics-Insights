@@ -6,6 +6,17 @@ on:
       - main
       - dev
   workflow_dispatch:
+    inputs:
+      force_build:
+        default: false
+        required: false
+        type: boolean
+        description: Bypass code changed check on build
+      force_release:
+        default: false
+        required: false
+        type: boolean
+        description: Bypass branch check on release
 
 env:
   Solution_Directory: src\AnalyticsEngine\
@@ -36,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build_number: ${{ steps.build_number.outputs.number }}
-      code_changed: ${{ true || steps.changes.outputs.code == 'true' }}
+      code_changed: ${{ inputs.force_build || steps.changes.outputs.code == 'true' }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -259,7 +270,7 @@ jobs:
       - setup_build
       - build_dotnet
       - build_aitracker
-    if: true || github.ref_name == 'main' || github.ref_name == 'dev'
+    if: inputs.force_release || github.ref_name == 'main' || github.ref_name == 'dev'
     permissions: 
       # Required to create tags in the repo
       contents: write
@@ -304,12 +315,12 @@ jobs:
           BASE: ${{ steps.artifacts.outputs.download-path }}
         with:
           draft: ${{ vars.PUBLISH_RELEASES == 'false' }}
-          prerelease: ${{ github.ref_name == 'dev' || github.ref_name == 'gh-actions' }}
+          prerelease: ${{ github.ref_name == 'dev' }}
           makeLatest: ${{ github.ref_name == 'main' }}
           name: ${{ env.LABEL }}
           tag: ${{ env.BuildId }}
           commit: ${{ github.sha }}
           bodyFile:  CHANGELOG.md
-          generateReleaseNotes: true
+          generateReleaseNotes: false
           artifacts: "${{ env.BASE }}/drop_dotnet/*.zip,${{ env.BASE }}/drop_aitracker/*.zip"
           artifactContentType: application/zip
