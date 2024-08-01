@@ -1,11 +1,16 @@
-name: ci
+name: pr
 
 on:
-  push:
-    branches:
-      - main
-      - dev
+  pull_request:
+    types:
+      - ready_for_review
   workflow_dispatch:
+    inputs:
+      force_build:
+        default: false
+        required: false
+        type: boolean
+        description: Bypass code changed check
 
 env:
   Solution_Directory: src\AnalyticsEngine\
@@ -35,15 +40,21 @@ jobs:
     # It will also check that the important folders have been updated.
     runs-on: ubuntu-latest
     outputs:
-      build_number: ${{ steps.build_number.outputs.number }}
+      code_changed: ${{ inputs.force_build || steps.changes.outputs.code == 'true' }}
     steps:
-      - name: Calculate build number
-        id: build_number
-        run: echo "number=$((${{ vars.BUILD_NUMBER_OFFSET }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Check if code has been modified so a build is needed
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'reports/**'
 
   build_dotnet:
     # Preparation:
-    #   - Get signing certificate
     #   - Transform configuration files
     #   - Restore dependencies
     # Build:
@@ -55,29 +66,22 @@ jobs:
     #   - Publish artifacts
     runs-on: windows-latest
     needs: setup_build
+    if: needs.setup_build.outputs.code_changed == 'true'
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
     env:
-      BuildId: ${{ needs.setup_build.outputs.build_number }}
-      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
+      BuildId: ${{ github.run_number }}
+      BuildLabel: PR ${{ github.run_number }}
     steps:
-      - name: This is ${{ env.BuildLabel }}
-        run: echo ${{ env.BuildId }}
       - name: Prepare build
         id: prep
         shell: bash
         run: |
           mkdir -p "${{ env.Zips_Folder }}"
           echo "ZIPS_FOLDER=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
-          echo "PFX_PATH=${{ env.Pfx_Path }}" >> "$GITHUB_OUTPUT"
         env:
           Zips_Folder: ${{ runner.temp }}/zips/
-          Pfx_Path: ${{ runner.temp }}/SPOInsightsBinaries.pfx
-      - name: Decode the PFX
-        run: |
-          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.PFX_PATH }}", $pfx_cert_byte)
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
@@ -182,14 +186,6 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
-      - name: Sign installer
-        run: |
-          & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
-          sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
-          /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
-          "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
-        env:
-          Configuration: ${{ matrix.configuration }}
       - name: Archive ControlPanelApp
         run: Compress-Archive -Force -Path "${{ runner.temp }}\ControlPanelApp" `
           -DestinationPath "${{ env.folder }}\ControlPanelApp.zip"
@@ -212,10 +208,6 @@ jobs:
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
   
-      - name: Remove the PFX
-        run: |
-          Remove-Item -Path "${{ steps.prep.outputs.PFX_PATH }}"
-
   build_aitracker:
     # NPM ai tracker
     # Build:
@@ -226,6 +218,7 @@ jobs:
     #   - Publish artifacts
     runs-on: ubuntu-latest
     needs: setup_build
+    if: needs.setup_build.outputs.code_changed == 'true'
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -244,66 +237,3 @@ jobs:
           path: src/SPO/AITrackerInstaller.zip
           name: drop_aitracker
           if-no-files-found: error
-
-  release:
-    runs-on: ubuntu-latest
-    needs:
-      - setup_build
-      - build_dotnet
-      - build_aitracker
-    permissions: 
-      # Required to create tags in the repo
-      contents: write
-    env:
-      BuildId: ${{ needs.setup_build.outputs.build_number }}
-      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        if: false
-        with:
-          fetch-depth: 0
-      - name: Install Changelog Generator
-        if: false
-        run: sudo gem install github_changelog_generator
-      - name: Generate Changelog
-        if: false
-        run: |
-          git branch
-          last_tag=""
-          extra=""
-          if ( git describe --tags --abbrev=0 ); then
-            last_tag=$(git describe --tags --abbrev=0)
-            extra="--since-tag $last_tag"
-          fi
-          echo $extra | xargs github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
-            --token ${{ github.token }} \
-            --release-branch ${{ github.ref_name }}
-          sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        id: artifacts
-      - name: Generate release label
-        run: |
-          if [ "${{ github.ref_name }}" != "main" ]; then
-            echo "LABEL=Testing build ${{ env.BuildId }}" >> $GITHUB_ENV
-          else
-            echo "LABEL=Stable build ${{ env.BuildId }}" >> $GITHUB_ENV
-          fi
-      - name: Create release
-        uses: ncipollo/release-action@v1.14.0
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}
-        with:
-          draft: ${{ vars.PUBLISH_RELEASES != 'true' }}
-          prerelease: ${{ github.ref_name != 'main' }}
-          makeLatest: ${{ github.ref_name == 'main' }}
-          name: ${{ env.LABEL }}
-          tag: ${{ env.BuildId }}
-          commit: ${{ github.sha }}
-          # bodyFile:  CHANGELOG.md
-          generateReleaseNotes: true
-          artifacts: "${{ env.BASE }}/drop_dotnet/*.zip,${{ env.BASE }}/drop_aitracker/*.zip"
-          artifactContentType: application/zip
