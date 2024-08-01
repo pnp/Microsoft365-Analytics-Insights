@@ -151,7 +151,8 @@ jobs:
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
       - name: Build WebJob.Office365ActivityImporter
-        run: msbuild ${{ env.Solution_Directory }}\WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj `
+        run: |
+          msbuild ${{ env.Solution_Directory }}\WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj `
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
@@ -161,11 +162,15 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
         env:
           Configuration: ${{ matrix.configuration }}
+      - name: Copy Automation scripts
+        run: |
+          Copy-Item -Verbose -Force -Recurse `
+          -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS" `
+          -Destination "${{ runner.temp }}\Office365ActivityImporter\"
       - name: Archive Office365ActivityImporter
         run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
-          Copy-Item -Recurse -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS/*" `
-          -Destination "${{ runner.temp }}\Office365ActivityImporter\AutomationPS"
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue `
+          "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
           Compress-Archive -Force -Path "${{ runner.temp }}\Office365ActivityImporter" `
           -DestinationPath "${{ env.folder }}\Office365ActivityImporter.zip"
         env:
@@ -183,7 +188,8 @@ jobs:
           Configuration: ${{ matrix.configuration }}
       - name: Archive Website
         run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue `
+          "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
           Compress-Archive -Force -Path "${{ runner.temp }}\Website\_PublishedWebsites\Web" `
           -DestinationPath "${{ env.folder }}\Website.zip"
         env:
