@@ -11,6 +11,12 @@ on:
     types: 
       - opened
   workflow_dispatch:
+    inputs:
+      force_run:
+        default: false
+        required: false
+        type: boolean
+        description: Bypass code changed check
 
 env:
   Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
@@ -31,7 +37,7 @@ env:
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
 
 jobs:
-  setup_build:
+  setup_tests:
     # Will check that the interesting folders have been updated.
     runs-on: ubuntu-latest
     outputs:
@@ -56,14 +62,19 @@ jobs:
     # Test:
     #   - Run test suite
     runs-on: windows-latest
-    needs: setup_build
-    if: needs.setup_build.outputs.code_changed == 'true'
+    needs: setup_tests
+    if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+      - name: Run AI Tracker tests
+        run: |
+          cd src/SPO/AITracker/TypeScript
+          npm ci
+          npm run test
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
       - name: Cache NuGet Packages
@@ -92,7 +103,6 @@ jobs:
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
         env:
           Configuration: ${{ matrix.configuration }}
-      # Execute all unit tests in the solution
       - name: Execute unit tests
         uses: jesusfer/vstest-action@main
         with:
