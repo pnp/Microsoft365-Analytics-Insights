@@ -64,6 +64,13 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Run AI Tracker tests
+        run: |
+          cd src/SPO/AITracker/TypeScript
+          npm ci
+          npm run test
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
       - name: Cache NuGet Packages
@@ -92,7 +99,6 @@ jobs:
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
         env:
           Configuration: ${{ matrix.configuration }}
-      # Execute all unit tests in the solution
       - name: Execute unit tests
         uses: jesusfer/vstest-action@main
         with:
