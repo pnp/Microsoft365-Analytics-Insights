@@ -11,12 +11,12 @@ on:
         default: false
         required: false
         type: boolean
-        description: Bypass code changed check on build
+        description: Bypass code changed check
       force_release:
         default: false
         required: false
         type: boolean
-        description: Bypass branch check on release
+        description: Bypass branch check
 
 env:
   Solution_Directory: src\AnalyticsEngine\
@@ -286,11 +286,14 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        if: false
         with:
           fetch-depth: 0
       - name: Install Changelog Generator
+        if: false
         run: sudo gem install github_changelog_generator
       - name: Generate Changelog
+        if: false
         run: |
           git branch
           last_tag=""
@@ -320,13 +323,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           BASE: ${{ steps.artifacts.outputs.download-path }}
         with:
-          draft: ${{ vars.PUBLISH_RELEASES == 'false' }}
+          draft: ${{ vars.PUBLISH_RELEASES != 'true' }}
           prerelease: ${{ github.ref_name != 'main' }}
           makeLatest: ${{ github.ref_name == 'main' }}
           name: ${{ env.LABEL }}
           tag: ${{ env.BuildId }}
           commit: ${{ github.sha }}
-          bodyFile:  CHANGELOG.md
-          generateReleaseNotes: false
+          # bodyFile:  CHANGELOG.md
+          generateReleaseNotes: true
           artifacts: "${{ env.BASE }}/drop_dotnet/*.zip,${{ env.BASE }}/drop_aitracker/*.zip"
           artifactContentType: application/zip
