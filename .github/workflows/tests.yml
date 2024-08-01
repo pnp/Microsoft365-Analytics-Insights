@@ -6,10 +6,8 @@ on:
       - main
       - dev
   pull_request:
-    branches:
-      - dev
     types: 
-      - opened
+      - ready_for_review
   workflow_dispatch:
     inputs:
       force_run:
