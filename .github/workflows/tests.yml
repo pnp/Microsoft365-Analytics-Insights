@@ -16,7 +16,7 @@ on:
         default: false
         required: false
         type: boolean
-        description: Bypass code changed check for testing
+        description: Bypass code changed check
 
 env:
   Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
