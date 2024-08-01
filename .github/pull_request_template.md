@@ -1,6 +1,6 @@
 # Description
 
-> **Please remember to always target the branch 'dev' in your pull requests.**
+> **Please remember to always target `dev` in your pull requests.**
 
 > Please keep pull requests light. They will be easier to merge.
 
