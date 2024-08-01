@@ -14,12 +14,6 @@ namespace Web.AnalyticsWeb
                 url: "Account/{action}/{id}",
                 defaults: new { Controller = "Account", action = "Index", id = UrlParameter.Optional }
             );
-
-            //routes.MapRoute(
-            //    name: "Home",
-            //    url: "{action}",
-            //    defaults: new { controller = "Home", action = "TeamsAuth", id = UrlParameter.Optional }
-            //    );
             routes.MapRoute(
                 name: "Home",
                 url: "{action}",

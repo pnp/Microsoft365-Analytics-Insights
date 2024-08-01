@@ -12,8 +12,6 @@ namespace Common.Entities.Redis.Auth
     {
         private const string TOKEN_KEY_PREFIX = "UserToken_";
 
-
-
         public static async Task SaveToken(this CacheConnectionManager connectionManager, ClaimsPrincipal signedInUser, RefreshOAuthToken authToken)
         {
             await connectionManager.SetString(GetRedisKey(signedInUser), authToken.ToString());
@@ -28,6 +26,5 @@ namespace Common.Entities.Redis.Auth
         {
             return TOKEN_KEY_PREFIX + user.Identity.Name;
         }
-
     }
 }

@@ -3,6 +3,7 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.InstallerTasks.Adoptify;
 using App.ControlPanel.Engine.InstallerTasks.Adoptify.Models;
+using App.ControlPanel.Engine.InstallerTasks.Tasks;
 using App.ControlPanel.Engine.Models;
 using App.ControlPanel.Engine.SharePointModelBuilder;
 using App.ControlPanel.Engine.SharePointModelBuilder.ValueLookups;
@@ -541,6 +542,59 @@ namespace Tests.UnitTests
 
                 await job.Install();
             }
+        }
+
+        [TestMethod]
+        public void Automation_Next_Tuesday()
+        {
+            var thisDayWasTuesday = new DateTime(2024, 7, 23, 1, 0, 0, DateTimeKind.Utc);
+            var aSunday = AutomationAccountTask.Next(thisDayWasTuesday, DayOfWeek.Sunday);
+            Assert.IsTrue(aSunday.DayOfWeek == DayOfWeek.Sunday);
+            Assert.IsTrue(aSunday == new DateTime(2024, 7, 28, 1, 0, 0, DateTimeKind.Utc));
+        }
+
+        [TestMethod]
+        public void Automation_Next_Sunday()
+        {
+            var thisDayWasSunday = new DateTime(2024, 7, 28, 1, 0, 0, DateTimeKind.Utc);
+            var aSunday = AutomationAccountTask.Next(thisDayWasSunday, DayOfWeek.Sunday);
+            Assert.IsTrue(aSunday.DayOfWeek == DayOfWeek.Sunday);
+            Assert.IsTrue(aSunday == new DateTime(2024, 8, 4, 1, 0, 0, DateTimeKind.Utc));
+        }
+
+        [TestMethod]
+        public void Automation_Next_Sunday_Midnight()
+        {
+            var thisDayWasSunday = new DateTime(2024, 7, 28, 0, 0, 0, DateTimeKind.Utc);
+            var aSunday = AutomationAccountTask.Next(thisDayWasSunday, DayOfWeek.Sunday);
+            Assert.IsTrue(aSunday.DayOfWeek == DayOfWeek.Sunday);
+            Assert.IsTrue(aSunday == new DateTime(2024, 8, 4, 0, 0, 0, DateTimeKind.Utc));
+        }
+
+        [TestMethod]
+        public void Automation_NextSundayAt_UTC()
+        {
+            var now = DateTime.UtcNow;
+            var nextSunday = AutomationAccountTask.Next(now, DayOfWeek.Sunday);
+            
+            var nextSunday1pm = AutomationAccountTask.NextSundayAt(13);
+            Assert.IsTrue(nextSunday1pm.DayOfWeek == DayOfWeek.Sunday);
+            Assert.IsTrue(nextSunday1pm.Hour == 13);
+            Assert.IsTrue(nextSunday1pm.Minute == 0);
+            Assert.IsTrue(nextSunday1pm.Date == nextSunday.Date);
+        }
+
+        [TestMethod]
+        public void Automation_NextSundayAt_Local()
+        {
+            var now = DateTime.Now;
+            var nextSunday = AutomationAccountTask.Next(now, DayOfWeek.Sunday);
+
+            var nextSunday4pm = AutomationAccountTask.NextSundayAt(16);
+            Assert.IsTrue(nextSunday4pm.DayOfWeek == DayOfWeek.Sunday);
+            Assert.IsTrue(nextSunday4pm.Hour == 16);
+            Assert.IsTrue(nextSunday4pm.Minute == 0);
+            Assert.IsTrue(nextSunday4pm.Date == nextSunday.Date);
         }
     }
 

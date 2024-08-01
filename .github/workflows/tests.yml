@@ -1,0 +1,115 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - dev
+    types: 
+      - opened
+  workflow_dispatch:
+    inputs:
+      force_run:
+        default: false
+        required: false
+        type: boolean
+        description: Bypass code changed check
+
+env:
+  Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
+  Build_Platform: anycpu
+  Build_ProcessorArchitecture: x86
+  ClientID: ${{ secrets.APP_CLIENTID }}
+  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
+  TenantGUID: ${{ secrets.APP_TENANTGUID }}
+  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
+  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
+  CosmosDbTestContainerCurrent: stats
+  CosmosDbTestContainerHistory: history
+  CosmosDbTestDatabaseName: UnitTestDevOps
+  CosmosDb: ${{ secrets.APP_COSMOSDB }}
+  redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
+  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
+  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+
+jobs:
+  setup_tests:
+    # Will check that the interesting folders have been updated.
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.changes.outputs.code == 'true' }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Check if the code has been modified so tests must be run
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - 'src/**'
+  unit_tests:
+    # Tests job
+    # Preparation:
+    #   - Transform configuration files
+    #   - Restore dependencies
+    # Build:
+    #   - Build .Net projects
+    # Test:
+    #   - Run test suite
+    runs-on: windows-latest
+    needs: setup_tests
+    if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
+    strategy:
+      matrix:
+        configuration: [Release] # [Debug, Release]
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Run AI Tracker tests
+        run: |
+          cd src/SPO/AITracker/TypeScript
+          npm ci
+          npm run test
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Cache NuGet Packages
+        id: nuget-packages
+        uses: actions/cache@v4
+        env:
+          cache-name: nuget-package-cache
+        with:
+          path: ~\.nuget\packages
+          key: ${{ runner.os }}-${{ env.cache-name }}
+      - name: Config substitution - Unit tests
+        uses: microsoft/variable-substitution@v1
+        with:
+          files: '${{ env.Solution_Directory }}\App.Release.config'
+      - name: Restore the application
+        run: msbuild ${{ env.Solution_Directory }} -t:Restore `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform=${{ env.Build_Platform }} `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
+        env:
+          Configuration: ${{ matrix.configuration }}
+      - name: Build solution
+        run: msbuild ${{ env.Solution_Directory }} `
+          -p:Configuration=${{ env.Configuration }} `
+          -p:Platform=${{ env.Build_Platform }} `
+          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
+        env:
+          Configuration: ${{ matrix.configuration }}
+      - name: Execute unit tests
+        uses: jesusfer/vstest-action@main
+        with:
+          testAssembly: Tests.UnitTests.dll
+          searchFolder: ${{ env.Solution_Directory }}\bin\${{ env.Configuration }}\
+          runInParallel: true
+          vstestLocationMethod: location
+          vstestLocation: C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\Extensions\\TestPlatform\\vstest.console.exe
+        env:
+          Configuration: ${{ matrix.configuration }}

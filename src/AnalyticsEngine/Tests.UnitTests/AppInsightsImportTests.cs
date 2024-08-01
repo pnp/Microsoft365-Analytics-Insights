@@ -83,7 +83,7 @@ namespace Tests.UnitTests
                         }
                     }
                 };
-                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), 10);
+                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), 10, new AppConfig());
                 var saveResultsEmpty = await pageUpdateManager.SaveAll(pageUpdatesEmpty);
                 Assert.IsTrue(saveResultsEmpty.Count == 0);     // Should have no URLs updated because nothing to do - no custom props or taxonomy fields
 
@@ -179,7 +179,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync(); var randoGuid = Guid.NewGuid();
 
 
-                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), 1);      // Allow 1 update per thread
+                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), 1, new AppConfig());      // Allow 1 update per thread
                 var pageUpdates = new List<PageUpdateEventAppInsightsQueryResult>();
 
                 // Add a bunch of updates
@@ -234,7 +234,7 @@ namespace Tests.UnitTests
 
                 await db.SaveChangesAsync();
 
-                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), 1);      // Allow 1 update per thread
+                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), 1, new AppConfig());      // Allow 1 update per thread
                 var pageUpdates = new List<PageUpdateEventAppInsightsQueryResult>();
 
                 // Add a bunch of updates
@@ -289,7 +289,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync();
 
 
-                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), LOOPS);
+                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), LOOPS, new AppConfig());
                 var pageUpdates = new List<PageUpdateEventAppInsightsQueryResult>();
 
                 dynamic testPropsUpdate = new ExpandoObject();
@@ -442,7 +442,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync();
 
                 // Insert new
-                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer());
+                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig());
                 var propsString1 = @"
                 {
                     ""PageLikes"": [
@@ -574,7 +574,7 @@ namespace Tests.UnitTests
                 db.urls.Add(urlNotNeedingUpdate);
                 await db.SaveChangesAsync();
 
-                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer());
+                var pageUpdateManager = new PageUpdateManager(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig());
 
                 // Add random props to both updates
                 var randoPropName = "Prop" + DateTime.Now.Ticks;
@@ -1034,7 +1034,7 @@ namespace Tests.UnitTests
                     });
                 }
 
-                await clicksToSave.SaveAllEventTypesToSql(telemetry);
+                await clicksToSave.SaveAllEventTypesToSql(telemetry, new AppConfig());
                 var lastClickAfterTest = await db.Clicks.OrderByDescending(h => h.ID).Take(1).FirstOrDefaultAsync() ?? new Common.Entities.Entities.WebTraffic.Clicks() { ID = int.MaxValue };
 
                 // Load & verify
@@ -1110,7 +1110,7 @@ namespace Tests.UnitTests
                     AppInsightsTimestamp = dt,
                 });
 
-                await clicksToSave.SaveAllEventTypesToSql(telemetry);
+                await clicksToSave.SaveAllEventTypesToSql(telemetry, new AppConfig());
                 clicksToSave.Rows.Clear();
 
                 // Duplicate in new save set
@@ -1128,7 +1128,7 @@ namespace Tests.UnitTests
                 });
 
                 // Make sure doesn't crash
-                await clicksToSave.SaveAllEventTypesToSql(telemetry);
+                await clicksToSave.SaveAllEventTypesToSql(telemetry, new AppConfig());
             }
         }
 

@@ -1,7 +1,7 @@
 import { AppInsightsWrapper } from "./AppInsightsWrapper";
 import { ClearLastPageStatsVal, GetLastPageStatsVal, GetLastTrackedPageVal, SetLastPageStatsVal } from "./Cookies";
 import { getSPRequestDuration } from "./DataFunctions";
-import { debug, error, log, warn } from "./Logger";
+import { debug, error, log } from "./Logger";
 import TimeMe from 'timeme.js'
 import { PagePropertyManager } from "./PageProps/PagePropertyManager";
 import { spPageContextInfo } from "./Definitions";
@@ -50,6 +50,10 @@ export class PageViewTracker {
 
         // Clear cookie
         ClearLastPageStatsVal();
+    }
+
+    setPageUpdateIntervalMinutes(interval: number) {
+        this._pagePropLoader.setPageUpdateIntervalMinutes(interval);
     }
 
     // Save last page stats to cookie, then track page view same as classic page

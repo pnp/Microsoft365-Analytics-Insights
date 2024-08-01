@@ -2,7 +2,6 @@
 using Common.Entities.Models;
 using Common.Entities.Redis;
 using Common.Entities.Redis.Auth;
-
 using Microsoft.Owin.Security;
 using Microsoft.Owin.Security.Cookies;
 using Microsoft.Owin.Security.OpenIdConnect;
@@ -34,23 +33,7 @@ namespace Web.AnalyticsWeb
                     ResponseType = "code id_token",
                     TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
                     {
-                        // For demo purposes only, see below
-                        ValidateIssuer = false
-
-                        // In a real multi-tenant app, you would add logic to determine whether the
-                        // issuer was from an authorized tenant
-                        //ValidateIssuer = true,
-                        //IssuerValidator = (issuer, token, tvp) =>
-                        //{
-                        //  if (MyCustomTenantValidation(issuer))
-                        //  {
-                        //    return issuer;
-                        //  }
-                        //  else
-                        //  {
-                        //    throw new SecurityTokenInvalidIssuerException("Invalid issuer");
-                        //  }
-                        //}
+                        ValidateIssuer = true
                     },
                     Notifications = new OpenIdConnectAuthenticationNotifications()
                     {
@@ -68,6 +51,5 @@ namespace Web.AnalyticsWeb
                     }
                 });
         }
-
     }
 }

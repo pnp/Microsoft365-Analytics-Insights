@@ -5,6 +5,9 @@ using System.Linq;
 
 namespace Common.Entities.Config
 {
+    /// <summary>
+    /// Config for the entire solution
+    /// </summary>
     public class AppConfig
     {
         public AppConfig()
@@ -38,8 +41,6 @@ namespace Common.Entities.Config
             }
             this.WebAppURL = ConfigurationManager.AppSettings.Get("WebAppURL");
 
-
-
             var ts = TimeSpan.FromDays(1);     // default
             TimeSpan.TryParse(ConfigurationManager.AppSettings.Get("ChunkSize"), out ts);
             this.ChunkSize = ts;
@@ -48,7 +49,6 @@ namespace Common.Entities.Config
             int daysBeforeNowToDownload = 6;
             int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out daysBeforeNowToDownload);
             this.DaysBeforeNowToDownload = daysBeforeNowToDownload;
-
 
 
             this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
@@ -60,14 +60,26 @@ namespace Common.Entities.Config
 
             this.StatsApiSecret = ConfigurationManager.AppSettings.Get("StatsApiSecret");
             this.StatsApiUrl = ConfigurationManager.AppSettings.Get("StatsApiUrl");
+
+            var metadataRefreshMinutes = ConfigurationManager.AppSettings.Get("MetadataRefreshMinutes");
+            if (!string.IsNullOrEmpty(metadataRefreshMinutes))
+            {
+                int metadataRefreshMinutesInt = 24 * 60; // 24 hours
+                int.TryParse(metadataRefreshMinutes, out metadataRefreshMinutesInt);
+                if (metadataRefreshMinutesInt < -1)
+                {
+                    this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
+                }
+            }
         }
 
 
         public string AppInsightsContainerName { get; set; }
         public string AppInsightsApiKey { get; set; }
         public string AppInsightsAppId { get; set; }
-
         public string AppInsightsConnectionString { get; set; }
+
+        public int MetadataRefreshMinutes { get; set; } = 24 * 60; // 24 hours
 
         public string ClientID { get; set; }
         public string ClientSecret { get; set; }
@@ -86,13 +98,8 @@ namespace Common.Entities.Config
         /// <summary>
         /// Default {AADInstance}/{TenantGUID} (https://login.microsoftonline.com/0000-000-00000/)
         /// </summary>
-        public string Authority
-        {
-            get
-            {
-                return this.AADInstance + this.TenantGUID;
-            }
-        }
+        public string Authority => this.AADInstance + this.TenantGUID;
+         
 
         /// <summary>
         /// Time-span to query API for in a single request
@@ -106,7 +113,7 @@ namespace Common.Entities.Config
         {
             get
             {
-                string[] tokens = ContentTypesString.Split(";".ToCharArray(), StringSplitOptions.RemoveEmptyEntries);
+                var tokens = ContentTypesString.Split(";".ToCharArray(), StringSplitOptions.RemoveEmptyEntries);
                 return tokens.ToList();
             }
         }
@@ -117,13 +124,7 @@ namespace Common.Entities.Config
         public string CognitiveEndpoint { get; set; }
         public string CognitiveKey { get; set; }
 
-        public bool IsValidCognitiveConfig
-        {
-            get
-            {
-                return !(string.IsNullOrEmpty(this.CognitiveEndpoint) || string.IsNullOrEmpty(this.CognitiveKey));
-            }
-        }
+        public bool IsValidCognitiveConfig => !(string.IsNullOrEmpty(this.CognitiveEndpoint) || string.IsNullOrEmpty(this.CognitiveKey));
 
         public ImportTaskSettings ImportJobSettings { get; set; }
 
@@ -131,6 +132,5 @@ namespace Common.Entities.Config
         public string StatsApiUrl { get; set; } = null;
 
         public AppConnectionStrings ConnectionStrings { get; set; } = null;
-
     }
 }

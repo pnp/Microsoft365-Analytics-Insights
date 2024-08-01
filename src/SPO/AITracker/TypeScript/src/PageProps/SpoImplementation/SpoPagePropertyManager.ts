@@ -1,4 +1,4 @@
-import { spApiJson } from "../../Api";
+import { getApiReturnJson } from "../../Api";
 import { CommentsListData, PageLikesListData, ListItemPropsResponse, PageComment, LikesUserEntity } from "../../Definitions";
 import { LOGGING_PREFIX, debug } from "../../Logger";
 import { PageProps } from "../Models/PageProps";
@@ -21,7 +21,7 @@ export class SpoPagePropertyManager extends PagePropertyManager {
         const apiUrlPageLikesUrl = this._webAbsoluteUrl +
             "/_api/web/lists/getbytitle('" + listTitle + "')/items(" + pageItemId + ")/likedByInformation?$expand=likedby";
 
-        return spApiJson<ListItemPropsResponse<PageLikesListData>>(apiUrlPageLikesUrl)
+        return getApiReturnJson<ListItemPropsResponse<PageLikesListData>>(apiUrlPageLikesUrl)
             .then((likesResponse: ListItemPropsResponse<PageLikesListData>) => {
 
                 // Build clean likes list (without all the meta tags etc)
@@ -41,7 +41,7 @@ export class SpoPagePropertyManager extends PagePropertyManager {
         const apiUrlPageComments = this._webAbsoluteUrl +
             "/_api/web/lists/getbytitle('" + listTitle + "')/items(" + pageItemId + ")/comments?$expand=replies";
 
-        return spApiJson<ListItemPropsResponse<CommentsListData>>(apiUrlPageComments)
+        return getApiReturnJson<ListItemPropsResponse<CommentsListData>>(apiUrlPageComments)
             .then((commentsResponse: ListItemPropsResponse<CommentsListData>) => {
                 console.debug(LOGGING_PREFIX + "comments response: " + commentsResponse.d.results.length);
                 console.debug(commentsResponse);
@@ -65,7 +65,7 @@ export class SpoPagePropertyManager extends PagePropertyManager {
         const apiUrlPageProps = this._webAbsoluteUrl +
             "/_api/web/lists/getbytitle('" + listTitle + "')/items(" + pageItemId + ")/properties";
 
-        return spApiJson<ListItemPropsResponse<any>>(apiUrlPageProps)
+        return getApiReturnJson<ListItemPropsResponse<any>>(apiUrlPageProps)
             .then((r: any) => this.processPageProps(url, r));
     }
 

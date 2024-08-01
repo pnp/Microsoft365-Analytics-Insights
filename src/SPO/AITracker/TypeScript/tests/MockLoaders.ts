@@ -1,17 +1,20 @@
+import exp from "constants";
 import { IPageDataService, LikesUserEntity, PageComment } from "../src/Definitions";
 import { log } from "../src/Logger";
 import { PageProps } from "../src/PageProps/Models/PageProps";
 import { PagePropertyManager } from "../src/PageProps/PagePropertyManager";
 import { BasePageStateManager } from "../src/PageProps/PageState";
+import { AITrackerConfig } from "../src/Models";
+import { ConfigLoadResult, IConfigLoader } from "../src/Config/interfaces";
 
 export class TestPagePropertyManager extends PagePropertyManager {
     loadLikes(listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
-        const c : LikesUserEntity = { email: "testuser@whatevs.local", creationDate: new Date(), id: "1" }
+        const c: LikesUserEntity = { email: "testuser@whatevs.local", creationDate: new Date(), id: "1" }
 
         return Promise.resolve([c]);
     }
     loadComments(listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
-        const c : PageComment = { email: "testuser@whatevs.local", comment: "Test comment", isReply: false, id: "1", creationDate: new Date() }
+        const c: PageComment = { email: "testuser@whatevs.local", comment: "Test comment", isReply: false, id: "1", creationDate: new Date() }
         return Promise.resolve([c])
     }
     _testValForProps: string;
@@ -33,10 +36,19 @@ export class TestPagePropertyManager extends PagePropertyManager {
 }
 
 export class TestPageDataService implements IPageDataService {
+    setPageUpdateInterval(interval: number): void {
+        throw new Error("Method not implemented.");
+    }
 
     recordPageProps(props: PageProps): void {
 
         const pageProps = JSON.stringify(props);
         log(`TestPageDataService: Pretending to register page properties '${pageProps}'`);
+    }
+}
+
+export class TestConfigLoader implements IConfigLoader {
+    loadConfig(): Promise<ConfigLoadResult> {
+        return Promise.resolve({ config: AITrackerConfig.GetDefault(), success: true });
     }
 }
