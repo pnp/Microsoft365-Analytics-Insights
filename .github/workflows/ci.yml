@@ -315,7 +315,7 @@ jobs:
           BASE: ${{ steps.artifacts.outputs.download-path }}
         with:
           draft: ${{ vars.PUBLISH_RELEASES == 'false' }}
-          prerelease: ${{ github.ref_name == 'dev' }}
+          prerelease: ${{ github.ref_name != 'main' }}
           makeLatest: ${{ github.ref_name == 'main' }}
           name: ${{ env.LABEL }}
           tag: ${{ env.BuildId }}
