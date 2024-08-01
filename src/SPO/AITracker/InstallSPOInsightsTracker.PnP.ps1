@@ -10,28 +10,25 @@ Param
 	[switch] $UninstallOnly
 )
 
-function Get-ScriptDirectory
-{
-  	$Invocation = (Get-Variable MyInvocation -Scope 1).Value
-  	Split-Path $Invocation.MyCommand.Path
+function Get-ScriptDirectory {
+	$Invocation = (Get-Variable MyInvocation -Scope 1).Value
+	Split-Path $Invocation.MyCommand.Path
 }
 
 # Install custom action in all sites listed in the config
-function ProcessScriptWithConfig ($configFileName)
-{
-    # Load config
-    try
-	{
-        $config = Get-Content ($scriptPath + "\" + $configFileName) -Raw -ErrorAction Stop | ConvertFrom-Json
-        Write-Host ("Read configuration for environment name '" + ($config.EnvironmentName) + "'...")
+function ProcessScriptWithConfig ($configFileName) {
+
+	# Load config and sanity check
+	try {
+		$config = Get-Content ($scriptPath + "\" + $configFileName) -Raw -ErrorAction Stop | ConvertFrom-Json
+		Write-Host ("Read configuration for environment name '" + ($config.EnvironmentName) + "'...")
 	}
-	catch
-	{
+	catch {
 		Write-Host "FATAL ERROR: Cannot open config-file '$configFileName'" -ForegroundColor red -BackgroundColor Black
 		return
 	}
 
-	# App Insights Key
+	# App Insights Key. Check and encode to base64
 	if ($config.ApplicationInsightsConnectionString -eq $null) {
 		Write-Host "FATAL ERROR: No property value with name 'ApplicationInsightsConnectionString' in '$configFileName'. Is this config file an old one? We use Application Insights connection-strings instead of just instrumentation keys since Sep 2023" -ForegroundColor red -BackgroundColor Black
 		return
@@ -39,45 +36,46 @@ function ProcessScriptWithConfig ($configFileName)
 	$appInsightsConnectionStringBytes = [System.Text.Encoding]::UTF8.GetBytes($config.ApplicationInsightsConnectionString)
 	$appInsightsConnectionStringEncoded = [Convert]::ToBase64String($appInsightsConnectionStringBytes)
 
+	# Solution website base URL. Check and encode to base64
+	if ($config.SolutionWebsiteBaseUrl -eq $null) {
+		Write-Host "FATAL ERROR: No property value with name 'SolutionWebsiteBaseUrl' in '$configFileName' (eg 'https://o365analyticscontoso.azurewebsites.net/'). Is this config file an old one? This setting is required since July 2024" -ForegroundColor red -BackgroundColor Black
+		return
+	}
+	$solutionWebsiteBaseUrlStringBytes = [System.Text.Encoding]::UTF8.GetBytes($config.SolutionWebsiteBaseUrl)
+	$solutionWebsiteBaseUrlStringEncoded = [Convert]::ToBase64String($solutionWebsiteBaseUrlStringBytes)
+
 	# Destination params
 	$sourceFileRelative = $config.SourceFileRelativeDestination
 	$targetFolder = $config.TargetFolderName
 
 	# Output what we're going to do
-	if ($UninstallOnly.IsPresent -ne $true)
-	{
+	if ($UninstallOnly.IsPresent -ne $true) {
 		$msg = "Adding AITracker to the following sites:"
 	}
-	else 
-	{
+	else {
 		$msg = "Removing AITracker from the following sites:"
 	}
 
 	Write-Output $msg
 
-	foreach ($siteCollectionRootWebUrl in $config.TargetSites)
-	{
+	foreach ($siteCollectionRootWebUrl in $config.TargetSites) {
 		Write-Output " + $siteCollectionRootWebUrl"
 	}
 
 	Write-Output ""
 
-	if ($UninstallOnly.IsPresent -ne $true)
-	{
+	if ($UninstallOnly.IsPresent -ne $true) {
 		# Loop each site-collection in config
-		foreach ($siteCollectionRootWebUrl in $config.TargetSites)
-		{
-            Write-Host "Processing site: $siteCollectionRootWebUrl..."
+		foreach ($siteCollectionRootWebUrl in $config.TargetSites) {
+			Write-Host "Processing site: $siteCollectionRootWebUrl..."
 			InstallAITrackerToSiteCollection $siteCollectionRootWebUrl $config
 		}
 		$msg = "Script finished"
 	}
-	else
-	{		
+	else {		
 		# Loop each site-collection in config
-		foreach ($siteCollectionRootWebUrl in $config.TargetSites)
-		{
-            Write-Host "Processing site: $siteCollectionRootWebUrl..."
+		foreach ($siteCollectionRootWebUrl in $config.TargetSites) {
+			Write-Host "Processing site: $siteCollectionRootWebUrl..."
 			UninstallAITrackerFromSiteCollection $siteCollectionRootWebUrl $config
 		}
 		
@@ -86,26 +84,21 @@ function ProcessScriptWithConfig ($configFileName)
 	}
 
 	Write-Host ""	
-    Write-Host $msg -ForegroundColor Green -BackgroundColor Black
+	Write-Host $msg -ForegroundColor Green -BackgroundColor Black
 }
 
 # Install in a specific site-collection
-function InstallAITrackerToSiteCollection($siteCollectionRootWebUrl, $config)
-{
+function InstallAITrackerToSiteCollection($siteCollectionRootWebUrl, $config) {
 	# Set vars
 	$sourceFile = $siteCollectionRootWebUrl + $sourceFileRelative
 
-	# Connect to site collection. 
-	try {
-		Connect-PnPOnline -Url $siteCollectionRootWebUrl -UseWebLogin 
-	}
-	catch {
-		Write-Host "Got unexpected error authenticating to SharePoint. Aborting script." -BackgroundColor Red
-		break
-	}	
+
+	# Auth to SharePoint
+	Connect-PnPOnline $siteCollectionRootWebUrl -Interactive
 
 	$msg = "Successfuly connected to site: " + $siteCollectionRootWebUrl
 	write-output $msg 
+	
 
 	$Context = Get-PnPContext
 	$web = Get-PnPWeb
@@ -115,8 +108,7 @@ function InstallAITrackerToSiteCollection($siteCollectionRootWebUrl, $config)
 	# Create SPO Insights document library if it doesn't already exist
 	$List = Confirm-SPODocumentLibrary -libName $config.SPOInsightDocLibTitle -libDescription "SPO Insight Asset Library"	
 
-	if ($null -ne $List)
-	{
+	if ($null -ne $List) {
 		# Upload JS to library in site-collection
 		# Read AITracker.js contents
 		$aiTrackerFileName = ($scriptPath + "\AITracker.js")				
@@ -124,34 +116,30 @@ function InstallAITrackerToSiteCollection($siteCollectionRootWebUrl, $config)
 		# check if AITracker.js already exists
 		$files = Find-PnPFile -List $config.SPOInsightDocLibTitle -Match "AITracker.js"
 		
-		if ($files.Count -gt 0)
-		{
+		if ($files.Count -gt 0) {
 			Write-host "Removing previous AITracker.js instance(s)..." -ForegroundColor Yellow
 			
 			# normally there should not be more than 1 file 
-			foreach ($f in $files)
-			{
+			foreach ($f in $files) {
 				# force check-in (in case file is checked out)
 				Set-PnPFileCheckedIn -Url $f.ServerRelativeUrl
 				Remove-PnPFile -ServerRelativeUrl $f.ServerRelativeUrl -Force
 			}			
 		}
-		else
-		{
+		else {
 			# Assuming we are running the script as a site collection admin, we are going to see all files in the library...
 			#Write-Host "AITracker.js doesn't exist for user $username! Let's upload it..."
 			
 			Write-Host "AITracker.js doesn't exist! Let's upload it..."
 		}
 						
-		if ($List.EnableMinorVersions)
-		{
-			Add-PnPFile -Path $aiTrackerFileName -Folder $config.SPOInsightDocLibTitle -Publish
+		if ($List.EnableMinorVersions) {
+			$f = Add-PnPFile -Path $aiTrackerFileName -Folder $config.SPOInsightDocLibTitle -Publish
 		}	
-		else 
-		{
-			Add-PnPFile -Path $aiTrackerFileName -Folder $config.SPOInsightDocLibTitle
+		else {
+			$f = Add-PnPFile -Path $aiTrackerFileName -Folder $config.SPOInsightDocLibTitle
 		}
+		Write-Host "AITracker.js uploaded to site:"  $siteCollectionRootWebUrl "in document library: " $config.SPOInsightDocLibTitle "..." -ForegroundColor Green
 
 		# Break security inheritance 
 		Set-PnPList -Identity $config.SPOInsightDocLibTitle -BreakRoleInheritance -ClearSubscopes
@@ -167,26 +155,20 @@ function InstallAITrackerToSiteCollection($siteCollectionRootWebUrl, $config)
 
 		AddAITrackerCustomActionToWeb($web)
 	}
-	else 
-	{
+	else {
 		$msg = "Unexpected outcome. Unable to ensure existence of SPOInsightsAssets document library for site: '" + $siteCollectionRootWebUrl + "'"
 		write-output $msg	
 	}
-		
-	Disconnect-PnPOnline
 }
 
 # Uninstall in a specific site-collection
-function UninstallAITrackerFromSiteCollection($siteCollectionRootWebUrl, $config)
-{	
-	try 
-	{
+function UninstallAITrackerFromSiteCollection($siteCollectionRootWebUrl, $config) {	
+	try {
 		# Set vars
 		$sourceFile = $siteCollectionRootWebUrl + $sourceFileRelative
-
-		# Connect to site collection. 	
-		Connect-PnPOnline -Url $siteCollectionRootWebUrl -UseWebLogin
 	
+		# Auth to SharePoint
+		Connect-PnPOnline $siteCollectionRootWebUrl -Interactive
 		$msg = "Successfuly connected to site: " + $siteCollectionRootWebUrl
 		write-output $msg 
 	
@@ -198,8 +180,7 @@ function UninstallAITrackerFromSiteCollection($siteCollectionRootWebUrl, $config
 		# Check whether SPO Insights document library exists
 		$List = Confirm-SPODocumentLibrary -libName $config.SPOInsightDocLibTitle -readOnly
 	
-		if ($List -ne $null)
-		{
+		if ($List -ne $null) {
 			Write-Host "Destination list for AITracker '" $config.SPOInsightDocLibTitle "' exists already. Leaving it for now..."
 			
 			# Check if file exists on the site.
@@ -208,20 +189,17 @@ function UninstallAITrackerFromSiteCollection($siteCollectionRootWebUrl, $config
 			# check if AITracker.js already exists
 			$files = Find-PnPFile -List $config.SPOInsightDocLibTitle -Match "AITracker.js"
 	
-			if ($files.Count -gt 0)
-			{
+			if ($files.Count -gt 0) {
 				Write-host "Removing AITracker.js..." -ForegroundColor Yellow
 				
 				# normally there should not be more than 1 file 
-				foreach ($f in $files)
-				{
+				foreach ($f in $files) {
 					# force check-in (in case file is checked out)
 					Set-PnPFileCheckedIn -Url $f.ServerRelativeUrl
 					Remove-PnPFile -ServerRelativeUrl $f.ServerRelativeUrl -Force
 				}			
 			}
-			else 
-			{
+			else {
 				$msg = "AITracker.js does not exist on site '" + $siteCollectionRootWebUrl + "'. Nothing to uninstall."
 				Write-Output 
 			}			
@@ -233,18 +211,14 @@ function UninstallAITrackerFromSiteCollection($siteCollectionRootWebUrl, $config
 	
 			RemoveAITrackerCustomActionFromWeb($web)
 		}
-		else
-		{
+		else {
 			#Execute if list does not exist
 			$msg = "List '" + $config.SPOInsightDocLibTitle + "' does not exist. Nothing to remove."
 			Write-Host $msg -ForegroundColor Yellow
 			return
 		}
-	
-		Disconnect-PnPOnline
 	}
-	catch 
-	{
+	catch {
 		$msg = "UninstallAITrackerFromSiteCollection: Unexpected error has occurred while connecting to site '" + $siteCollectionRootWebUrl + "'."
 		Write-Output $msg
 
@@ -256,23 +230,18 @@ function UninstallAITrackerFromSiteCollection($siteCollectionRootWebUrl, $config
 }
 
 # check if a document library exists in a site, optionally create it if does not exist
-function Confirm-SPODocumentLibrary ($libName, $libDescription, [switch] $readOnly)
-{
+function Confirm-SPODocumentLibrary ($libName, $libDescription, [switch] $readOnly) {
 	$lib = $null		
 
-	try 
-	{
+	try {
 		$lib = Get-PnPList -Identity $libName
 
-		if (($lib.Title -eq $libName) -and ($lib.BaseTemplate -eq 101))
-		{
+		if (($lib.Title -eq $libName) -and ($lib.BaseTemplate -eq 101)) {
 			$msg = "Document library by the name of '" + $libName + "' already exists in site '" + $lib.ParentWebUrl + "'. No need to re-create."
 			write-output $msg
 		}
-		else 
-		{
-			if (!$readOnly)
-			{
+		else {
+			if (!$readOnly) {
 				$msg = "Creating new document library: " + $libName
 				write-output $msg
 
@@ -281,8 +250,7 @@ function Confirm-SPODocumentLibrary ($libName, $libDescription, [switch] $readOn
 			}			
 		}		
 	}
-	catch 
-	{
+	catch {
 		$msg = "Error occurred while ensuring existence of document library: " + $libName
 		Write-Output $msg
 		$msg = "ERROR MESSAGE: " + $_.Exception.Message
@@ -294,138 +262,130 @@ function Confirm-SPODocumentLibrary ($libName, $libDescription, [switch] $readOn
 
 
 # Removes stuff from a site.
-function RemoveAITrackerCustomActionFromWeb($web)
-{
+function RemoveAITrackerCustomActionFromWeb($web) {
 	$aiTrackerDecription = "SPO Insights AITracker"
 
 	# Remove legacy AITracker custom-actions
-    RemoveCustomActionByDescription $web "Core.EmbedJavaScriptJSOM" "ScriptLink"
+	RemoveCustomActionByDescription $web "Core.EmbedJavaScriptJSOM" "ScriptLink"
 
 	# Remove current AITracker custom-actions
-    RemoveCustomActionByDescription $web $aiTrackerDecription "ScriptLink"
+	RemoveCustomActionByDescription $web $aiTrackerDecription "ScriptLink"
 
-    # Remove modern UI extension too
-    RemoveCustomActionByDescription $web $aiModernUITrackerDecription "ClientSideExtension.ApplicationCustomizer"
+	# Remove modern UI extension too
+	RemoveCustomActionByDescription $web $aiModernUITrackerDecription "ClientSideExtension.ApplicationCustomizer"
 
-    # Check web sub-webs recursively
-    #Write-Host ("Checking sub-webs for site '"+ $web.Title + "'...")
-    foreach($subWeb in $web.Webs)
-    {
-        RemoveAITrackerCustomActionFromWeb($subWeb)
-    }
+	# Check web sub-webs recursively
+	#Write-Host ("Checking sub-webs for site '"+ $web.Title + "'...")
+	foreach ($subWeb in $web.Webs) {
+		RemoveAITrackerCustomActionFromWeb($subWeb)
+	}
 }
 
 
-function RemoveCustomActionByDescription($web, $description, $location)
-{
+function RemoveCustomActionByDescription($web, $description, $location) {
 	# Load site data. Pretend we've just deleted a web-action so we enter the loop once at least.
-    $loopActionCheck = $true
+	$loopActionCheck = $true
 	$deletedAction = $false;
 	
 	#Get-PnPCustomAction -Scope All | ? Location -eq ScriptLink -and Description -eq $description | Remove-PnPCustomAction
-#	$actions = Get-PnPCustomAction -Scope All | ? (Location -eq $location) -and (Description -eq $description)
+	#	$actions = Get-PnPCustomAction -Scope All | ? (Location -eq $location) -and (Description -eq $description)
 
-    # Loop all actions are deleted. Can't enumerate a collection that's deleted from
-    while ($loopActionCheck)
-    {
-        $thisWebActions = $web.UserCustomActions
-        $subWebs = $web.Webs
-        $Context.Load($subWebs)
-        $Context.Load($thisWebActions)
-        $Context.ExecuteQuery()
+	# Loop all actions are deleted. Can't enumerate a collection that's deleted from
+	while ($loopActionCheck) {
+		$thisWebActions = $web.UserCustomActions
+		$subWebs = $web.Webs
+		$Context.Load($subWebs)
+		$Context.Load($thisWebActions)
+		$Context.ExecuteQuery()
 
-        # find any previous custom actions of the same type & remove
-        foreach ($action in $thisWebActions) {
+		# find any previous custom actions of the same type & remove
+		foreach ($action in $thisWebActions) {
 
-            if (($action.Description -eq $description) -and ($action.Location -eq $location)) {
+			if (($action.Description -eq $description) -and ($action.Location -eq $location)) {
 
-                $action.DeleteObject()
-                $deletedAction = $true
+				$action.DeleteObject()
+				$deletedAction = $true
 
-                Write-Host "Removed custom-action with description '$description' from "$web.Url"." -ForegroundColor Yellow
-			    $Context.ExecuteQuery();
-                break
-            }
-        }
+				Write-Host "Removed custom-action with description '$description' from "$web.Url"." -ForegroundColor Yellow
+				$Context.ExecuteQuery();
+				break
+			}
+		}
 
-        # Did we delete an action?
-        if ($deletedAction -eq $true)
-        {
-            # Go around again (and reset deleted flag).
-            $loopActionCheck = $true
-        }
-        else
-        {
-            $loopActionCheck = $false;
-        }
-        $deletedAction = $false;
-    }
+		# Did we delete an action?
+		if ($deletedAction -eq $true) {
+			# Go around again (and reset deleted flag).
+			$loopActionCheck = $true
+		}
+		else {
+			$loopActionCheck = $false;
+		}
+		$deletedAction = $false;
+	}
 }
 
 # Add actions to SPWeb
-function AddAITrackerCustomActionToWeb($web)
-{
+function AddAITrackerCustomActionToWeb($web) {
 	$aiTrackerDecription = "SPO Insights AITracker"
 
 	# Remove legacy AITracker custom-actions
-    RemoveCustomActionByDescription $web "Core.EmbedJavaScriptJSOM" "ScriptLink"
+	RemoveCustomActionByDescription $web "Core.EmbedJavaScriptJSOM" "ScriptLink"
 
 	# Remove current AITracker custom-actions
-    RemoveCustomActionByDescription $web $aiTrackerDecription "ScriptLink"
+	RemoveCustomActionByDescription $web $aiTrackerDecription "ScriptLink"
 
-	 # Generate JS to inject into SharePoint pages
+	# Generate JS to inject into SharePoint pages
 	$scriptBlock = @"
 	var headID = document.getElementsByTagName("head")[0];var newScript = document.createElement("script");newScript.type = "text/javascript";newScript.src = "
 "@
 
-    $scriptBlock += $sourceFile + '?ver='+ (Get-Date).Ticks
-    $scriptBlock += '";headID.appendChild(newScript);';
+	$scriptBlock += $sourceFile + '?ver=' + (Get-Date).Ticks
+	$scriptBlock += '";headID.appendChild(newScript);';
 
-    # Insert action into host header + the AI key variable.
-    $scriptBlock += 'var appInsightsConnectionStringHash = "' + $appInsightsConnectionStringEncoded + '";'
+	# Insert action into host header + the AI key variable.
+	$scriptBlock += 'var appInsightsConnectionStringHash = "' + $appInsightsConnectionStringEncoded + '";'
+
+	# Insert root 
+	$scriptBlock += 'var insightsWebRootUrlHash = "' + $solutionWebsiteBaseUrlStringEncoded + '";'
 	
 	#Add-PnPCustomAction -Description $description -Location "ScriptLink" -scr $scriptBlock
 
-    # Add new Action
+	# Add new Action
 	$thisWebActions = $web.UserCustomActions
-    $newAction = $thisWebActions.Add()
-    $newAction.Description = $aiTrackerDecription
-    $newAction.ScriptBlock = $scriptBlock
-    $newAction.Location = "ScriptLink"
+	$newAction = $thisWebActions.Add()
+	$newAction.Description = $aiTrackerDecription
+	$newAction.ScriptBlock = $scriptBlock
+	$newAction.Location = "ScriptLink"
 	$newAction.Update();
 	
-    try
-    {
-        $Context.ExecuteQuery()
-        Write-Host ("Inserted custom-action into web: '" + ($web.Url) + "' with description '$aiTrackerDecription'...") -ForegroundColor Green
-    }
-    catch
-    {
-        Write-Host "WARNING: Failed to configure custom actions - custom scripts enabled? Run 'Set-SPOsite https://[tenant].sharepoint.com/sites/site -DenyAddAndCustomizePages 0' to enable customisations" -ForegroundColor Yellow
+	try {
+		$Context.ExecuteQuery()
+		Write-Host ("Inserted custom-action into web: '" + ($web.Url) + "' with description '$aiTrackerDecription'...") -ForegroundColor Green
+	}
+	catch {
+		Write-Host "WARNING: Failed to configure custom actions - custom scripts enabled? Run 'Set-SPOsite https://[tenant].sharepoint.com/sites/site -DenyAddAndCustomizePages 0' to enable customisations" -ForegroundColor Yellow
 
 		# Sites must have customisations enabled.
-        # Connect-SPOService -Url https://m365x818801-admin.sharepoint.com/
-        # Set-SPOsite https://m365x818801.sharepoint.com/sites/SPOInsightsModern -DenyAddAndCustomizePages 0
+		# Connect-SPOService -Url https://m365x818801-admin.sharepoint.com/
+		# Set-SPOsite https://m365x818801.sharepoint.com/sites/SPOInsightsModern -DenyAddAndCustomizePages 0
 
-    }
+	}
 
 	# Add modern UI custom action to this web too.
 	AddModernUIAITrackerCustomActionToWeb($web)
 
-    # Check web sub-webs recursively
-    foreach($subWeb in $web.Webs)
-    {
+	# Check web sub-webs recursively
+	foreach ($subWeb in $web.Webs) {
 		Write-Host
 		AddAITrackerCustomActionToWeb($subWeb)
-    }
+	}
 }
 
 # Add ModernUI solution to web
-function AddModernUIAITrackerCustomActionToWeb($web)
-{
+function AddModernUIAITrackerCustomActionToWeb($web) {
 
 	# Remove current AITracker custom-actions
-    RemoveCustomActionByDescription $web $aiModernUITrackerDecription "ClientSideExtension.ApplicationCustomizer"
+	RemoveCustomActionByDescription $web $aiModernUITrackerDecription "ClientSideExtension.ApplicationCustomizer"
 
 	# NOTE - using direct CSOM here (rather than Add-PnPCustomAction) for now, due to https://github.com/SharePoint/PnP-PowerShell/issues/1048
 	$customActions = $web.UserCustomActions
@@ -438,48 +398,48 @@ function AddModernUIAITrackerCustomActionToWeb($web)
 	$custAction.ClientSideComponentId = "a4e24884-9cfd-41ac-87af-747a47055f25"
 
 	# Include execution DT
-	$dt = Get-Date -Format "dd-MM-yyyy:HH-mm-ss"	
-	$custAction.ClientSideComponentProperties = "{""appInsightsConnectionStringHash"":""" + $appInsightsConnectionStringEncoded + """, ""cacheToken"":""" + $dt + """}"
+	$dt = Get-Date -Format "dd-MM-yyyy:HH-mm-ss"
 
-	
+	# Build the properties string
+	$custAction.ClientSideComponentProperties = "{""appInsightsConnectionStringHash"":""" + $appInsightsConnectionStringEncoded + """, " + 
+	"""insightsWebRootUrlHash"":""" + $solutionWebsiteBaseUrlStringEncoded + """, ""cacheToken"":""" + $dt + """}"
+
 	$custAction.Update()
 
-	try
-    {
-        $Context.ExecuteQuery()
+	try {
+		$Context.ExecuteQuery()
 		Write-Host ("Inserted ModernUI Application Customizer custom-action into web: '" + ($web.Url) + "'...") -ForegroundColor Green
-    }
-    catch [Microsoft.SharePoint.Client.ServerUnauthorizedAccessException]
-    {
-        Write-Host "Failed to configure custom actions - custom scripts enabled?" -ForegroundColor Red
+	}
+	catch [Microsoft.SharePoint.Client.ServerUnauthorizedAccessException] {
+		Write-Host "Failed to configure custom actions - custom scripts enabled?" -ForegroundColor Red
 
 		# Sites must have customisations enabled.
-        # Connect-SPOService -Url https://m365x818801-admin.sharepoint.com/
-        # Set-SPOsite https://m365x818801.sharepoint.com/sites/SPOInsightsModern -DenyAddAndCustomizePages 0
-    }
+		# Connect-SPOService -Url https://m365x818801-admin.sharepoint.com/
+		# Set-SPOsite https://m365x818801.sharepoint.com/sites/SPOInsightsModern -DenyAddAndCustomizePages 0
+	}
 }
 
-# Install PnP module?
-if (Get-Module -ListAvailable -Name SharePointPnPPowerShellOnline) {
-    Write-Host "SharePoint PnP PowerShell Online is installed."
-} 
-else {
-    Write-Host "SharePoint PnP PowerShell Online not installed. Installing now for current user..."
-	Install-PackageProvider -Name NuGet -Scope CurrentUser -MinimumVersion 2.8.5.201 -Force
-	Install-Module SharePointPnPPowerShellOnline -Scope CurrentUser -Force
-}
-
-Import-Module SharePointPnPPowerShellOnline
-
-$aiModernUITrackerDecription = "SPO Insights ModernUI AITracker App Customizer"
-# ProcessScriptWithConfig($ConfigFileName) called at end of script
 
 $scriptPath = Get-ScriptDirectory
 
 # Install the things
-if ($PSVersionTable.PSVersion.Major -gt 5) {
-	Write-Host "Unsupported PowerShell version detected. This script only supports PowerShell 5 (Windows 10 default)" -ForegroundColor red
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+	Write-Host "Unsupported PowerShell version detected. This script only supports PowerShell 7 - https://pnp.github.io/powershell/articles/installation.html" -ForegroundColor red
 }
 else {
+	
+	# Install PnP module?
+	if (Get-Module -ListAvailable -Name PnP.PowerShell) {
+		Write-Host "SharePoint PnP PowerShell is installed."
+	} 
+	else {
+		Write-Host "SharePoint PnP PowerShell not installed. Installing now for current user..."
+		Install-Module PnP.PowerShell -Scope CurrentUser -SkipPublisherCheck
+	}
+
+	Import-Module PnP.PowerShell
+
+	$aiModernUITrackerDecription = "SPO Insights ModernUI AITracker App Customizer"
+	
 	ProcessScriptWithConfig($ConfigFileName)
 }

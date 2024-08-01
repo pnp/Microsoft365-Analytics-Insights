@@ -1,0 +1,7 @@
+project=Microsoft365-Analytics-Insights
+user=pnp
+configure-sections={"Engine":{"prefix":"**Engine updates**","labels":["Engine"]},"Analytics":{"prefix":"**Analytics updates**","labels":["Analytics"]}}
+header-label=## What's changed
+pr-label=**Merged Pull requests**
+author=false
+

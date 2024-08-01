@@ -3,7 +3,7 @@
   "solution": {
     "name": "Office 365 Advanced Analytics - SharePoint SPFx Tracker",
     "id": "610a9794-be9b-4d64-97c7-39377a624979",
-    "version": "1.0.1.51",
+    "version": "1.0.1.54",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
