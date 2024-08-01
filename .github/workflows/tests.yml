@@ -11,6 +11,12 @@ on:
     types: 
       - opened
   workflow_dispatch:
+    inputs:
+      force_run:
+        default: false
+        required: false
+        type: boolean
+        description: Bypass code changed check for testing
 
 env:
   Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
@@ -57,7 +63,7 @@ jobs:
     #   - Run test suite
     runs-on: windows-latest
     needs: setup_build
-    if: needs.setup_build.outputs.code_changed == 'true'
+    if: inputs.force_run || needs.setup_build.outputs.code_changed == 'true'
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
