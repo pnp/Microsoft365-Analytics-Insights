@@ -259,7 +259,7 @@ jobs:
       - setup_build
       - build_dotnet
       - build_aitracker
-    if: github.ref_name == 'main' || github.ref_name == 'dev'
+    if: true || github.ref_name == 'main' || github.ref_name == 'dev'
     permissions: 
       # Required to create tags in the repo
       contents: write
