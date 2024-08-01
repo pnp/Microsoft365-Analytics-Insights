@@ -276,10 +276,13 @@ jobs:
       - name: Generate Changelog
         run: |
           git branch
-          if ( ! last_tag="--since-tag $(git describe --tags --abbrev=0)" ); then
-            last_tag=""
+          last_tag=""
+          extra=""
+          if ( git describe --tags --abbrev=0 ); then
+            last_tag=$(git describe --tags --abbrev=0)
+            extra="--since-tag $last_tag"
           fi
-          echo $last_tag | xargs github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
+          echo $extra | xargs github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
             --token ${{ github.token }} \
             --release-branch ${{ github.ref_name }}
           sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
