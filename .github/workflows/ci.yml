@@ -1,10 +1,13 @@
-name: ci
+name: Release build
 
 on:
   push:
     branches:
       - main
       - dev
+    paths:
+      - src/**
+      - reports/**
   workflow_dispatch:
 
 env:
@@ -256,7 +259,6 @@ jobs:
       contents: write
     env:
       BuildId: ${{ needs.setup_build.outputs.build_number }}
-      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
