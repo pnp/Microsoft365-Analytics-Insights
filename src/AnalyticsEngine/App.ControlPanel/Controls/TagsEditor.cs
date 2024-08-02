@@ -33,6 +33,7 @@ namespace App.ControlPanel.Controls
             }
             set
             {
+                lstTags.Items.Clear();
                 foreach (var tag in value)
                 {
                     lstTags.Items.Add(new TagLVI(tag));

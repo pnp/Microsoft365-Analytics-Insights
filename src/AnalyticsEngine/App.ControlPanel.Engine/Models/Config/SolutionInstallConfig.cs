@@ -242,6 +242,11 @@ namespace App.ControlPanel.Engine
                     errs.AddRange(spErrs);
                 }
             }
+            var duplicateTags = this.Tags.GroupBy(t => t.Name.ToLower()).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+            if (duplicateTags.Count > 0)
+            {
+                errs.Add($"Duplicate tag names: {string.Join(", ", duplicateTags)}");
+            }
 
             if (SolutionConfig.SolutionTargeted == SolutionImportType.Adoptify)
             {

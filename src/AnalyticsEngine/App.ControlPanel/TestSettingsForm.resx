@@ -120,4 +120,7 @@
   <metadata name="backgroundWorkerAutoDetectFTP.TrayLocation" type="System.Drawing.Point, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
     <value>17, 17</value>
   </metadata>
+  <data name="lblTitle.Text" xml:space="preserve">
+    <value>This form is used to configure targets for the network tests used for the “Test Configuration” button on the “install” tab. The tests check that network connectivity is possible for SQL Server and FTPS – required for installation to work.</value>
+  </data>
 </root>

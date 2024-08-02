@@ -153,12 +153,19 @@ namespace App.ControlPanel.Engine
             return null;
         }
 
-        public static bool ConfigReadyForFtpTest(SolutionInstallConfig config)
+        /// <summary>
+        /// Do we have enough config to run the FTP and SQL tests?
+        /// </summary>
+        public static bool ConfigIsReadyForFtpAndSqlAutodetection(SolutionInstallConfig config)
         {
             if (config == null) return false;
 
             var installerAccErrors = config.InstallerAccount?.GetValidationErrors();
-            return installerAccErrors != null && installerAccErrors.Count == 0 && !string.IsNullOrEmpty(config.AppServiceWebAppName);
+            return installerAccErrors != null && installerAccErrors.Count == 0
+                && !string.IsNullOrEmpty(config.AppServiceWebAppName)
+                && !string.IsNullOrEmpty(config.ResourceGroupName)
+                && config.Subscription.IsValidSubscription
+                && !string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername) && !string.IsNullOrEmpty(config.SQLServerName);
         }
 
         async Task<(ResourceGroupResource, bool)> GetResourceGroupIfValid()
