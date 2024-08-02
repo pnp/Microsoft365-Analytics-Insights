@@ -1,9 +1,12 @@
-name: pr
+name: PR build
 
 on:
   pull_request:
     types:
       - ready_for_review
+    paths:
+      - src/**
+      - reports/**
   workflow_dispatch:
     inputs:
       force_build:
