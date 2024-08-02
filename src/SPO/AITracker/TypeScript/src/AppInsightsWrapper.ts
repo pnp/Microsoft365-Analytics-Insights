@@ -60,7 +60,7 @@ export class AppInsightsWrapper {
             appInsightsPageViewData['pageLoad'] = pageLoadDuration;
 
             this._ai.trackPageView(pv);
-            debug('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
+            log('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
         }
         else {
 
