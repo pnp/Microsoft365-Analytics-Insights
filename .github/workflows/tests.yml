@@ -1,13 +1,19 @@
-name: tests
+name: Tests
 
 on:
   push:
     branches:
       - main
       - dev
+    paths:
+      - src/**
+      - reports/**  
   pull_request:
-    types: 
+    types:
       - ready_for_review
+    paths:
+      - src/**
+      - reports/**  
   workflow_dispatch:
     inputs:
       force_run:
