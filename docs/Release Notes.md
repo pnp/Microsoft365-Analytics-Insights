@@ -1,5 +1,31 @@
+## master - build 1431
+Adds the ability to send App Service configuration to AITracker via an API call, which is locally cached too.
+
+New config value: MetadataRefreshMinutes - used to determine how often page metadata is loaded from AITracker, and how often the server will update metadata for URLs in SQL. See [docs](https://github.com/pnp/Microsoft365-Analytics-Insights/blob/main/docs/productnotes.md) for more info.
+
+Installer:
+* PS file updated for PnP.PowerShell
+* Installer & PS pass new param to SPFx component and AITracker - insightsWebRootUrlHash (base64 encoded app-service root URL).
+
+Web:
+* New endpoint for loading script config: api/ImportConfig?appInsightsStringEncoded=base64encodedstring
+* Protected via CORs, based on urls defined in "org_urls" table.
+* Also verifies App Insights connection string matches. The installer configures this already, so we send to this new endpoint too so it can verify against the connection-string on the server to be sure the call is from a valid client.
+
+* SPOInsights ModernUI: 1.0.1.54
+* AI Tracker: version 1.5.4
+
+No SQL schema changes.
+
+## master - build 1412
+Reports updates for user usage analytics.
+
+No SQL schema changes.
+
 ## master - build 1400
 Reliability updates for copilot event processing. Previously, SharePoint metadata lookups failed for file specific actions. Also now misc chats are better imported for Copilot actions in Outlook and other app-hosts. 
+
+No SQL schema changes.
 
 ## master - build 1375
 Fixes for SharePoint site aggregation usage stats. When looking up a site ID for a previously imported site (with no ID set), the site lookup save would crash. 
