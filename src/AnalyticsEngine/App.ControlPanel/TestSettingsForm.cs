@@ -60,14 +60,15 @@ namespace App.ControlPanel
 
         private void btnAutoDetect_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            if (SolutionInstallVerifier.ConfigReadyForFtpTest(SolutionInstallConfig))
+            if (SolutionInstallVerifier.ConfigIsReadyForFtpAndSqlAutodetection(SolutionInstallConfig))
             {
                 backgroundWorkerAutoDetectFTP.RunWorkerAsync();
                 SetLoadLoading(true);
             }
             else
             {
-                MessageBox.Show("The entered configuration is not valid to detect your FTP details. You need to fill the tab fields out",
+                MessageBox.Show("The entered configuration in the main form is not valid to detect your FTP/SQL details. " +
+                    "You need at least: an installer account, resource-group, subscription ID, SQL details, and app-service",
                     "Can't Autodetect", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
             }
         }
@@ -75,9 +76,16 @@ namespace App.ControlPanel
         private void backgroundWorkerAutoDetectFTP_DoWork(object sender, System.ComponentModel.DoWorkEventArgs e)
         {
             var j = new SolutionInstallVerifier(SolutionInstallConfig, _logger, FtpConfig, this.TestConfiguration);
-            var ftpProfile = j.GetFtpAndSQLDetails(SolutionInstallConfig.SQLServerAdminPassword).Result;
 
-            e.Result = ftpProfile;
+            try
+            {
+                var ftpProfile = j.GetFtpAndSQLDetails(SolutionInstallConfig.SQLServerAdminPassword).Result;
+                e.Result = ftpProfile;
+            }
+            catch (Exception ex)
+            {
+                e.Result = ex;
+            }
         }
 
         private void backgroundWorkerAutoDetectFTP_RunWorkerCompleted(object sender, System.ComponentModel.RunWorkerCompletedEventArgs e)
@@ -107,9 +115,14 @@ namespace App.ControlPanel
                 }
                 else
                 {
-                    MessageBox.Show($"Your resources auto-detected succesfully. They'll be used for installer tests when you close this window",
-                        "Can't Autodetect", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show($"Your resources auto-detected succesfully. Save the detected configuration to use them for solution tests",
+                        "Autodetect Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
+            }
+            else if (e.Result is Exception)
+            {
+                MessageBox.Show($"Couldn't get some/all of your Azure resources data: {((Exception)e.Result).Message}",
+                        "Can't Autodetect", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
             }
             else
                 MessageBox.Show($"Unexpected error getting FTP details: {_logger.GetMessages()}",

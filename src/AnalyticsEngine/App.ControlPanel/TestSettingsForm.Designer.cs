@@ -28,6 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(TestSettingsForm));
             this.backgroundWorkerAutoDetectFTP = new System.ComponentModel.BackgroundWorker();
             this.pnlAll = new System.Windows.Forms.Panel();
             this.btnOk = new System.Windows.Forms.Button();
@@ -46,6 +47,7 @@
             this.label3 = new System.Windows.Forms.Label();
             this.txtSqlServer = new System.Windows.Forms.TextBox();
             this.label1 = new System.Windows.Forms.Label();
+            this.lblTitle = new System.Windows.Forms.Label();
             this.pnlAll.SuspendLayout();
             this.groupBox1.SuspendLayout();
             this.SuspendLayout();
@@ -60,22 +62,23 @@
             this.pnlAll.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
+            this.pnlAll.Controls.Add(this.lblTitle);
             this.pnlAll.Controls.Add(this.btnOk);
             this.pnlAll.Controls.Add(this.btnClose);
             this.pnlAll.Controls.Add(this.groupBox1);
             this.pnlAll.Location = new System.Drawing.Point(12, 12);
             this.pnlAll.Name = "pnlAll";
-            this.pnlAll.Size = new System.Drawing.Size(687, 539);
+            this.pnlAll.Size = new System.Drawing.Size(687, 633);
             this.pnlAll.TabIndex = 7;
             // 
             // btnOk
             // 
             this.btnOk.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnOk.Location = new System.Drawing.Point(421, 490);
+            this.btnOk.Location = new System.Drawing.Point(421, 584);
             this.btnOk.Name = "btnOk";
             this.btnOk.Size = new System.Drawing.Size(120, 40);
             this.btnOk.TabIndex = 12;
-            this.btnOk.Text = "OK";
+            this.btnOk.Text = "Save";
             this.btnOk.UseVisualStyleBackColor = true;
             this.btnOk.Click += new System.EventHandler(this.btnOk_Click);
             // 
@@ -83,7 +86,7 @@
             // 
             this.btnClose.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnClose.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnClose.Location = new System.Drawing.Point(547, 490);
+            this.btnClose.Location = new System.Drawing.Point(547, 584);
             this.btnClose.Name = "btnClose";
             this.btnClose.Size = new System.Drawing.Size(120, 40);
             this.btnClose.TabIndex = 11;
@@ -106,9 +109,9 @@
             this.groupBox1.Controls.Add(this.label3);
             this.groupBox1.Controls.Add(this.txtSqlServer);
             this.groupBox1.Controls.Add(this.label1);
-            this.groupBox1.Location = new System.Drawing.Point(5, 0);
+            this.groupBox1.Location = new System.Drawing.Point(5, 123);
             this.groupBox1.Name = "groupBox1";
-            this.groupBox1.Size = new System.Drawing.Size(662, 474);
+            this.groupBox1.Size = new System.Drawing.Size(662, 455);
             this.groupBox1.TabIndex = 9;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "Test Configuration:";
@@ -234,19 +237,27 @@
             this.label1.TabIndex = 4;
             this.label1.Text = "SQL Server (command to test: \'select @@version\'):";
             // 
+            // lblTitle
+            // 
+            this.lblTitle.Location = new System.Drawing.Point(5, 26);
+            this.lblTitle.Name = "lblTitle";
+            this.lblTitle.Size = new System.Drawing.Size(662, 65);
+            this.lblTitle.TabIndex = 13;
+            this.lblTitle.Text = resources.GetString("lblTitle.Text");
+            // 
             // TestSettingsForm
             // 
             this.AcceptButton = this.btnOk;
             this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 20F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnClose;
-            this.ClientSize = new System.Drawing.Size(708, 563);
+            this.ClientSize = new System.Drawing.Size(708, 657);
             this.Controls.Add(this.pnlAll);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.Name = "TestSettingsForm";
-            this.Text = "Test Settings";
+            this.Text = "Solution Test Settings";
             this.pnlAll.ResumeLayout(false);
             this.groupBox1.ResumeLayout(false);
             this.groupBox1.PerformLayout();
@@ -273,5 +284,6 @@
         private System.Windows.Forms.TextBox txtSqlServer;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.Button btnOk;
+        private System.Windows.Forms.Label lblTitle;
     }
 }

@@ -313,7 +313,7 @@ namespace App.ControlPanel
         {
 
             var f = new TestSettingsForm();
-            f.SolutionInstallConfig = this.LoadedConfig;            // Give current config so it can lookup FTP & SQL details
+            f.SolutionInstallConfig = this.SelectedUI.GetConfigurationState();            // Give current config so it can lookup FTP & SQL details
 
             f.TestConfiguration = SavedPreferences.TestsConfig;     // Currently configured test config
             f.FtpConfig = SavedPreferences.FtpConfig;
