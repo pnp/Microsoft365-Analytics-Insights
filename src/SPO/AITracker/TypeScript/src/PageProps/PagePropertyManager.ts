@@ -4,6 +4,8 @@ import { debug, log } from "../Logger";
 import { PageProps } from "./Models/PageProps";
 import { BasePageStateManager } from "./PageState";
 
+const MAX_CUSTOM_PROP_SIZE_BYTES = 8192	;    // "Property value string length" - https://learn.microsoft.com/en-us/azure/azure-monitor/app/api-custom-events-metrics#limits
+
 // Handles whether to upload page information to App Insights.
 // Should only do it once per session to avoid generating excessive updates
 export abstract class PagePropertyManager {
@@ -54,22 +56,22 @@ export abstract class PagePropertyManager {
                 // Make sure we at least have the page props request
                 const loadedPagePropsResult = loadResults[0];
                 if (loadedPagePropsResult.status === "fulfilled") {
-                    const loadedPageProps = loadedPagePropsResult.value;
+                    const loadedPagePropsAll = loadedPagePropsResult.value;
 
                     if (newPagePropsLoaded)
-                        newPagePropsLoaded(loadedPageProps);
+                        newPagePropsLoaded(loadedPagePropsAll);
 
                     // Parse taxonomy fields
-                    const taxFieldCount = loadedPageProps.setTaxonomyFieldsFromRawLoadedProps();
-                    debug(`Read ${loadedPageProps.propsCount()} properties and ${taxFieldCount} taxonomy fields for page id ${pageItemId} on list ${listTitle}. Will not update metadata for page again.`);
+                    const taxFieldCount = loadedPagePropsAll.setTaxonomyFieldsFromRawLoadedProps();
+                    debug(`Read ${loadedPagePropsAll.propsCount()} properties and ${taxFieldCount} taxonomy fields for page id ${pageItemId} on list ${listTitle}. Will not update metadata for page again.`);
 
                     // Add likes to page properties
                     const likesLoadPromiseResult = loadResults[1];
                     if (likesLoadPromiseResult.status === "fulfilled") {
 
                         // Add totals & details
-                        loadedPageProps.pageLikes = likesLoadPromiseResult.value;
-                        loadedPageProps.props.PageLikesCount = likesLoadPromiseResult.value.length;
+                        loadedPagePropsAll.pageLikes = likesLoadPromiseResult.value;
+                        loadedPagePropsAll.props.PageLikesCount = likesLoadPromiseResult.value.length;
                     }
 
                     // Add comments
@@ -77,12 +79,16 @@ export abstract class PagePropertyManager {
                     if (commentsLoadPromiseResult.status === "fulfilled") {
                         
                         // Add totals & details
-                        loadedPageProps.pageComments = commentsLoadPromiseResult.value;
-                        loadedPageProps.props.CommentsCount = commentsLoadPromiseResult.value.length;
+                        loadedPagePropsAll.pageComments = commentsLoadPromiseResult.value;
+                        loadedPagePropsAll.props.CommentsCount = commentsLoadPromiseResult.value.length;
                     }
 
-                    // Log loaded props with api provider
-                    this.dataService.recordPageProps(loadedPageProps);
+                    // Log loaded props with api provider. Split into multiple parts if needed
+                    const splitPageProps = loadedPagePropsAll.splitIntoMutliple(MAX_CUSTOM_PROP_SIZE_BYTES);
+                    debug(`Splitting page properties into ${splitPageProps.length} parts`);
+                    splitPageProps.forEach((pageProps, idx) => {
+                        this.dataService.recordPageProps(pageProps);
+                    });
 
                     // Don't keep registering page props
                     this.stateManager.registerPageSeen(listTitle, pageItemId);
