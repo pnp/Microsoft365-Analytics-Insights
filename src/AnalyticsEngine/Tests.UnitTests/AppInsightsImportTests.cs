@@ -665,16 +665,7 @@ namespace Tests.UnitTests
         public void PageUpdateEventAppInsightsQueryResultCommentsAndLikesMergeTest()
         {
             const string URL = "http://url";
-            var propsString1 = @"
-                {
-                    ""PageLikes"": [
-                        {
-                            ""creationDate"": ""2023-09-27T09:51:28.423Z"",
-                            ""email"": ""admin@MODERNCOMMS933270.onmicrosoft.com"",
-                            ""id"": 6
-                        }
-                    ],
-                    ""Comments"": [
+            var propsStringComments1 = @"[
                         {
                             ""id"": ""1"",
                             ""comment"": ""reply\n"",
@@ -683,20 +674,20 @@ namespace Tests.UnitTests
                             ""creationDate"": ""2023-09-27T09:28:51.747Z""
                         }
                     ]
-                }";
-
-            var e1 = new PageUpdateEventAppInsightsQueryResult { CustomProperties = new PageUpdateEventCustomProps { Url = URL, PropsString = propsString1 }, AppInsightsTimestamp = DateTime.Now };
-
-            var propsString2 = @"
-                {
-                    ""PageLikes"": [
+                ";
+            var propsStringLikes1 = @"[
                         {
                             ""creationDate"": ""2023-09-27T09:51:28.423Z"",
-                            ""email"": ""bob@MODERNCOMMS933270.onmicrosoft.com"",
-                            ""id"": 7
+                            ""email"": ""admin@MODERNCOMMS933270.onmicrosoft.com"",
+                            ""id"": 6
                         }
-                    ],
-                    ""Comments"": [
+                    ]";
+
+            var e1 = new PageUpdateEventAppInsightsQueryResult 
+            { 
+                CustomProperties = new PageUpdateEventCustomProps { Url = URL, CommentsString = propsStringComments1, LikesString = propsStringLikes1 }, AppInsightsTimestamp = DateTime.Now };
+
+            var propsStringComments2 = @"[
                         {
                             ""id"": ""2"",
                             ""comment"": ""child reply"",
@@ -705,12 +696,18 @@ namespace Tests.UnitTests
                             ""creationDate"": ""2023-09-27T09:28:58.393Z"",
                             ""parentId"": ""1""
                         }
-                    ]
-                }";
+                    ]";
+            var propsStringLikes2 = @"[
+                        {
+                            ""creationDate"": ""2023-09-27T09:51:28.423Z"",
+                            ""email"": ""bob@MODERNCOMMS933270.onmicrosoft.com"",
+                            ""id"": 7
+                        }
+                    ]";
 
             var e2 = new PageUpdateEventAppInsightsQueryResult
             {
-                CustomProperties = new PageUpdateEventCustomProps { Url = URL, PropsString = propsString2 },
+                CustomProperties = new PageUpdateEventCustomProps { Url = URL, CommentsString = propsStringComments2, LikesString = propsStringLikes2 },
                 AppInsightsTimestamp = DateTime.Now
             };
 
