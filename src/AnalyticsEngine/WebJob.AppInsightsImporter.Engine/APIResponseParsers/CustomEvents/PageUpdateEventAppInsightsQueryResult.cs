@@ -73,6 +73,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                         this.CustomProperties.Likes.Add(like);
                     }
                 }
+
                 foreach (var comment in updateToAdd.CustomProperties.PageComments)
                 {
                     if (!this.CustomProperties.PageComments.Where(l => l.SharePointId == comment.SharePointId).Any())
@@ -82,16 +83,12 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                 }
             }
 
-
-
             this.CustomProperties.SetPropsDic(existingProps);
             this.CustomProperties.SetTaxProps(existingMM);
-
         }
 
         [JsonIgnore]
         public PageUpdateEventCustomProps CustomProperties { get; set; } = new PageUpdateEventCustomProps();
-
 
         public class TaxonomoyProperty
         {

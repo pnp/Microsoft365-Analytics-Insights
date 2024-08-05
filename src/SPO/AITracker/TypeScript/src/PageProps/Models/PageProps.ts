@@ -1,9 +1,12 @@
+import { LikesUserEntity, PageComment } from "../../Definitions";
 import { MetadataInfo } from "./MetadataInfo";
 
 export class PageProps {
 
     url: string;
     props: any;
+    pageComments: PageComment[];
+    pageLikes: LikesUserEntity[];
     taxonomyProps: MetadataInfo[];
 
     constructor(url : string, propsAll: any) {

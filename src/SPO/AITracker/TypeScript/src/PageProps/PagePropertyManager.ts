@@ -68,7 +68,7 @@ export abstract class PagePropertyManager {
                     if (likesLoadPromiseResult.status === "fulfilled") {
 
                         // Add totals & details
-                        loadedPageProps.props.PageLikes = likesLoadPromiseResult.value;
+                        loadedPageProps.pageLikes = likesLoadPromiseResult.value;
                         loadedPageProps.props.PageLikesCount = likesLoadPromiseResult.value.length;
                     }
 
@@ -77,7 +77,7 @@ export abstract class PagePropertyManager {
                     if (commentsLoadPromiseResult.status === "fulfilled") {
                         
                         // Add totals & details
-                        loadedPageProps.props.Comments = commentsLoadPromiseResult.value;
+                        loadedPageProps.pageComments = commentsLoadPromiseResult.value;
                         loadedPageProps.props.CommentsCount = commentsLoadPromiseResult.value.length;
                     }
 
