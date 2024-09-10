@@ -25,7 +25,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
                 this.Timestamp = p.Timestamp;
                 this.Url = p.CustomProperties.HRef;
                 this.Username = p.Username;
-                this.ClassNames = StringUtils.EnsureMaxLength(p.CustomProperties.ClassNames, 2000);
+                this.ClassNames = StringUtils.EnsureMaxLength(p.CustomProperties.ClassNames, 800);
                 this.PageRequestId = p.CustomProperties.PageRequestId.Value;
                 this.LinkText = StringUtils.EnsureMaxLength(p.CustomProperties.LinkText, 100);
             }

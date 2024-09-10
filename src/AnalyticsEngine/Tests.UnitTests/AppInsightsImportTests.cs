@@ -1142,13 +1142,21 @@ namespace Tests.UnitTests
                 db.Clicks.RemoveRange(db.Clicks.ToList());
                 await db.SaveChangesAsync();
 
-                await TestEdgeClicks(db, telemetry, randoTestName);
-                await TestEdgeClicks(db, telemetry, randoTestName);     // Use existing lookup
+                await TestEdgeClicks(db, telemetry, randoTestName, null);
+                await TestEdgeClicks(db, telemetry, randoTestName, null);     // Use existing lookup
+
+                // Generate 4k(ish) string
+                var sb = "";
+                for (int i = 0; i < 4096; i++)
+                {
+                    sb += ("a");
+                }
+                await TestEdgeClicks(db, telemetry, randoTestName, sb);
 
             }
         }
 
-        private async Task TestEdgeClicks(AnalyticsEntitiesContext db, ILogger telemetry, string randoTestName)
+        private async Task TestEdgeClicks(AnalyticsEntitiesContext db, ILogger telemetry, string randoTestName, string classname)
         {
             var clicksToSave = new CustomEventsResultCollection();
 
@@ -1167,6 +1175,7 @@ namespace Tests.UnitTests
                 CustomProperties = new ClickCustomProps()
                 {
                     LinkText = randoTestName,
+                    ClassNames = classname,
                     PageRequestId = testHit.page_request_id
                 },
                 AppInsightsTimestamp = DateTime.Now,
