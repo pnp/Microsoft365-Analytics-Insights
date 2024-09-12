@@ -250,7 +250,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                                             }
                                             else if (prop.Name == "PageLikes")
                                             {
-                                                Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains legacy comments data. Check AITracker is updated");
+                                                Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains legacy likes data. Check AITracker is updated");
                                             }
                                             else
                                             {
