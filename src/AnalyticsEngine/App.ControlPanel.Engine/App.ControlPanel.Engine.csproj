@@ -81,6 +81,7 @@
     <Compile Include="InstallerTasks\RunbooksInstallJob.cs" />
     <Compile Include="Models\AzStorageConnectionInfo.cs" />
     <Compile Include="SolutionUninstaller.cs" />
+    <None Include="app.config" />
     <None Include="SqlExtentions\readme.md" />
     <Compile Include="SPO\SiteTrackerInstaller\Models.cs" />
     <Compile Include="Utils\AzurePublicCloudEnumerator.cs" />
