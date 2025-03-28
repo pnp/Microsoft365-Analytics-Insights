@@ -329,9 +329,7 @@ namespace Tests.UnitTests
             var credentials = new AzureKeyCredential(config.CognitiveKey);
             var client = new TextAnalyticsClient(new Uri(config.CognitiveEndpoint), credentials);
 
-            var propsString1 = @"
-                {
-                    ""Comments"": [
+            var propsString1 = @"[
                         {
                             ""id"": ""1"",
                             ""comment"": ""This is amazing"",
@@ -340,12 +338,11 @@ namespace Tests.UnitTests
                             ""id"": ""2"",
                             ""comment"": ""Todo eso está fatal. No puede ser peor."",
                         }
-                    ]
-                }";
+                    ]";
 
             var pageUpdate = new PageUpdateEventAppInsightsQueryResult
             {
-                CustomProperties = new PageUpdateEventCustomProps { Url = "https://site", PropsString = propsString1 },
+                CustomProperties = new PageUpdateEventCustomProps { Url = "https://site", CommentsString = propsString1 },
                 AppInsightsTimestamp = DateTime.Now
             };
             // Trigger fake comments build
