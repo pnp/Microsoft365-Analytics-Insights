@@ -320,7 +320,7 @@
       <Version>2.4.1</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.SharePointOnline.CSOM">
-      <Version>16.1.24009.12000</Version>
+      <Version>16.1.25814.12000</Version>
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.1</Version>
