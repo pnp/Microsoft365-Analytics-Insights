@@ -116,8 +116,21 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
         public async Task<ListInfo> ConfirmDocLibOnRootSite(string listTitle)
         {
             var list = _clientContext.Web.GetListByTitle(listTitle);
+            _clientContext.Load(list);
+
+            var listFound = false;
+            try
+            {
+                await _clientContext.ExecuteQueryAsync();
+                listFound = true;
+            }
+            catch (ServerException)
+            {
+                // No list
+                listFound = false;
+            }
             bool createdNew = false, versioning = false;
-            if (list == null)
+            if (!listFound)
             {
                 createdNew = true;
                 list = _clientContext.Web.CreateDocumentLibrary(listTitle);
