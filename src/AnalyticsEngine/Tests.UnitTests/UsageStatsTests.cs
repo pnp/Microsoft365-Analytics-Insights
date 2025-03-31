@@ -1,4 +1,5 @@
-﻿using Common.Entities;
+﻿using Azure.Identity;
+using Common.Entities;
 using Common.Entities.Installer;
 using DataUtils;
 using Microsoft.Azure.Cosmos;
@@ -51,7 +52,9 @@ namespace Tests.UnitTests
             {
                 Assert.Fail("Invalid config for Cosmos DB");
             }
-            var cosmosClient = new CosmosClient(cosmosTestConfig.CosmosConnectionString);
+
+            var config = new Common.Entities.Config.AppConfig();
+            var cosmosClient = new CosmosClient(cosmosTestConfig.CosmosConnectionString, new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret));
             var a = new CosmosTelemetrySaveAdaptor(cosmosClient, cosmosTestConfig);
 
             var tenantId = Guid.NewGuid();

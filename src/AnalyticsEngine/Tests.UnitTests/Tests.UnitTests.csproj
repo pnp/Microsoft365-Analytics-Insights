@@ -292,7 +292,7 @@
       <Version>3.3.19</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.SharePointOnline.CSOM">
-      <Version>16.1.24009.12000</Version>
+      <Version>16.1.25814.12000</Version>
     </PackageReference>
     <PackageReference Include="MSTest.TestAdapter">
       <Version>3.8.3</Version>
