@@ -101,6 +101,9 @@
     <PackageReference Include="Microsoft.Owin.Security.OpenIdConnect">
       <Version>4.2.2</Version>
     </PackageReference>
+    <PackageReference Include="Microsoft.SharePointOnline.CSOM">
+      <Version>16.1.25814.12000</Version>
+    </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.1</Version>
     </PackageReference>
