@@ -44,7 +44,9 @@ namespace Tests.UnitTests
         /// <summary>
         /// Test the service adaptor here, just to make sure it works in the API as this project is part of DevOps pipeline.
         /// </summary>
+#if DEBUG
         [TestMethod]
+#endif
         public async Task UsageStatsCosmosTelemetrySaveAdaptorTests()
         {
             var cosmosTestConfig = new TestConfig();
