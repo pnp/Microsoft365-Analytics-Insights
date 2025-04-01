@@ -415,10 +415,13 @@
       <Version>2.4.1</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.SharePointOnline.CSOM">
-      <Version>16.1.24009.12000</Version>
+      <Version>16.1.25814.12000</Version>
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.1</Version>
+    </PackageReference>
+    <PackageReference Include="System.IO.Packaging">
+      <Version>6.0.2</Version>
     </PackageReference>
     <PackageReference Include="System.Memory.Data">
       <Version>6.0.0</Version>
@@ -442,7 +445,7 @@
       <Version>4.3.2</Version>
     </PackageReference>
     <PackageReference Include="System.Text.Json">
-      <Version>6.0.2</Version>
+      <Version>6.0.11</Version>
     </PackageReference>
     <PackageReference Include="WindowsAzure.Storage">
       <Version>9.3.3</Version>
