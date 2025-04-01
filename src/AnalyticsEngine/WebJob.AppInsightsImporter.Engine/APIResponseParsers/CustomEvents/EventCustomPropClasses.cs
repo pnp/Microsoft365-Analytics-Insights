@@ -80,6 +80,14 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         public string PropsString { get; set; }
 
 
+        [JsonProperty("pageComments")]
+        public string CommentsString { get; set; }
+
+
+        [JsonProperty("pageLikes")]
+        public string LikesString { get; set; }
+
+
         /// <summary>
         /// Also Stringified MM props as given by SharePoint. App Insights only allows flat json custom props, so sub-objects are stringified.
         /// ex: { taxonomyProps: "[]"}
@@ -125,14 +133,79 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             }
         }
 
-
-
+        private List<PageCommentEvent> _pageComments = null;
         [JsonIgnore]
-        public List<PageCommentEvent> PageComments { get; set; } = new List<PageCommentEvent>();
+        public List<PageCommentEvent> PageComments 
+        { 
+            get 
+            {
+                if (_pageComments == null)
+                {
+                    if (string.IsNullOrEmpty(this.CommentsString)) _pageComments = new List<PageCommentEvent>();
 
+                    else
+                    {
+                        var success = false;
+                        try
+                        {
+                            _pageComments = JsonConvert.DeserializeObject<List<PageCommentEvent>>(this.CommentsString);
+                            success = true;
+                        }
+                        catch (FormatException)
+                        {
+                            // Ignore
+                        }
+                        catch (JsonSerializationException)
+                        {
+                            // Ignore
+                        }
+                        if (!success)
+                        {
+                            Console.WriteLine($"\nERROR:Unexpected {nameof(CommentsString)} value for URL {Url}: '{CommentsString}'");
+                            _pageComments = new List<PageCommentEvent>();
+                        }
+                    }
+                }
+                return _pageComments;
+            } 
+        } 
 
+        private List<UserBasedCustomAIEvent> _likes = null;
         [JsonIgnore]
-        public List<UserBasedCustomAIEvent> Likes { get; set; } = new List<UserBasedCustomAIEvent>();
+        public List<UserBasedCustomAIEvent> Likes 
+        { 
+            get 
+            { 
+                if (_likes == null)
+                {
+                    if (string.IsNullOrEmpty(this.LikesString)) _likes = new List<UserBasedCustomAIEvent>();
+
+                    else
+                    {
+                        var success = false;
+                        try
+                        {
+                            _likes = JsonConvert.DeserializeObject<List<UserBasedCustomAIEvent>>(this.LikesString);
+                            success = true;
+                        }
+                        catch (FormatException)
+                        {
+                            // Ignore
+                        }
+                        catch (JsonSerializationException)
+                        {
+                            // Ignore
+                        }
+                        if (!success)
+                        {
+                            Console.WriteLine($"\nERROR:Unexpected {nameof(LikesString)} value for URL {Url}: '{LikesString}'");
+                            _likes = new List<UserBasedCustomAIEvent>();
+                        }
+                    }
+                }
+                return _likes;
+            } 
+        } 
 
         /// <summary>
         /// Get list of props in this page update. Doesn't include taxonomy fields. 
@@ -168,38 +241,16 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                                         }
                                         else
                                         {
-                                            // Look for specific properties that we know are objects and serialise them
+                                            // Look for specific properties that we know are objects and serialise them. 
+                                            // Deprecated now as comments/likes are handled separately
+                                            // For now just warn anyway
                                             if (prop.Name == "Comments")
                                             {
-                                                List<PageCommentEvent> l = null;
-                                                try
-                                                {
-                                                    l = JsonConvert.DeserializeObject<List<PageCommentEvent>>(c[0].ToString());
-                                                }
-                                                catch (JsonSerializationException)
-                                                {
-                                                    // Ignore
-                                                }
-                                                if (l != null && l.Count > 0)
-                                                {
-                                                    this.PageComments.AddRange(l);
-                                                }
+                                                Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains legacy comments data. Check AITracker is updated");
                                             }
                                             else if (prop.Name == "PageLikes")
                                             {
-                                                List<UserBasedCustomAIEvent> l = null;
-                                                try
-                                                {
-                                                    l = JsonConvert.DeserializeObject<List<UserBasedCustomAIEvent>>(c[0].ToString());
-                                                }
-                                                catch (JsonSerializationException)
-                                                {
-                                                    // Ignore
-                                                }
-                                                if (l != null && l.Count > 0)
-                                                {
-                                                    this.Likes.AddRange(l);
-                                                }
+                                                Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains legacy likes data. Check AITracker is updated");
                                             }
                                             else
                                             {

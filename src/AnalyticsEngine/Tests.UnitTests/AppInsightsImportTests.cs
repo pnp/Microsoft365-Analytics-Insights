@@ -329,9 +329,7 @@ namespace Tests.UnitTests
             var credentials = new AzureKeyCredential(config.CognitiveKey);
             var client = new TextAnalyticsClient(new Uri(config.CognitiveEndpoint), credentials);
 
-            var propsString1 = @"
-                {
-                    ""Comments"": [
+            var propsString1 = @"[
                         {
                             ""id"": ""1"",
                             ""comment"": ""This is amazing"",
@@ -340,12 +338,11 @@ namespace Tests.UnitTests
                             ""id"": ""2"",
                             ""comment"": ""Todo eso está fatal. No puede ser peor."",
                         }
-                    ]
-                }";
+                    ]";
 
             var pageUpdate = new PageUpdateEventAppInsightsQueryResult
             {
-                CustomProperties = new PageUpdateEventCustomProps { Url = "https://site", PropsString = propsString1 },
+                CustomProperties = new PageUpdateEventCustomProps { Url = "https://site", CommentsString = propsString1 },
                 AppInsightsTimestamp = DateTime.Now
             };
             // Trigger fake comments build
@@ -665,16 +662,7 @@ namespace Tests.UnitTests
         public void PageUpdateEventAppInsightsQueryResultCommentsAndLikesMergeTest()
         {
             const string URL = "http://url";
-            var propsString1 = @"
-                {
-                    ""PageLikes"": [
-                        {
-                            ""creationDate"": ""2023-09-27T09:51:28.423Z"",
-                            ""email"": ""admin@MODERNCOMMS933270.onmicrosoft.com"",
-                            ""id"": 6
-                        }
-                    ],
-                    ""Comments"": [
+            var propsStringComments1 = @"[
                         {
                             ""id"": ""1"",
                             ""comment"": ""reply\n"",
@@ -683,20 +671,20 @@ namespace Tests.UnitTests
                             ""creationDate"": ""2023-09-27T09:28:51.747Z""
                         }
                     ]
-                }";
-
-            var e1 = new PageUpdateEventAppInsightsQueryResult { CustomProperties = new PageUpdateEventCustomProps { Url = URL, PropsString = propsString1 }, AppInsightsTimestamp = DateTime.Now };
-
-            var propsString2 = @"
-                {
-                    ""PageLikes"": [
+                ";
+            var propsStringLikes1 = @"[
                         {
                             ""creationDate"": ""2023-09-27T09:51:28.423Z"",
-                            ""email"": ""bob@MODERNCOMMS933270.onmicrosoft.com"",
-                            ""id"": 7
+                            ""email"": ""admin@MODERNCOMMS933270.onmicrosoft.com"",
+                            ""id"": 6
                         }
-                    ],
-                    ""Comments"": [
+                    ]";
+
+            var e1 = new PageUpdateEventAppInsightsQueryResult 
+            { 
+                CustomProperties = new PageUpdateEventCustomProps { Url = URL, CommentsString = propsStringComments1, LikesString = propsStringLikes1 }, AppInsightsTimestamp = DateTime.Now };
+
+            var propsStringComments2 = @"[
                         {
                             ""id"": ""2"",
                             ""comment"": ""child reply"",
@@ -705,12 +693,18 @@ namespace Tests.UnitTests
                             ""creationDate"": ""2023-09-27T09:28:58.393Z"",
                             ""parentId"": ""1""
                         }
-                    ]
-                }";
+                    ]";
+            var propsStringLikes2 = @"[
+                        {
+                            ""creationDate"": ""2023-09-27T09:51:28.423Z"",
+                            ""email"": ""bob@MODERNCOMMS933270.onmicrosoft.com"",
+                            ""id"": 7
+                        }
+                    ]";
 
             var e2 = new PageUpdateEventAppInsightsQueryResult
             {
-                CustomProperties = new PageUpdateEventCustomProps { Url = URL, PropsString = propsString2 },
+                CustomProperties = new PageUpdateEventCustomProps { Url = URL, CommentsString = propsStringComments2, LikesString = propsStringLikes2 },
                 AppInsightsTimestamp = DateTime.Now
             };
 
@@ -1142,13 +1136,21 @@ namespace Tests.UnitTests
                 db.Clicks.RemoveRange(db.Clicks.ToList());
                 await db.SaveChangesAsync();
 
-                await TestEdgeClicks(db, telemetry, randoTestName);
-                await TestEdgeClicks(db, telemetry, randoTestName);     // Use existing lookup
+                await TestEdgeClicks(db, telemetry, randoTestName, null);
+                await TestEdgeClicks(db, telemetry, randoTestName, null);     // Use existing lookup
+
+                // Generate 4k(ish) string
+                var sb = "";
+                for (int i = 0; i < 4096; i++)
+                {
+                    sb += ("a");
+                }
+                await TestEdgeClicks(db, telemetry, randoTestName, sb);
 
             }
         }
 
-        private async Task TestEdgeClicks(AnalyticsEntitiesContext db, ILogger telemetry, string randoTestName)
+        private async Task TestEdgeClicks(AnalyticsEntitiesContext db, ILogger telemetry, string randoTestName, string classname)
         {
             var clicksToSave = new CustomEventsResultCollection();
 
@@ -1167,6 +1169,7 @@ namespace Tests.UnitTests
                 CustomProperties = new ClickCustomProps()
                 {
                     LinkText = randoTestName,
+                    ClassNames = classname,
                     PageRequestId = testHit.page_request_id
                 },
                 AppInsightsTimestamp = DateTime.Now,
