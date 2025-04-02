@@ -1,6 +1,4 @@
 
-const { TextEncoder } = require("util");
-
 // This function will split an array into multiple arrays of a maximum byte size
 export function splitIntoJsonArraysOfMaxBytes<T>(d: T[] | undefined, maxBytesSize: number, callBack: Function): void {
     const textEncoder = new TextEncoder();
