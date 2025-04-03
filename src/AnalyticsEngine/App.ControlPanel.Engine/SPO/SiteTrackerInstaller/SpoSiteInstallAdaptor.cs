@@ -142,8 +142,9 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             await _clientContext.ExecuteQueryAsync();
             versioning = list.EnableMinorVersions;
 
+            var siteRelativeUrl = list.RootFolder.ServerRelativeUrl.TrimStart(list.ParentWebUrl.ToCharArray());
 
-            return new ListInfo { CreatedNew = createdNew, EnableMinorVersions = versioning, ServerRelativeUrl = list.RootFolder.ServerRelativeUrl };
+            return new ListInfo { CreatedNew = createdNew, EnableMinorVersions = versioning, SiteRelativeUrl = siteRelativeUrl };
         }
 
         public string GetUrl(Web web)

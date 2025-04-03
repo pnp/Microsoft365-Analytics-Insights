@@ -109,7 +109,7 @@ namespace Tests.UnitTests
             public Task<ListInfo> ConfirmDocLibOnRootSite(string listTitle)
             {
                 Console.WriteLine($"Confirmed fake library {listTitle} exists");
-                return Task.FromResult<ListInfo>(new ListInfo { CreatedNew = true, EnableMinorVersions = false, ServerRelativeUrl = listTitle });
+                return Task.FromResult<ListInfo>(new ListInfo { CreatedNew = true, EnableMinorVersions = false, SiteRelativeUrl = listTitle });
             }
 
             public string GetUrl(FakeWeb web)
