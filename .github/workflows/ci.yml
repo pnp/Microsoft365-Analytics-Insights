@@ -102,6 +102,7 @@ jobs:
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v4
+        if: false
         env:
           cache-name: nuget-package-cache
         with:
@@ -278,5 +279,5 @@ jobs:
           commit: ${{ github.sha }}
           # bodyFile:  CHANGELOG.md
           generateReleaseNotes: true
-          artifacts: "${{ env.BASE }}/drop_dotnet/*.zip,${{ env.BASE }}/drop_aitracker/*.zip"
+          artifacts: "${{ env.BASE }}/**/*.zip"
           artifactContentType: application/zip
