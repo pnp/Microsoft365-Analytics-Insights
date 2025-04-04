@@ -121,7 +121,7 @@ jobs:
 
       # Build the project
       - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }} -t:Restore `
+        run: msbuild ${{ env.Solution_Directory }}\${{ matrix.project.name }}\${{ matrix.project.file }} -t:Restore `
           -p:Configuration=${{ matrix.configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
@@ -137,26 +137,26 @@ jobs:
           -p:EmitCompilerGeneratedFiles=false
 
       - name: Copy Automation scripts (WebJob.Office365ActivityImporter only)
-        if: ${{ matrix.project.name }} == "WebJob.Office365ActivityImporter"
+        if: ${{ matrix.project.name }} == 'WebJob.Office365ActivityImporter'
         run: |
           Copy-Item -Verbose -Force -Recurse `
           -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS" `
           -Destination "${{ runner.temp }}\Office365ActivityImporter\"
 
       - name: Decode the PFX
-        if: ${{ matrix.project.name }} == "App.ControlPanel"
+        if: ${{ matrix.project.name }} == 'App.ControlPanel'
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
           [IO.File]::WriteAllBytes("${{ steps.prep.outputs.PFX_PATH }}", $pfx_cert_byte)
       - name: Sign installer
-        if: ${{ matrix.project.name }} == "App.ControlPanel"
+        if: ${{ matrix.project.name }} == 'App.ControlPanel'
         run: |
             & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
             sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
             /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
             "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
       - name: Remove the PFX
-        if: ${{ matrix.project.name }} == "App.ControlPanel"
+        if: ${{ matrix.project.name }} == 'App.ControlPanel'
         run: |
           Remove-Item -Path "${{ steps.prep.outputs.PFX_PATH }}"
     
@@ -172,7 +172,7 @@ jobs:
 
       - name: Archive Reports
         # condition to run it only once
-        if: ${{ matrix.project.name }} == "App.ControlPanel"
+        if: ${{ matrix.project.name }} == 'App.ControlPanel'
         run: |
           Get-ChildItem '.\reports\Usage Analytics\*' `
           -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
