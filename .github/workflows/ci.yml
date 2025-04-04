@@ -165,7 +165,7 @@ jobs:
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
-          Compress-Archive -Force -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" 
+          Compress-Archive -Force -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
           -DestinationPath "${{ env.folder }}\${{ matrix.project.outDir }}.zip"
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
