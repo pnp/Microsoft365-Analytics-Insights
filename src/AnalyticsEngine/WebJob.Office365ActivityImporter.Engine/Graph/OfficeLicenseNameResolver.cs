@@ -53,7 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         [Name("Product_Display_Name")]
         public string DisplayName { get; set; }
 
-        [Name("String_ Id")]
+        [Name("String_Id")]
         public string IdString { get; set; }
 
         public override string ToString()
