@@ -139,13 +139,13 @@ namespace Tests.UnitTests
         public async Task MessageImportTests()
         {
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-            var authConfig = new AppConfig();
-            var auth = new GraphAppIndentityOAuthContext(telemetry, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
+            var config = new AppConfig();
+            var auth = new GraphAppIndentityOAuthContext(telemetry, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
 
             await auth.InitClientCredential();
             var graphClient = new GraphServiceClient(auth.Creds);
 
-            var finder = new TeamsFinder(telemetry, authConfig, graphClient);
+            var finder = new TeamsFinder(telemetry, config, graphClient);
             var allGroups = await finder.FindGroupsWithTeamToCrawl(TeamsCrawlConfig.AllGroupsConfig);
 
             Assert.IsTrue(allGroups.Count > 0, "No teams found to load messages for");
@@ -153,7 +153,7 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 var context = new TeamsLoadContext(graphClient);
-                var team = await O365Team.LoadTeamFull(allGroups[0], context, telemetry, db);
+                var team = await O365Team.LoadTeamFull(allGroups[0], context, telemetry, config, db);
                 var channel = team.Channels.First();
                 var user = new Identity { Id = team.OwnerUserAccounts[0].Id };
 
@@ -212,7 +212,7 @@ namespace Tests.UnitTests
                 await team.ProcessAllReactionsFromMessages(context, channel);
 
 
-                var sqlTeam = await team.SaveToSQL(new TeamsAndCallsDBLookupManager(db), telemetry);
+                var sqlTeam = await team.SaveToSQL(new TeamsAndCallsDBLookupManager(db), config, telemetry);
                 Assert.IsNotNull(sqlTeam);
 
                 // Check we see reactions & stats
@@ -461,6 +461,8 @@ namespace Tests.UnitTests
             };
             testTeam.Channels.Add(channelWithMsgsOnDifferentDays);
 
+            var settings = new AppConfig();
+
             // Save & load
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -478,7 +480,7 @@ namespace Tests.UnitTests
                 var preTestChannelLogCount = await db.TeamChannelStats.CountAsync();
 
                 // Save 
-                await testTeam.SaveToSQL(lookupManager, AnalyticsLogger.ConsoleOnlyTracer());
+                await testTeam.SaveToSQL(lookupManager, settings, AnalyticsLogger.ConsoleOnlyTracer());
 
                 // Check SQL data. Should be 1 log per day of messages. 
                 var firstPostTestChannelLogCount = await db.TeamChannelStats.CountAsync();
@@ -495,7 +497,7 @@ namespace Tests.UnitTests
                     .Where(m => m.CreatedDateTime.Value.Date == lastInserted.Date).Count(), "Last inserted log has unexpected messages count");
 
                 // Save again
-                await testTeam.SaveToSQL(lookupManager, AnalyticsLogger.ConsoleOnlyTracer());
+                await testTeam.SaveToSQL(lookupManager, settings, AnalyticsLogger.ConsoleOnlyTracer());
                 var secondPostTestChannelLogCount = await db.TeamChannelStats.CountAsync();
 
                 // 3rd count should be same as post 1st-save count as we already have logs for those days, so no changes should be made
@@ -528,7 +530,7 @@ namespace Tests.UnitTests
                 );
 
                 // Save one more time
-                await testTeam.SaveToSQL(lookupManager, AnalyticsLogger.ConsoleOnlyTracer());
+                await testTeam.SaveToSQL(lookupManager, settings, AnalyticsLogger.ConsoleOnlyTracer());
                 var thirdPostTestChannelLogCount = await db.TeamChannelStats.CountAsync();
 
                 // 4th count should only include the last happy msgs - 1 log as they're all on the same day

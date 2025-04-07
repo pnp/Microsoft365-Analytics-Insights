@@ -12,9 +12,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     public class TeamTokenManager
     {
-        public TeamTokenManager(O365Team team)
+        public TeamTokenManager(O365Team team, AppConfig appConfig, ILogger logger)
         {
-            this.CacheConnectionManager = CacheConnectionManager.GetConnectionManager(new AppConfig().ConnectionStrings.RedisConnectionString);
+            if (appConfig.ConnectionStrings.RedisConnectionString != null)
+            {
+                this.CacheConnectionManager = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString);
+            }
+            else
+            {
+                logger.LogWarning("No redis connection string found in app config. No caching will be done.");
+            }
             this.Team = team;
         }
 
@@ -24,7 +31,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         static Lazy<Dictionary<O365Team, RefreshOAuthToken>> _cahedTokens = new Lazy<Dictionary<O365Team, RefreshOAuthToken>>(() => new Dictionary<O365Team, RefreshOAuthToken>());
         public async Task<RefreshOAuthToken> GetRefreshToken(ILogger telemetry)
         {
-
+            if (CacheConnectionManager == null)
+            {
+                // No redis
+                return null;
+            }
             if (_cahedTokens.Value.ContainsKey(this.Team))
             {
                 return _cahedTokens.Value[this.Team];
