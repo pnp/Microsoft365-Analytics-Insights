@@ -404,7 +404,7 @@ namespace Tests.UnitTests
                 // Run updater; force full load
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
                 var userUpdater = new UserMetadataUpdater(telemetry, authConfig, auth.Creds, new ManualGraphCallClient(auth, telemetry));
-                await userUpdater.GraphUserLoader.ClearUserQueryDeltaCode();
+                await userUpdater.GraphUserLoader.DeltaValueProvider.ClearDeltaToken();
 
                 await userUpdater.InsertAndUpdateDatabaseUsersFromGraph();
 
@@ -428,7 +428,7 @@ namespace Tests.UnitTests
 
 
                 // Update again with no delta. Test logic for updating just existing
-                await userUpdater.GraphUserLoader.ClearUserQueryDeltaCode();
+                await userUpdater.GraphUserLoader.DeltaValueProvider.ClearDeltaToken();
                 await userUpdater.InsertAndUpdateDatabaseUsersFromGraph();
             }
         }
