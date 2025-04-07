@@ -1,6 +1,4 @@
-﻿using Common.Entities.Config;
-using Common.Entities.Redis;
-using DataUtils;
+﻿using DataUtils;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,22 +9,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public class GraphUserLoader
     {
         private readonly ManualGraphCallClient _httpClient;
+        private readonly IDeltaValueProvider _deltaValueProvider;
         private readonly ILogger _telemetry;
 
-        private readonly CacheConnectionManager _cacheConnectionManager;
-        public GraphUserLoader(ManualGraphCallClient httpClient, ILogger telemetry)
+        public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger telemetry)
         {
             this._httpClient = httpClient;
+            _deltaValueProvider = deltaValueProvider;
             this._telemetry = telemetry;
-            _cacheConnectionManager = CacheConnectionManager.GetConnectionManager(new AppConfig().ConnectionStrings.RedisConnectionString);
         }
+
+        public IDeltaValueProvider DeltaValueProvider => _deltaValueProvider;
 
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
             // Cache delta using tenant ID
-            var REDIS_USER_DELTA_KEY = GetRedisUserDeltaCacheKey();
-            var usersQueryDelta = await _cacheConnectionManager.GetString(REDIS_USER_DELTA_KEY);
-
+            var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
             var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
                 "?$select=id,accountEnabled,officeLocation,usageLocation,jobTitle,department,mail,userPrincipalName,manager,companyName,postalCode,country,state" +
                 "&$expand=manager";
@@ -39,7 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 async (deltaLink) =>
                 {
                     var thisPageDelta = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
-                    await _cacheConnectionManager.SetString(REDIS_USER_DELTA_KEY, thisPageDelta);
+                    await _deltaValueProvider.SetDeltaToken(thisPageDelta);
                 });
 
 
@@ -58,28 +56,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             return allActiveGraphUsers;
         }
-
-        #region Redis
-
-        public async Task ClearUserQueryDeltaCode()
-        {
-            var REDIS_USER_DELTA_KEY = GetRedisUserDeltaCacheKey();
-            await _cacheConnectionManager.DeleteString(REDIS_USER_DELTA_KEY);
-            _telemetry.LogInformation("User import - cleared delta token from cache");
-        }
-
-        static AppConfig _config = null;
-        static string GetRedisUserDeltaCacheKey()
-        {
-            if (_config == null)
-            {
-                _config = new AppConfig();
-            }
-            var REDIS_USER_DELTA_KEY = $"UserDeltaCode-{_config.TenantGUID}";
-            return REDIS_USER_DELTA_KEY;
-        }
-
-        #endregion
 
     }
 }
