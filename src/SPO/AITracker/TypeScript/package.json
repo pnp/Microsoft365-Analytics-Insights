@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "O365 Advanced Analytics client-side tracker",
   "scripts": {
-    "build": "webpack --mode=production --define-process-env-node-env=production",
+    "build": "webpack",
     "clean": "tsc --build --clean",
     "build:dev": "webpack --mode=development",
     "build:prod": "webpack --mode=production --define-process-env-node-env=production",
@@ -35,7 +35,6 @@
     "js-cookie": "^3.0.1",
     "moment": "^2.29.4",
     "timeme.js": "^2.1.0",
-    "util": "^0.12.5",
     "uuid": "^9.0.0"
   }
 }

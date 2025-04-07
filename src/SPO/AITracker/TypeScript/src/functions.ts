@@ -1,10 +1,7 @@
-
-const { TextEncoder } = require("util");
+const textEncoder = new TextEncoder();
 
 // This function will split an array into multiple arrays of a maximum byte size
 export function splitIntoJsonArraysOfMaxBytes<T>(d: T[] | undefined, maxBytesSize: number, callBack: Function): void {
-    const textEncoder = new TextEncoder();
-
     let nextCallbackResults: T[] = [];
     if (d && Array.isArray(d)) {
         d.forEach((item: T, idx: number) => {
