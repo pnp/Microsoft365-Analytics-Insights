@@ -28,6 +28,12 @@ function ProcessScriptWithConfig ($configFileName) {
 		return
 	}
 
+	# PnP Client ID. Check and encode to base64
+	if ($config.PnPsClientId -eq $null -or $config.PnPsClientId -eq "") {
+		Write-Host "FATAL ERROR: No property value with name 'PnPsClientId' in '$configFileName'. We need it to authenticate PnP PowerShell. Is this config file an old one?" -ForegroundColor red -BackgroundColor Black
+		return
+	}
+
 	# App Insights Key. Check and encode to base64
 	if ($config.ApplicationInsightsConnectionString -eq $null) {
 		Write-Host "FATAL ERROR: No property value with name 'ApplicationInsightsConnectionString' in '$configFileName'. Is this config file an old one? We use Application Insights connection-strings instead of just instrumentation keys since Sep 2023" -ForegroundColor red -BackgroundColor Black
@@ -93,15 +99,12 @@ function InstallAITrackerToSiteCollection($siteCollectionRootWebUrl, $config) {
 	$sourceFile = $siteCollectionRootWebUrl + $sourceFileRelative
 
 
-	# Auth to SharePoint
-	Connect-PnPOnline $siteCollectionRootWebUrl -Interactive
-
 	$msg = "Successfuly connected to site: " + $siteCollectionRootWebUrl
 	write-output $msg 
 	
-
+	Connect-PnPOnline -url $siteCollectionRootWebUrl -ClientId $config.PnPsClientId -Interactive -ErrorAction Stop
 	$Context = Get-PnPContext
-	$web = Get-PnPWeb
+	$web = Get-PnPWeb -ErrorAction Stop
 
 	Write-Output ""	
 	
@@ -167,10 +170,6 @@ function UninstallAITrackerFromSiteCollection($siteCollectionRootWebUrl, $config
 		# Set vars
 		$sourceFile = $siteCollectionRootWebUrl + $sourceFileRelative
 	
-		# Auth to SharePoint
-		Connect-PnPOnline $siteCollectionRootWebUrl -Interactive
-		$msg = "Successfuly connected to site: " + $siteCollectionRootWebUrl
-		write-output $msg 
 	
 		$Context = Get-PnPContext
 		$web = Get-PnPWeb
@@ -363,7 +362,7 @@ function AddAITrackerCustomActionToWeb($web) {
 		Write-Host ("Inserted custom-action into web: '" + ($web.Url) + "' with description '$aiTrackerDecription'...") -ForegroundColor Green
 	}
 	catch {
-		Write-Host "WARNING: Failed to configure custom actions - custom scripts enabled? Run 'Set-SPOsite https://[tenant].sharepoint.com/sites/site -DenyAddAndCustomizePages 0' to enable customisations" -ForegroundColor Yellow
+		Write-Host "WARNING: Failed to configure custom actions - custom scripts enabled? Run 'Set-SPOsite $web.Url -DenyAddAndCustomizePages 0' to enable customisations" -ForegroundColor Yellow
 
 		# Sites must have customisations enabled.
 		# Connect-SPOService -Url https://m365x818801-admin.sharepoint.com/
@@ -439,6 +438,7 @@ else {
 
 	Import-Module PnP.PowerShell
 
+	
 	$aiModernUITrackerDecription = "SPO Insights ModernUI AITracker App Customizer"
 	
 	ProcessScriptWithConfig($ConfigFileName)

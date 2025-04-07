@@ -236,7 +236,7 @@ jobs:
         run: |
           cd src/SPO/AITracker/TypeScript
           npm ci
-          npm run build
+          npm run build:prod
           cd ../..
           rm -rf AITracker/TypeScript
           zip -r AITrackerInstaller.zip AITracker

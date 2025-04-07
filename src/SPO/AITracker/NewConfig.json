@@ -6,6 +6,7 @@
     "https://mytenant.sharepoint.com/sites/spoinsightsModern",
     "https://mytentant.sharepoint.com/sites/spoinsights"
   ],
+  "PnPsClientId": "",
   "ApplicationInsightsConnectionString": "--Paste AI connection string here--",
   "SourceFileRelativeDestination": "/SPOInsights/AITracker.js",
   "SPOInsightDocLibTitle": "SPOInsights"
