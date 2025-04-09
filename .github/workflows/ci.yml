@@ -231,11 +231,11 @@ jobs:
         run: |
           Get-ChildItem '.\reports\Usage Analytics\*' `
           -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
-          -Force -DestinationPath "${{ runner.temp }}\zips\Analytics_Reports.zip"
+          -Force -DestinationPath "${{ runner.temp }}\Analytics_Reports.zip"
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.temp }}/zips/
+          path: ${{ runner.temp }}/zips/Analytics_Reports.zip
           name: drop_Reports
           if-no-files-found: error
 
@@ -246,6 +246,7 @@ jobs:
       - setup_build
       - build_dotnet
       - build_aitracker
+      - build_reports
     permissions: 
       # Required to create tags in the repo
       contents: write
