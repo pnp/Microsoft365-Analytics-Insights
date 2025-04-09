@@ -167,29 +167,15 @@ jobs:
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
           Compress-Archive -Force -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
-          -DestinationPath "${{ env.folder }}\${{ matrix.project.outDir }}.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-
-      - name: Archive Reports
-        # condition to run it only once
-        if: matrix.project.name == 'App.ControlPanel'
-        run: |
-          Get-ChildItem '.\reports\Usage Analytics\*' `
-          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
-          -Force -DestinationPath "${{ env.folder }}\Analytics_Reports.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+          -DestinationPath "${{ steps.prep.outputs.ZIPS_FOLDER }}\${{ matrix.project.outDir }}.zip"
 
       # Wrap up
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: ${{ env.folder }}
+          path: ${{ steps.prep.outputs.ZIPS_FOLDER }}
           name: drop_${{ matrix.project.name }}
           if-no-files-found: error
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
   
   build_aitracker:
     # NPM ai tracker
