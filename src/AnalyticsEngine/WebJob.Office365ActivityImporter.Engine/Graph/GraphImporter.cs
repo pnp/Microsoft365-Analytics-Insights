@@ -122,26 +122,36 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             await InitAuth();
             var MIN_WAIT = TimeSpan.FromDays(1);
 
-            var lastImportedDateLoader = new UserActivityLastImportedRedisSingleDateLoader(_settings.ConnectionStrings.RedisConnectionString);
-
-            // Clear "last imported" date in redis if no data in DB
-            using (var db = new AnalyticsEntitiesContext())
+            DateTime? lastImportedDate = null;
+            UserActivityLastImportedRedisSingleDateLoader lastImportedDateLoader = null;
+            if (_settings.ConnectionStrings.RedisConnectionString != null)
             {
-                var teamsActivityCountAll = await db.TeamUserActivityLogs.CountAsync();
-                if (teamsActivityCountAll == 0)
+                lastImportedDateLoader = new UserActivityLastImportedRedisSingleDateLoader(_settings.ConnectionStrings.RedisConnectionString);
+
+                // Clear "last imported" date in redis if no data in DB
+                using (var db = new AnalyticsEntitiesContext())
                 {
-                    await lastImportedDateLoader.DeleteDt();
+                    var teamsActivityCountAll = await db.TeamUserActivityLogs.CountAsync();
+                    if (teamsActivityCountAll == 0)
+                    {
+                        await lastImportedDateLoader.DeleteDt();
+                    }
                 }
+
+                lastImportedDate = await lastImportedDateLoader.GetLastDT();
+            }
+            else
+            {
+                _telemetry.LogWarning("No Redis connection string - cannot find last date for imported for activity reports.");
             }
 
-            var lastImportedDate = await lastImportedDateLoader.GetLastDT();
             var runImport = (lastImportedDate == null || DateTime.Now.Subtract(lastImportedDate.Value) > MIN_WAIT);
 #if DEBUG
             runImport = true;
 #endif
             if (runImport)
             {
-                _telemetry.LogInformation($"\nReading all activity reports from {daysBackMax} days back...");
+                _telemetry.LogInformation($"Reading all activity reports from {daysBackMax} days back...");
 
                 // Parallel-load all, each one with own DB context
                 var importTasks = new List<Task>();
@@ -199,7 +209,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 // Remember last import date
-                await lastImportedDateLoader.SaveDT();
+                if (lastImportedDateLoader != null)
+                {
+                    await lastImportedDateLoader.SaveDT();
+                }
+
                 _telemetry.LogInformation($"Activity reports imported. Will run again in {MIN_WAIT.TotalHours} hours");
                 return true;
             }

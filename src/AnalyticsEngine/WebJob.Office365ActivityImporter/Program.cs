@@ -204,12 +204,19 @@ namespace WebJob.Office365ActivityImporter
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
-                    var redisDatesAdaptor = new RedisStatsDatesLoader(configuredSettings);
-
-                    using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
+                    if (configuredSettings.ConnectionStrings.RedisConnectionString != null)
                     {
-                        var stats = new UsageStatsManager(sqlUsageBuilder, redisDatesAdaptor, statsUploader, telemetry);
-                        await stats.ProcessAndFailSilently();
+                        var redisDatesAdaptor = new RedisStatsDatesLoader(configuredSettings);
+
+                        using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
+                        {
+                            var stats = new UsageStatsManager(sqlUsageBuilder, redisDatesAdaptor, statsUploader, telemetry);
+                            await stats.ProcessAndFailSilently();
+                        }
+                    }
+                    else
+                    {
+                        telemetry.LogWarning("No Redis connection string found - skipping stats upload.");
                     }
                 }
 

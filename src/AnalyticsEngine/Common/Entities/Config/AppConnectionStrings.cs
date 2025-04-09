@@ -55,11 +55,8 @@ namespace Common.Entities.Config
             this.DatabaseConnectionString = dbConnectionString.ConnectionString;
 
             var redisConnectionString = ConfigurationManager.ConnectionStrings["Redis"];
-            if (redisConnectionString == null)
-            {
-                throw new ConfigurationErrorsException("Missing redis connection string");
-            }
-            this.RedisConnectionString = redisConnectionString.ConnectionString;
+            // Redis can now be null
+            this.RedisConnectionString = redisConnectionString?.ConnectionString;
 
             var sb = ConfigurationManager.ConnectionStrings["ServiceBus"];
             if (sb == null)

@@ -108,6 +108,7 @@
     <Compile Include="Entities\MessageCognitiveStats.cs" />
     <Compile Include="Entities\WebActivityReportSet.cs" />
     <Compile Include="ExceptionHandler.cs" />
+    <Compile Include="Graph\DeltaValueProvider.cs" />
     <Compile Include="Graph\PageableGraphLoaderExtensions.cs" />
     <Compile Include="Graph\PageableGraphResponse.cs" />
     <Compile Include="Graph\OfficeLicenseNameResolver.cs" />
