@@ -93,6 +93,7 @@ jobs:
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # 4.2.3
+        if: false
         env:
           cache-name: nuget-package-cache
         with:
