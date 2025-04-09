@@ -37,17 +37,6 @@ env:
   StatsApiUrl: ${{ secrets.STATSAPIURL }}
 
 jobs:
-  setup_build:
-    # This step will calculate the build number with an offset
-    # so that build numbers will follow the ones from Azure DevOps.
-    # It will also check that the important folders have been updated.
-    runs-on: ubuntu-latest
-    outputs:
-      code_changed: ${{ inputs.force_build || steps.changes.outputs.code == 'true' }}
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
   build_dotnet:
     # Preparation:
     #   - Transform configuration files
@@ -60,7 +49,6 @@ jobs:
     #   - Zip files
     #   - Publish artifacts
     runs-on: windows-latest
-    needs: setup_build
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
@@ -141,16 +129,6 @@ jobs:
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
 
-      - name: Archive Reports
-        # condition to run it only once
-        if: matrix.project.name == 'App.ControlPanel'
-        run: |
-          Get-ChildItem '.\reports\Usage Analytics\*' `
-          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
-          -Force -DestinationPath "${{ env.folder }}\Analytics_Reports.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-
       # Wrap up
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -170,7 +148,6 @@ jobs:
     #   - Zip files
     #   - Publish artifacts
     runs-on: ubuntu-latest
-    needs: setup_build
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -189,3 +166,33 @@ jobs:
           path: src/SPO/AITrackerInstaller.zip
           name: drop_aitracker
           if-no-files-found: error
+
+  build_reports:
+    runs-on: windows-latest
+    steps:
+      - name: Prepare folders
+        id: prep
+        shell: bash
+        run: |
+          mkdir -p "${{ env.Zips_Folder }}"
+          echo "ZIPS_FOLDER=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
+        env:
+          Zips_Folder: ${{ runner.temp }}/zips/
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Archive Reports
+        run: |
+          Get-ChildItem '.\reports\Usage Analytics\*' `
+          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
+          -Force -DestinationPath "${{ env.folder }}\Analytics_Reports.zip"
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.folder }}
+          name: drop_UsageReports
+          if-no-files-found: error
+        env:
+          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+
