@@ -48,15 +48,29 @@ jobs:
       code_changed: ${{ steps.changes.outputs.code == 'true' }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
       - name: Check if the code has been modified so tests must be run
         id: changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # 3.0.2
         with:
           filters: |
             code:
               - 'src/**'
-  unit_tests:
+
+  test_aitracker:
+    runs-on: ubuntu-latest
+    needs: setup_tests
+    if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+      - name: Run AI Tracker tests
+        run: |
+          cd src/SPO/AITracker/TypeScript
+          npm ci
+          npm run test
+
+  test_dotnet:
     # Tests job
     # Preparation:
     #   - Transform configuration files
@@ -73,24 +87,20 @@ jobs:
         configuration: [Release] # [Debug, Release]
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Run AI Tracker tests
-        run: |
-          cd src/SPO/AITracker/TypeScript
-          npm ci
-          npm run test
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # 2.0.0
       - name: Cache NuGet Packages
         id: nuget-packages
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # 4.2.3
+        if: false
         env:
           cache-name: nuget-package-cache
         with:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
       - name: Config substitution - Unit tests
-        uses: microsoft/variable-substitution@v1
+        uses: microsoft/variable-substitution@6287962da9e5b6e68778dc51e840caa03ca84495 # 1.0.0
         with:
           files: '${{ env.Solution_Directory }}\App.Release.config'
       - name: Restore the application
@@ -108,7 +118,7 @@ jobs:
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Execute unit tests
-        uses: jesusfer/vstest-action@main
+        uses: jesusfer/vstest-action@f5ec12ddb71f6e151b738fa4740f8fea61e9214b
         with:
           testAssembly: Tests.UnitTests.dll
           searchFolder: ${{ env.Solution_Directory }}\bin\${{ env.Configuration }}\

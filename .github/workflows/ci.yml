@@ -61,6 +61,23 @@ jobs:
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
+        project:
+          - name: WebJob.AppInsightsImporter
+            file: WebJob.AppInsightsImporter.csproj
+            outDir: AppInsightsImporter
+            compressFolder: AppInsightsImporter
+          - name: WebJob.Office365ActivityImporter
+            file: WebJob.Office365ActivityImporter.csproj
+            outDir: Office365ActivityImporter
+            compressFolder: Office365ActivityImporter
+          - name: Web
+            file: Web.csproj
+            outDir: Website
+            compressFolder: Website\_PublishedWebsites\Web
+          - name: App.ControlPanel
+            file: App.ControlPanel.WinForms.csproj
+            outDir: ControlPanelApp
+            compressFolder: ControlPanelApp
     env:
       BuildId: ${{ needs.setup_build.outputs.build_number }}
       BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
@@ -77,10 +94,7 @@ jobs:
         env:
           Zips_Folder: ${{ runner.temp }}/zips/
           Pfx_Path: ${{ runner.temp }}/SPOInsightsBinaries.pfx
-      - name: Decode the PFX
-        run: |
-          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.PFX_PATH }}", $pfx_cert_byte)
+
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
@@ -88,11 +102,13 @@ jobs:
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v4
+        if: false
         env:
           cache-name: nuget-package-cache
         with:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
+
       # Configuration files
       - name: Year substitution
         shell: bash
@@ -103,122 +119,64 @@ jobs:
         uses: devops-actions/variable-substitution@v1.2
         with:
           files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
+
+      # Build the project
       - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }} -t:Restore `
-          -p:Configuration=${{ env.Configuration }} `
+        run: msbuild ${{ env.Solution_Directory }}\${{ matrix.project.name }}\${{ matrix.project.file }} -t:Restore `
+          -p:Configuration=${{ matrix.configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
-        env:
-          Configuration: ${{ matrix.configuration }}
-      # Projects building
-      - name: Build WebJob.AppInsightsImporter
-        run: msbuild ${{ env.Solution_Directory }}\WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj `
-          -p:Configuration=${{ env.Configuration }} `
+
+      - name: Build ${{ matrix.project.name }}
+        run: msbuild ${{ env.Solution_Directory }}\${{ matrix.project.name }}\${{ matrix.project.file }} `
+          -p:Configuration=${{ matrix.configuration }} `
           -p:Platform="${{ env.Build_Platform }}" `
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:OutDir=${{ runner.temp }}\AppInsightsImporter `
-          -p:OutputPath=${{ env.Configuration }} `
+          -p:OutDir=${{ runner.temp }}\${{ matrix.project.outDir }} `
+          -p:OutputPath=${{ matrix.configuration }} `
           -p:AllowedReferenceRelatedFileExtensions=none `
           -p:EmitCompilerGeneratedFiles=false
-        env:
-          Configuration: ${{ matrix.configuration }}
-      - name: Archive AppInsightsImporter
-        run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
-          Compress-Archive -Force -Path "${{ runner.temp }}\AppInsightsImporter" `
-          -DestinationPath "${{ env.folder }}\AppInsightsImporter.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-      - name: Build WebJob.Office365ActivityImporter
-        run: |
-          msbuild ${{ env.Solution_Directory }}\WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj `
-          -p:Configuration=${{ env.Configuration }} `
-          -p:Platform="${{ env.Build_Platform }}" `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:OutDir=${{ runner.temp }}\Office365ActivityImporter `
-          -p:OutputPath=${{ env.Configuration }} `
-          -p:AllowedReferenceRelatedFileExtensions=none `
-          -p:EmitCompilerGeneratedFiles=false
-        env:
-          Configuration: ${{ matrix.configuration }}
-      - name: Copy Automation scripts
+
+      - name: Copy Automation scripts (WebJob.Office365ActivityImporter only)
+        if: matrix.project.name == 'WebJob.Office365ActivityImporter'
         run: |
           Copy-Item -Verbose -Force -Recurse `
           -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS" `
           -Destination "${{ runner.temp }}\Office365ActivityImporter\"
-      - name: Archive Office365ActivityImporter
+
+      - name: Decode the PFX
+        if: matrix.project.name == 'App.ControlPanel'
         run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue `
-          "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
-          Compress-Archive -Force -Path "${{ runner.temp }}\Office365ActivityImporter" `
-          -DestinationPath "${{ env.folder }}\Office365ActivityImporter.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-      - name: Build Website
-        run: msbuild ${{ env.Solution_Directory }}\Web\Web.csproj `
-          -p:Configuration=${{ env.Configuration }} `
-          -p:Platform="${{ env.Build_Platform }}" `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:OutDir=${{ runner.temp }}\Website `
-          -p:OutputPath=${{ env.Configuration }} `
-          -p:AllowedReferenceRelatedFileExtensions=none `
-          -p:EmitCompilerGeneratedFiles=false
-        env:
-          Configuration: ${{ matrix.configuration }}
-      - name: Archive Website
-        run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue `
-          "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
-          Compress-Archive -Force -Path "${{ runner.temp }}\Website\_PublishedWebsites\Web" `
-          -DestinationPath "${{ env.folder }}\Website.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-      - name: Build Installer
-        run: |
-          msbuild ${{ env.Solution_Directory }}\App.ControlPanel\App.ControlPanel.WinForms.csproj `
-          -p:Configuration=${{ env.Configuration }} `
-          -p:Platform="${{ env.Build_Platform }}" `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:OutDir=${{ runner.temp }}\ControlPanelApp `
-          -p:OutputPath=${{ env.Configuration }} `
-          -p:AllowedReferenceRelatedFileExtensions=none `
-          -p:EmitCompilerGeneratedFiles=false
-        env:
-          Configuration: ${{ matrix.configuration }}
+          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
+          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.PFX_PATH }}", $pfx_cert_byte)
       - name: Sign installer
+        if: matrix.project.name == 'App.ControlPanel'
         run: |
-          & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
-          sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
-          /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
-          "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
-        env:
-          Configuration: ${{ matrix.configuration }}
-      - name: Archive ControlPanelApp
-        run: Compress-Archive -Force -Path "${{ runner.temp }}\ControlPanelApp" `
-          -DestinationPath "${{ env.folder }}\ControlPanelApp.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-      - name: Archive Reports
+            & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
+            sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
+            /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
+            "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
+      - name: Remove the PFX
+        if: matrix.project.name == 'App.ControlPanel'
         run: |
-          Get-ChildItem '.\reports\Usage Analytics\*' `
-          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
-          -Force -DestinationPath "${{ env.folder }}\Analytics_Reports.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+          Remove-Item -Path "${{ steps.prep.outputs.PFX_PATH }}"
+    
+      - name: Archive ${{ matrix.project.name }}
+        run: |
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
+          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
+          Compress-Archive -Force -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
+          -DestinationPath "${{ steps.prep.outputs.ZIPS_FOLDER }}\${{ matrix.project.outDir }}.zip"
+
       # Wrap up
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: ${{ env.folder }}
-          name: drop_dotnet
+          path: ${{ steps.prep.outputs.ZIPS_FOLDER }}
+          name: drop_${{ matrix.project.name }}
           if-no-files-found: error
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
   
-      - name: Remove the PFX
-        run: |
-          Remove-Item -Path "${{ steps.prep.outputs.PFX_PATH }}"
-
   build_aitracker:
     # NPM ai tracker
     # Build:
@@ -248,12 +206,33 @@ jobs:
           name: drop_aitracker
           if-no-files-found: error
 
+
+  build_reports:
+    runs-on: windows-latest
+    needs: setup_build
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Archive Reports
+        run: |
+          Get-ChildItem '.\reports\Usage Analytics\*' `
+          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
+          -Force -DestinationPath "${{ runner.temp }}\Analytics_Reports.zip"
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ runner.temp }}/Analytics_Reports.zip
+          name: drop_Reports
+          if-no-files-found: error
+
+
   release:
     runs-on: ubuntu-latest
     needs:
       - setup_build
       - build_dotnet
       - build_aitracker
+      - build_reports
     permissions: 
       # Required to create tags in the repo
       contents: write
@@ -307,5 +286,5 @@ jobs:
           commit: ${{ github.sha }}
           # bodyFile:  CHANGELOG.md
           generateReleaseNotes: true
-          artifacts: "${{ env.BASE }}/drop_dotnet/*.zip,${{ env.BASE }}/drop_aitracker/*.zip"
+          artifacts: "${{ env.BASE }}/**/*.zip"
           artifactContentType: application/zip
