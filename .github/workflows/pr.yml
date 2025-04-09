@@ -8,12 +8,6 @@ on:
       - src/**
       - reports/**
   workflow_dispatch:
-    inputs:
-      force_build:
-        default: false
-        required: false
-        type: boolean
-        description: Bypass code changed check
 
 env:
   Solution_Directory: src\AnalyticsEngine\
