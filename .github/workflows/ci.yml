@@ -60,7 +60,7 @@ jobs:
     needs: setup_build
     strategy:
       matrix:
-        configuration: [Release] # [Debug, Release]
+        configuration: [Release, Debug] # [Debug, Release]
         project:
           - name: WebJob.AppInsightsImporter
             file: WebJob.AppInsightsImporter.csproj
