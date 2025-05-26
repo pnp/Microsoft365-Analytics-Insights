@@ -34,7 +34,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Override default
             _graphServiceClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
             _httpClient = manualGraphCallClient;
-            _userLoader = new GraphUserLoader(_httpClient, _telemetry);
+
+
+            IDeltaValueProvider deltaProvider = null;
+            if (settings.ConnectionStrings.RedisConnectionString != null)
+            {
+                deltaProvider = new RedisProcessDeltaValueProvider(settings, telemetry);
+                telemetry.LogInformation($"User import - using Redis for delta token cache.");
+            }
+            else
+            {
+                telemetry.LogInformation($"User import - no redis found configured, using in-process cache for delta token.");
+                deltaProvider = new InProcessDeltaValueProvider(telemetry);
+            }
+            _userLoader = new GraphUserLoader(_httpClient, deltaProvider, _telemetry);
         }
 
         public GraphUserLoader GraphUserLoader => _userLoader;
@@ -59,7 +72,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var activeUserCount = await db.users.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value == true).CountAsync();
                 if (activeUserCount == 0)
                 {
-                    await _userLoader.ClearUserQueryDeltaCode();
+                    await _userLoader.DeltaValueProvider.ClearDeltaToken();
                 }
 
                 // Load from Graph & update delta code once done
