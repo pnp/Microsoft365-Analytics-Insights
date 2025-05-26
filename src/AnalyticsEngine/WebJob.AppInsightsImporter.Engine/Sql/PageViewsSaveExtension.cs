@@ -21,18 +21,18 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             // Hack to change/ensure correct DB schema. Needs moving to a migration
             ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
-            var pageViewsProcessed = new System.Collections.Concurrent.ConcurrentBag<Guid>();
+            var pageRequestIdProcessed = new List<Guid>();
 
             var logsToInsert = new EFInsertBatch<HitTempEntity>(database, telemetry);
             foreach (var pv in pageViews.Rows.Where(p => p.CustomProperties?.PageRequestId != null))
             {
                 var userName = pv.Username;
-                var hitIsNew = pv.CustomProperties.PageRequestId != Guid.Empty && !pageViewsProcessed.Contains(pv.CustomProperties.PageRequestId.Value);
+                var hitIsNew = pv.CustomProperties.PageRequestId != Guid.Empty && !pageRequestIdProcessed.Contains(pv.CustomProperties.PageRequestId.Value);
 
                 if (hitIsNew)
                 {
                     // Remember page view ID in case we get duplicates. 
-                    pageViewsProcessed.Add(pv.CustomProperties.PageRequestId.Value);
+                    pageRequestIdProcessed.Add(pv.CustomProperties.PageRequestId.Value);
 
                     // Filter URLs based on org_urls table 
                     if (!filterUrls.UrlInScope(pv.CustomProperties.SiteUrl, pv.Url))
