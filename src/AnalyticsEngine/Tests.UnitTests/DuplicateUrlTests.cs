@@ -148,14 +148,14 @@ namespace Tests.UnitTests
                 );
 
                 // Cleanup duplicate URLs
-                await ImportDbHacks.CleanDuplicateHits(db);
+                await ImportDbHacks.CleanDuplicateUrls(db);
 
-                // Save hits again after cleanup
+                // Save hits again after cleanup. Should succeed now
                 await duplicateHitsInSingleBatch.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
 
                 var hitsPostInsert = db.hits.Count();
 
-                // Find the resources we created above to make sure they still exist
+                // Find the resources we created above to make sure they still exist (or not)
                 var urlDup1Check = db.urls.FirstOrDefault(u => u.ID == urlDup1.ID);
                 var urlDup2Check = db.urls.FirstOrDefault(u => u.ID == urlDup2.ID);
                 Assert.IsNotNull(urlDup1Check, "URL 1 should still exist after cleanup");

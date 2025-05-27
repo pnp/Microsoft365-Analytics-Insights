@@ -96,7 +96,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
         }
 
-        public static async Task CleanDuplicateHits(AnalyticsEntitiesContext db)
+        public static async Task CleanDuplicateUrls(AnalyticsEntitiesContext db)
         {
             if (db == null)
                 throw new ArgumentNullException(nameof(db));
