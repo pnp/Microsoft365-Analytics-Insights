@@ -6,7 +6,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     /// <summary>
     /// The class of shame.
     /// </summary>
-    internal static class ImportDbHacks
+    public static class ImportDbHacks
     {
 
         /// <summary>
@@ -85,7 +85,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// Runs script to clean hits with duplicate page-request IDs, and creates unique index on page_request_id if doesn't exist.
         /// This only needs to be run once ever really.
         /// </summary>
-        public static void CleanDuplicateHits()
+        public static void CleanDuplicateHitsAndCreateIX_PageRequestID()
         {
             using (var db = new AnalyticsEntitiesContext())
             {

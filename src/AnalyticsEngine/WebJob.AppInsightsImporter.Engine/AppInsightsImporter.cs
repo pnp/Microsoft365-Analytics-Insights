@@ -30,7 +30,7 @@ namespace WebJob.AppInsightsImporter.Engine
         public async Task ImportAndSave(bool saveRestResponses, int? daysBeforeOverride)
         {
             // Delete duplicate hits 1st. It also creates the page-request-ID index
-            ImportDbHacks.CleanDuplicateHits();
+            ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID();
 
             DateTime? scanFromDateOverride = null;
             if (daysBeforeOverride.HasValue)
