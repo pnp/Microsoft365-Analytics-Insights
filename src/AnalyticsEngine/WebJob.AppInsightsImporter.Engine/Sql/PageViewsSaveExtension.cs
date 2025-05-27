@@ -19,7 +19,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger telemetry, List<FilterUrlConfig> filterUrls)
         {
             // Hack to change/ensure correct DB schema. Needs moving to a migration
-            ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
+            await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
             var pageRequestIdProcessed = new List<Guid>();
 

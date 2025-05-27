@@ -1,5 +1,9 @@
 ﻿using Common.Entities;
+using System;
 using System.Data.Entity;
+using System.IO;
+using System.Reflection;
+using System.Threading.Tasks;
 
 namespace WebJob.AppInsightsImporter.Engine.Sql
 {
@@ -14,10 +18,12 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// (it used to be the default of SQL_Latin1_General_CP1_CI_AS (case insensitive) but had to handle AppInsights wierd session IDs in multiple cases).
         /// Fun fact: we don't even use AppInsights generated session Ids anymore, so this change is useless but we can't change this index now as it would take forever to recreate in production DBs
         /// </summary>
-        public static void EnsureSessionTableHasRightCollation(Database database)
+        public static async Task EnsureSessionTableHasRightCollation(Database database)
         {
+            if (database == null)
+                throw new ArgumentNullException(nameof(database));
             // Check if we need to convert collation + insert index
-            database.ExecuteSqlCommand(@"
+            await database.ExecuteSqlCommandAsync(@"
                 if (SELECT c.collation_name 
                     FROM SYS.COLUMNS c
                     JOIN SYS.TABLES t ON t.object_id = c.object_id
@@ -78,19 +84,49 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 ");
         }
 
-
-
-
         /// <summary>
         /// Runs script to clean hits with duplicate page-request IDs, and creates unique index on page_request_id if doesn't exist.
         /// This only needs to be run once ever really.
         /// </summary>
-        public static void CleanDuplicateHitsAndCreateIX_PageRequestID()
+        public static async Task CleanDuplicateHitsAndCreateIX_PageRequestID(AnalyticsEntitiesContext db)
         {
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                db.Database.ExecuteSqlCommand(Properties.Resources.Delete_Duplicate_Hits_and_Create_ReqID_IDX);
-            }
+            if (db == null)
+                throw new ArgumentNullException(nameof(db));
+            await db.Database.ExecuteSqlCommandAsync(Properties.Resources.Delete_Duplicate_Hits_and_Create_ReqID_IDX);
+
+        }
+
+        public static async Task CleanDuplicateHits(AnalyticsEntitiesContext db)
+        {
+            if (db == null)
+                throw new ArgumentNullException(nameof(db));
+
+            // Run the script to clean duplicate hits
+            var script = ReadResource("WebJob.AppInsightsImporter.Engine.Resources.Delete Duplicate URLs.sql");
+            await db.Database.ExecuteSqlCommandAsync(script);
+
+        }
+
+        static string ReadResource(string resourcePath)
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+
+            // Format: "{Namespace}.{Folder}.{filename}.{Extension}"
+            var manifests = assembly.GetManifestResourceNames();
+
+
+            using (var stream = assembly.GetManifestResourceStream(resourcePath))
+                if (stream != null)
+                {
+                    using (var reader = new StreamReader(stream))
+                    {
+                        return reader.ReadToEnd();
+                    }
+                }
+                else
+                {
+                    throw new ArgumentOutOfRangeException(nameof(resourcePath), $"No resource found by name '{resourcePath}'");
+                }
         }
     }
 }

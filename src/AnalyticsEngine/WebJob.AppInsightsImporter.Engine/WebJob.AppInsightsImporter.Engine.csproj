@@ -114,7 +114,7 @@
     <Content Include="Resources\Create Searches Import Temp Table.sql" />
     <Content Include="Resources\Create Update Temp Table.sql" />
     <Content Include="Resources\Create Import Temp Table.sql" />
-    <Content Include="Resources\Delete Duplicate URLs.sql" />
+    <EmbeddedResource Include="Resources\Delete Duplicate URLs.sql" />
     <Content Include="Resources\Delete Duplicate Hits and Create ReqID IDX.sql" />
     <Content Include="Resources\Migrate clicks from staging.sql" />
     <Content Include="Resources\Migrate New Comments.sql" />
