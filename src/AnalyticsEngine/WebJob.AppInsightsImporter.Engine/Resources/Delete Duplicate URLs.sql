@@ -28,7 +28,7 @@
 							GROUP BY full_url
 							HAVING COUNT(*)>1
 						) dt ON y.full_url=dt.full_url
-						order by dt.CountOf
+						order by dt.full_url
 					
 		open @allUrlsCursor
 
