@@ -64,7 +64,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             using (var database = new AnalyticsEntitiesContext())
             {
                 // Hack to change/ensure correct DB schema. Needs moving to a migration
-                ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
+                await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
 
                 var hitUpdatesTimer = new JobTimer(telemetry, "Hit updates");
