@@ -128,7 +128,6 @@ namespace WebJob.AppInsightsImporter.Engine
             if (response.IsSuccessStatusCode)
             {
                 var responeObj = JsonConvert.DeserializeObject<T>(responseBody);
-                File.WriteAllText(@"C:\Users\sambetts\Desktop\PV.json", responseBody);
                 return responeObj;
             }
             else
