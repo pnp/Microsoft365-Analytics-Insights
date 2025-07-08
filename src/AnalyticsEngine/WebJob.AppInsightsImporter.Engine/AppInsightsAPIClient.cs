@@ -14,7 +14,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public class AppInsightsAPIClient : IDisposable
     {
-        private readonly ILogger _debugTracer;
+        private readonly ILogger _logger;
 
         #region Constructors
 
@@ -37,7 +37,7 @@ namespace WebJob.AppInsightsImporter.Engine
             client.Timeout = TimeSpan.FromMinutes(10);
 
             this.ApiKey = apikey;
-            _debugTracer = debugTracer;
+            _logger = debugTracer;
             this.AppId = appid;
         }
 
@@ -55,42 +55,42 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>
         /// Load page-views
         /// </summary>
-        public async Task<PageViewCollection> GetPageViewsFromAppInsights(DateTime fromWhen, bool saveRestResponses)
+        public async Task<PageViewCollection> GetPageViewsFromAppInsights(DateTime forDate, bool saveRestResponses)
         {
-            // Request data from last 14 days to avoid default range. Some calls seem to default to 12 hours, so adding just in case.
-            var tsString = GetTimeSpanText(DateTime.Now.AddDays(-14));
-
-            // ...but only from the last hit timestamp
-            var adxQuery = $"pageViews | where timestamp > todatetime('{fromWhen.ToString("yyyy-MM-dd HH:mm:ss")}') | order by timestamp asc";
+            // Only from the last hit timestamp
+            var adxQuery = $"pageViews | where " + GetWhereString(forDate) +
+                $" | order by timestamp asc";
 
             // API Doc: https://docs.microsoft.com/en-us/rest/api/application-insights/query/get
-            var req = $"https://api.applicationinsights.io/v1/apps/{AppId}/query?query={adxQuery}&timespan={tsString}";
+            var req = $"https://api.applicationinsights.io/v1/apps/{AppId}/query?query={adxQuery}";
             var response = await client.GetAsync(req);
 
             var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "pageview");
 
-            return new PageViewCollection(result.DefaultTable, fromWhen, this._debugTracer);
+            return new PageViewCollection(result.DefaultTable, forDate, this._logger);
         }
 
         /// <summary>
         /// Load & process events into specific events we can use
         /// </summary>
-        public async Task<CustomEventsResultCollection> GetCustomEventsFromAppInsights(DateTime fromWhen, bool saveRestResponses)
+        public async Task<CustomEventsResultCollection> GetCustomEventsFromAppInsights(DateTime forDate, bool saveRestResponses)
         {
-            // Request data from last 14 days to avoid default range. Some calls seem to default to 12 hours, so adding just in case.
-            var tsString = GetTimeSpanText(DateTime.Now.AddDays(-14));
-
-            // ...but only from the last hit timestamp
-            var adxQuery = $"customEvents | where timestamp > todatetime('{fromWhen.ToString("yyyy-MM-dd HH:mm:ss")}') | order by timestamp asc";
+            // Only from the last hit timestamp
+            var adxQuery = $"customEvents | where " + GetWhereString(forDate) + " | order by timestamp asc";
 
             // Doc: https://dev.applicationinsights.io/reference/get-events
-            var req = $"https://api.applicationinsights.io/v1/apps/{AppId}/query?query={adxQuery}&timespan={tsString}";
+            var req = $"https://api.applicationinsights.io/v1/apps/{AppId}/query?query={adxQuery}";
 
             var resultsResponse = await client.GetAsync(req);
 
             var result = await HandleResponse<AppInsightsQueryResult>(resultsResponse, saveRestResponses, "event");
 
-            return new CustomEventsResultCollection(result.DefaultTable, fromWhen, _debugTracer);
+            return new CustomEventsResultCollection(result.DefaultTable, forDate, _logger);
+        }
+
+        string GetWhereString(DateTime forDate)
+        {
+            return $"timestamp >= todatetime('{forDate.ToString("yyyy-MM-dd HH:mm:ss")}') and timestamp < todatetime('{forDate.AddDays(1).ToString("yyyy-MM-dd HH:mm:ss")}')";
         }
 
         async Task<T> HandleResponse<T>(HttpResponseMessage response, bool saveRestResponses, string operationType)
@@ -134,16 +134,6 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 throw new HttpRequestException($"Unexpected response: {responseBody}");
             }
-        }
-
-        string GetTimeSpanText(DateTime fromWhen)
-        {
-            if (fromWhen > DateTime.Now)
-            {
-                throw new ArgumentOutOfRangeException(nameof(fromWhen), "Invalid filter - must be < today");
-            }
-            var ts = DateTime.Now.Subtract(fromWhen);
-            return System.Xml.XmlConvert.ToString(ts);
         }
 
         public void Dispose()
