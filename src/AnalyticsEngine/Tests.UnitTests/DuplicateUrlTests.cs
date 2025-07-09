@@ -74,7 +74,7 @@ namespace Tests.UnitTests
                             Id = Guid.NewGuid(),
                             Operation = new EventOperation
                             {
-                                Name = "Op" + DateTime.Now.Ticks
+                                Name = "Dup Url Op " + DateTime.Now.Ticks
                             },
                             User = randoUser,
                             TimeStamp = DateTime.Now,
