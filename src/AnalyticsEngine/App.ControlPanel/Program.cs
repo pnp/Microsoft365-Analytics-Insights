@@ -3,7 +3,6 @@ using App.ControlPanel.Engine.Models;
 using Common.Entities;
 using DataUtils;
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -40,12 +39,12 @@ namespace App.ControlPanel
                     }
                     catch (FormatException)
                     {
-                        AddToWindowsEventLog("Couldn't convert init param from base64; assuming the connection-string was sent in clear-text.");
+                        InstallerLogs.AddToWindowsEventLog("Couldn't convert init param from base64; assuming the connection-string was sent in clear-text.");
                         initInfo = new DatabaseUpgradeInfo() { ConnectionString = secondArgfullArgsString };
                     }
 
                     // Attempt to upgrade/verify the DB is on the correct migration
-                    DatabaseUpgrader.CheckDbUpgraded(initInfo, msg => AddToWindowsEventLog(msg));
+                    DatabaseUpgrader.CheckDbUpgraded(initInfo, msg => InstallerLogs.AddToWindowsEventLog(msg));
                     return;
                 }
                 else if (args.Contains(InstallerConstants.PARAM_REGISTERCONFIG))
@@ -59,13 +58,13 @@ namespace App.ControlPanel
                     }
                     catch (FormatException)
                     {
-                        AddToWindowsEventLog($"Couldn't convert init param from base64 value '{secondArgfullArgsString}'. Aborting registering config.", true);
+                        InstallerLogs.AddToWindowsEventLog($"Couldn't convert init param from base64 value '{secondArgfullArgsString}'. Aborting registering config.", true);
                         return;
                     }
 
                     if (!File.Exists(fileName))
                     {
-                        AddToWindowsEventLog($"Couldn't open file '{fileName}'. Aborting registering config.", true);
+                        InstallerLogs.AddToWindowsEventLog($"Couldn't open file '{fileName}'. Aborting registering config.", true);
                         return;
                     }
 
@@ -76,7 +75,7 @@ namespace App.ControlPanel
                     }
                     catch (FormatException ex)
                     {
-                        AddToWindowsEventLog($"Couldn't parse file data in '{fileName}': {ex.Message}. Aborting registering config.", true);
+                        InstallerLogs.AddToWindowsEventLog($"Couldn't parse file data in '{fileName}': {ex.Message}. Aborting registering config.", true);
                     }
 
                     if (installConfigAndEvents != null)
@@ -133,26 +132,12 @@ namespace App.ControlPanel
             }
             catch (Exception ex)
             {
-                AddToWindowsEventLog($"Registering config failed. Exception: '{ex}'.");
+                InstallerLogs.AddToWindowsEventLog($"Registering config failed. Exception: '{ex}'.");
                 throw;
             }
 
-            AddToWindowsEventLog($"Configuration registered successfully.");
+            InstallerLogs.AddToWindowsEventLog($"Configuration registered successfully.");
         }
 
-        static void AddToWindowsEventLog(string msg)
-        {
-            AddToWindowsEventLog(msg, false);
-        }
-        static void AddToWindowsEventLog(string msg, bool isError)
-        {
-            var buildLabel = System.Configuration.ConfigurationManager.AppSettings["BuildLabel"] ?? "Unknown build";
-            using (var eventLog = new EventLog("Application"))
-            {
-                eventLog.Source = "Application";
-                Console.WriteLine(msg);
-                eventLog.WriteEntry($"{buildLabel} - {msg}", isError ? EventLogEntryType.Error : EventLogEntryType.Information, InstallerConstants.EVENT_LOG_CATEGORY_ID, 1);
-            }
-        }
     }
 }

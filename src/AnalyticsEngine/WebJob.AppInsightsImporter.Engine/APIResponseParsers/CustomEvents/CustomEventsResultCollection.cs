@@ -64,33 +64,42 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             using (var database = new AnalyticsEntitiesContext())
             {
                 // Hack to change/ensure correct DB schema. Needs moving to a migration
-                ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
-
+                await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
                 var hitUpdatesTimer = new JobTimer(telemetry, "Hit updates");
                 hitUpdatesTimer.Start();
-                await this.SaveHitsUpdatesToSQL(telemetry, database);
-                hitUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                var hitUpdatesCount = await this.SaveHitsUpdatesToSQL(telemetry, database);
+                if (hitUpdatesCount > 0)
+                {
+                    hitUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                }
 
                 var searchesInsertTimer = new JobTimer(telemetry, "Searches");
                 searchesInsertTimer.Start();
                 var searchesInserted = await this.SaveSearchesToSQL(telemetry, database);
-                searchesInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                telemetry.LogInformation($"Search batch imported - {searchesInserted.ToString("n0")} new searches inserted");
-
+                if (searchesInserted > 0)
+                {
+                    searchesInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                    telemetry.LogInformation($"Search batch imported - {searchesInserted.ToString("n0")} new searches inserted");
+                }
 
                 var pageUpdatesTimer = new JobTimer(telemetry, "Page updates");
                 pageUpdatesTimer.Start();
                 var pagesUpdated = await this.SavePageUpdatesToSQL(telemetry, config);
-                pageUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                telemetry.LogInformation($"Page updates imported - {pagesUpdated.ToString("n0")}");
-
+                if (pagesUpdated > 0)
+                {
+                    pageUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                    telemetry.LogInformation($"Page updates imported - {pagesUpdated.ToString("n0")}");
+                }
 
                 var clicksInsertTimer = new JobTimer(telemetry, "Clicks");
                 clicksInsertTimer.Start();
                 var clicks = await this.SaveClicksToSQL(telemetry, database);
-                telemetry.LogInformation($"Clicks batch imported - {clicks} clicks inserted");
-                clicksInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                if (clicks > 0)
+                {
+                    telemetry.LogInformation($"Clicks batch imported - {clicks} clicks inserted");
+                    clicksInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                }
             }
         }
     }

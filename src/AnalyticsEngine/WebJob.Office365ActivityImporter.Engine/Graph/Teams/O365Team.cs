@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Redis.Teams;
 using Common.Entities.Teams;
@@ -69,7 +70,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         #endregion
 
-        public async Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, ILogger telemetry)
+        public async Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger telemetry)
         {
             if (lookupManager is null) throw new ArgumentNullException(nameof(lookupManager));
             if (telemetry is null) throw new ArgumentNullException(nameof(telemetry));
@@ -105,7 +106,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Channels
             var dbChannels = new List<TeamChannel>();
 
-            var teamTokenManager = new TeamTokenManager(this);
+            var teamTokenManager = new TeamTokenManager(this, appConfig, telemetry);
             foreach (var channel in this.Channels)
             {
                 var dbChannel = await channel.SaveToSql(lookupManager, dbTeam);
@@ -161,26 +162,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             catch (System.Data.Entity.Infrastructure.DbUpdateException ex)
             {
                 telemetry.LogError(ex, $"Got SQL exception saving Team: {ex.Message}. Will try again next cycle.");
-                await ClearChannelDeltaTokens(telemetry);
+                await ClearChannelDeltaTokens(telemetry, appConfig);
                 return null;
             }
 
             return dbTeam;
         }
 
-        async Task ClearChannelDeltaTokens(ILogger telemetry)
+        async Task ClearChannelDeltaTokens(ILogger telemetry, AppConfig appConfig)
         {
-            var teamTokenManager = new TeamTokenManager(this);
+            var teamTokenManager = new TeamTokenManager(this, appConfig, telemetry);
             foreach (var c in this.Channels)
             {
-                await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(this.Id, c.Id, telemetry);
+                if (teamTokenManager.CacheConnectionManager != null)
+                {
+                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(this.Id, c.Id, telemetry);
+                }
             }
         }
 
         /// <summary>
         /// Loads all the Team child data, plus messages from the last channel log in the DB
         /// </summary>
-        public static async Task<O365Team> LoadTeamFull(Group parentGroup, TeamsLoadContext context, ILogger telemetry, AnalyticsEntitiesContext db)
+        public static async Task<O365Team> LoadTeamFull(Group parentGroup, TeamsLoadContext context, ILogger telemetry, AppConfig appConfig, AnalyticsEntitiesContext db)
         {
             var teamId = parentGroup.Id;
             // Get Team details from Graph and convert to our own class
@@ -237,13 +241,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 fullTeam.Channels.Add(new ChannelWithReactions(channel));
 
 
-            var teamTokenManager = new TeamTokenManager(fullTeam);
+            var teamTokenManager = new TeamTokenManager(fullTeam, appConfig, telemetry);
 
             // Load tabs in each channel
             foreach (var channel in fullTeam.Channels)
             {
                 var dbChannel = await db.TeamChannels.Where(c => c.GraphID == channel.Id).SingleOrDefaultAsync();
-                if (dbChannel == null)
+                if (dbChannel == null && teamTokenManager.CacheConnectionManager != null)
                 {
                     // Clear delta cache if new channel in DB. Mainly for debug reasons but also if there's no channel, we need to make sure we ignore any delta code (just in case)
                     await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(fullTeam.Id, channel.Id, telemetry);

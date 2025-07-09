@@ -44,8 +44,8 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
 
             _logger.LogInformation($"Installing AI tracker to {_siteInstallAdaptor.SiteUrl}");
             var docLibInfo = await _siteInstallAdaptor.ConfirmDocLibOnRootSite(trackerInstallConfig.DocLibTitle);
-            if (!docLibInfo.CreatedNew) _logger.LogInformation($"{trackerInstallConfig.DocLibTitle} created");
-            else _logger.LogInformation($"{trackerInstallConfig.DocLibTitle} already exists");
+            if (docLibInfo.CreatedNew) _logger.LogInformation($"Library '{trackerInstallConfig.DocLibTitle}' created");
+            else _logger.LogInformation($"Library '{trackerInstallConfig.DocLibTitle}' already exists");
 
             // Remove previous
             var trackerExisted = await _siteInstallAdaptor.RemoveTrackerIfExistsOnRootSite(trackerInstallConfig.DocLibTitle);
@@ -63,27 +63,35 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             _logger.LogInformation($"Library '{trackerInstallConfig.DocLibTitle}' security configured for 'read-only' permissions for all users");
 
             // Register custom actions
-            var aiTrackerFQDN = $"{_siteInstallAdaptor.GetUrl(_siteInstallAdaptor.RootWeb)}/{docLibInfo.ServerRelativeUrl}/AITracker.js";
+            var aiTrackerFQDN = $"{_siteInstallAdaptor.GetUrl(_siteInstallAdaptor.RootWeb)}/{docLibInfo.SiteRelativeUrl}/AITracker.js";
             var cacheToken = DateTime.Now.Ticks.ToString();
             var aiTrackerUrlWithToken = $"{aiTrackerFQDN}?ver={cacheToken}";
 
             // Remove old custom actions & add new
-            await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
-            await _siteInstallAdaptor.AddAITrackerCustomActionToWeb(_siteInstallAdaptor.RootWeb, new ClassicPageCustomAction(aiTrackerUrlWithToken, trackerInstallConfig.AppInsightsConnectionString, solutionWebsiteBaseUrl));
-            await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
-            await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(_siteInstallAdaptor.RootWeb, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken, solutionWebsiteBaseUrl));
+            await RemoveActionsFromWeb(_siteInstallAdaptor.RootWeb);
+            await AddActionsToWeb(_siteInstallAdaptor.RootWeb, aiTrackerUrlWithToken, trackerInstallConfig, solutionWebsiteBaseUrl, cacheToken);
+            
             foreach (var w in _siteInstallAdaptor.SubWebs)
             {
                 var webUrl = _siteInstallAdaptor.GetUrl(w);
                 _logger.LogInformation($"Registering AITracker to on web {webUrl}");
 
-                await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(w);
-                await _siteInstallAdaptor.AddAITrackerCustomActionToWeb(w, new ClassicPageCustomAction(aiTrackerUrlWithToken, trackerInstallConfig.AppInsightsConnectionString, solutionWebsiteBaseUrl));
-
-                await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(w);
-                await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(w, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken, solutionWebsiteBaseUrl));
+                await RemoveActionsFromWeb(w);
+                await AddActionsToWeb(w, aiTrackerUrlWithToken, trackerInstallConfig, solutionWebsiteBaseUrl, cacheToken);
             }
             _logger.LogInformation($"Registered AITracker to all sub-webs");
+        }
+
+        private async Task AddActionsToWeb(WEBTYPE w, string aiTrackerUrlWithToken, TrackerInstallConfig trackerInstallConfig, string solutionWebsiteBaseUrl, string cacheToken)
+        {
+            await _siteInstallAdaptor.AddAITrackerCustomActionToWeb(w, new ClassicPageCustomAction(aiTrackerUrlWithToken, trackerInstallConfig.AppInsightsConnectionString, solutionWebsiteBaseUrl));
+            await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(w, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken, solutionWebsiteBaseUrl));
+        }
+
+        private async Task RemoveActionsFromWeb(WEBTYPE rootWeb)
+        {
+            await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
+            await _siteInstallAdaptor.RemoveModernUIAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
         }
 
         /// <summary>
@@ -110,13 +118,11 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             await _siteInstallAdaptor.RemoveDocLibOnRootSite(docLibTitle);
 
             // Unregister custom actions
-            await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
-            await _siteInstallAdaptor.RemoveModernUIAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
+            await RemoveActionsFromWeb(_siteInstallAdaptor.RootWeb);
 
             foreach (var w in _siteInstallAdaptor.SubWebs)
             {
-                await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(w);
-                await _siteInstallAdaptor.RemoveModernUIAITrackerCustomActionFromWeb(w);
+                await RemoveActionsFromWeb(w);
             }
             _logger.LogInformation($"Uninstalled AITracker from all sub-webs");
         }
