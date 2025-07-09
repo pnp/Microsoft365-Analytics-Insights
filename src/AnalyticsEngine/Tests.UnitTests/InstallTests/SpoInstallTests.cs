@@ -55,9 +55,6 @@ namespace Tests.UnitTests
             }
         }
 
-#if DEBUG
-        [TestMethod]
-#endif
         public async Task SPOSiteInstallAdaptorTests()
         {
             const string URL_SP = "https://moderncomms933270.sharepoint.com/sites/ProjectFalcon-UXtest";
