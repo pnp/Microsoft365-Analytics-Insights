@@ -55,9 +55,6 @@ namespace Tests.UnitTests
             }
         }
 
-#if DEBUG
-        [TestMethod]
-#endif
         public async Task SPOSiteInstallAdaptorTests()
         {
             const string URL_SP = "https://moderncomms933270.sharepoint.com/sites/ProjectFalcon-UXtest";
@@ -109,7 +106,7 @@ namespace Tests.UnitTests
             public Task<ListInfo> ConfirmDocLibOnRootSite(string listTitle)
             {
                 Console.WriteLine($"Confirmed fake library {listTitle} exists");
-                return Task.FromResult<ListInfo>(new ListInfo { CreatedNew = true, EnableMinorVersions = false, ServerRelativeUrl = listTitle });
+                return Task.FromResult<ListInfo>(new ListInfo { CreatedNew = true, EnableMinorVersions = false, SiteRelativeUrl = listTitle });
             }
 
             public string GetUrl(FakeWeb web)

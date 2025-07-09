@@ -98,6 +98,8 @@ namespace App.ControlPanel.Engine
                 // Anything else. Log error as fatal
                 _logger.LogError($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + ex.Message);
                 Console.WriteLine(ex);
+                InstallerLogs.AddToWindowsEventLog($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + ex.Message, true);
+                InstallerLogs.AddToWindowsEventLog(ex.ToString(), true);
                 return;
             }
 

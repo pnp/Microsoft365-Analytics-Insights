@@ -37,8 +37,8 @@ namespace App.ControlPanel.Engine.SPO
                 "var newScript = document.createElement(\"script\");" +
                 "newScript.type = \"text/javascript\";newScript.src=\"" + sourceFileFQDN +
                 "\";headID.appendChild(newScript);" +
-                $"var appInsightsConnectionStringHash = \"'{appInsightsConnectionString.Base64Encode()}'\";" +
-                $"var insightsWebRootUrlHash = \"'{solutionWebsiteBaseUrl.Base64Encode()}'\";";
+                $"var appInsightsConnectionStringHash = \"{appInsightsConnectionString.Base64Encode()}\";" +
+                $"var insightsWebRootUrlHash = \"{solutionWebsiteBaseUrl.Base64Encode()}\";";
         }
 
         public string Name { get; set; }
@@ -49,7 +49,10 @@ namespace App.ControlPanel.Engine.SPO
 
     public class ListInfo
     {
-        public string ServerRelativeUrl { get; set; }
+        /// <summary>
+        /// Example: "SPOInsights/"
+        /// </summary>
+        public string SiteRelativeUrl { get; set; }
         public bool CreatedNew { get; set; }
         public bool EnableMinorVersions { get; set; }
     }

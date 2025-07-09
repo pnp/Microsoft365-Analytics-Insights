@@ -76,7 +76,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             O365Team team = null;
             try
             {
-                team = await O365Team.LoadTeamFull(parentGroup, _context, _telemetry, lookupManager.Database);
+                team = await O365Team.LoadTeamFull(parentGroup, _context, _telemetry, _settings, lookupManager.Database);
             }
             catch (ServiceException ex)
             {
@@ -88,7 +88,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 try
                 {
-                    await team.SaveToSQL(lookupManager, _telemetry);
+                    await team.SaveToSQL(lookupManager, _settings, _telemetry);
                 }
                 catch (SqlException ex)
                 {

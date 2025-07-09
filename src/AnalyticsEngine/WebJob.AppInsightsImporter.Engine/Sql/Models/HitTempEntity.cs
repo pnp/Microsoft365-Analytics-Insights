@@ -31,10 +31,10 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
             this.SiteUrl = p.CustomProperties?.SiteUrl;
             this.SPRequestDuration = p.CustomProperties?.SPRequestDuration ?? 0;
             this.Timestamp = p.Timestamp;
-            this.Title = p.CustomProperties?.PageTitle;
+            this.Title = StringUtils.EnsureMaxLength(p.CustomProperties?.PageTitle, 250);           // 250 nvarchar for this destination column
             this.Url = StringUtils.GetUrlBaseAddressIfValidUrl(p.Url);
             this.Username = p.Username;
-            this.WebTitle = p.CustomProperties?.WebTitle;
+            this.WebTitle = StringUtils.EnsureMaxLength(p.CustomProperties?.WebTitle, 1000);        // Varchar max on this destination column, so not really important
             this.WebUrl = p.CustomProperties?.WebUrl;
         }
 
