@@ -28,6 +28,9 @@ namespace Common.Entities.Config
             this.AADInstance = ConfigurationManager.AppSettings.Get("AADInstance");
             this.KeyVaultUrl = ConfigurationManager.AppSettings.Get("KeyVaultUrl");
 
+            // New: UserGroupsFilter (optional)
+            this.UserGroupsFilter = ConfigurationManager.AppSettings.Get("UserGroupsFilter");
+
             var useClientCertificate = ConfigurationManager.AppSettings.Get("UseClientCertificate");
             if (!string.IsNullOrEmpty(useClientCertificate))
             {
@@ -132,5 +135,10 @@ namespace Common.Entities.Config
         public string StatsApiUrl { get; set; } = null;
 
         public AppConnectionStrings ConnectionStrings { get; set; } = null;
+
+        /// <summary>
+        /// Optional filter for user groups
+        /// </summary>
+        public string UserGroupsFilter { get; set; }
     }
 }
