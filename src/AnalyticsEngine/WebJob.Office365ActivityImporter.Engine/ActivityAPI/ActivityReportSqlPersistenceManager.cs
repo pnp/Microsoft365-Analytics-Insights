@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using WebJob.Office365ActivityImporter.Engine.Properties;
 
 namespace WebJob.Office365ActivityImporter.Engine
@@ -24,17 +25,21 @@ namespace WebJob.Office365ActivityImporter.Engine
     public class ActivityReportSqlPersistenceManager : IActivityReportPersistenceManager
     {
         private readonly AuditFilterConfig _filterConfig;
+        private readonly UserGroupsCache _userGroupsCache;
         private readonly ILogger _telemetry;
         private readonly AppConfig _appConfig;
         private string _defaultConnectionString = null;
+        private UserGroupsFilterModel _userGroupsFilter = null;
 
         private static SemaphoreSlim _sqlSaveSemaphore = new SemaphoreSlim(1);      // Make sure we're only saving one thread at a time
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, ILogger telemetry, AppConfig appConfig)
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger telemetry, AppConfig appConfig)
         {
             _filterConfig = filterConfig;
+            _userGroupsCache = userGroupsCache;
             _telemetry = telemetry;
             _appConfig = appConfig;
+            _userGroupsFilter = new UserGroupsFilterModel(appConfig.UserGroupsFilter);
         }
 
         /// <summary>
@@ -113,11 +118,18 @@ namespace WebJob.Office365ActivityImporter.Engine
                     var result = SaveResultEnum.NotSaved;
                     if (_filterConfig.InScope(abtractLog))
                     {
-                        logsToInsert.Rows.Add(new AuditLogTempEntity(abtractLog, abtractLog.UserId));
+                        if (await _userGroupsCache.IsInGroupsFilter(abtractLog.UserId, _userGroupsFilter))
+                        {
+                            logsToInsert.Rows.Add(new AuditLogTempEntity(abtractLog, abtractLog.UserId));
 
-                        // Remember we've done this one now
-                        cache.RememberProcessedEvent(abtractLog);
-                        result = SaveResultEnum.Imported;
+                            // Remember we've done this one now
+                            cache.RememberProcessedEvent(abtractLog);
+                            result = SaveResultEnum.Imported;
+                        }
+                        else
+                        {
+                            _telemetry.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
+                        }
                     }
                     else
                     {

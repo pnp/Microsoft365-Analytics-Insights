@@ -3,6 +3,7 @@ using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -16,13 +17,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
         }
 
-        public async Task<bool> UpdateUserInstalledApps(GraphServiceClient graphClient)
+        public async Task<bool> UpdateUserInstalledApps(GraphServiceClient graphClient, UserGroupsCache graphUserGroupsCache, UserGroupsFilterModel filter)
         {
             using (var db = new AnalyticsEntitiesContext())
             {
                 var l = new GraphAndSqlUserAppLoader(db, _telemetry, graphClient);
 
-                await l.LoadAndSave();
+                await l.LoadAndSave(graphUserGroupsCache, filter);
 
                 return true;
             }

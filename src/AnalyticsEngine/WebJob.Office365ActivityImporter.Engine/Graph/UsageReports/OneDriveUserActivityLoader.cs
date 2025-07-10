@@ -1,17 +1,19 @@
 ﻿using Common.Entities;
+using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Data.Entity;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
     // https://docs.microsoft.com/en-us/graph/api/reportroot-getonedriveactivityuserdetail?view=graph-rest-beta
     public class OneDriveUserActivityLoader : AbstractUserDailyActivityLoader<OneDriveUserActivityLog, OneDriveUserActivityDetail>
     {
-        public OneDriveUserActivityLoader(ManualGraphCallClient client, ILogger telemetry)
-            : base(client, telemetry)
+        public OneDriveUserActivityLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger telemetry)
+            : base(client, userGroupsCache, userGroupsFilterModel, telemetry)
         {
         }
         protected override void PopulateReportSpecificMetadata(OneDriveUserActivityLog todaysLog, OneDriveUserActivityDetail userActivityReportPage)

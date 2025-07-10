@@ -18,7 +18,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             _mockGroups = mockGroups ?? new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         }
 
-        protected override Task<List<string>> LoadGroupsFromGraphAsync(string upn)
+        protected override Task<List<string>> LoadGroupsFromExternalAsync(string upn)
         {
             if (_mockGroups.TryGetValue(upn, out var groups))
                 return Task.FromResult(groups);
