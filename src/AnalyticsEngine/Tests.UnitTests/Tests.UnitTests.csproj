@@ -96,6 +96,7 @@
     <Compile Include="CopilotTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
+    <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
@@ -129,6 +130,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="TeamsTests.cs" />
     <Compile Include="StreamTests.cs" />
+    <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
     <Compile Include="UserLookupTests.cs" />
   </ItemGroup>
