@@ -1,4 +1,3 @@
-using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
@@ -20,7 +19,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         }
 
-        protected override async Task<List<string>> LoadGroupsFromGraphAsync(string upn)
+        protected override async Task<List<string>> LoadGroupsFromExternalAsync(string upn)
         {
             var result = new List<string>();
             try
@@ -42,6 +41,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
                 _logger?.LogError(ex, $"Failed to load groups for user '{upn}'");
             }
             return result;
+        }
+    }
+
+    public class NoUsersHaveGroupsUserGroupsCache : UserGroupsCache
+    {
+        public NoUsersHaveGroupsUserGroupsCache(ILogger logger) : base(logger)
+        {
+        }
+
+        protected override Task<List<string>> LoadGroupsFromExternalAsync(string upn)
+        {
+            // Simulate no groups for any user
+            return Task.FromResult(new List<string>());
         }
     }
 }

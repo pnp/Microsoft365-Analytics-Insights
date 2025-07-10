@@ -12,6 +12,7 @@ namespace Common.Entities.Config
     {
         public List<string> Patterns { get; }
 
+        public UserGroupsFilterModel() : this(string.Empty) { }
         public UserGroupsFilterModel(string filterString)
         {
             if (string.IsNullOrWhiteSpace(filterString))

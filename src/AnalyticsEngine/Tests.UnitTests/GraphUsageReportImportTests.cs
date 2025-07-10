@@ -9,6 +9,7 @@ using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -58,10 +59,14 @@ namespace Tests.UnitTests
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
 
-            var graphImporter = new GraphImporter(telemetry, authConfig);
             var graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(telemetry, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
+            await graphAppIndentityOAuthContext.InitClientCredential();
 
-            await graphImporter.GetAndSaveActivityReportsMultiThreaded(1, new ManualGraphCallClient(graphAppIndentityOAuthContext, telemetry));
+            var graphClient = new Microsoft.Graph.GraphServiceClient(graphAppIndentityOAuthContext.Creds);
+            var graphImporter = new GraphImporter(telemetry, new NoUsersHaveGroupsUserGroupsCache(telemetry), graphAppIndentityOAuthContext, graphClient, authConfig);
+
+            await graphImporter.GetAndSaveActivityReportsMultiThreaded(1, new ManualGraphCallClient(graphAppIndentityOAuthContext, telemetry), 
+                new NoUsersHaveGroupsUserGroupsCache(telemetry), new UserGroupsFilterModel());
         }
 
         [TestMethod]

@@ -32,7 +32,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
             if (_userGroupsCache.TryGetValue(upn, out var cachedGroups))
                 return cachedGroups;
 
-            var groups = await LoadGroupsFromGraphAsync(upn);
+            List<string> groups = null;
+            try
+            {
+                groups = await LoadGroupsFromExternalAsync(upn);
+            }
+            catch (Exception)
+            {
+                _logger.LogWarning($"Failed to load groups for user {upn}. Returning empty list.");
+                groups = new List<string>();
+            }
             _userGroupsCache[upn] = groups;
             return groups;
         }
@@ -40,7 +49,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
         /// <summary>
         /// Implement this to load group display names for a user from the desired source.
         /// </summary>
-        protected abstract Task<List<string>> LoadGroupsFromGraphAsync(string upn);
+        protected abstract Task<List<string>> LoadGroupsFromExternalAsync(string upn);
 
         /// <summary>
         /// Returns true if any of the user's groups match the filter.
@@ -50,6 +59,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
             if (filter == null)
                 throw new ArgumentNullException(nameof(filter));
             var groups = await GetGroupsForUserAsync(upn);
+
+            if (filter.Patterns.Count == 0)
+            {
+                return true; // No filter patterns means all groups match
+            }
             return groups.Any(g => filter.Matches(g));
         }
     }

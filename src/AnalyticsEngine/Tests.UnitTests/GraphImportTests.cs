@@ -35,7 +35,7 @@ namespace Tests.UnitTests
         {
             const int users = 10000;
             var l = new FakeUserAppLoader(AnalyticsLogger.ConsoleOnlyTracer(), users);
-            var updates = await l.LoadAndSave();
+            var updates = await l.LoadAndSave(new NoUsersHaveGroupsUserGroupsCache(AnalyticsLogger.ConsoleOnlyTracer()), new UserGroupsFilterModel());
             Assert.IsTrue(updates == users);
         }
 
@@ -56,7 +56,7 @@ namespace Tests.UnitTests
             await userUpdater.InsertAndUpdateDatabaseUsersFromGraph();
 
             var updater = new UserAppLogUpdater(telemetry, new AppConfig());
-            var sucess = await updater.UpdateUserInstalledApps(graphClient);
+            var sucess = await updater.UpdateUserInstalledApps(graphClient, new NoUsersHaveGroupsUserGroupsCache(telemetry), new UserGroupsFilterModel());
             Assert.IsTrue(sucess);
         }
 
