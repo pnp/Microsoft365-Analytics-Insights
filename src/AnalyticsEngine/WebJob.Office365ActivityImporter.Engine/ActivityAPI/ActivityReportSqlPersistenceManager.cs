@@ -128,6 +128,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                         }
                         else
                         {
+                            result = SaveResultEnum.UserOutOfScope;
                             _telemetry.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
                         }
                     }
@@ -135,7 +136,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                     {
                         // No URL
                         cache.RememberNewlyIgnoredEvent(abtractLog);
-                        result = SaveResultEnum.OutOfScope;
+                        result = SaveResultEnum.UrlOutOfScope;
                     }
 
                     // Update stats
@@ -145,8 +146,9 @@ namespace WebJob.Office365ActivityImporter.Engine
                         listOfActivitiesSavedToSQL.Add(abtractLog);
                     }
                     else if (result == SaveResultEnum.ProcessedAlready) stats.ProcessedAlready++;
-                    else if (result == SaveResultEnum.OutOfScope) stats.URLsOutOfScope++;
-                    else throw new InvalidOperationException("Unexpected save result");
+                    else if (result == SaveResultEnum.UrlOutOfScope) stats.URLsOutOfScope++;
+                    else if (result == SaveResultEnum.UserOutOfScope) stats.UsersOutOfScope++;
+                    else _telemetry.LogError($"Unexpected log result for log {abtractLog.Id}");
 
                     processedIds.Add(abtractLog.Id);
                 }

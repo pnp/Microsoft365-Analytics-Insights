@@ -205,7 +205,7 @@ namespace WebJob.Office365ActivityImporter
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
-                    if (configuredSettings.ConnectionStrings.RedisConnectionString != null)
+                    if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
                     {
                         var redisDatesAdaptor = new RedisStatsDatesLoader(configuredSettings);
 
@@ -259,7 +259,7 @@ namespace WebJob.Office365ActivityImporter
         /// </summary>
         private static void PrintStartupDetails(AppConfig settings, ILogger telemetry)
         {
-            ConsoleApp.PrintStartupAndLoggingConfig(telemetry);
+            ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, telemetry);
 
             var efConnectionString = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
             var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);

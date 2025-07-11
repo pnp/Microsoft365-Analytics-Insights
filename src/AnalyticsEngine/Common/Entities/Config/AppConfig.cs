@@ -20,6 +20,7 @@ namespace Common.Entities.Config
             this.AppInsightsApiKey = ConfigurationManager.AppSettings["AppInsightsApiKey"];
             this.AppInsightsAppId = ConfigurationManager.AppSettings["AppInsightsAppId"];
 
+            this.BuildLabel = ConfigurationManager.AppSettings["BuildLabel"];
 
             this.ClientID = ConfigurationManager.AppSettings.Get("ClientID");
             this.ClientSecret = ConfigurationManager.AppSettings.Get("ClientSecret");
@@ -76,7 +77,7 @@ namespace Common.Entities.Config
             }
         }
 
-
+        public string BuildLabel { get; set; }
         public string AppInsightsContainerName { get; set; }
         public string AppInsightsApiKey { get; set; }
         public string AppInsightsAppId { get; set; }
