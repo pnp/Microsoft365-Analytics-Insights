@@ -91,6 +91,8 @@ namespace WebJob.Office365ActivityImporter
             _graphClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
             _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _telemetry);
             _graphUserGroupsCache = new GraphUserGroupsCache(_manualGraphCallClient, _telemetry);
+
+
             _isInitialized = true;
 
         }

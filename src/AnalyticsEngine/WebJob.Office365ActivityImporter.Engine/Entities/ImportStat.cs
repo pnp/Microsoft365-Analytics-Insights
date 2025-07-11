@@ -12,6 +12,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         public int Imported { get; set; }
         public int ProcessedAlready { get; set; }
         public int URLsOutOfScope { get; set; }
+        public int UsersOutOfScope { get; set; }
         public int DownloadErrors { get; set; }
         public int Total { get; set; }
 
@@ -36,6 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
                 $"Imported successfully: {this.Imported.ToString("n0")}, " +
                 $"already processed: {this.ProcessedAlready.ToString("n0")}, " +
                 $"URLs out of scope (orgs table): {this.URLsOutOfScope.ToString("n0")}, " +
+                $"users out of scope: {this.UsersOutOfScope.ToString("n0")}, " +
                 $"errors: {this.DownloadErrors.ToString("n0")}, " +
                 $"total: {this.Total.ToString("n0")}";
         }

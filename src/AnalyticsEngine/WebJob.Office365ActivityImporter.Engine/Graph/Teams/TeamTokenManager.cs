@@ -14,13 +14,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         public TeamTokenManager(O365Team team, AppConfig appConfig, ILogger logger)
         {
-            if (appConfig.ConnectionStrings.RedisConnectionString != null)
+            if (!string.IsNullOrEmpty(appConfig.ConnectionStrings.RedisConnectionString))
             {
                 this.CacheConnectionManager = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString);
             }
             else
             {
-                logger.LogWarning("No redis connection string found in app config. No caching will be done.");
+                logger.LogWarning("No redis connection string found in config. No deep Teams analytics will be possible.");
             }
             this.Team = team;
         }
