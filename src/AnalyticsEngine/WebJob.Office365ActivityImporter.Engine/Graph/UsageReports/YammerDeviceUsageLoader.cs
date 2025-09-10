@@ -1,9 +1,11 @@
 ﻿using Common.Entities;
+using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Data.Entity;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
@@ -12,8 +14,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
     /// </summary>
     public class YammerDeviceUsageLoader : AbstractUserDailyActivityLoader<YammerDeviceActivityLog, YammerDeviceActivityDetail>
     {
-        public YammerDeviceUsageLoader(ManualGraphCallClient client, ILogger telemetry)
-            : base(client, telemetry)
+        public YammerDeviceUsageLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger telemetry)
+            : base(client, userGroupsCache, userGroupsFilterModel, telemetry)
         {
         }
         protected override void PopulateReportSpecificMetadata(YammerDeviceActivityLog todaysLog, YammerDeviceActivityDetail userActivityReportPage)

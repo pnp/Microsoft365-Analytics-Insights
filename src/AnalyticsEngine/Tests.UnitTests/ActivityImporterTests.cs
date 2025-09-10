@@ -21,6 +21,7 @@ using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -146,7 +147,8 @@ namespace Tests.UnitTests
             var oneDriveEvent = DataGenerators.GetRandomSharePointLog();
             oneDriveEvent.Workload = ActivityImportConstants.WORKLOAD_OD;
             hits.Add(oneDriveEvent);
-            var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig());
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig());
 
             await hits.CommitAllToSQL(sqlPersist);
 
@@ -181,7 +183,8 @@ namespace Tests.UnitTests
 
                 // Save
                 int preSPLogsInsertSPEventsCount = db.sharepoint_events.Count();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig());
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig());
                 await sharePointLogs.CommitAllToSQL(sqlPersist);
 
                 // Validate new count
@@ -248,7 +251,8 @@ namespace Tests.UnitTests
 
                 // Save
                 int preSPLogsInsertSPEventsCount = db.AuditEventsCommon.Count();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig());
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig());
                 await otherLogs.CommitAllToSQL(sqlPersist);
 
                 // Validate new events count
@@ -442,7 +446,9 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             using (var db = new AnalyticsEntitiesContext())
             {
                 int preInsertCount = db.sharepoint_events.Count();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig());
+
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig());
 
                 // Create content-set for two different-but-same-id activities
                 TestActivityReportSet duplicateContent = new TestActivityReportSet() { randomActivity, duplicateIdRandomActivity };
@@ -557,7 +563,9 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
 
                 // Save
                 var tempCache = ActivityImportCache.GetEmptyCache();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig());
+
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig());
 
                 var s = await hitsActivity.CommitAllToSQL(sqlPersist);
 
@@ -657,7 +665,9 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
                 var importer = new ActivityWebImporter(fakeClient, s, telemetry);
 
                 // Download all the things & get stats.
-                var stats = await importer.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), telemetry, s));
+
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var stats = await importer.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig()));
 
                 var contentMetaDataLoader = new WebContentMetaDataLoader(telemetry, fakeClient, s);
 
