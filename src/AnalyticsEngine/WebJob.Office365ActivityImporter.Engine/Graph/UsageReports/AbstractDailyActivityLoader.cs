@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using Common.Entities.ActivityReports;
+using Common.Entities.Config;
 using Common.Entities.LookupCaches;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -9,6 +10,7 @@ using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
@@ -88,6 +90,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Look through Graph results & compare with already saved reports for this date
                 foreach (var reportPage in LoadedReportPages[dateTime])
                 {
+                    // Usually we're checking if the user is in scope (Entra ID group memembership for group filter)
+                    var isInScope = await IdInScope(reportPage.LookupFieldValue);
+                    if (!isInScope)
+                    {
+                        Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
+                        continue;   // Skip this record
+                    }
+
                     // Do we have a cached ID for the lookup?
                     int? lookupId = null;
                     lock (userEmailToDbIdCache)     // Lock between import threads
@@ -159,6 +169,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             await lookupCache.DB.SaveChangesAsync();
         }
+
+        protected virtual Task<bool> IdInScope(string lookupId)
+        {
+            // Default implementation assumes all IDs are in scope
+            // Override this method to filter out IDs that should not be processed
+            return Task.FromResult(true);
+        }
+
         protected abstract long CountActivity(TUserActivityUserDetail activityPage);
         protected abstract void PopulateReportSpecificMetadata(TReportDbType newRecord, TUserActivityUserDetail activityPage);
 
@@ -179,8 +197,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         where TReportDbType : AbstractUsageActivityLog, new()
         where TUserActivityUserDetail : AbstractActivityRecord<Common.Entities.User>
     {
-        internal AbstractUserDailyActivityLoader(ManualGraphCallClient client, ILogger telemetry) : base(client, telemetry)
+        private readonly UserGroupsCache _graphUserGroupsCache;
+        private readonly UserGroupsFilterModel _userGroupsFilterModel;
+
+        internal AbstractUserDailyActivityLoader(ManualGraphCallClient client, UserGroupsCache graphUserGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger telemetry) : base(client, telemetry)
         {
+            _graphUserGroupsCache = graphUserGroupsCache;
+            _userGroupsFilterModel = userGroupsFilterModel;
+        }
+
+        protected override async Task<bool> IdInScope(string upn)
+        {
+            return await _graphUserGroupsCache.IsInGroupsFilter(upn, _userGroupsFilterModel);
         }
     }
 }

@@ -20,6 +20,7 @@ namespace Common.Entities.Config
             this.AppInsightsApiKey = ConfigurationManager.AppSettings["AppInsightsApiKey"];
             this.AppInsightsAppId = ConfigurationManager.AppSettings["AppInsightsAppId"];
 
+            this.BuildLabel = ConfigurationManager.AppSettings["BuildLabel"];
 
             this.ClientID = ConfigurationManager.AppSettings.Get("ClientID");
             this.ClientSecret = ConfigurationManager.AppSettings.Get("ClientSecret");
@@ -27,6 +28,9 @@ namespace Common.Entities.Config
             this.TenantGUID = Guid.Parse(ConfigurationManager.AppSettings.Get("TenantGUID"));
             this.AADInstance = ConfigurationManager.AppSettings.Get("AADInstance");
             this.KeyVaultUrl = ConfigurationManager.AppSettings.Get("KeyVaultUrl");
+
+            // New: UserGroupsFilter (optional)
+            this.UserGroupsFilter = ConfigurationManager.AppSettings.Get("UserGroupsFilter");
 
             var useClientCertificate = ConfigurationManager.AppSettings.Get("UseClientCertificate");
             if (!string.IsNullOrEmpty(useClientCertificate))
@@ -73,7 +77,7 @@ namespace Common.Entities.Config
             }
         }
 
-
+        public string BuildLabel { get; set; }
         public string AppInsightsContainerName { get; set; }
         public string AppInsightsApiKey { get; set; }
         public string AppInsightsAppId { get; set; }
@@ -132,5 +136,10 @@ namespace Common.Entities.Config
         public string StatsApiUrl { get; set; } = null;
 
         public AppConnectionStrings ConnectionStrings { get; set; } = null;
+
+        /// <summary>
+        /// Optional filter for user groups
+        /// </summary>
+        public string UserGroupsFilter { get; set; }
     }
 }

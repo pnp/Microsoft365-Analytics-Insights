@@ -127,6 +127,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         NotSaved = 0,           // Default
         ProcessedAlready = 1,   // Event ignored previously
         Imported = 2,           // Already imported
-        OutOfScope = 3          // Not to be imported. Usually because the SharePoint URL is for a site we don't care about.
+        UrlOutOfScope = 3,          // Not to be imported. Usually because the SharePoint URL is for a site we don't care about.
+        UserOutOfScope = 4,          // Not to be imported. Usually because the user is outside group filter
     }
 }

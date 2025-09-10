@@ -150,12 +150,14 @@
     <Compile Include="Graph\UsageReports\YammerUserUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\TeamsUserUsageLoader.cs" />
     <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
+    <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\UserApps\AbstractUserAppLoader.cs" />
     <Compile Include="Graph\User\UserApps\GraphAndSqlUserAppLoader.cs" />
     <Compile Include="Graph\User\UserApps\Models.cs" />
     <Compile Include="Graph\User\UserApps\UserAppLogUpdater.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
+    <Compile Include="Graph\User\UserGroupsCache.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
     <Compile Include="Graph\User\UserTeamApp.cs" />

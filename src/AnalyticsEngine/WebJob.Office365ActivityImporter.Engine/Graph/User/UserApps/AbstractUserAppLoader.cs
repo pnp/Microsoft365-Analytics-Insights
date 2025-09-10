@@ -1,4 +1,5 @@
-﻿using DataUtils;
+﻿using Common.Entities.Config;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -31,7 +32,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
 
         public abstract Task Save(Dictionary<string, List<APPTYPE>> usersAndApps);
 
-        public async Task<int> LoadAndSave()
+        public async Task<int> LoadAndSave(UserGroupsCache userGroupsCache, UserGroupsFilterModel filter)
         {
             var timer = new JobTimer(_telemetry, "User Apps load");
             timer.Start();
@@ -45,6 +46,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             {
                 if (StringUtils.IsEmail(usersEmailResult))
                 {
+                    // Check if the user is in the filter
+                    if (filter != null && !await userGroupsCache.IsInGroupsFilter(usersEmailResult, filter))
+                    {
+                        _telemetry.LogInformation($"User Apps Load - '{usersEmailResult}' is not in the filter groups, skipping...");
+                        continue;
+                    }
                     usersEmailsToUpdate.Add(usersEmailResult);
                 }
             }
