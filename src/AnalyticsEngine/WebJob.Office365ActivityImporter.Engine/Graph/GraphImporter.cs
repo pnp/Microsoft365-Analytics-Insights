@@ -203,7 +203,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     if (!StringUtils.IsEmail(allTeamsData[0].UserPrincipalName))
                     {
-                        _telemetry.LogInformation($"\nWARNING: Usage reports have associated user email concealed - we won't be able to link any activity back to users. See Office 365 Advanced Analytics Engine prerequisites.\n");
+                        _telemetry.LogError($"IMPORTANT: Usage reports have associated user email concealed - we won't be able to link any activity back to users. See Office 365 Advanced Analytics Engine prerequisites.\n");
                     }
                 }
 
