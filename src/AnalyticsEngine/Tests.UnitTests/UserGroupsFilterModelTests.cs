@@ -1,4 +1,3 @@
-using System;
 using Common.Entities.Config;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 

@@ -309,7 +309,7 @@ namespace App.ControlPanel.Engine
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(auth.Creds);
 
-            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, telemetry), 
+            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, telemetry),
                 new NoUsersHaveGroupsUserGroupsCache(_logger),
                 new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
                 telemetry);

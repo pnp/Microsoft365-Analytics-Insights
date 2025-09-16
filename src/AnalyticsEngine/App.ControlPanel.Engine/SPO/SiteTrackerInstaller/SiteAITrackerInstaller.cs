@@ -70,7 +70,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             // Remove old custom actions & add new
             await RemoveActionsFromWeb(_siteInstallAdaptor.RootWeb);
             await AddActionsToWeb(_siteInstallAdaptor.RootWeb, aiTrackerUrlWithToken, trackerInstallConfig, solutionWebsiteBaseUrl, cacheToken);
-            
+
             foreach (var w in _siteInstallAdaptor.SubWebs)
             {
                 var webUrl = _siteInstallAdaptor.GetUrl(w);

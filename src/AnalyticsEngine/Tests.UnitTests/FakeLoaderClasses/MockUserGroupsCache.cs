@@ -1,10 +1,8 @@
-using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Tests.UnitTests.FakeLoaderClasses
 {

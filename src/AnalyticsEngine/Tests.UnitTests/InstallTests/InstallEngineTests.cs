@@ -576,7 +576,7 @@ namespace Tests.UnitTests
         {
             var now = DateTime.UtcNow;
             var nextSunday = AutomationAccountTask.Next(now, DayOfWeek.Sunday);
-            
+
             var nextSunday1pm = AutomationAccountTask.NextSundayAt(13);
             Assert.IsTrue(nextSunday1pm.DayOfWeek == DayOfWeek.Sunday);
             Assert.IsTrue(nextSunday1pm.Hour == 13);
