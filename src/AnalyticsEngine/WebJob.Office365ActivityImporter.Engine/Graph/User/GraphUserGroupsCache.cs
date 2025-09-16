@@ -24,7 +24,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
             var result = new List<string>();
             try
             {
-                string url = $"https://graph.microsoft.com/v1.0/users/{Uri.EscapeDataString(upn)}/memberOf?$select=displayName";
+                // Requires permissions Directory.Read.All - https://learn.microsoft.com/en-us/graph/api/user-list-memberof?view=graph-rest-1.0&tabs=http#permissions-for-another-users-direct-memberships
+                var url = $"https://graph.microsoft.com/v1.0/users/{Uri.EscapeDataString(upn)}/memberOf?$select=displayName";
                 var response = await _httpClient.GetAsyncWithThrottleRetries<JObject>(url);
                 if (response != null && response["value"] is JArray arr)
                 {
@@ -38,7 +39,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, $"Failed to load groups for user '{upn}'");
+                _logger?.LogError(ex, $"Failed to load groups for user '{upn}' - {ex.Message}");
             }
             return result;
         }
