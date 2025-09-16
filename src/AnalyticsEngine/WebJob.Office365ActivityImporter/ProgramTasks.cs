@@ -25,7 +25,7 @@ namespace WebJob.Office365ActivityImporter
         private readonly AnalyticsLogger _telemetry;
         private readonly AppConfig _settings;
         private ManualGraphCallClient _manualGraphCallClient = null;
-        private GraphUserGroupsCache _graphUserGroupsCache = null;  
+        private GraphUserGroupsCache _graphUserGroupsCache = null;
 
         public ProgramTasks(AnalyticsLogger telemetry, AppConfig settings)
         {

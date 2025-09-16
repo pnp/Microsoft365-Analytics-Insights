@@ -135,9 +135,9 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
 
         private List<PageCommentEvent> _pageComments = null;
         [JsonIgnore]
-        public List<PageCommentEvent> PageComments 
-        { 
-            get 
+        public List<PageCommentEvent> PageComments
+        {
+            get
             {
                 if (_pageComments == null)
                 {
@@ -167,15 +167,15 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                     }
                 }
                 return _pageComments;
-            } 
-        } 
+            }
+        }
 
         private List<UserBasedCustomAIEvent> _likes = null;
         [JsonIgnore]
-        public List<UserBasedCustomAIEvent> Likes 
-        { 
-            get 
-            { 
+        public List<UserBasedCustomAIEvent> Likes
+        {
+            get
+            {
                 if (_likes == null)
                 {
                     if (string.IsNullOrEmpty(this.LikesString)) _likes = new List<UserBasedCustomAIEvent>();
@@ -204,8 +204,8 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                     }
                 }
                 return _likes;
-            } 
-        } 
+            }
+        }
 
         /// <summary>
         /// Get list of props in this page update. Doesn't include taxonomy fields. 

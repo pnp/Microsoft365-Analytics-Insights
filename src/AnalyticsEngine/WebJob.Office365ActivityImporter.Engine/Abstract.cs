@@ -1,7 +1,6 @@
 ﻿using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Http;
-using Microsoft.Extensions.Logging;
 
 namespace WebJob.Office365ActivityImporter.Engine
 {

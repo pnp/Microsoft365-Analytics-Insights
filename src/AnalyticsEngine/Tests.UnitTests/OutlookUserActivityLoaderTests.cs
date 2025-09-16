@@ -1,16 +1,15 @@
-using Common.Entities.LookupCaches;
+using Common.Entities;
 using Common.Entities.Config;
-using Common.Entities.Entities.Teams;
+using Common.Entities.LookupCaches;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
-using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
-using Common.Entities;
 
 namespace Tests.UnitTests
 {

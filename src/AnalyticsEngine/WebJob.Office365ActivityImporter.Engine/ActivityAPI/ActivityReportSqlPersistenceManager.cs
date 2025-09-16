@@ -246,7 +246,8 @@ namespace WebJob.Office365ActivityImporter.Engine
                 this.EventData = spLog.EventData;
             }
 
-            if (abtractLog is CopilotAuditLogContent) {
+            if (abtractLog is CopilotAuditLogContent)
+            {
                 var copilotLog = (CopilotAuditLogContent)abtractLog;
                 this.EventData = copilotLog.EventRaw;
             }

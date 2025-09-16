@@ -103,7 +103,7 @@ namespace Common.Entities.Config
         /// Default {AADInstance}/{TenantGUID} (https://login.microsoftonline.com/0000-000-00000/)
         /// </summary>
         public string Authority => this.AADInstance + this.TenantGUID;
-         
+
 
         /// <summary>
         /// Time-span to query API for in a single request

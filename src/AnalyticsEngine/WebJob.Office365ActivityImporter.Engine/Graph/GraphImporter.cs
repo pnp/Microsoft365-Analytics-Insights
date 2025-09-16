@@ -26,7 +26,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly GraphAppIndentityOAuthContext _graphAppIndentityOAuthContext;
         private readonly GraphServiceClient _graphClient;
 
-        public GraphImporter(AnalyticsLogger telemetry, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings) 
+        public GraphImporter(AnalyticsLogger telemetry, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings)
             : base(telemetry, settings)
         {
             _userGroupsCache = userGroupsCache;

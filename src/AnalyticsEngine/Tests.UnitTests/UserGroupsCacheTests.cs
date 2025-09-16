@@ -1,8 +1,8 @@
 using Common.Entities.Config;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Tests.UnitTests
 {
