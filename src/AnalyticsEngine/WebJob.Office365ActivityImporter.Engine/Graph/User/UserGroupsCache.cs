@@ -39,7 +39,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
             }
             catch (Exception)
             {
-                _logger.LogWarning($"Failed to load groups for user {upn}. Returning empty list.");
+                _logger.LogError($"Failed to load groups for user {upn}. Returning empty list.");
                 groups = new List<string>();
             }
             _userGroupsCache[upn] = groups;
@@ -58,13 +58,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
         {
             if (filter == null)
                 throw new ArgumentNullException(nameof(filter));
-            var groups = await GetGroupsForUserAsync(upn);
+            var groupsForUser = await GetGroupsForUserAsync(upn);
 
-            if (filter.Patterns.Count == 0)
+            if (filter.Patterns.Count == 0 || groupsForUser.Count == 0)
             {
-                return true; // No filter patterns means all groups match
+                return true; // No filter patterns or user has no groups means all groups match
             }
-            return groups.Any(g => filter.Matches(g));
+            return groupsForUser.Any(g => filter.Matches(g));
         }
     }
 }
