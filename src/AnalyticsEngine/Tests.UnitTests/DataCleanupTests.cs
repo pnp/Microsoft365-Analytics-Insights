@@ -4,10 +4,9 @@ using Common.Entities.Entities.AuditLog;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Entities.UsageReports;
 using Common.Entities.Entities.WebTraffic;
+using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
-using System.IO;
-using System.Reflection;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -25,6 +24,32 @@ namespace Tests.UnitTests
                 await db.Database.ExecuteSqlCommandAsync(Properties.Resources.Clean_Old_Data_Data);
             }
         }
+
+        [TestMethod]
+        public async Task CleanupDataForUserDataTests()
+        {
+            var userId = 0;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = await InsertTestDataAll(db);
+                userId = user.ID;
+
+                // Ensure stored proc exists
+                var statements = StringUtils.SplitSqlStatements(ResourceProxy.CreateOrUpdateClean_Data_By_User_StoredProc);
+                foreach (var statement in statements)
+                    await db.Database.ExecuteSqlCommandAsync(statement);
+
+                // Run cleanup for user
+                await db.Database.ExecuteSqlCommandAsync("EXEC CleanDataByUser @p0", userId);
+            }
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Find user again in new context for caching. Should be gone
+                var checkUser = await db.users.FindAsync(userId);
+                Assert.IsNull(checkUser);
+            }
+        }
+
 
         private async Task<User> InsertTestDataAll(AnalyticsEntitiesContext db)
         {

@@ -55,7 +55,7 @@ namespace App.ControlPanel.Engine
                         log?.Invoke($"--Running script '{scriptName}'...");
                         var script = rr.ReadResourceString(scriptName);
 
-                        var statements = SplitSqlStatements(script);
+                        var statements = StringUtils.SplitSqlStatements(script);
                         foreach (var statement in statements)
                             context.Database.ExecuteSqlCommand(statement);
                     }
@@ -85,24 +85,5 @@ namespace App.ControlPanel.Engine
             log?.Invoke($"[{DateTime.Now}]: Database initialised successfully. Everything worked.");
         }
 
-        // https://stackoverflow.com/questions/18596876/go-statements-blowing-up-sql-execution-in-net
-        private static IEnumerable<string> SplitSqlStatements(string sqlScript)
-        {
-            // Make line endings standard to match RegexOptions.Multiline
-            sqlScript = Regex.Replace(sqlScript, @"(\r\n|\n\r|\n|\r)", "\n");
-
-            // Split by "GO" statements
-            var statements = Regex.Split(
-                    sqlScript,
-                    @"^[\t ]*GO[\t ]*\d*[\t ]*(?:--.*)?$",
-                    RegexOptions.Multiline |
-                    RegexOptions.IgnorePatternWhitespace |
-                    RegexOptions.IgnoreCase);
-
-            // Remove empties, trim, and return
-            return statements
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x.Trim(' ', '\n'));
-        }
     }
 }

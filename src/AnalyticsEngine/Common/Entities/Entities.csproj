@@ -1,7 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
-    Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -74,12 +73,9 @@
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
   </ItemGroup>
-
   <ItemGroup>
     <EmbeddedResource Include="..\..\..\Clean Old Data Data.sql" />
   </ItemGroup>
-
-
   <ItemGroup>
     <Compile Include="BaseEntity.cs" />
     <Compile Include="Config\AppConfig.cs" />
@@ -252,8 +248,7 @@
       <DependentUpon>202403131104274_ExtendedUsageReports.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs" />
-    <Compile
-      Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.Designer.cs">
+    <Compile Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.Designer.cs">
       <DependentUpon>202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202404101126333_CopilotEvents.cs" />
@@ -299,6 +294,7 @@
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
+    <Compile Include="ResourceProxy.cs" />
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include=".NETFramework,Version=v4.5.2">
@@ -364,8 +360,7 @@
     <EmbeddedResource Include="Migrations\202403131104274_ExtendedUsageReports.resx">
       <DependentUpon>202403131104274_ExtendedUsageReports.cs</DependentUpon>
     </EmbeddedResource>
-    <EmbeddedResource
-      Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.resx">
+    <EmbeddedResource Include="Migrations\202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.resx">
       <DependentUpon>202404031636545_ExtendedUsageReportsSpSiteUsageLogDbFixes.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202404101126333_CopilotEvents.resx">
@@ -388,6 +383,7 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
+      <SubType>Designer</SubType>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
     </EmbeddedResource>
   </ItemGroup>
