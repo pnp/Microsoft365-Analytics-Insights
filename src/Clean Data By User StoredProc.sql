@@ -1,21 +1,55 @@
+/*======================================================================
+  Procedure:   [dbo].[CleanDataByUser]
+  Purpose:     Safely clean/delete user-scoped data across related tables,
+               with transactional safety.
+  Author:      sambetts
+  Created:     2025-09-26
+  Notes:       - Idempotent deployment (CREATE OR ALTER)
+               - XACT_ABORT, TRY/CATCH with THROW
+               - Respects outer transactions
+  Returns:     Return code (0=OK), @ReturnMessage OUTPUT
+======================================================================*/
 
-IF OBJECT_ID('dbo.CleanDataByUser', 'P') IS NOT NULL
-    DROP PROCEDURE dbo.CleanDataByUser;
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
 GO
 
-CREATE PROCEDURE dbo.CleanDataByUser
-    @userId INT
+CREATE OR ALTER PROCEDURE [dbo].[CleanDataByUser]
+      @UserId          INT                      -- TODO: adjust type (e.g., UNIQUEIDENTIFIER)
+    , @ReturnMessage   NVARCHAR(4000) = NULL OUTPUT
 AS
 BEGIN
     SET NOCOUNT ON;
+    SET XACT_ABORT ON;
 
+    -------------------------------------------------------------------
+    -- 0) DECLARATIONS
+    -------------------------------------------------------------------
+    DECLARE @proc_name SYSNAME = OBJECT_SCHEMA_NAME(@@PROCID) + N'.' + OBJECT_NAME(@@PROCID);
+    DECLARE @start_time DATETIME2(3) = SYSUTCDATETIME();
+    DECLARE @had_outer_tx BIT = CASE WHEN @@TRANCOUNT > 0 THEN 1 ELSE 0 END;
+    DECLARE @rc INT = 0;
+    DECLARE @total BIGINT = 0;
+    SET @ReturnMessage = N'';
+
+    -------------------------------------------------------------------
+    -- 1) VALIDATION
+    -------------------------------------------------------------------
+    IF @UserId IS NULL
+    BEGIN
+        SET @rc = 51001;
+        SET @ReturnMessage = N'@UserId is required.';
+        ;THROW 51001, '@UserId is required.', 1;
+    END
+
+    -------------------------------------------------------------------
+    -- 2) OPTIONAL: ENFORCE ISOLATION (leave commented unless needed)
+    -------------------------------------------------------------------
+    -- SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+    -- SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
 
     BEGIN TRY
-    BEGIN TRAN;
-
-
-
-
+        
 
     -------------------------------------------------
     -- Temp tables for reuse
@@ -133,73 +167,87 @@ BEGIN
     -------------------------------------------------
     DELETE FROM audit_events WHERE user_id = @UserId;
 
+
+
     -- Yammer messages
-    -- Safety: if prior execution on same session failed before cleanup.
-    IF OBJECT_ID('tempdb..#MessagesToDelete') IS NOT NULL
-        DROP TABLE #MessagesToDelete;
+        IF OBJECT_ID('tempdb..#MessagesToDelete') IS NOT NULL
+            DROP TABLE #MessagesToDelete;
 
-    ;WITH RecursiveMessages AS
-    (
-        -- Seed: messages authored by the user
-        SELECT ym.id, ym.yammer_msg_id
-        FROM dbo.yammer_messages ym
-        WHERE ym.sender_id = @UserId
+        ;WITH RecursiveMessages AS
+        (
+            -- Seed: messages authored by the user
+            SELECT ym.id, ym.yammer_msg_id
+            FROM dbo.yammer_messages ym
+            WHERE ym.sender_id = @UserId
+            UNION ALL
+            -- Recurse: any message replying (directly/indirectly) to those
+            SELECT child.id, child.yammer_msg_id
+            FROM dbo.yammer_messages child
+            INNER JOIN RecursiveMessages parent
+                ON child.reply_to_yammer_msg_id = parent.yammer_msg_id
+        )
+        SELECT DISTINCT rm.id
+        INTO #MessagesToDelete
+        FROM RecursiveMessages rm
+        OPTION (MAXRECURSION 0);
 
-        UNION ALL
+        IF EXISTS (SELECT 1 FROM #MessagesToDelete)
+        BEGIN
+            -- Delete dependent links first
+            DELETE ysl
+            FROM dbo.yammer_msg_to_stream ysl
+            INNER JOIN #MessagesToDelete d ON d.id = ysl.message_id;
 
-        -- Recurse: any message replying (directly/indirectly) to those
-        SELECT child.id, child.yammer_msg_id
-        FROM dbo.yammer_messages child
-        INNER JOIN RecursiveMessages parent
-            ON child.reply_to_yammer_msg_id = parent.yammer_msg_id
-    )
-    SELECT DISTINCT rm.id
-    INTO #MessagesToDelete
-    FROM RecursiveMessages rm
-    OPTION (MAXRECURSION 0);
+            -- Delete messages
+            DELETE ym
+            FROM dbo.yammer_messages ym
+            INNER JOIN #MessagesToDelete d ON d.id = ym.id;
 
-    IF NOT EXISTS (SELECT 1 FROM #MessagesToDelete)
-    BEGIN
-        DROP TABLE #MessagesToDelete;
-        RETURN;
-    END
+            -- Optional: capture @Deleted if you need it
+            DECLARE @Deleted INT = @@ROWCOUNT;
+        END
 
-    BEGIN TRAN;
-
-        -- Delete dependent links first
-        DELETE ysl
-        FROM dbo.yammer_msg_to_stream ysl
-        INNER JOIN #MessagesToDelete d ON d.id = ysl.message_id;
-
-        -- Delete messages
-        DELETE ym
-        FROM dbo.yammer_messages ym
-        INNER JOIN #MessagesToDelete d ON d.id = ym.id;
-
-        DECLARE @Deleted INT = @@ROWCOUNT;
-
-    COMMIT;
-
-    DROP TABLE #MessagesToDelete;
+        -- Always drop the temp table if it exists
+        IF OBJECT_ID('tempdb..#MessagesToDelete') IS NOT NULL
+            DROP TABLE #MessagesToDelete;
 
 
-    -------------------------------------------------
-    -- Finally the user
-    -------------------------------------------------
-    DELETE FROM users WHERE id = @UserId;
+        -- Unset any users with this user as their manager
+        Update users set manager_id = null 
+            WHERE id = @UserId;
 
 
 
+        -------------------------------------------------
+        -- Finally the user
+        -------------------------------------------------
+        DELETE FROM users WHERE id = @UserId;
 
 
+        RETURN @rc; -- 0
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE() <> 0 AND @had_outer_tx = 0
+            ROLLBACK;
 
-    COMMIT TRAN;
-END TRY
-BEGIN CATCH
-    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
-    THROW;
-END CATCH
+        DECLARE 
+              @err_number   INT         = ERROR_NUMBER()
+            , @err_severity INT         = ERROR_SEVERITY()
+            , @err_state    INT         = ERROR_STATE()
+            , @err_line     INT         = ERROR_LINE()
+            , @err_proc     NVARCHAR(256) = ERROR_PROCEDURE()
+            , @err_msg      NVARCHAR(4000) = ERROR_MESSAGE();
 
+        SET @rc = ISNULL(@err_number, 50000);
+        SET @ReturnMessage = CONCAT(
+            N'ERR: ', ISNULL(@err_proc, @proc_name), N' (line ', @err_line, N'): ',
+            @err_msg, N' [state=', @err_state, N', severity=', @err_severity, N']'
+        );
 
-END;
+        ;THROW; -- preserve original error metadata
+    END CATCH
+END
+GO
 
+-- Optional permissions
+-- GRANT EXECUTE ON [dbo].[CleanDataByUser] TO [app_executor];
