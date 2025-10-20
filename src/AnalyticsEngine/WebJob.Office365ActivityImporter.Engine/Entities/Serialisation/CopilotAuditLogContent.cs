@@ -10,9 +10,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     {
         public CopilotEventData CopilotEventData { get; set; } = null;
         public string EventRaw { get; set; } = null;
-        public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, Office365Event relatedAuditEvent)
+
+        public string AgentName { get; set; }
+        public string AgentId { get; set; }
+
+        public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, CommonAuditEvent relatedAuditEvent)
         {
-            await sessionContext.CopilotEventResolver.SaveSingleCopilotEventToSql(CopilotEventData, relatedAuditEvent);
+            await sessionContext.CopilotEventResolver.SaveSingleCopilotEventToSqlStaging(this, relatedAuditEvent);
             return true;
         }
     }

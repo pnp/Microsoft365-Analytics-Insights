@@ -7,7 +7,7 @@ namespace Common.Entities
     /// The common event entity for any workload. Workload specific events link back to this.
     /// </summary>
     [Table("audit_events")]
-    public class Office365Event
+    public class CommonAuditEvent
     {
         [Column("id")]
         public System.Guid Id { get; set; }
