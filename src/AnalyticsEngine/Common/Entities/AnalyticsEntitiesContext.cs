@@ -16,8 +16,8 @@ namespace Common.Entities
     /// The database model
     /// </summary>
     /// <remarks>
-    /// Add-Migration -Name "ExtendedUsageReports" -ProjectName "Common.Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
-    /// Update-Database -TargetMigration "PageCommentsAndLikes" -ProjectName "Common.Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
+    /// Add-Migration -Name "ExtendedUsageReports" -ProjectName "Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
+    /// Update-Database -TargetMigration "PageCommentsAndLikes" -ProjectName "Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
     /// </remarks>
     public class AnalyticsEntitiesContext : DbContext
     {
