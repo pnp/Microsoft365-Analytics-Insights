@@ -331,7 +331,7 @@ namespace Tests.UnitTests
                 var commonEventDocEditReloaded = await _db.CopilotEventMetadataFiles
                     .Include(x => x.RelatedChat)
                     .Include(x => x.RelatedChat.Agent)
-                    .FirstOrDefaultAsync(x => x.RelatedChat.AuditEvent == commonEventDocEdit);
+                    .FirstOrDefaultAsync(x => x.RelatedChat.AuditEvent.Id == commonEventDocEdit.Id);
                 Assert.IsNotNull(commonEventDocEditReloaded);
                 Assert.IsNotNull(commonEventDocEditReloaded.RelatedChat.Agent);
                 Assert.IsTrue(commonEventDocEditReloaded.RelatedChat.Agent.Name.Contains("Test Agent Doc"));
@@ -351,16 +351,16 @@ namespace Tests.UnitTests
                 var commonEventChat1 = new CommonAuditEvent
                 {
                     TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "Chat or something" + DateTime.Now.Ticks },
-                    User = new User { AzureAdId = "test", UserPrincipalName = "test chat user " + DateTime.Now.Ticks },
+                    Operation = new EventOperation { Name = "Chat or something 1 " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test chat user 1 " + DateTime.Now.Ticks },
                     Id = Guid.NewGuid()
                 };
 
                 var commonEventChat2 = new CommonAuditEvent
                 {
                     TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "Chat or something" + DateTime.Now.Ticks },
-                    User = new User { AzureAdId = "test", UserPrincipalName = "test chat user " + DateTime.Now.Ticks },
+                    Operation = new EventOperation { Name = "Chat or something 2 " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test chat user 2 " + DateTime.Now.Ticks },
                     Id = Guid.NewGuid()
                 };
 
@@ -369,13 +369,13 @@ namespace Tests.UnitTests
                 {
                     AppHost = "Teams",
                     Contexts = new List<Context>
-            {
-                new Context
-                {
-                    Id = "https://microsoft.teams.com/threads/19:somechatthread@thread.v2",
-                    Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
-                }
-            }
+                    {
+                        new Context
+                        {
+                            Id = "https://microsoft.teams.com/threads/19:somechatthread@thread.v2",
+                            Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                        }
+                    }
                 };
 
                 // Save common events as they are required for the foreign key - the common event is saved before CopilotAuditEventManager runs on the metadata
@@ -392,7 +392,7 @@ namespace Tests.UnitTests
                 // Check event has right agent details
                 var commonEventDocEditReloaded = await _db.CopilotChats
                     .Include(x => x.Agent)
-                    .FirstOrDefaultAsync(x => x.AuditEvent == commonEventChat1);
+                    .FirstOrDefaultAsync(x => x.AuditEvent.Id == commonEventChat1.Id);
                 Assert.IsNotNull(commonEventDocEditReloaded);
                 Assert.IsTrue(commonEventDocEditReloaded.Agent.AgentID == agentId);
                 Assert.IsTrue(commonEventDocEditReloaded.Agent.Name == agentName);
@@ -406,7 +406,7 @@ namespace Tests.UnitTests
                 // Check event has right agent details
                 var commonEventDocEditReloaded2 = await _db.CopilotChats
                     .Include(x => x.Agent)
-                    .FirstOrDefaultAsync(x => x.AuditEvent == commonEventChat2);
+                    .FirstOrDefaultAsync(x => x.AuditEvent.Id == commonEventChat2.Id);
                 await _db.Entry(commonEventDocEditReloaded2.Agent).ReloadAsync();
                 Assert.IsNotNull(commonEventDocEditReloaded2);
                 Assert.IsTrue(commonEventDocEditReloaded2.Agent.AgentID == agentId);
