@@ -53,7 +53,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _auth = new GraphAppIndentityOAuthContext(_telemetry, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
             this._thisTenantId = thisTenantId;
 
-            _sbClient = new ServiceBusClient(config.ConnectionStrings.ServiceBusConnectionString);
+            var sbCredential = new Azure.Identity.ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
+
+            _sbClient = new ServiceBusClient(config.ConnectionStrings.ServiceBusConnectionString, sbCredential);
             var sbConnectionInfo = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
             _processor = _sbClient.CreateProcessor(sbConnectionInfo.EntityPath, new ServiceBusProcessorOptions
             {
