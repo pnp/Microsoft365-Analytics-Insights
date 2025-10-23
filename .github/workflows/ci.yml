@@ -94,7 +94,7 @@ jobs:
         env:
           Zips_Folder: ${{ runner.temp }}/zips/
           Pfx_Path: ${{ runner.temp }}/SPOInsightsBinaries.pfx
-
+      
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Setup MSBuild
@@ -143,6 +143,9 @@ jobs:
           Copy-Item -Verbose -Force -Recurse `
           -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS" `
           -Destination "${{ runner.temp }}\Office365ActivityImporter\"
+          
+      - uses: KamaranL/add-signtool-action@v1
+        id: signtool
 
       - name: Decode the PFX
         if: matrix.project.name == 'App.ControlPanel'
@@ -152,7 +155,7 @@ jobs:
       - name: Sign installer
         if: matrix.project.name == 'App.ControlPanel'
         run: |
-            & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe' `
+            & $env:SIGNTOOL_DIR\signtool.exe `
             sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
             /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
             "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
