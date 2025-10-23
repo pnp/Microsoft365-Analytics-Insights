@@ -53,7 +53,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             // Install into sites. Hard-code library name "SPOInsights" for now
             var siteInstaller = new SpoSiteListInstaller(_logger);
-            await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString, 
+            await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString,
                 "SPOInsights", "https://" + _defaultHostName);
 
             _logger.LogInformation("Installed AITracker to target SharePoint sites via CSOM.");

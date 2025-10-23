@@ -38,7 +38,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync();
                 Console.WriteLine($"Inserted duplicate URLs: {urlDup1.ID} and {urlDup2.ID}");
 
-                var randoUser = new User 
+                var randoUser = new User
                 {
                     UserPrincipalName = "user" + DateTime.Now.Ticks + "@example.com",
                 };
@@ -176,7 +176,7 @@ namespace Tests.UnitTests
                 var pagePropValCheck = db.FileMetadataPropertyValues.FirstOrDefault(p => p.ID == pagePropVal.ID);
                 Assert.IsNotNull(pagePropValCheck, "Page property value should exist after cleanup");
 
-                Assert.IsTrue(hitsPostInsert == hitsPreInsert + duplicateHitsInSingleBatch.Rows.Count, 
+                Assert.IsTrue(hitsPostInsert == hitsPreInsert + duplicateHitsInSingleBatch.Rows.Count,
                     "Hits count should increase by " + duplicateHitsInSingleBatch.Rows.Count + " after saving duplicate hits");
             }
         }

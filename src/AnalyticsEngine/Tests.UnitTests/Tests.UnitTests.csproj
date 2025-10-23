@@ -96,6 +96,8 @@
     <Compile Include="CopilotTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
+    <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
+    <Compile Include="OutlookUserActivityLoaderTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
@@ -129,6 +131,8 @@
     <Compile Include="Program.cs" />
     <Compile Include="TeamsTests.cs" />
     <Compile Include="StreamTests.cs" />
+    <Compile Include="UserGroupsCacheTests.cs" />
+    <Compile Include="UserGroupsFilterModelTests.cs" />
     <Compile Include="UserLookupTests.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -236,7 +240,7 @@
       <Version>4.0.3</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
-      <Version>6.4.4</Version>
+      <Version>6.5.1</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.ApplicationInsights">
       <Version>2.22.0</Version>

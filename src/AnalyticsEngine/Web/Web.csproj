@@ -63,7 +63,7 @@
       <Version>4.0.3</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
-      <Version>6.4.4</Version>
+      <Version>6.5.1</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.ApplicationInsights">
       <Version>2.22.0</Version>

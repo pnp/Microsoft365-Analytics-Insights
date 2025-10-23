@@ -21,6 +21,7 @@ using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using static App.ControlPanel.Engine.Models.AutodetectedSqlAndFtpDetails;
 
 namespace App.ControlPanel.Engine
@@ -308,7 +309,10 @@ namespace App.ControlPanel.Engine
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(auth.Creds);
 
-            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, telemetry), telemetry);
+            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, telemetry),
+                new NoUsersHaveGroupsUserGroupsCache(_logger),
+                new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
+                telemetry);
 
             // Usage reports
             if (Config.SolutionConfig.ImportTaskSettings.GraphUsageReports)

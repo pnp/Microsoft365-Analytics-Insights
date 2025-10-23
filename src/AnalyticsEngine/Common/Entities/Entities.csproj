@@ -78,6 +78,7 @@
     <Compile Include="Config\AppConfig.cs" />
     <Compile Include="Config\AppConnectionStrings.cs" />
     <Compile Include="Config\ImportConfig.cs" />
+    <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
     <Compile Include="Entities\OnlineMeeting.cs" />
     <Compile Include="Entities\UsageReports\AppPlatformUserActivityLog.cs" />
@@ -422,7 +423,7 @@
       <Version>4.0.3</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
-      <Version>6.4.4</Version>
+      <Version>6.5.1</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
       <Version>6.0.1</Version>

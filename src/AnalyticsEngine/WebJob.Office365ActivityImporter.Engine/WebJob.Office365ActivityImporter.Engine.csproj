@@ -134,6 +134,7 @@
     <Compile Include="Graph\Teams\Extensions\ITeamInstalledAppsCollectionPageExtensions.cs" />
     <Compile Include="Graph\GraphLookupCache.cs" />
     <Compile Include="Graph\GraphImporter.cs" />
+    <Compile Include="Graph\UsageReports\AbstractUserDailyActivityLoader.cs" />
     <Compile Include="Graph\UsageReports\ActivityReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\AbstractAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\AbstractModels.cs" />
@@ -150,12 +151,14 @@
     <Compile Include="Graph\UsageReports\YammerUserUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\TeamsUserUsageLoader.cs" />
     <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
+    <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\UserApps\AbstractUserAppLoader.cs" />
     <Compile Include="Graph\User\UserApps\GraphAndSqlUserAppLoader.cs" />
     <Compile Include="Graph\User\UserApps\Models.cs" />
     <Compile Include="Graph\User\UserApps\UserAppLogUpdater.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
+    <Compile Include="Graph\User\UserGroupsCache.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
     <Compile Include="Graph\User\UserTeamApp.cs" />
@@ -220,7 +223,7 @@
       <Version>30.0.1</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
-      <Version>6.4.4</Version>
+      <Version>6.5.1</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.ApplicationInsights">
       <Version>2.22.0</Version>

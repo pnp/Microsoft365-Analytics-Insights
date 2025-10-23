@@ -255,7 +255,7 @@
       <Version>12.14.1</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
-      <Version>6.4.4</Version>
+      <Version>6.5.1</Version>
     </PackageReference>
     <PackageReference Include="FluentFTP">
       <Version>45.1.0</Version>

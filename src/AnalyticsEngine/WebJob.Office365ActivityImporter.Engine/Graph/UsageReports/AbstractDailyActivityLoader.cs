@@ -1,6 +1,5 @@
 ﻿using Common.Entities;
 using Common.Entities.ActivityReports;
-using Common.Entities.LookupCaches;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -88,6 +87,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Look through Graph results & compare with already saved reports for this date
                 foreach (var reportPage in LoadedReportPages[dateTime])
                 {
+                    // Usually we're checking if the user is in scope (Entra ID group memembership for group filter)
+                    var isInScope = await IdInScope(reportPage.LookupFieldValue);
+                    if (!isInScope)
+                    {
+                        Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
+                        continue;   // Skip this record
+                    }
+
                     // Do we have a cached ID for the lookup?
                     int? lookupId = null;
                     lock (userEmailToDbIdCache)     // Lock between import threads
@@ -159,6 +166,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             await lookupCache.DB.SaveChangesAsync();
         }
+
+        protected virtual Task<bool> IdInScope(string lookupId)
+        {
+            // Default implementation assumes all IDs are in scope
+            // Override this method to filter out IDs that should not be processed
+            return Task.FromResult(true);
+        }
+
         protected abstract long CountActivity(TUserActivityUserDetail activityPage);
         protected abstract void PopulateReportSpecificMetadata(TReportDbType newRecord, TUserActivityUserDetail activityPage);
 
@@ -172,15 +187,4 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         }
     }
 
-    /// <summary>
-    /// Generic Graph report loader for users. 
-    /// </summary>
-    public abstract class AbstractUserDailyActivityLoader<TReportDbType, TUserActivityUserDetail> : AbstractDailyActivityLoader<TReportDbType, TUserActivityUserDetail, Common.Entities.User, UserCache>
-        where TReportDbType : AbstractUsageActivityLog, new()
-        where TUserActivityUserDetail : AbstractActivityRecord<Common.Entities.User>
-    {
-        internal AbstractUserDailyActivityLoader(ManualGraphCallClient client, ILogger telemetry) : base(client, telemetry)
-        {
-        }
-    }
 }
