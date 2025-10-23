@@ -157,12 +157,10 @@ jobs:
       - name: Sign installer
         if: matrix.project.name == 'App.ControlPanel'
         run: |
-            & "${{ env.SIGNTOOL_DIR }}\signtool.exe" `
+            & "${{ steps.signtool.outputs.signtool-x64 }}\signtool.exe" `
             sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
             /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
             "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
-        env:
-          SIGNTOOL_DIR: ${{ steps.signtool.outputs.signtool-x64 }}
       - name: Remove the PFX
         if: matrix.project.name == 'App.ControlPanel'
         run: |
