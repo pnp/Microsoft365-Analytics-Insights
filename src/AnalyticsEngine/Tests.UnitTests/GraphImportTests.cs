@@ -270,12 +270,20 @@ namespace Tests.UnitTests
             httpConfig.MapHttpAttributeRoutes();
             var server = new HttpServer(httpConfig);        // Will use fake controllers in test project
 
-            // Create new SB client
+            // Create new SB client (updated to RBAC credential auth)
             var config = new AppConfig();
             var conString = config.ConnectionStrings.ServiceBusConnectionString;
-            var sbClient = new ServiceBusClient(conString);
             var sbConnectionProps = ServiceBusConnectionStringProperties.Parse(conString);
-            var sbSender = sbClient.CreateSender(sbConnectionProps.EntityPath);
+            var fqNamespace = sbConnectionProps.Endpoint.Host; // e.g. namespace.servicebus.windows.net
+            var queueName = sbConnectionProps.EntityPath; // queue name
+
+            // Build credential from app registration (client ID / secret or certificate)
+            // NOTE: Service Bus RBAC requires Standard or Premium tier and the app registration must have role
+            // 'Azure Service Bus Data Sender' at namespace or queue scope. Basic tier does NOT support AAD RBAC.
+            // Using direct ClientSecretCredential avoids any graph-specific token logic.
+            var sbCredential = new Azure.Identity.ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
+            var sbClient = new ServiceBusClient(fqNamespace, sbCredential);
+            var sbSender = sbClient.CreateSender(queueName);
 
             using (var db = new AnalyticsEntitiesContext())
             {
