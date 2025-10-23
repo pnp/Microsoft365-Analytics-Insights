@@ -281,6 +281,7 @@ namespace Tests.UnitTests
             // NOTE: Service Bus RBAC requires Standard or Premium tier and the app registration must have role
             // 'Azure Service Bus Data Sender' at namespace or queue scope. Basic tier does NOT support AAD RBAC.
             // Using direct ClientSecretCredential avoids any graph-specific token logic.
+            telemetry.LogInformation($"Creating Service Bus client with client ID {config.ClientID}");
             var sbCredential = new Azure.Identity.ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
             var sbClient = new ServiceBusClient(fqNamespace, sbCredential);
             var sbSender = sbClient.CreateSender(queueName);
