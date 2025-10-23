@@ -144,8 +144,9 @@ jobs:
           Copy-Item -Verbose -Force -Recurse `
           -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS" `
           -Destination "${{ runner.temp }}\Office365ActivityImporter\"
-          
-      - uses: KamaranL/add-signtool-action@v1
+
+      - name: Setup SignTool
+        uses: KamaranL/add-signtool-action@v1
         id: signtool
 
       - name: Decode the PFX
@@ -156,10 +157,12 @@ jobs:
       - name: Sign installer
         if: matrix.project.name == 'App.ControlPanel'
         run: |
-            & $env:SIGNTOOL_DIR\signtool.exe `
+            & "${{ env.SIGNTOOL_DIR }}\signtool.exe" `
             sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
             /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
             "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
+        env:
+          SIGNTOOL_DIR: ${{ steps.signtool.outputs.signtool-x64 }}
       - name: Remove the PFX
         if: matrix.project.name == 'App.ControlPanel'
         run: |
