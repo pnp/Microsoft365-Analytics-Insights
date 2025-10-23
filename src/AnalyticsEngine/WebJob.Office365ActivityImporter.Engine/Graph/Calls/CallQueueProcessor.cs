@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
+using Azure.Identity; // Added for ClientSecretCredential
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {
@@ -32,7 +33,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private ManualGraphCallClient _graphCallClient;
         private bool _isInitialised = false;
 
-
+        public ServiceBusClient ServiceBusClient => _sbClient;
         public static CallQueueProcessor _singleton = null;
         public static async Task<CallQueueProcessor> GetCallQueueProcessor(AppConfig config, string thisTenantId, ManualGraphCallClient graphCallClient)
         {
@@ -53,18 +54,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _auth = new GraphAppIndentityOAuthContext(_telemetry, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
             this._thisTenantId = thisTenantId;
 
-            var sbCredential = new Azure.Identity.ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
-
-            _sbClient = new ServiceBusClient(config.ConnectionStrings.ServiceBusConnectionString, sbCredential);
-            var sbConnectionInfo = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
-            _processor = _sbClient.CreateProcessor(sbConnectionInfo.EntityPath, new ServiceBusProcessorOptions
+            // If RBAC is enabled, build ServiceBusClient using AAD credential
+            if (config.UseRBACForServiceBus)
             {
-                MaxConcurrentCalls = 10,
-                PrefetchCount = 0,
-                ReceiveMode = ServiceBusReceiveMode.PeekLock,
-                MaxAutoLockRenewalDuration = TimeSpan.FromHours(24),        // Queue should be configured for 5 minute lock timeout
-                AutoCompleteMessages = false                                // Messages are completed only when the migrator has succeeded to migrate the file
-            });
+                _telemetry.LogInformation("Initializing ServiceBusClient using RBAC (ClientSecretCredential).");
+                var credential = new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
+                // Extract fully qualified namespace from connection string (Endpoint=sb://namespace.servicebus.windows.net/;...)
+                var sbProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
+                var fullyQualifiedNamespace = sbProps.FullyQualifiedNamespace; // e.g. namespace.servicebus.windows.net
+                _sbClient = new ServiceBusClient(fullyQualifiedNamespace, credential);
+                _processor = _sbClient.CreateProcessor(sbProps.EntityPath, new ServiceBusProcessorOptions
+                {
+                    MaxConcurrentCalls = 10,
+                    PrefetchCount = 0,
+                    ReceiveMode = ServiceBusReceiveMode.PeekLock,
+                    MaxAutoLockRenewalDuration = TimeSpan.FromHours(24),        // Queue should be configured for 5 minute lock timeout
+                    AutoCompleteMessages = false                                // Messages are completed only when the migrator has succeeded to migrate the file
+                });
+            }
+            else
+            {
+                // Legacy SAS connection string approach
+                _sbClient = new ServiceBusClient(config.ConnectionStrings.ServiceBusConnectionString);
+                var sbConnectionInfo = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
+                _processor = _sbClient.CreateProcessor(sbConnectionInfo.EntityPath, new ServiceBusProcessorOptions
+                {
+                    MaxConcurrentCalls = 10,
+                    PrefetchCount = 0,
+                    ReceiveMode = ServiceBusReceiveMode.PeekLock,
+                    MaxAutoLockRenewalDuration = TimeSpan.FromHours(24),        // Queue should be configured for 5 minute lock timeout
+                    AutoCompleteMessages = false                                // Messages are completed only when the migrator has succeeded to migrate the file
+                });
+            }
         }
 
         #endregion
