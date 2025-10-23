@@ -277,15 +277,6 @@ namespace Tests.UnitTests
             var fqNamespace = sbConnectionProps.Endpoint.Host; // e.g. namespace.servicebus.windows.net
             var queueName = sbConnectionProps.EntityPath; // queue name
 
-            // Build credential from app registration (client ID / secret or certificate)
-            // NOTE: Service Bus RBAC requires Standard or Premium tier and the app registration must have role
-            // 'Azure Service Bus Data Sender' at namespace or queue scope. Basic tier does NOT support AAD RBAC.
-            // Using direct ClientSecretCredential avoids any graph-specific token logic.
-            telemetry.LogInformation($"Creating Service Bus client with client ID {config.ClientID}");
-            var sbCredential = new Azure.Identity.ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
-            var sbClient = new ServiceBusClient(fqNamespace, sbCredential);
-            var sbSender = sbClient.CreateSender(queueName);
-
             using (var db = new AnalyticsEntitiesContext())
             {
                 var callCountInitial = await db.CallRecords.CountAsync();
@@ -300,6 +291,8 @@ namespace Tests.UnitTests
                         _ = callProcessor.BeginProcessCallsQueue();
 
                         // START TEST: Send fake msgs through SB - remember IDs
+                        var sbSender = callProcessor.ServiceBusClient.CreateSender(queueName);
+
                         var testIds = new List<string>();
                         for (int i = 0; i < CALLS_TO_ADD; i++)
                         {
