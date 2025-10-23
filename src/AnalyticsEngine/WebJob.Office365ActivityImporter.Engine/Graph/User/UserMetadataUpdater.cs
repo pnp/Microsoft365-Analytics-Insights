@@ -37,7 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
 
             IDeltaValueProvider deltaProvider = null;
-            if (settings.ConnectionStrings.RedisConnectionString != null)
+            if (!string.IsNullOrEmpty(settings.ConnectionStrings.RedisConnectionString))
             {
                 deltaProvider = new RedisProcessDeltaValueProvider(settings, telemetry);
                 telemetry.LogInformation($"User import - using Redis for delta token cache.");

@@ -680,9 +680,11 @@ namespace Tests.UnitTests
                         }
                     ]";
 
-            var e1 = new PageUpdateEventAppInsightsQueryResult 
-            { 
-                CustomProperties = new PageUpdateEventCustomProps { Url = URL, CommentsString = propsStringComments1, LikesString = propsStringLikes1 }, AppInsightsTimestamp = DateTime.Now };
+            var e1 = new PageUpdateEventAppInsightsQueryResult
+            {
+                CustomProperties = new PageUpdateEventCustomProps { Url = URL, CommentsString = propsStringComments1, LikesString = propsStringLikes1 },
+                AppInsightsTimestamp = DateTime.Now
+            };
 
             var propsStringComments2 = @"[
                         {

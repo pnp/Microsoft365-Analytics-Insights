@@ -155,25 +155,15 @@ namespace WebJob.AppInsightsImporter
         /// Output the config and check it's good.
         /// </summary>
         /// <returns>If the config is valid</returns>
-        private static bool ValidateAndPrintConfig(AppConfig config, ILogger telemetry)
+        private static bool ValidateAndPrintConfig(AppConfig settings, ILogger telemetry)
         {
-            ConsoleApp.PrintStartupAndLoggingConfig(telemetry);
+            ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, telemetry);
 
             // Have config object test
 
-            var accountName = StringUtils.FindValueForProp(config.ConnectionStrings.DatabaseConnectionString, "AccountName");
+            settings.ConnectionStrings.TestSQLSettings(telemetry);
 
-            string efConnectionString = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
-            var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
-
-            telemetry.LogInformation("Configured values:");
-            //pIIConfig.PrintConfig(telemetry);     // PII anonisation is broken for the time being in this project, but nobody uses it anyway...
-
-            telemetry.LogInformation($"Destination SQL Server configuration: \ndata source='{sqlConnectionInfo.DataSource}', initial catalog='{sqlConnectionInfo.InitialCatalog}'");
-
-            config.ConnectionStrings.TestSQLSettings(telemetry);
-
-            if (string.IsNullOrEmpty(config.AppInsightsApiKey))
+            if (string.IsNullOrEmpty(settings.AppInsightsApiKey))
             {
                 telemetry.LogInformation("Critical: no Application Insights API key found - can't continue. Run the latest installer again to reset configuration.");
                 return false;

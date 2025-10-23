@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
 using System;
-using System.Configuration;
 
 namespace DataUtils
 {
@@ -35,34 +34,16 @@ namespace DataUtils
             }
         }
 
-        public static void PrintStartupAndLoggingConfig(ILogger logger)
+        public static void PrintStartupAndLoggingConfig(string efConnectionString, string buildLabel, string userGroupsFilterString, ILogger logger)
         {
-            if (logger is null)
-            {
-                throw new ArgumentNullException(nameof(logger));
-            }
 
-            var buildLabel = ConfigurationManager.AppSettings["BuildLabel"];
             logger.LogInformation($"Office 365 Advanced Analytics engine START: '{buildLabel}'.");
-
-            string efConnectionString = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
             var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
             logger.LogInformation($"Destination SQL Server='{sqlConnectionInfo.DataSource}', DB='{sqlConnectionInfo.InitialCatalog}'.");
-
-            bool loggingEnabled = ConfigurationManager.AppSettings["ImportLogging"] == "True";
-#if DEBUG
-            loggingEnabled = true;
-#endif
-
-            if (loggingEnabled)
+            if (!string.IsNullOrEmpty(userGroupsFilterString))
             {
-                logger.LogInformation("Import logging is ENABLED.");
-            }
-            else
-            {
-                logger.LogInformation("Import logging is disabled. Add key 'ImportLogging' value 'True' to configuration to enable full logging.");
+                logger.LogWarning($"WARNING: User groups import filter configured: '{userGroupsFilterString}'. Will not import data for users not in those groups");
             }
         }
-
     }
 }

@@ -13,6 +13,7 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReport
 using WebJob.Office365ActivityImporter.Engine.Graph.Teams;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
@@ -21,30 +22,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     public class GraphImporter : AbstractApiLoader
     {
+        private readonly UserGroupsCache _userGroupsCache;
         private readonly GraphAppIndentityOAuthContext _graphAppIndentityOAuthContext;
-        private GraphServiceClient _graphClient = null;
+        private readonly GraphServiceClient _graphClient;
 
-        public GraphImporter(AnalyticsLogger telemetry, AppConfig settings) : base(telemetry, settings)
+        public GraphImporter(AnalyticsLogger telemetry, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings)
+            : base(telemetry, settings)
         {
-            _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(telemetry, _settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
-
+            _userGroupsCache = userGroupsCache;
+            _graphAppIndentityOAuthContext = graphAppIndentityOAuthContext;
+            _graphClient = graphClient;
         }
 
-        async Task InitAuth()
-        {
-            await _graphAppIndentityOAuthContext.InitClientCredential();
-            _graphClient = new GraphServiceClient(_graphAppIndentityOAuthContext.Creds);
-            _graphClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
-        }
 
         /// <summary>
         /// Main entry-point
         /// </summary>
         public async Task GetAndSaveAllGraphData(AppConfig settings)
         {
-            await InitAuth();
             var auth = new GraphAppIndentityOAuthContext(_telemetry, _settings.ClientID, _settings.TenantGUID.ToString(), _settings.ClientSecret, _settings.KeyVaultUrl, _settings.UseClientCertificate);
             var httpClient = new ManualGraphCallClient(auth, _telemetry);
+            var userGroupsFilter = new UserGroupsFilterModel(_settings.UserGroupsFilter);
+
+            var graphUserGroupsCache = new GraphUserGroupsCache(httpClient, _telemetry);
 
             if (settings.ImportJobSettings.GraphUsersMetadata)
             {
@@ -59,7 +59,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 userMetadaTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
             }
             else
-                _telemetry.LogInformation("Skipping user metadata import");
+                _telemetry.LogInformation("Skipping user metadata import", graphUserGroupsCache);
 
 
             using (var db = new AnalyticsEntitiesContext())
@@ -71,13 +71,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     userAppsTimer.Start();
                     var userAppsLogUpdater = new UserAppLogUpdater(_telemetry, _settings);
 
-                    await userAppsLogUpdater.UpdateUserInstalledApps(_graphClient);
+                    await userAppsLogUpdater.UpdateUserInstalledApps(_graphClient, graphUserGroupsCache, userGroupsFilter);
 
                     // Track finished event 
                     userAppsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
                 }
                 else
-                    _telemetry.LogInformation("Skipping user Teams apps import");
+                    _telemetry.LogInformation("Skipping user Teams apps import", graphUserGroupsCache);
 
 
                 if (settings.ImportJobSettings.GraphUsageReports)
@@ -86,7 +86,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     usageActivityTimer.Start();
 
                     // Global user activity report. Each thread creates own context.
-                    var imported = await GetAndSaveActivityReportsMultiThreaded(settings.DaysBeforeNowToDownload, httpClient);
+                    var imported = await GetAndSaveActivityReportsMultiThreaded(settings.DaysBeforeNowToDownload, httpClient, graphUserGroupsCache, userGroupsFilter);
 
                     // Track finished event 
                     if (imported)
@@ -95,7 +95,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
                 else
-                    _telemetry.LogInformation("Skipping usage reports import");
+                    _telemetry.LogInformation("Skipping usage reports import", graphUserGroupsCache);
 
                 if (settings.ImportJobSettings.GraphTeams)
                 {
@@ -111,20 +111,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     teamsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
                 }
                 else
-                    _telemetry.LogInformation("Skipping Teams import");
+                    _telemetry.LogInformation("Skipping Teams import", graphUserGroupsCache);
 
             }
         }
 
 
-        public async Task<bool> GetAndSaveActivityReportsMultiThreaded(int daysBackMax, ManualGraphCallClient client)
+        public async Task<bool> GetAndSaveActivityReportsMultiThreaded(int daysBackMax, ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)
         {
-            await InitAuth();
             var MIN_WAIT = TimeSpan.FromDays(1);
 
             DateTime? lastImportedDate = null;
             UserActivityLastImportedRedisSingleDateLoader lastImportedDateLoader = null;
-            if (_settings.ConnectionStrings.RedisConnectionString != null)
+            if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
             {
                 lastImportedDateLoader = new UserActivityLastImportedRedisSingleDateLoader(_settings.ConnectionStrings.RedisConnectionString);
 
@@ -159,34 +158,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var lookupIdCache = new ConcurrentLookupDbIdsCache();
 
                 // Daily imports
-                var teamsUserUsageLoader = new TeamsUserUsageLoader(client, _telemetry);
+                var teamsUserUsageLoader = new TeamsUserUsageLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(teamsUserUsageLoader, daysBackMax, "Teams user activity", _telemetry, lookupIdCache));
 
-                var teamsUserDeviceLoader = new TeamsUserDeviceLoader(client, _telemetry);
+                var teamsUserDeviceLoader = new TeamsUserDeviceLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(teamsUserDeviceLoader, daysBackMax, "Teams user device", _telemetry, lookupIdCache));
 
-                var outlookLoader = new OutlookUserActivityLoader(client, _telemetry);
+                var outlookLoader = new OutlookUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(outlookLoader, daysBackMax, "Outlook activity", _telemetry, lookupIdCache));
 
-                var oneDriveUsageLoader = new OneDriveUsageLoader(client, _telemetry);
+                var oneDriveUsageLoader = new OneDriveUsageLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(oneDriveUsageLoader, daysBackMax, "OneDrive usage", _telemetry, lookupIdCache));
 
-                var oneDriveUserActivityLoader = new OneDriveUserActivityLoader(client, _telemetry);
+                var oneDriveUserActivityLoader = new OneDriveUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(oneDriveUserActivityLoader, daysBackMax, "OneDrive activity", _telemetry, lookupIdCache));
 
-                var sharePointUserActivityLoader = new SharePointUserActivityLoader(client, _telemetry);
+                var sharePointUserActivityLoader = new SharePointUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(sharePointUserActivityLoader, daysBackMax, "SharePoint user activity", _telemetry, lookupIdCache));
 
-                var yammerUserActivityLoader = new YammerUserUsageLoader(client, _telemetry);
+                var yammerUserActivityLoader = new YammerUserUsageLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(yammerUserActivityLoader, daysBackMax, "Yammer user activity", _telemetry, lookupIdCache));
 
                 var yammerGroupsActivityLoader = new YammerGroupUsageLoader(client, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(yammerGroupsActivityLoader, daysBackMax, "Yammer group activity", _telemetry, lookupIdCache));
 
-                var yammerDeviceActivityLoader = new YammerDeviceUsageLoader(client, _telemetry);
+                var yammerDeviceActivityLoader = new YammerDeviceUsageLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(yammerDeviceActivityLoader, daysBackMax, "Yammer device activity", _telemetry, lookupIdCache));
 
-                var userPlatActivityLoader = new AppPlatformUserActivityLoader(client, _telemetry);
+                var userPlatActivityLoader = new AppPlatformUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _telemetry);
                 importTasks.Add(LoadAndSaveDailyImportReport(userPlatActivityLoader, daysBackMax, "Apps & platform activity", _telemetry, lookupIdCache));
 
                 // Weekly imports
@@ -204,7 +203,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     if (!StringUtils.IsEmail(allTeamsData[0].UserPrincipalName))
                     {
-                        _telemetry.LogInformation($"\nWARNING: Usage reports have associated user email concealed - we won't be able to link any activity back to users. See Office 365 Advanced Analytics Engine prerequisites.\n");
+                        _telemetry.LogError($"IMPORTANT: Usage reports have associated user email concealed - we won't be able to link any activity back to users. See Office 365 Advanced Analytics Engine prerequisites.\n");
                     }
                 }
 

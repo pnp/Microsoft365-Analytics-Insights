@@ -138,13 +138,14 @@ namespace WebJob.Office365ActivityImporter
             {
                 var importCycleTimer = new JobTimer(telemetry, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
+                var tasks = new ProgramTasks(telemetry, configuredSettings);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
                 {
                     try
                     {
-                        await ProgramTasks.ProcessCallQueueAndWebhook(configuredSettings, webHookUrl, telemetry);
+                        await tasks.ProcessCallQueueAndWebhook(webHookUrl);
                     }
                     catch (Exception ex)
                     {
@@ -160,7 +161,7 @@ namespace WebJob.Office365ActivityImporter
                 try
                 {
                     // Get Teams & user data
-                    await ProgramTasks.GetGraphTeamsAndUserData(telemetry, configuredSettings);
+                    await tasks.GetGraphTeamsAndUserData();
                 }
                 catch (Exception ex)
                 {
@@ -178,7 +179,7 @@ namespace WebJob.Office365ActivityImporter
                     try
                     {
 #endif
-                    await ProgramTasks.DownloadActivityData(configuredSettings, telemetry);
+                    await tasks.DownloadActivityData();
 #if !DEBUG
                     }
                     catch (Exception ex)
@@ -204,7 +205,7 @@ namespace WebJob.Office365ActivityImporter
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
-                    if (configuredSettings.ConnectionStrings.RedisConnectionString != null)
+                    if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
                     {
                         var redisDatesAdaptor = new RedisStatsDatesLoader(configuredSettings);
 
@@ -258,7 +259,7 @@ namespace WebJob.Office365ActivityImporter
         /// </summary>
         private static void PrintStartupDetails(AppConfig settings, ILogger telemetry)
         {
-            ConsoleApp.PrintStartupAndLoggingConfig(telemetry);
+            ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, telemetry);
 
             var efConnectionString = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
             var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
