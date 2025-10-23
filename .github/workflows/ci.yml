@@ -154,11 +154,27 @@ jobs:
         run: |
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
           [IO.File]::WriteAllBytes("${{ steps.prep.outputs.PFX_PATH }}", $pfx_cert_byte)
+      - name: Debug SignTool Outputs
+        if: matrix.project.name == 'App.ControlPanel'
+        run: |
+          Write-Host "Available SignTool outputs:"
+          Write-Host "signtool-x64: '${{ steps.signtool.outputs.signtool-x64 }}'"
+          Write-Host "signtool-x86: '${{ steps.signtool.outputs.signtool-x86 }}'"
+          Write-Host "Runner Arch: ${{ runner.arch }}"
+          Write-Host "ENV RUNNER_ARCH: $env:RUNNER_ARCH"
+          
       - name: Sign installer
         if: matrix.project.name == 'App.ControlPanel'
         run: |
-            & "${{ steps.signtool.outputs.signtool-x64 }}\signtool.exe" `
-            sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
+            $signtoolPath = "${{ steps.signtool.outputs.signtool-x64 }}"
+            if ([string]::IsNullOrEmpty($signtoolPath)) {
+              # Fallback to PATH
+              Write-Host "SignTool output is empty, using PATH"
+              $signtoolPath = "signtool.exe"
+            } else {
+              Write-Host "Using SignTool from output: $signtoolPath"
+            }
+            & $signtoolPath sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
             /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
             "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
       - name: Remove the PFX
