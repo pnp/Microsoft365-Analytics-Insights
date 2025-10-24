@@ -270,12 +270,12 @@ namespace Tests.UnitTests
             httpConfig.MapHttpAttributeRoutes();
             var server = new HttpServer(httpConfig);        // Will use fake controllers in test project
 
-            // Create new SB client
+            // Create new SB client (updated to RBAC credential auth)
             var config = new AppConfig();
             var conString = config.ConnectionStrings.ServiceBusConnectionString;
-            var sbClient = new ServiceBusClient(conString);
             var sbConnectionProps = ServiceBusConnectionStringProperties.Parse(conString);
-            var sbSender = sbClient.CreateSender(sbConnectionProps.EntityPath);
+            var fqNamespace = sbConnectionProps.Endpoint.Host; // e.g. namespace.servicebus.windows.net
+            var queueName = sbConnectionProps.EntityPath; // queue name
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -291,6 +291,8 @@ namespace Tests.UnitTests
                         _ = callProcessor.BeginProcessCallsQueue();
 
                         // START TEST: Send fake msgs through SB - remember IDs
+                        var sbSender = callProcessor.ServiceBusClient.CreateSender(queueName);
+
                         var testIds = new List<string>();
                         for (int i = 0; i < CALLS_TO_ADD; i++)
                         {
