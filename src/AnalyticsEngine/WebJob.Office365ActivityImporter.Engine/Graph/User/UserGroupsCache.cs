@@ -58,11 +58,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
         {
             if (filter == null)
                 throw new ArgumentNullException(nameof(filter));
+            if (filter.Patterns.Count == 0)
+            {
+                return true; // No filter patterns - all groups match
+            }
+
             var groupsForUser = await GetGroupsForUserAsync(upn);
 
-            if (filter.Patterns.Count == 0 || groupsForUser.Count == 0)
+            if (groupsForUser.Count == 0)
             {
-                return true; // No filter patterns or user has no groups means all groups match
+                return true; // user has no groups - all groups match
             }
             return groupsForUser.Any(g => filter.Matches(g));
         }
