@@ -138,3 +138,4 @@ Expected data-range for a medium-sized environment:
 Some components can be moved out of Azure; the app-service and the SQL database if needed, but we recommend keeping it in Azure so the automatic installer update process will work with the architecture.
 
 ![Architecture diagram](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/media/architecture.jpg)
+

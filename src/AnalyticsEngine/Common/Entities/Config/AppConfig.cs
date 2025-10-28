@@ -75,6 +75,17 @@ namespace Common.Entities.Config
                     this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
                 }
             }
+
+            // New optional flag: UseRBACForServiceBus (default false)
+            var useRbacForSb = ConfigurationManager.AppSettings.Get("UseRBACForServiceBus");
+            if (!string.IsNullOrEmpty(useRbacForSb))
+            {
+                bool parsed = false;
+                if (bool.TryParse(useRbacForSb, out parsed))
+                {
+                    this.UseRBACForServiceBus = parsed;
+                }
+            }
         }
 
         public string BuildLabel { get; set; }
@@ -141,5 +152,11 @@ namespace Common.Entities.Config
         /// Optional filter for user groups
         /// </summary>
         public string UserGroupsFilter { get; set; }
+
+        /// <summary>
+        /// When true, use RBAC (AAD) auth to connect to Service Bus instead of SAS connection string.
+        /// Default false.
+        /// </summary>
+        public bool UseRBACForServiceBus { get; set; } = false;
     }
 }
