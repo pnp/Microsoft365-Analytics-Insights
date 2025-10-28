@@ -50,9 +50,14 @@ namespace Common.Entities
 
         [ImportProp]
         public bool Calls { get; set; } = true;
+
+
         [ImportProp]
         public bool GraphUsersMetadata { get; set; } = true;
 
+        /// <summary>
+        /// User Teams apps for user refresh
+        /// </summary>
         [ImportProp]
         public bool GraphUserApps { get; set; } = true;
 

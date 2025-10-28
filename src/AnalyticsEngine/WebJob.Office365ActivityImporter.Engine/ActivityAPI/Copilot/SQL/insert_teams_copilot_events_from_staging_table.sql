@@ -4,6 +4,7 @@ INSERT INTO online_meetings(created, meeting_id, name)
 	left join 
 		online_meetings on online_meetings.meeting_id = imports.meeting_id
 	where 
+		imports.meeting_id is not null AND imports.meeting_name is not null AND imports.meeting_created_utc is not null AND
 		not exists(select top 1 created, meeting_id, name from online_meetings 
 			where created = imports.meeting_created_utc 
 				and created = imports.meeting_created_utc 
@@ -20,3 +21,4 @@ insert into event_copilot_meetings (copilot_chat_id, meeting_id)
 	  inner join online_meetings on online_meetings.meeting_id = imports.meeting_id
 		and online_meetings.name = imports.meeting_name
 		and online_meetings.created = CAST(imports.meeting_created_utc AS datetime)		 
+	where imports.meeting_id is not null AND imports.meeting_name is not null AND imports.meeting_created_utc is not null

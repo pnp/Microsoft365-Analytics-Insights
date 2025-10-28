@@ -7,6 +7,8 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
+using System.IO;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // AuditTraceConfig
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 {
@@ -67,6 +69,31 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             foreach (var reportItem in reportsArray)
             {
                 var logJson = reportItem.ToString();
+                // Trace logic
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(AuditTraceConfig.TraceEmail) && !string.IsNullOrWhiteSpace(AuditTraceConfig.TraceDirectory))
+                    {
+                        if (logJson.IndexOf(AuditTraceConfig.TraceEmail, StringComparison.OrdinalIgnoreCase) >=0)
+                        {
+                            var safeEmail = AuditTraceConfig.TraceEmail.Trim().ToLower();
+                            // Sanitize for filesystem
+                            foreach (var c in new char[] { '@', '.', ':', ';', '/', '\\', '"', '\'', '*', '?', '<', '>', '|' })
+                            {
+                                safeEmail = safeEmail.Replace(c, '_');
+                            }
+                            var fileName = $"audit_trace_{safeEmail}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid().ToString().Substring(0,8)}.json";
+                            var fullPath = Path.Combine(AuditTraceConfig.TraceDirectory, fileName);
+                            File.WriteAllText(fullPath, logJson);
+                            _telemetry.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _telemetry.LogWarning($"TRACE: Failed to write trace audit log file: {ex.Message}");
+                }
+
                 var logBase = JsonConvert.DeserializeObject<WorkloadOnlyAuditLogContent>(logJson);
                 AbstractAuditLogContent thisAuditLogReport = null;
 
