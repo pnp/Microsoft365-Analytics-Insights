@@ -387,6 +387,10 @@ namespace Tests.UnitTests
 
             [Column("date")]
             public DateTime Timestamp { get; set; } = DateTime.Now;
+
+
+            [Column("date_nullable")]
+            public DateTime? NullableTimestamp { get; set; } = null;
         }
 
         [TempTableName(TEMP_TABLE_NAME)]
