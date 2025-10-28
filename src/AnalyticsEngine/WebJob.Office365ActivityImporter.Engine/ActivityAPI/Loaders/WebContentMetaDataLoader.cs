@@ -85,7 +85,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             if (!string.IsNullOrEmpty(responseFromServer))
             {
                 // Deserialise the results from the HTTP response
-                responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
+                try
+                {
+                    responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
+                }
+                catch (JsonSerializationException)
+                {
+                    _telemetry.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
+                    responseMeta = new List<ActivityReportInfo>();
+                }
 
                 // Add our own batch ID variable to each response
                 foreach (var metaData in responseMeta)

@@ -14,10 +14,12 @@ using Newtonsoft.Json;
 using System;
 using System.Configuration;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
 #endregion
 
 namespace WebJob.Office365ActivityImporter
@@ -27,6 +29,10 @@ namespace WebJob.Office365ActivityImporter
     /// </summary>
     class Program
     {
+        // Holder for trace settings
+        internal static string TraceAuditEmail = null;
+        internal static string TraceAuditDirectory = null;
+
         /// <summary>
         /// Imports data from the Graph & 0365 Activity APIs.
         /// 
@@ -119,6 +125,37 @@ namespace WebJob.Office365ActivityImporter
                             auth.Creds, telemetry, configuredSettings.TenantGUID.ToString());
 
                         ConsoleApp.BombOut(false);
+                    }
+                }
+                else if (arg.ToLower() == ActivityImportConstants.PARAM_TRACE_AUDIT_EMAIL.ToLower())
+                {
+                    if (args.Length >= argIdx + 2)
+                    {
+                        TraceAuditEmail = args[argIdx + 1];
+                        AuditTraceConfig.TraceEmail = TraceAuditEmail;
+                        Console.WriteLine($"TRACE: Will capture audit imports containing email '{TraceAuditEmail}'.");
+                    }
+                }
+                else if (arg.ToLower() == ActivityImportConstants.PARAM_TRACE_AUDIT_DIR.ToLower())
+                {
+                    if (args.Length >= argIdx + 2)
+                    {
+                        TraceAuditDirectory = args[argIdx + 1];
+                        try
+                        {
+                            if (!string.IsNullOrWhiteSpace(TraceAuditDirectory))
+                            {
+                                System.IO.Directory.CreateDirectory(TraceAuditDirectory);
+                                AuditTraceConfig.TraceDirectory = TraceAuditDirectory;
+                                Console.WriteLine($"TRACE: Will save matching audit import files to '{TraceAuditDirectory}'.");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"TRACE: Failed to create trace directory '{TraceAuditDirectory}': {ex.Message}");
+                            TraceAuditDirectory = null;
+                            AuditTraceConfig.TraceDirectory = null;
+                        }
                     }
                 }
                 argIdx++;

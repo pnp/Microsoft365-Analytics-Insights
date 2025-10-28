@@ -12,8 +12,11 @@ namespace DataUtils.Sql.Inserts
     {
         private List<InsertBatchPropertyMapping> _fieldInfoPropertyInfoCache = null;
 
-        static List<Type> _validTempColumnTypes = new List<Type>() { typeof(string), typeof(DateTime), typeof(int), typeof(float), typeof(double), typeof(bool), typeof(Guid), typeof(int?),
-            typeof(int?), typeof(double?) };
+        static List<Type> _validTempColumnTypes = new List<Type>() 
+        {
+            typeof(string), typeof(DateTime), typeof(DateTime?), typeof(int), typeof(float), typeof(double), typeof(bool), typeof(Guid), typeof(int?),
+            typeof(int?), typeof(double?) 
+        };
 
         public List<InsertBatchPropertyMapping> PropertyMappingInfo
         {
@@ -63,6 +66,10 @@ namespace DataUtils.Sql.Inserts
             if (propertyType == typeof(DateTime))
             {
                 return ("datetime2", false);
+            }
+            else if (propertyType == typeof(DateTime?))
+            {
+                return ("datetime2", true);
             }
             else if (propertyType == typeof(int))
             {
