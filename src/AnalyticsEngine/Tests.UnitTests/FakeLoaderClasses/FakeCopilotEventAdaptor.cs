@@ -35,4 +35,20 @@ namespace UnitTests.FakeLoaderClasses
             return Task.FromResult("testId");
         }
     }
+
+    public class ReturnNullFilesAndMeetingsAdaptor : ICopilotMetadataLoader
+    {
+        public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+        {
+            return Task.FromResult<MeetingMetadata>(null);
+        }
+        public Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotId, string eventUpn)
+        {
+            return Task.FromResult<SpoDocumentFileInfo>(null);
+        }
+        public Task<string> GetUserIdFromUpn(string userPrincipalName)
+        {
+            return Task.FromResult("testId");
+        }
+    }
 }

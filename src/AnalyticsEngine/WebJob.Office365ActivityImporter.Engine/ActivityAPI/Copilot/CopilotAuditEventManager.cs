@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using DataUtils;
 using DataUtils.Sql.Inserts;
@@ -60,16 +61,27 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
                         if (meetingInfo == null)
                         {
+                            _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                            {
+                                EventId = baseOfficeEvent.Id,
+                                AppHost = eventData.AppHost,
+                                MeetingId = meetingId,
+                                MeetingCreatedUTC = null,
+                                MeetingName = null
+                            });
                             continue;   // Logging done in adaptor. Move to next
                         }
-                        _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                        else
                         {
-                            EventId = baseOfficeEvent.Id,
-                            AppHost = eventData.AppHost,
-                            MeetingId = meetingId,
-                            MeetingCreatedUTC = meetingInfo.CreatedUTC,
-                            MeetingName = meetingInfo.Subject
-                        });
+                            _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                            {
+                                EventId = baseOfficeEvent.Id,
+                                AppHost = eventData.AppHost,
+                                MeetingId = meetingId,
+                                MeetingCreatedUTC = meetingInfo.CreatedUTC,
+                                MeetingName = meetingInfo.Subject
+                            });
+                        }
 
                         meetingsCount++;
                         break;  // Only one meeting per event
@@ -77,12 +89,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     else if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT)
                     {
                         // Just a chat with copilot, without any specific meeting or file associated. Log the interaction.
-                        var copilotEvent = new CopilotChat
-                        {
-                            EventID = baseOfficeEvent.Id,
-                            AppHost = eventData.AppHost
-                        };
-                        _db.CopilotChats.Add(copilotEvent);
+                        AddChatEvent(baseOfficeEvent.Id, eventData.AppHost);
                     }
                     else
                     {
@@ -108,6 +115,15 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                         else
                         {
                             _logger.LogWarning($"No file info found for copilot context type '{context.Type}' with ID {context.Id}");
+                            _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
+                            {
+                                EventId = baseOfficeEvent.Id,
+                                AppHost = eventData.AppHost,
+                                FileExtension = null,
+                                FileName = null,
+                                Url = null,
+                                UrlBase = null
+                            });
                         }
                     }
                 }
@@ -129,6 +145,16 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             {
                 _logger.LogTrace($"No copilot event metadata saved to SQL for event {baseOfficeEvent.Id} for host '{eventData.AppHost}'");
             }
+        }
+
+        private void AddChatEvent(Guid id, string appHost)
+        {
+            var copilotEvent = new CopilotChat
+            {
+                EventID = id,
+                AppHost = appHost
+            };
+            _db.CopilotChats.Add(copilotEvent);
         }
 
         public async Task CommitAllChanges()
