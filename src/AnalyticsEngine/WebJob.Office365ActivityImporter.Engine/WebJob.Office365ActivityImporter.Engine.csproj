@@ -63,6 +63,7 @@
     <Compile Include="ActivityAPI\ActivitySubscriptionManager.cs" />
     <Compile Include="ActivityAPI\AuditFilterConfig.cs" />
     <Compile Include="ActivityAPI\ActivityImporter.cs" />
+    <Compile Include="ActivityAPI\AuditTraceConfig.cs" />
     <Compile Include="ActivityAPI\Copilot\CopilotAuditEventManager.cs" />
     <Compile Include="ActivityAPI\Copilot\GraphCaches.cs" />
     <Compile Include="ActivityAPI\Copilot\GraphFileMetadataLoader.cs" />
