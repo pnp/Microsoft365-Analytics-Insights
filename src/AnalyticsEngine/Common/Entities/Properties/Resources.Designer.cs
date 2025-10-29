@@ -97,6 +97,34 @@ namespace Common.Entities.Properties {
         
         /// <summary>
         ///   Looks up a localized string similar to 
+        ///IF OBJECT_ID(&apos;dbo.CleanDataByUser&apos;, &apos;P&apos;) IS NOT NULL
+        ///    DROP PROCEDURE dbo.CleanDataByUser;
+        ///GO
+        ///
+        ///CREATE PROCEDURE dbo.CleanDataByUser
+        ///    @userId INT
+        ///AS
+        ///BEGIN
+        ///    SET NOCOUNT ON;
+        ///
+        ///    
+        ///    BEGIN TRY
+        ///        BEGIN TRAN;
+        ///
+        ///        ------------------------------------------------------------
+        ///        -- CTEs to collect user-scoped entity IDs
+        ///        ------------------------------------------------------------
+        ///        ;WITH UserEvents AS (
+        ///            SELECT Id FROM audit_events WHERE user_id  [rest of string was truncated]&quot;;.
+        /// </summary>
+        internal static string Clean_Data_By_User_StoredProc {
+            get {
+                return ResourceManager.GetString("Clean_Data_By_User_StoredProc", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to 
         ///-- --------------------------------------------------
         ///-- Entity Designer DDL Script for SQL Server 2005, 2008, 2012 and Azure
         ///-- --------------------------------------------------
