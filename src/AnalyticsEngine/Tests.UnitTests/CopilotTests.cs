@@ -85,38 +85,47 @@ namespace Tests.UnitTests
         }
 
 
-        // https://learn.microsoft.com/en-us/office/office-365-management-api/copilot-schema
-        [TestMethod]
-        public async Task CopilotEventManagerSaveTest()
+        async Task ClearEvents(AnalyticsEntitiesContext db)
+        {
+
+            // Clear events for test
+            db.CopilotEventMetadataFiles.RemoveRange(db.CopilotEventMetadataFiles);
+            db.CopilotEventMetadataMeetings.RemoveRange(db.CopilotEventMetadataMeetings);
+            db.CopilotChats.RemoveRange(db.CopilotChats);
+
+            await db.SaveChangesAsync();
+        }
+
+
+
         // Shared flow for saving Copilot events (normal + no permissions adaptor)
         private async Task ExecuteCopilotEventManagerSaveFlow(ICopilotMetadataLoader adaptor, AnalyticsEntitiesContext db)
         {
-            await ClearEvents();
 
             var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, adaptor, _logger);
 
-            var commonEventDocEdit = new Office365Event
+            var commonEventDocEdit = new CommonAuditEvent
             {
                 TimeStamp = DateTime.Now,
                 Operation = new EventOperation { Name = "Document Edit" + DateTime.Now.Ticks },
                 User = new User { AzureAdId = "test", UserPrincipalName = "test doc user " + DateTime.Now.Ticks },
                 Id = Guid.NewGuid()
             };
-            var commonEventChat = new Office365Event
+            var commonEventChat = new CommonAuditEvent
             {
                 TimeStamp = DateTime.Now,
                 Operation = new EventOperation { Name = "Chat or something" + DateTime.Now.Ticks },
                 User = new User { AzureAdId = "test", UserPrincipalName = "test chat user " + DateTime.Now.Ticks },
                 Id = Guid.NewGuid()
             };
-            var commonEventMeeting = new Office365Event
+            var commonEventMeeting = new CommonAuditEvent
             {
                 TimeStamp = DateTime.Now,
                 Operation = new EventOperation { Name = "Meeting Op" + DateTime.Now.Ticks },
                 User = new User { AzureAdId = "test", UserPrincipalName = "test meeting user " + DateTime.Now.Ticks },
                 Id = Guid.NewGuid()
             };
-            var commonOutlook = new Office365Event
+            var commonOutlook = new CommonAuditEvent
             {
                 TimeStamp = DateTime.Now,
                 Operation = new EventOperation { Name = "Outlook Op" + DateTime.Now.Ticks },
@@ -178,10 +187,10 @@ namespace Tests.UnitTests
             await db.SaveChangesAsync();
 
             // Save Copilot events
-            await copilotEventManager.SaveSingleCopilotEventToSql(meeting, commonEventMeeting);
-            await copilotEventManager.SaveSingleCopilotEventToSql(docEvent, commonEventDocEdit);
-            await copilotEventManager.SaveSingleCopilotEventToSql(teamsChat, commonEventChat);
-            await copilotEventManager.SaveSingleCopilotEventToSql(outlook, commonOutlook);
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = meeting }, commonEventMeeting);
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = docEvent }, commonEventDocEdit);
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = teamsChat }, commonEventChat);
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = outlook }, commonOutlook);
             await copilotEventManager.CommitAllChanges();
 
         }
@@ -192,16 +201,14 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                db.CopilotEventMetadataFiles.RemoveRange(db.CopilotEventMetadataFiles);
-                db.CopilotEventMetadataMeetings.RemoveRange(db.CopilotEventMetadataMeetings);
-                await db.SaveChangesAsync();
+                await ClearEvents(db);
 
                 // Counts before
                 var fileEventsPreCount = await db.CopilotEventMetadataFiles.CountAsync();
                 var meetingEventsPreCount = await db.CopilotEventMetadataMeetings.CountAsync();
                 var allCopilotEventsPreCount = await db.CopilotChats.CountAsync();
 
-                await ExecuteCopilotEventManagerSaveFlow(new FakeCopilotEventAdaptor(), db);
+                await ExecuteCopilotEventManagerSaveFlow(new FakeCopilotMetadataLoader(), db);
 
 
                 // Counts after
@@ -225,9 +232,7 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                db.CopilotEventMetadataFiles.RemoveRange(db.CopilotEventMetadataFiles);
-                db.CopilotEventMetadataMeetings.RemoveRange(db.CopilotEventMetadataMeetings);
-                await db.SaveChangesAsync();
+                await ClearEvents(db);
 
                 // Counts before
                 var fileEventsPreCount = await db.CopilotEventMetadataFiles.CountAsync();
@@ -248,10 +253,90 @@ namespace Tests.UnitTests
             }
         }
 
+
+        [TestMethod]
+        public async Task CopilotEventManagerAgentNameUpdateSaveTest()
+        {
+
+            var copilotEventAdaptor = new CopilotAuditEventManager(_config.ConnectionStrings.SQL, new FakeCopilotMetadataLoader(), _logger);
+
+            using (var _db = new AnalyticsEntitiesContext(_config.ConnectionStrings.SQL, true, false))
+            {
+                await ClearEvents(_db);
+               
+                var commonEventChat1 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Chat or something 1 " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test chat user 1 " + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                var commonEventChat2 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Chat or something 2 " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test chat user 2 " + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+
+                var teamsChat = new CopilotEventData
+                {
+                    AppHost = "Teams",
+                    Contexts = new List<Context>
+                    {
+                        new Context
+                        {
+                            Id = "https://microsoft.teams.com/threads/19:somechatthread@thread.v2",
+                            Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                        }
+                    }
+                };
+
+                // Save common events as they are required for the foreign key - the common event is saved before CopilotAuditEventManager runs on the metadata
+                _db.AuditEventsCommon.Add(commonEventChat1);
+                _db.AuditEventsCommon.Add(commonEventChat2);
+                await _db.SaveChangesAsync();
+
+                // Save event with agent name 1
+                var agentId = "Unit testing3 " + DateTime.Now.Ticks;
+                var agentName = "Test Agent Chat " + DateTime.Now.Ticks;
+                await copilotEventAdaptor.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = teamsChat, AgentName = agentName, AgentId = agentId }, commonEventChat1);
+                await copilotEventAdaptor.CommitAllChanges();
+
+                // Check event has right agent details
+                var commonEventDocEditReloaded = await _db.CopilotChats
+                    .Include(x => x.Agent)
+                    .FirstOrDefaultAsync(x => x.AuditEvent.Id == commonEventChat1.Id);
+                Assert.IsNotNull(commonEventDocEditReloaded);
+                Assert.IsTrue(commonEventDocEditReloaded.Agent.AgentID == agentId);
+                Assert.IsTrue(commonEventDocEditReloaded.Agent.Name == agentName);
+
+                // Save another event with new agent name but same agent ID
+                agentName = "Test Agent Chat 2 " + DateTime.Now.Ticks;
+                var newAgentName = "Test Agent New Name " + DateTime.Now.Ticks;
+                await copilotEventAdaptor.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = teamsChat, AgentName = newAgentName, AgentId = agentId }, commonEventChat2);
+                await copilotEventAdaptor.CommitAllChanges();
+
+                // Check event has right agent details
+                var commonEventDocEditReloaded2 = await _db.CopilotChats
+                    .Include(x => x.Agent)
+                    .FirstOrDefaultAsync(x => x.AuditEvent.Id == commonEventChat2.Id);
+                await _db.Entry(commonEventDocEditReloaded2.Agent).ReloadAsync();
+                Assert.IsNotNull(commonEventDocEditReloaded2);
+                Assert.IsTrue(commonEventDocEditReloaded2.Agent.AgentID == agentId);
+                Assert.IsTrue(commonEventDocEditReloaded2.Agent.Name == newAgentName);
+            }
+        }
+
+
         /// <summary>
         /// Tests we can load metadata from Graph
         /// </summary>
+#if DEBUG
         [TestMethod]
+#endif
         public async Task GraphCopilotMetadataLoaderTests()
         {
             var auth = new GraphAppIndentityOAuthContext(_logger, _config.ClientID, _config.TenantGUID.ToString(), _config.ClientSecret, string.Empty, false);
@@ -282,5 +367,6 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(meeting);
             }
         }
+
     }
 }

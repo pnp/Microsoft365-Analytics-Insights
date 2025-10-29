@@ -18,7 +18,5 @@ insert into event_copilot_meetings (copilot_chat_id, meeting_id)
 	FROM ${STAGING_TABLE_ACTIVITY} imports
 		inner join online_meetings on online_meetings.meeting_id = imports.meeting_id
 		and online_meetings.name = imports.meeting_name
-		and online_meetings.created = CAST(imports.meeting_created_utc AS datetime)		 
-	where imports.meeting_id is not null AND imports.meeting_name is not null AND imports.meeting_created_utc is not null
-		and online_meetings.created = imports.meeting_created_utc
-	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id]
+		and online_meetings.created = CAST(imports.meeting_created_utc AS datetime)		
+	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id] 
