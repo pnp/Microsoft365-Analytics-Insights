@@ -24,7 +24,12 @@ WHERE EXISTS (
       AND imports.agent_name <> copilot_agents.[name]
 );
 
--- Insert chat-only copilot events
-insert into [event_copilot_chats] (event_id, app_host)
-	SELECT imports.event_id,app_host FROM [${STAGING_TABLE_ACTIVITY}] imports
 
+-- Insert chat
+insert into [event_copilot_chats] (event_id, app_host, agent_id)
+	SELECT 
+		imports.event_id
+		,app_host
+		,copilot_agents.id
+		FROM [${STAGING_TABLE_ACTIVITY}] imports
+	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id]

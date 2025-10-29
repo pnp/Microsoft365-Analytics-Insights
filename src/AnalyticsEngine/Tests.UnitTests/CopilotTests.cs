@@ -19,7 +19,6 @@ namespace Tests.UnitTests
     {
         protected ILogger _logger;
         protected TestsAppConfig _config;
-        private readonly AnalyticsEntitiesContext _db;
 
         public CopilotTests()
         {
@@ -92,6 +91,7 @@ namespace Tests.UnitTests
         // Shared flow for saving Copilot events (normal + no permissions adaptor)
         private async Task ExecuteCopilotEventManagerSaveFlow(ICopilotMetadataLoader adaptor, AnalyticsEntitiesContext db)
         {
+            await ClearEvents();
 
             var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, adaptor, _logger);
 

@@ -169,9 +169,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         public async Task CommitAllChanges()
         {
-            var docsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_SP, "ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql");
+            var docsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_SP, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql");
 
-            var teamsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS, "ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql");
+            var teamsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql");
 
             var chatOnlyMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY, null);
 
@@ -194,7 +194,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         string GetSql(string tempTableName, string workloadSpecificScriptName)
         {
-            var commonMergeSql = _rr.ReadResourceString("ActivityImporter.Engine.ActivityAPI.Copilot.SQL.common_upsert_copilot_agents.sql")
+            var commonMergeSql = _rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.common_upsert_copilot_agents.sql")
                 .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName);
 
             var workloadSpecificSql = workloadSpecificScriptName != null ? _rr.ReadResourceString(workloadSpecificScriptName)
