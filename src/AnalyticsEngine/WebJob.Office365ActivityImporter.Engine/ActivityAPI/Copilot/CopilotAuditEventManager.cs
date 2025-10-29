@@ -1,4 +1,6 @@
 ﻿using Common.Entities;
+using Common.Entities.Entities;
+using Common.Entities.Entities.AuditLog;
 using DataUtils;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
@@ -71,26 +73,35 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
                         if (meetingInfo == null)
                         {
+                            _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                            {
+                                EventId = baseOfficeEvent.Id,
+                                AppHost = eventData.AppHost,
+                                MeetingId = meetingId,
+                                MeetingCreatedUTC = null,
+                                MeetingName = null
+                            });
                             continue;   // Logging done in adaptor. Move to next
                         }
-                        _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                        else
                         {
-                            EventId = baseOfficeEvent.Id,
-                            AppHost = auditRecord.CopilotEventData.AppHost,
-                            MeetingId = meetingId,
-                            MeetingCreatedUTC = meetingInfo.CreatedUTC,
-                            MeetingName = meetingInfo.Subject,
-                            AgentId = auditRecord.AgentId,
-                            AgentName = auditRecord.AgentName,
-                        });
+                            _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                            {
+                                EventId = baseOfficeEvent.Id,
+                                AppHost = eventData.AppHost,
+                                MeetingId = meetingId,
+                                MeetingCreatedUTC = meetingInfo.CreatedUTC,
+                                MeetingName = meetingInfo.Subject
+                            });
+                        }
 
                         _meetingsCount++;
                         break;  // Only one meeting per event
                     }
                     else if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT)
                     {
-                        // Just a chat with copilot from Teams, without any specific meeting or file associated. Log the interaction.
-                        AddChatOnly(auditRecord, baseOfficeEvent);
+                        // Just a chat with copilot, without any specific meeting or file associated. Log the interaction.
+                        AddChatEvent(baseOfficeEvent.Id, eventData.AppHost);
                     }
                     else
                     {
@@ -117,7 +128,16 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                         }
                         else
                         {
-                            _logger.LogWarning($"Unexpected copilot context type '{context.Type}' for context ID {context.Id}");
+                            _logger.LogWarning($"No file info found for copilot context type '{context.Type}' with ID {context.Id}");
+                            _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
+                            {
+                                EventId = baseOfficeEvent.Id,
+                                AppHost = eventData.AppHost,
+                                FileExtension = null,
+                                FileName = null,
+                                Url = null,
+                                UrlBase = null
+                            });
                         }
                     }
                 }
@@ -133,20 +153,18 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             else
             {
-                _logger.LogTrace($"No copilot event metadata saved to SQL for event {baseOfficeEvent.Id} for host '{auditRecord.CopilotEventData.AppHost}'");
+                _logger.LogTrace($"No copilot event metadata saved to SQL for event {baseOfficeEvent.Id} for host '{eventData.AppHost}'");
             }
         }
 
-        void AddChatOnly(CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
+        private void AddChatEvent(Guid id, string appHost)
         {
-            _copilotInsertsChatsNoContext.Rows.Add(new ChatOnlyCopilotLogTempEntity
+            var copilotEvent = new CopilotChat
             {
-                EventId = baseOfficeEvent.Id,
-                AppHost = auditRecord.CopilotEventData.AppHost,
-                AgentId = auditRecord.AgentId,
-                AgentName = auditRecord.AgentName,
-            });
-            _chatOnlyCount++;
+                EventID = id,
+                AppHost = appHost
+            };
+            _db.CopilotChats.Add(copilotEvent);
         }
 
         public async Task CommitAllChanges()

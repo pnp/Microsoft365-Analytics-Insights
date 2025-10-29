@@ -19,6 +19,9 @@
 
         public static string PARAM_WEBHOOK_OVERRIDE { get { return "--webhook"; } }
         public static string PARAM_CALL_ID { get { return "--callId"; } }
+        // New params for tracing audit log imports containing a specific email address
+        public static string PARAM_TRACE_AUDIT_EMAIL { get { return "--traceAuditEmail"; } }
+        public static string PARAM_TRACE_AUDIT_DIR { get { return "--traceAuditDir"; } }
 
         public const string STAGING_TABLE_VARNAME = "${STAGING_TABLE_ACTIVITY}";
 

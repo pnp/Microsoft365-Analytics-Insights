@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -409,6 +410,27 @@ namespace DataUtils
             {
                 return potentiallyLongString;
             }
+        }
+
+
+        // https://stackoverflow.com/questions/18596876/go-statements-blowing-up-sql-execution-in-net
+        public static IEnumerable<string> SplitSqlStatements(string sqlScript)
+        {
+            // Make line endings standard to match RegexOptions.Multiline
+            sqlScript = Regex.Replace(sqlScript, @"(\r\n|\n\r|\n|\r)", "\n");
+
+            // Split by "GO" statements
+            var statements = Regex.Split(
+                    sqlScript,
+                    @"^[\t ]*GO[\t ]*\d*[\t ]*(?:--.*)?$",
+                    RegexOptions.Multiline |
+                    RegexOptions.IgnorePatternWhitespace |
+                    RegexOptions.IgnoreCase);
+
+            // Remove empties, trim, and return
+            return statements
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim(' ', '\n'));
         }
     }
 }

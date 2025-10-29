@@ -31,10 +31,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [Column("meeting_id")]
         public string MeetingId { get; internal set; } = null;
 
-        [Column("meeting_created_utc")]
-        public DateTime MeetingCreatedUTC { get; internal set; }
+        [Column("meeting_created_utc", true)]
+        public DateTime? MeetingCreatedUTC { get; internal set; }
 
-        [Column("meeting_name")]
+        [Column("meeting_name", true)]
         public string MeetingName { get; internal set; } = null;
     }
 
@@ -47,13 +47,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [Column("url_base", true)]
         public string UrlBase { get; set; } = null;
 
-        [Column("file_name")]
+        [Column("file_name", true)]
         public string FileName { get; set; } = null;
 
-        [Column("file_extension")]
+        [Column("file_extension", true)]
         public string FileExtension { get; set; } = null;
 
-        [Column("url")]
+        [Column("url", true)]
         public string Url { get; set; } = null;
     }
 

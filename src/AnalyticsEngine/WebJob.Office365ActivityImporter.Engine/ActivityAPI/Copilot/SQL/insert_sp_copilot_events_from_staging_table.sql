@@ -4,6 +4,7 @@ INSERT INTO urls(full_url)
 	left join 
 		urls on urls.full_url = imports.url
 	where 
+		imports.url is not null AND
 		not exists(select top 1 full_url from urls where full_url = imports.url)
 
 
