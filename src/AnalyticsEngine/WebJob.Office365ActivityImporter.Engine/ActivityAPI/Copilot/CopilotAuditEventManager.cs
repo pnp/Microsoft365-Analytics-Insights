@@ -10,9 +10,12 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
 {
-
     /// <summary>
-    /// Saves copilot event metadata to SQL
+    /// Saves copilot event metadata to SQL (staging tables first, then merged via supplied scripts).
+    /// Responsibilities:
+    /// - Adapt raw audit events into staging entities (files / meetings / chat-only)
+    /// - Accumulate batches for high-speed bulk insert
+    /// - Provide per-event and batch-level logging
     /// </summary>
     public class CopilotAuditEventManager : IDisposable
     {
@@ -21,147 +24,153 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly InsertBatch<SPCopilotLogTempEntity> _copilotInsertsSP;
         private readonly InsertBatch<TeamsCopilotLogTempEntity> _copilotInsertsTeams;
         private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
+        private readonly ProjectResourceReader _rr;
 
-        private ProjectResourceReader _rr;
-        private int _meetingsCount = 0;
-        private int _filesCount = 0;
-        private int _chatOnlyCount = 0;
-        private readonly AnalyticsEntitiesContext _db;
-
+        // Batch-level totals (across all processed events since last commit)
+        private int _totalMeetingsCount;
+        private int _totalFilesCount;
+        private int _totalChatOnlyCount;
 
         public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger)
         {
             _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
-
             _copilotEventAdaptor = copilotEventAdaptor;
             _logger = logger;
-
             _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsChatsNoContext = new InsertBatch<ChatOnlyCopilotLogTempEntity>(connectionString, logger);
-            _db = new AnalyticsEntitiesContext();
         }
 
+        /// <summary>
+        /// Adapts a single Copilot audit record into staging entities. Does NOT commit to SQL.
+        /// </summary>
         public async Task SaveSingleCopilotEventToSqlStaging(CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
         {
-            _chatOnlyCount = 0;
-            _filesCount = 0;
-            _meetingsCount = 0;
-
-            _logger.LogInformation($"Saving copilot event metadata to SQL for event {baseOfficeEvent.Id}");
-
-            // Save via the high-speed bulk insert code, not EF as we're doing this multi-threaded and we don't want FK conflicts
-
-            if (auditRecord.CopilotEventData.Contexts != null && auditRecord.CopilotEventData.Contexts.Count > 0)
+            if (auditRecord == null || baseOfficeEvent == null)
             {
-                // Process events with context (Teams meeting, file etc).
-                // Normally only one context per event, but we'll loop through them all just in case.
-                foreach (var context in auditRecord.CopilotEventData.Contexts)
+                _logger.LogWarning("CopilotAuditEventManager received null auditRecord or baseOfficeEvent.");
+                return;
+            }
+
+            _logger.LogInformation($"Saving copilot event metadata to staging for event {baseOfficeEvent.Id}");
+
+            // Per-event counts (for logging only)
+            int eventMeetings =0, eventFiles =0, eventChats =0;
+
+            var contexts = auditRecord.CopilotEventData?.Contexts;
+            if (contexts != null && contexts.Count >0)
+            {
+                foreach (var context in contexts)
                 {
-                    // There are some known context types for Teams etc. Everything else is assumed to be a file type. 
+                    // Only one meeting OR file per event is relevant; chat contexts are additive.
                     if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING)
                     {
-                        // We need the user guid to construct the meeting ID
-                        var userGuid = await _copilotEventAdaptor.GetUserIdFromUpn(baseOfficeEvent.User.UserPrincipalName);
-
-                        // Construct meeting ID from user GUID and thread ID
-                        var meetingId = StringUtils.GetOnlineMeetingId(context.Id, userGuid);
-
-                        var meetingInfo = await _copilotEventAdaptor.GetMeetingInfo(meetingId, userGuid);
-
-                        if (meetingInfo == null)
+                        if (eventMeetings ==0) // safeguard against multiple meeting contexts
                         {
-                            _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                            if (await TryAddMeetingAsync(context.Id, auditRecord, baseOfficeEvent))
                             {
-                                EventId = baseOfficeEvent.Id,
-                                AppHost = auditRecord.CopilotEventData.AppHost,
-                                MeetingId = meetingId,
-                                MeetingCreatedUTC = null,
-                                MeetingName = null,
-                                AgentId = auditRecord.AgentId,
-                                AgentName = auditRecord.AgentName,
-                            });
-                            continue;   // Logging done in adaptor. Move to next
+                                eventMeetings++; _totalMeetingsCount++; 
+                            }
                         }
-                        else
-                        {
-                            _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
-                            {
-                                EventId = baseOfficeEvent.Id,
-                                AppHost = auditRecord.CopilotEventData.AppHost,
-                                MeetingId = meetingId,
-                                MeetingCreatedUTC = meetingInfo.CreatedUTC,
-                                MeetingName = meetingInfo.Subject,
-                                AgentId = auditRecord.AgentId,
-                                AgentName = auditRecord.AgentName,
-                            });
-                        }
-
-                        _meetingsCount++;
-                        break;  // Only one meeting per event
+                        break; // meeting ends further processing for meeting/file
                     }
                     else if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT)
                     {
-                        // Just a chat with copilot, without any specific meeting or file associated. Log the interaction.
                         AddChatOnly(auditRecord, baseOfficeEvent);
+                        eventChats++; _totalChatOnlyCount++;
+                        // continue; chat-only does not block other context types
                     }
                     else
                     {
-                        // Load from Graph the SPO file info
-                        var spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(context.Id, baseOfficeEvent.User.UserPrincipalName);
-
-                        if (spFileInfo != null)
+                        if (eventFiles ==0) // only capture first file-relevant context
                         {
-                            // Use the bulk insert 
-                            _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
+                            if (await TryAddFileAsync(context.Id, auditRecord, baseOfficeEvent))
                             {
-                                EventId = baseOfficeEvent.Id,
-                                AppHost = auditRecord.CopilotEventData.AppHost,
-                                FileExtension = spFileInfo.Extension,
-                                FileName = spFileInfo.Filename,
-                                Url = spFileInfo.Url,
-                                UrlBase = spFileInfo.SiteUrl,
-                                AgentId = auditRecord.AgentId,
-                                AgentName = auditRecord.AgentName,
-                            });
-                            _filesCount++;
-                            break;  // Normally only one file per event.
-                                    // There can be more documents in the context if one file references another, but we only care about the doc the user is in.
+                                eventFiles++; _totalFilesCount++;
+                            }
                         }
-                        else
-                        {
-                            _logger.LogWarning($"No file info found for copilot context type '{context.Type}' with ID {context.Id}");
-                            _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
-                            {
-                                EventId = baseOfficeEvent.Id,
-                                AppHost = auditRecord.CopilotEventData.AppHost,
-                                FileExtension = null,
-                                FileName = null,
-                                Url = null,
-                                UrlBase = null,
-                                AgentId = auditRecord.AgentId,
-                                AgentName = auditRecord.AgentName,
-                            });
-                        }
+                        break; // after first file we break out (matching prior behaviour)
                     }
+
+                    // Preserve original logic: break after first meeting OR file context captured.
+                    if (eventMeetings >0 || eventFiles >0)
+                        break;
                 }
             }
             else
             {
-                // No context. Log the interaction as a chat only event
+                // No context => treat as chat-only interaction.
                 AddChatOnly(auditRecord, baseOfficeEvent);
+                eventChats++; _totalChatOnlyCount++;
             }
-            if (_meetingsCount > 0 || _filesCount > 0 || _chatOnlyCount > 0)
+
+            if (eventMeetings >0 || eventFiles >0 || eventChats >0)
             {
-                _logger.LogInformation($"Saved {_chatOnlyCount} chats, {_meetingsCount} meetings and {_filesCount} files to SQL for copilot event {baseOfficeEvent.Id}");
+                _logger.LogInformation($"Event {baseOfficeEvent.Id}: staged {eventChats} chat(s), {eventMeetings} meeting(s), {eventFiles} file(s).");
             }
             else
             {
-                _logger.LogTrace($"No copilot event metadata saved to SQL for event {baseOfficeEvent.Id} for host '{auditRecord.CopilotEventData.AppHost}'");
+                _logger.LogTrace($"Event {baseOfficeEvent.Id}: no copilot metadata to stage (host '{auditRecord.CopilotEventData?.AppHost}')");
             }
         }
 
-        void AddChatOnly(CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
+        private async Task<bool> TryAddMeetingAsync(string contextId, CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
+        {
+            try
+            {
+                var userGuid = await _copilotEventAdaptor.GetUserIdFromUpn(baseOfficeEvent.User.UserPrincipalName);
+                var meetingId = StringUtils.GetOnlineMeetingId(contextId, userGuid);
+                var meetingInfo = await _copilotEventAdaptor.GetMeetingInfo(meetingId, userGuid);
+
+                _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                {
+                    EventId = baseOfficeEvent.Id,
+                    AppHost = auditRecord.CopilotEventData.AppHost,
+                    MeetingId = meetingId,
+                    MeetingCreatedUTC = meetingInfo?.CreatedUTC,
+                    MeetingName = meetingInfo?.Subject,
+                    AgentId = auditRecord.AgentId,
+                    AgentName = auditRecord.AgentName,
+                });
+                return true; // staged regardless of meetingInfo retrieval success
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"Failed to stage meeting metadata for event {baseOfficeEvent.Id} context {contextId}");
+                return false;
+            }
+        }
+
+        private async Task<bool> TryAddFileAsync(string contextId, CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
+        {
+            try
+            {
+                var spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
+                _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
+                {
+                    EventId = baseOfficeEvent.Id,
+                    AppHost = auditRecord.CopilotEventData.AppHost,
+                    FileExtension = spFileInfo?.Extension,
+                    FileName = spFileInfo?.Filename,
+                    Url = spFileInfo?.Url,
+                    UrlBase = spFileInfo?.SiteUrl,
+                    AgentId = auditRecord.AgentId,
+                    AgentName = auditRecord.AgentName,
+                });
+                if (spFileInfo == null)
+                {
+                    _logger.LogWarning($"No file info found for copilot context type with id {contextId} (event {baseOfficeEvent.Id})");
+                }
+                return true; // staged regardless
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"Failed to stage file metadata for event {baseOfficeEvent.Id} context {contextId}");
+                return false;
+            }
+        }
+
+        private void AddChatOnly(CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
         {
             _copilotInsertsChatsNoContext.Rows.Add(new ChatOnlyCopilotLogTempEntity
             {
@@ -170,46 +179,46 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
             });
-            _chatOnlyCount++;
         }
 
+        /// <summary>
+        /// Commits all staged entities to their respective staging tables + merge scripts, then clears internal state.
+        /// </summary>
         public async Task CommitAllChanges()
         {
             var docsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_SP, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql");
-
             var teamsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql");
-
             var chatOnlyMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY, null);
 
+            _logger.LogDebug($"Committing batch: {_totalFilesCount} file(s), {_totalMeetingsCount} meeting(s), {_totalChatOnlyCount} chat-only event(s) to SQL.");
 
-            _logger.LogDebug($"Saving {_filesCount} files to SQL");
             await _copilotInsertsSP.SaveToStagingTable(docsMergeSql);
-
-
-            _logger.LogDebug($"Saving {_meetingsCount} meetings to SQL");
             await _copilotInsertsTeams.SaveToStagingTable(teamsMergeSql);
-
-            _logger.LogDebug($"Saving {_chatOnlyCount} chat only events to SQL");
             await _copilotInsertsChatsNoContext.SaveToStagingTable(chatOnlyMergeSql);
 
-            // Clear lists
+            // Clear lists & counters for next batch
             _copilotInsertsSP.Rows.Clear();
             _copilotInsertsTeams.Rows.Clear();
             _copilotInsertsChatsNoContext.Rows.Clear();
+            _totalFilesCount =0;
+            _totalMeetingsCount =0;
+            _totalChatOnlyCount =0;
         }
 
-        string GetSql(string tempTableName, string workloadSpecificScriptName)
+        private string GetSql(string tempTableName, string workloadSpecificScriptName)
         {
             var commonMergeSql = _rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.common_upsert_copilot_agents.sql")
                 .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName);
 
-            var workloadSpecificSql = workloadSpecificScriptName != null ? _rr.ReadResourceString(workloadSpecificScriptName)
-                .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName) : string.Empty;
+            var workloadSpecificSql = workloadSpecificScriptName != null
+                ? _rr.ReadResourceString(workloadSpecificScriptName).Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName)
+                : string.Empty;
             return commonMergeSql + Environment.NewLine + workloadSpecificSql;
         }
 
         public void Dispose()
         {
+            // Nothing disposable currently. Placeholder for future enhancements.
         }
     }
 
