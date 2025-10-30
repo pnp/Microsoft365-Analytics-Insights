@@ -1,6 +1,4 @@
 ﻿using Common.Entities;
-using Common.Entities.Entities;
-using Common.Entities.Entities.AuditLog;
 using DataUtils;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
@@ -79,7 +77,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 AppHost = auditRecord.CopilotEventData.AppHost,
                                 MeetingId = meetingId,
                                 MeetingCreatedUTC = null,
-                                MeetingName = null
+                                MeetingName = null,
+                                //AgentId = auditRecord.AgentId,
+                                //AgentName = auditRecord.AgentName,
                             });
                             continue;   // Logging done in adaptor. Move to next
                         }
@@ -91,7 +91,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 AppHost = auditRecord.CopilotEventData.AppHost,
                                 MeetingId = meetingId,
                                 MeetingCreatedUTC = meetingInfo.CreatedUTC,
-                                MeetingName = meetingInfo.Subject
+                                MeetingName = meetingInfo.Subject,
+                                AgentId = auditRecord.AgentId,
+                                AgentName = auditRecord.AgentName,
                             });
                         }
 
@@ -136,7 +138,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 FileExtension = null,
                                 FileName = null,
                                 Url = null,
-                                UrlBase = null
+                                UrlBase = null,
+                                //AgentId = auditRecord.AgentId,
+                                //AgentName = auditRecord.AgentName,
                             });
                         }
                     }
