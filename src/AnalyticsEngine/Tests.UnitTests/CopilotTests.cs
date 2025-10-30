@@ -210,52 +210,57 @@ namespace Tests.UnitTests
             {
                 await ClearEvents(_db);
 
-                // First save with initial agent name
-                var agentId = "Unit testing3 " + DateTime.Now.Ticks;
-                var agentName = "Test Agent Chat " + DateTime.Now.Ticks;
-                var firstChatEvents = await ExecuteCopilotEventManagerSaveFlow(new FakeCopilotMetadataLoader(), _db, Tuple.Create(agentId, agentName));
+                var adaptors = new ICopilotMetadataLoader[] { new FakeCopilotMetadataLoader(), new ReturnNullFilesAndMeetingsAdaptor() };
 
-                // Verify ALL first events saved with initial agent name
-                foreach (var evt in firstChatEvents)
+                foreach (var adaptor in adaptors)
                 {
-                    var id = evt.Id;
-                    var reloaded = await _db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == id);
-                    Assert.IsNotNull(reloaded, $"CopilotChat not found for initial event {id}");
-                    Assert.IsNotNull(reloaded.Agent, $"Agent navigation null for initial event {id}");
-                    Assert.AreEqual(agentId, reloaded.Agent.AgentID, $"AgentID mismatch for initial event {id}");
-                    Assert.AreEqual(agentName, reloaded.Agent.Name, $"Agent Name mismatch for initial event {id}");
-                }
+                    // First save with initial agent name
+                    var agentId = "Unit testing3 " + adaptor.GetType().Name + " " + DateTime.Now.Ticks;
+                    var agentName = "Test Agent Chat " + adaptor.GetType().Name + " " + DateTime.Now.Ticks;
+                    var firstChatEvents = await ExecuteCopilotEventManagerSaveFlow(adaptor, _db, Tuple.Create(agentId, agentName));
 
-                // Second save with updated agent name (same agent ID)
-                var newAgentName = "Test Agent New Name " + DateTime.Now.Ticks;
-                var secondChatEvents = await ExecuteCopilotEventManagerSaveFlow(new FakeCopilotMetadataLoader(), _db, Tuple.Create(agentId, newAgentName));
-
-                // Verify ALL second events saved and agent name updated
-                foreach (var evt in secondChatEvents)
-                {
-                    var id = evt.Id;
-                    var reloaded = await _db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == id);
-                    if (reloaded?.Agent != null)
+                    // Verify ALL first events saved with initial agent name
+                    foreach (var evt in firstChatEvents)
                     {
-                        // Ensure we have fresh agent data after update
-                        await _db.Entry(reloaded.Agent).ReloadAsync();
+                        var id = evt.Id;
+                        var reloaded = await _db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == id);
+                        Assert.IsNotNull(reloaded, $"CopilotChat not found for initial event {id}");
+                        Assert.IsNotNull(reloaded.Agent, $"Agent navigation null for initial event {id}");
+                        Assert.AreEqual(agentId, reloaded.Agent.AgentID, $"AgentID mismatch for initial event {id}");
+                        Assert.AreEqual(agentName, reloaded.Agent.Name, $"Agent Name mismatch for initial event {id}");
                     }
-                    Assert.IsNotNull(reloaded, $"CopilotChat not found for second event {id}");
-                    Assert.IsNotNull(reloaded.Agent, $"Agent navigation null for second event {id}");
-                    Assert.AreEqual(agentId, reloaded.Agent.AgentID, $"AgentID mismatch for second event {id}");
-                    Assert.AreEqual(newAgentName, reloaded.Agent.Name, $"Updated Agent Name mismatch for second event {id}");
-                }
 
-                // Optionally also assert that previously created events now reflect updated agent name (if agent entity updated globally)
-                var previouslyCreatedIds = firstChatEvents.Select(e => e.Id).ToList();
-                var previouslyCreatedChats = await _db.CopilotChats.Include(x => x.Agent)
-                    .Where(x => previouslyCreatedIds.Contains(x.AuditEvent.Id)).ToListAsync();
-                foreach (var chat in previouslyCreatedChats)
-                {
-                    if (chat.Agent != null)
+                    // Second save with updated agent name (same agent ID)
+                    var newAgentName = "Test Agent New Name " + adaptor.GetType().Name + " " + DateTime.Now.Ticks;
+                    var secondChatEvents = await ExecuteCopilotEventManagerSaveFlow(adaptor, _db, Tuple.Create(agentId, newAgentName));
+
+                    // Verify ALL second events saved and agent name updated
+                    foreach (var evt in secondChatEvents)
                     {
-                        await _db.Entry(chat.Agent).ReloadAsync();
-                        Assert.AreEqual(newAgentName, chat.Agent.Name, "Existing event did not reflect updated agent name");
+                        var id = evt.Id;
+                        var reloaded = await _db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == id);
+                        if (reloaded?.Agent != null)
+                        {
+                            // Ensure we have fresh agent data after update
+                            await _db.Entry(reloaded.Agent).ReloadAsync();
+                        }
+                        Assert.IsNotNull(reloaded, $"CopilotChat not found for second event {id}");
+                        Assert.IsNotNull(reloaded.Agent, $"Agent navigation null for second event {id}");
+                        Assert.AreEqual(agentId, reloaded.Agent.AgentID, $"AgentID mismatch for second event {id}");
+                        Assert.AreEqual(newAgentName, reloaded.Agent.Name, $"Updated Agent Name mismatch for second event {id}");
+                    }
+
+                    // Assert previously created events now reflect updated agent name
+                    var previouslyCreatedIds = firstChatEvents.Select(e => e.Id).ToList();
+                    var previouslyCreatedChats = await _db.CopilotChats.Include(x => x.Agent)
+                        .Where(x => previouslyCreatedIds.Contains(x.AuditEvent.Id)).ToListAsync();
+                    foreach (var chat in previouslyCreatedChats)
+                    {
+                        if (chat.Agent != null)
+                        {
+                            await _db.Entry(chat.Agent).ReloadAsync();
+                            Assert.AreEqual(newAgentName, chat.Agent.Name, "Existing event did not reflect updated agent name");
+                        }
                     }
                 }
             }

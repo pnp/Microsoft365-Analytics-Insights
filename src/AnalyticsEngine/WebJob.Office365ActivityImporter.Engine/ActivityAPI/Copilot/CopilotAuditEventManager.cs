@@ -78,8 +78,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 MeetingId = meetingId,
                                 MeetingCreatedUTC = null,
                                 MeetingName = null,
-                                //AgentId = auditRecord.AgentId,
-                                //AgentName = auditRecord.AgentName,
+                                AgentId = auditRecord.AgentId,
+                                AgentName = auditRecord.AgentName,
                             });
                             continue;   // Logging done in adaptor. Move to next
                         }
@@ -139,8 +139,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 FileName = null,
                                 Url = null,
                                 UrlBase = null,
-                                //AgentId = auditRecord.AgentId,
-                                //AgentName = auditRecord.AgentName,
+                                AgentId = auditRecord.AgentId,
+                                AgentName = auditRecord.AgentName,
                             });
                         }
                     }
