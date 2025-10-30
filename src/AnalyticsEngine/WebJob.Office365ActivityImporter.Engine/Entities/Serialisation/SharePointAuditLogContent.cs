@@ -17,7 +17,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
 
 
-        public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, Office365Event relatedAuditEvent)
+        public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent)
         {
             // Is there a site/web for this event (SP file events only)?
             if (!string.IsNullOrEmpty(this.SiteUrl))

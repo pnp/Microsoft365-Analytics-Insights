@@ -81,6 +81,9 @@ namespace Common.Entities.Config
 
         public string DatabaseConnectionString { get; set; } = null;
 
+        // Compat with Copilot Feedback Bot
+        public string SQL => DatabaseConnectionString;
+
         public string RedisConnectionString { get; set; } = null;
 
         public string ServiceBusConnectionString { get; set; } = null;

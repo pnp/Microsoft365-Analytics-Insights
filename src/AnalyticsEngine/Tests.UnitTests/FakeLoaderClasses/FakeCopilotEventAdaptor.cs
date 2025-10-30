@@ -5,7 +5,7 @@ using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 
 namespace UnitTests.FakeLoaderClasses
 {
-    public class FakeCopilotEventAdaptor : ICopilotMetadataLoader
+    public class FakeCopilotMetadataLoader : ICopilotMetadataLoader
     {
         public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
         {

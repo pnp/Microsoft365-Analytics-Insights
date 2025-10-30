@@ -44,7 +44,7 @@ namespace Tests.UnitTests
             {
                 var userCache = new UserCache(db);
                 // Create generic event
-                Office365Event newEvent = new Office365Event();
+                CommonAuditEvent newEvent = new CommonAuditEvent();
                 newEvent.Id = Guid.NewGuid();
 
                 newEvent.Operation = new EventOperation { Name = "test op " + DateTime.Now.Ticks };
@@ -61,7 +61,7 @@ namespace Tests.UnitTests
                     value = SharePointLookupManager.GetAuditPropertyValue("Val", db)
                 }
                 );
-                exchangeEvent.Event = newEvent;
+                exchangeEvent.AuditEvent = newEvent;
                 db.exchange_events.Add(exchangeEvent);
 
                 db.SaveChanges();
@@ -84,7 +84,7 @@ namespace Tests.UnitTests
                 var userCache = new UserCache(db);
 
                 // Create generic event
-                Office365Event newEvent = new Office365Event();
+                CommonAuditEvent newEvent = new CommonAuditEvent();
                 newEvent.Id = Guid.NewGuid();
 
                 newEvent.Operation = new EventOperation { Name = "test op " + DateTime.Now.Ticks };
@@ -96,7 +96,7 @@ namespace Tests.UnitTests
 
                 GeneralEventMetada generalEvent = new GeneralEventMetada();
                 generalEvent.json = "unit-test jSon";
-                generalEvent.Event = newEvent;
+                generalEvent.AuditEvent = newEvent;
                 db.general_audit_events.Add(generalEvent);
                 db.SaveChanges();
 

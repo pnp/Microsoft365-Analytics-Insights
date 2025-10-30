@@ -10,7 +10,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     public class ExchangeAuditLogContent : AbstractAuditLogContent
     {
 
-        public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, Office365Event relatedAuditEvent)
+        public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent)
         {
             var related = await saveBatch.Database.exchange_events.Where(m => m.EventID == this.Id).SingleOrDefaultAsync();
             var props = GetPropertiesAndValues(saveBatch);
