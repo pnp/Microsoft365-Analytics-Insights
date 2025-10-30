@@ -14,6 +14,12 @@ namespace Common.Entities.Entities.AuditLog
     {
         [Column("app_host")]
         public string AppHost { get; set; } = null;
+
+
+        [ForeignKey(nameof(Agent))]
+        [Column("agent_id")]
+        public int? AgentId { get; set; }
+        public CopilotAgent Agent { get; set; } = null;
     }
 
     /// <summary>
@@ -77,4 +83,12 @@ namespace Common.Entities.Entities.AuditLog
         }
     }
 
+    [Table("copilot_agents")]
+    public class CopilotAgent : AbstractEFEntityWithName
+    {
+        [Column("agent_id")]
+        public string AgentID { get; set; } = null;
+    }
+
 }
+

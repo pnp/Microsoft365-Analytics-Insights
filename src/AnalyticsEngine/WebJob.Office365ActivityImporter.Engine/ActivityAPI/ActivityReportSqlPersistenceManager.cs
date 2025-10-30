@@ -180,7 +180,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                     .Where(e => ids.Contains(e.Id)).ToList();
 
                 var spEventsJustSaved = db.sharepoint_events
-                    .Include(spe => spe.Event)
+                    .Include(spe => spe.AuditEvent)
                     .Where(e => ids.Contains(e.EventID)).ToList();
 
                 foreach (var e in spEventsJustSaved)

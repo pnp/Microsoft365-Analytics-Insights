@@ -16,8 +16,8 @@ namespace Common.Entities
     /// The database model
     /// </summary>
     /// <remarks>
-    /// Add-Migration -Name "ExtendedUsageReports" -ProjectName "Common.Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
-    /// Update-Database -TargetMigration "PageCommentsAndLikes" -ProjectName "Common.Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
+    /// Add-Migration -Name "ExtendedUsageReports" -ProjectName "Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
+    /// Update-Database -TargetMigration "PageCommentsAndLikes" -ProjectName "Entities" -StartUpProjectName "WebJob.Office365ActivityImporter"
     /// </remarks>
     public class AnalyticsEntitiesContext : DbContext
     {
@@ -192,7 +192,7 @@ namespace Common.Entities
 
         public virtual DbSet<Site> sites { get; set; }
         public virtual DbSet<Web> webs { get; set; }
-        public virtual DbSet<Office365Event> AuditEventsCommon { get; set; }
+        public virtual DbSet<CommonAuditEvent> AuditEventsCommon { get; set; }
         public virtual DbSet<Browser> browsers { get; set; }
         public virtual DbSet<City> cities { get; set; }
         public virtual DbSet<Country> countries { get; set; }
@@ -299,6 +299,7 @@ namespace Common.Entities
         public DbSet<CopilotChat> CopilotChats { get; set; }
         public DbSet<CopilotEventMetadataFile> CopilotEventMetadataFiles { get; set; }
         public DbSet<CopilotEventMetadataMeeting> CopilotEventMetadataMeetings { get; set; }
+        public DbSet<CopilotAgent> CopilotAgents { get; set; }
 
 
         #endregion

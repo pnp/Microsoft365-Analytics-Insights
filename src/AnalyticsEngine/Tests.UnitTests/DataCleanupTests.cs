@@ -117,7 +117,7 @@ namespace Tests.UnitTests
             db.UrlComments.Add(pageComment);
 
             // Audit base event
-            var auditEvent = new Office365Event
+            var auditEvent = new CommonAuditEvent
             {
                 Id = Guid.NewGuid(),
                 TimeStamp = oneYearAgo,
@@ -138,7 +138,7 @@ namespace Tests.UnitTests
             var spEvent = new SharePointEventMetadata
             {
                 url = url,
-                Event = new Office365Event
+                AuditEvent = new CommonAuditEvent
                 {
                     Id = Guid.NewGuid(),
                     Operation = op,
@@ -430,7 +430,7 @@ namespace Tests.UnitTests
 
             var streamEvent = new StreamEventMetada
             {
-                Event = new Office365Event
+                AuditEvent = new CommonAuditEvent
                 {
                     Id = Guid.NewGuid(),
                     TimeStamp = oneYearAgo,
@@ -472,7 +472,7 @@ namespace Tests.UnitTests
                 Site = site,
                 RelatedChat = new CopilotChat
                 {
-                    Event = new Office365Event
+                    AuditEvent = new CommonAuditEvent
                     {
                         Id = Guid.NewGuid(),
                         TimeStamp = oneYearAgo,

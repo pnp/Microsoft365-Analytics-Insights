@@ -197,9 +197,9 @@ namespace Tests.UnitTests
                 foreach (var log in sharePointLogs)
                 {
                     var spEvent = db.sharepoint_events
-                        .Include(e => e.Event)
-                        .Include(e => e.Event.User)
-                        .Include(e => e.Event.Operation)
+                        .Include(e => e.AuditEvent)
+                        .Include(e => e.AuditEvent.User)
+                        .Include(e => e.AuditEvent.Operation)
                         .Include(e => e.related_web)
                         .Include(e => e.file_extension)
                         .Include(e => e.file_name)
@@ -267,9 +267,9 @@ namespace Tests.UnitTests
                     if (log.Workload == ActivityImportConstants.WORKLOAD_EXCHANGE)
                     {
                         var dbEvent = db.exchange_events
-                            .Include(e => e.Event)
-                            .Include(e => e.Event.User)
-                            .Include(e => e.Event.Operation)
+                            .Include(e => e.AuditEvent)
+                            .Include(e => e.AuditEvent.User)
+                            .Include(e => e.AuditEvent.Operation)
                             .Include(e => e.Properties).Where(e => e.EventID == log.Id).SingleOrDefault();
                         CompareExchangeReports(dbEvent, log);
 
@@ -278,9 +278,9 @@ namespace Tests.UnitTests
                     else if (log.Workload == ActivityImportConstants.WORKLOAD_AZURE_AD)
                     {
                         var dbEvent = db.azure_ad_events
-                            .Include(e => e.Event)
-                            .Include(e => e.Event.User)
-                            .Include(e => e.Event.Operation)
+                            .Include(e => e.AuditEvent)
+                            .Include(e => e.AuditEvent.User)
+                            .Include(e => e.AuditEvent.Operation)
                             .Include(e => e.Properties)
                             .Where(e => e.EventID == log.Id).SingleOrDefault();
                         CompareAzureReports(dbEvent, log);
@@ -359,9 +359,9 @@ namespace Tests.UnitTests
             Assert.IsTrue(databaseObj.EventID == jsonObj.Id);
             //if (jsonObj.EventData != null) Assert.IsTrue(databaseObj.Event.event_data == jsonObj.EventData);
 
-            Assert.IsTrue(databaseObj.Event.User.UserPrincipalName == jsonObj.UserId);
-            Assert.IsTrue(databaseObj.Event.Operation.Name == jsonObj.Operation);
-            Assert.IsTrue(databaseObj.Event.TimeStamp == jsonObj.CreationTime);
+            Assert.IsTrue(databaseObj.AuditEvent.User.UserPrincipalName == jsonObj.UserId);
+            Assert.IsTrue(databaseObj.AuditEvent.Operation.Name == jsonObj.Operation);
+            Assert.IsTrue(databaseObj.AuditEvent.TimeStamp == jsonObj.CreationTime);
             //Assert.IsTrue(databaseObj.Event.event_data == jsonObj.EventData);
         }
 
@@ -580,10 +580,10 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
                     .Include(l => l.file_extension)
                     .Include(l => l.related_web)
                     .Include(l => l.item_type)
-                    .Include(l => l.Event)
+                    .Include(l => l.AuditEvent)
                     .Include(l => l.url)
-                    .Include(l => l.Event.User)
-                    .Include(l => l.Event.Operation)
+                    .Include(l => l.AuditEvent.User)
+                    .Include(l => l.AuditEvent.Operation)
                     .Where(l => targetIds.Contains(l.EventID)).ToListAsync();
                 Assert.IsTrue(dbLogs.Count == hitsActivity.Count);
 
@@ -593,11 +593,11 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
                     Assert.AreEqual(dbLog.file_name.Name, activityLog.SourceFileName);
                     Assert.AreEqual(dbLog.url.FullUrl, activityLog.ObjectId);
                     Assert.AreEqual(dbLog.file_extension.extension_name, activityLog.SourceFileExtension);
-                    Assert.AreEqual(dbLog.Event.User.UserPrincipalName, activityLog.UserId);
+                    Assert.AreEqual(dbLog.AuditEvent.User.UserPrincipalName, activityLog.UserId);
 
-                    Assert.AreEqual(dbLog.Event.Operation.Name, activityLog.Operation);
-                    Assert.AreEqual(dbLog.Event.TimeStamp, new SqlDateTime(activityLog.CreationTime));
-                    Assert.AreEqual(dbLog.Event.EventData, activityLog.EventData);
+                    Assert.AreEqual(dbLog.AuditEvent.Operation.Name, activityLog.Operation);
+                    Assert.AreEqual(dbLog.AuditEvent.TimeStamp, new SqlDateTime(activityLog.CreationTime));
+                    Assert.AreEqual(dbLog.AuditEvent.EventData, activityLog.EventData);
                     Assert.AreEqual(dbLog.related_web.url_base.ToLower(), StringUtils.RemoveTrailingSlash(activityLog.SiteUrl).ToLower());
                     Assert.AreEqual(dbLog.item_type.type_name, activityLog.ItemType);
                     Assert.AreEqual(dbLog.EventID, activityLog.Id);

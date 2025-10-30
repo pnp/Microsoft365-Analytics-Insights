@@ -47,7 +47,7 @@ namespace Tests.UnitTests
                 var spEvent = new SharePointEventMetadata
                 {
                     url = urlDup2,
-                    Event = new Office365Event
+                    AuditEvent = new CommonAuditEvent
                     {
                         Id = Guid.NewGuid(),
                         Operation = new EventOperation
@@ -69,7 +69,7 @@ namespace Tests.UnitTests
                     RelatedChat = new CopilotChat
                     {
                         AppHost = "AppHost" + DateTime.Now.Ticks,
-                        Event = new Office365Event
+                        AuditEvent = new CommonAuditEvent
                         {
                             Id = Guid.NewGuid(),
                             Operation = new EventOperation
@@ -161,10 +161,10 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(urlDup1Check, "URL 1 should still exist after cleanup");
                 Assert.IsNull(urlDup2Check, "URL 2 should not exist after cleanup");
 
-                var spEventCheck = db.sharepoint_events.FirstOrDefault(e => e.Event.Id == spEvent.Event.Id);
+                var spEventCheck = db.sharepoint_events.FirstOrDefault(e => e.AuditEvent.Id == spEvent.AuditEvent.Id);
                 Assert.IsNotNull(spEventCheck, "SharePoint event should exist after cleanup");
 
-                var copilotEventCheck = db.CopilotEventMetadataFiles.FirstOrDefault(e => e.RelatedChat.Event.Id == copilotEvent.RelatedChat.Event.Id);
+                var copilotEventCheck = db.CopilotEventMetadataFiles.FirstOrDefault(e => e.RelatedChat.AuditEvent.Id == copilotEvent.RelatedChat.AuditEvent.Id);
                 Assert.IsNotNull(copilotEventCheck, "Copilot event should exist after cleanup");
 
                 var pageCommentCheck = db.UrlComments.FirstOrDefault(c => c.ID == pageComment.ID);

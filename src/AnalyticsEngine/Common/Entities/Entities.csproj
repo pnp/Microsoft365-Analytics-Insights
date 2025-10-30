@@ -255,6 +255,10 @@
     <Compile Include="Migrations\202404101126333_CopilotEvents.Designer.cs">
       <DependentUpon>202404101126333_CopilotEvents.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202510231511508_CopilotAgents.cs" />
+    <Compile Include="Migrations\202510231511508_CopilotAgents.Designer.cs">
+      <DependentUpon>202510231511508_CopilotAgents.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -365,6 +369,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202404101126333_CopilotEvents.resx">
       <DependentUpon>202404101126333_CopilotEvents.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202510231511508_CopilotAgents.resx">
+      <DependentUpon>202510231511508_CopilotAgents.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
