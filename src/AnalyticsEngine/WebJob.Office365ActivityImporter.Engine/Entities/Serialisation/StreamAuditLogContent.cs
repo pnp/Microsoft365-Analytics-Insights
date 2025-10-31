@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using Common.Entities.Entities.AuditLog;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
@@ -18,7 +19,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         #endregion
 
-        public override async Task<bool> ProcessExtendedProperties(SaveSession session, CommonAuditEvent relatedAuditEvent)
+        public override async Task<bool> ProcessExtendedProperties(SaveSession session, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
 
 #if DEBUG
