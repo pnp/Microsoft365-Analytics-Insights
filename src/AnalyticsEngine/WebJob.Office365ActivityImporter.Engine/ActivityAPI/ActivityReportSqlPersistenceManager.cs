@@ -198,7 +198,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                     }
 #endif
                     // Add metadata
-                    var changesMade = await log.ProcessExtendedProperties(saveSession, eventsJustSaved.Where(e => e.Id == log.Id).SingleOrDefault());
+                    var changesMade = await log.ProcessExtendedProperties(saveSession, eventsJustSaved.Where(e => e.Id == log.Id).SingleOrDefault(), _telemetry);
                     if (changesMade)
                         changesMadeCount++;
 

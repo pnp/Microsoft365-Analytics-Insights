@@ -1,5 +1,7 @@
 ﻿using Common.Entities;
 using DataUtils;
+using Microsoft.Extensions.Logging;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 
@@ -17,19 +19,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
 
 
-        public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent)
+        public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
             // Is there a site/web for this event (SP file events only)?
             if (!string.IsNullOrEmpty(this.SiteUrl))
             {
-                await AssignWeb(saveBatch, this.SiteUrl, true);     // Create site if not existing already
+                await AssignWeb(saveBatch, this.SiteUrl, true, logger);     // Create site if not existing already
                 return true;
             }
             else
             {
                 if (StringUtils.IsValidAbsoluteUrl(StringUtils.ConvertSharePointUrl(this.ObjectId)))
                 {
-                    await AssignWeb(saveBatch, this.ObjectId, false);   // Do not create site if we can't find already
+                    await AssignWeb(saveBatch, this.ObjectId, false, logger);   // Do not create site if we can't find already
                     return true;
                 }
                 else
@@ -37,12 +39,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
         }
 
-        async Task AssignWeb(SaveSession saveBatch, string url, bool createIfNotFound)
+        async Task AssignWeb(SaveSession saveBatch, string url, bool createIfNotFound, ILogger logger)
         {
-            var spEvent = saveBatch.CachedSpEvents[this.Id];
+            try
+            {
+                var spEvent = saveBatch.CachedSpEvents[this.Id];
 
-            // Assign web to event
-            spEvent.related_web = await saveBatch.SharePointLookupManager.GetWebOrCreateWebPlusSite(url, createIfNotFound);
+                // Assign web to event
+                spEvent.related_web = await saveBatch.SharePointLookupManager.GetWebOrCreateWebPlusSite(url, createIfNotFound);
+            }
+            catch (KeyNotFoundException)
+            {
+                logger.LogWarning($"Could not find SP event for audit-log content ID {this.Id} in cached SP events when assigning web for URL {url}");
+            }
         }
     }
 }

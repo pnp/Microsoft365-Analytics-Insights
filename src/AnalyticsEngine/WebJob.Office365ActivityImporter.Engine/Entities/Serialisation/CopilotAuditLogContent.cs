@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
@@ -14,7 +15,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string AgentName { get; set; }
         public string AgentId { get; set; }
 
-        public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, CommonAuditEvent relatedAuditEvent)
+        public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
             await sessionContext.CopilotEventResolver.SaveSingleCopilotEventToSqlStaging(this, relatedAuditEvent);
             return true;
