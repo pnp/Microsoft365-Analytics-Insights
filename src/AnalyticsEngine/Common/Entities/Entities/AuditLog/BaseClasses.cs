@@ -11,12 +11,12 @@ namespace Common.Entities.Entities
         /// Foriegn key for "Event" only
         /// </summary>
         [Key]
-        [ForeignKey("Event")]
+        [ForeignKey(nameof(AuditEvent))]
         [Column("event_id")]
         public Guid EventID { get; set; }
 
 
-        public Office365Event Event { get; set; }
+        public CommonAuditEvent AuditEvent { get; set; }
 
     }
 

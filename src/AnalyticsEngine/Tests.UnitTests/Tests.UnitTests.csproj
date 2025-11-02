@@ -90,6 +90,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="GraphStringUtilsTests.cs" />
+    <Compile Include="DataCleanupTests.cs" />
     <Compile Include="DuplicateUrlTests.cs" />
     <Compile Include="AppInsightsImportTests.cs" />
     <Compile Include="Constants.cs" />
@@ -197,6 +199,7 @@
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+      <SubType>Designer</SubType>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>

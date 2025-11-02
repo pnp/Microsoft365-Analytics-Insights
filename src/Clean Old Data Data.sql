@@ -3,10 +3,9 @@ declare @archiveDateMax datetime
 --Archive date: one month before "now". All records will use this value to delete from
 set @archiveDateMax = dateadd(month, -1, GETDATE())
 
---IMPORTANT: by default this script does not commit the transaction.
---Test once in rollback mode and once no errors are seen, change "rollback" to "commit" below and run again.
+--IMPORTANT: strongly recommend you run this in a transaction first and rollback to test
 
-begin transaction archive
+--begin transaction archive
 
 --Delete hits & activity from before achive date
 delete from hits where [hit_timestamp] < @archiveDateMax
@@ -58,6 +57,13 @@ delete [event_meta_general] from [event_meta_general]
 
 -- Teams
 delete from teams_addons_log where [date] < @archiveDateMax
+delete teams_channel_stats_log_keywords from teams_channel_stats_log_keywords 
+	inner join teams_channel_stats_log on teams_channel_stats_log.id = teams_channel_stats_log_keywords.channel_stats_log_id
+	where teams_channel_stats_log.[date] < @archiveDateMax 
+delete teams_channel_stats_log_langs from teams_channel_stats_log_langs 
+	inner join teams_channel_stats_log on teams_channel_stats_log.id = teams_channel_stats_log_langs.channel_stats_log_id
+	where teams_channel_stats_log.[date] < @archiveDateMax 
+
 delete from teams_channel_stats_log where [date] < @archiveDateMax 
 delete from teams_channel_tabs_log where [date] < @archiveDateMax 
 delete from team_membership_log where [date] < @archiveDateMax 
@@ -74,6 +80,6 @@ delete from yammer_group_activity_log where [date] < @archiveDateMax
 delete from yammer_user_activity_log where [date] < @archiveDateMax
 
 -- commit/rollback
-rollback transaction archive
+--rollback transaction archive
 
 --commit transaction archive
