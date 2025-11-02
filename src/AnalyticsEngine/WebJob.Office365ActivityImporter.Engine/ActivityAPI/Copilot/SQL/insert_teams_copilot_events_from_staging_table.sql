@@ -11,14 +11,12 @@ INSERT INTO online_meetings(created, meeting_id, name)
 				and imports.meeting_name = [name]
 		)
 
-insert into [event_copilot_chats] (event_id, app_host)
-	SELECT imports.event_id,app_host FROM [${STAGING_TABLE_ACTIVITY}] imports
-
 insert into event_copilot_meetings (copilot_chat_id, meeting_id)
-	SELECT imports.event_id
-		  ,online_meetings.id as meetingId
-	  FROM ${STAGING_TABLE_ACTIVITY} imports
-	  inner join online_meetings on online_meetings.meeting_id = imports.meeting_id
+	SELECT 
+		imports.event_id
+		,online_meetings.id as meetingId
+	FROM ${STAGING_TABLE_ACTIVITY} imports
+		inner join online_meetings on online_meetings.meeting_id = imports.meeting_id
 		and online_meetings.name = imports.meeting_name
-		and online_meetings.created = CAST(imports.meeting_created_utc AS datetime)		 
-	where imports.meeting_id is not null AND imports.meeting_name is not null AND imports.meeting_created_utc is not null
+		and online_meetings.created = CAST(imports.meeting_created_utc AS datetime)		
+	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id] 

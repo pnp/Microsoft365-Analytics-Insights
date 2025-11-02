@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using Common.Entities.Entities.AuditLog;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
@@ -18,7 +19,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         #endregion
 
-        public override async Task<bool> ProcessExtendedProperties(SaveSession session, Office365Event relatedAuditEvent)
+        public override async Task<bool> ProcessExtendedProperties(SaveSession session, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
 
 #if DEBUG
@@ -29,7 +30,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             {
                 var vid = await session.StreamLookupManager.GetCreateOrUpdateStreamVideo(vidGuid, ResourceTitle);
                 var clientApp = await session.SharePointLookupManager.GetClientApp(ClientApplicationId);
-                var newEvent = new StreamEventMetada { Video = vid, Event = relatedAuditEvent, ClientApplication = clientApp };
+                var newEvent = new StreamEventMetada { Video = vid, AuditEvent = relatedAuditEvent, ClientApplication = clientApp };
 
                 session.Database.StreamEvents.Add(newEvent);
             }

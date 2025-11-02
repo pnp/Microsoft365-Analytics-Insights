@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using Common.Entities.Entities.AuditLog;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -53,7 +54,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// <summary>
         /// Save new common + specific event to SQL.
         /// </summary>
-        public abstract Task<bool> ProcessExtendedProperties(SaveSession saveBatch, Office365Event relatedAuditEvent);
+        public abstract Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent, ILogger logger);
 
         /// <summary>
         /// Saves "property_name" and "property_value" records for a set of extended properties

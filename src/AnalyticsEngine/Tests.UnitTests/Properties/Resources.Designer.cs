@@ -205,6 +205,28 @@ namespace Tests.UnitTests.Properties {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to declare @archiveDateMax datetime
+        ///
+        ///--Archive date: one month before &quot;now&quot;. All records will use this value to delete from
+        ///set @archiveDateMax = dateadd(month, -1, GETDATE())
+        ///
+        ///--IMPORTANT: by default this script does not commit the transaction.
+        ///--Test once in rollback mode and once no errors are seen, change &quot;rollback&quot; to &quot;commit&quot; below and run again.
+        ///
+        ///begin transaction archive
+        ///
+        ///--Delete hits &amp; activity from before achive date
+        ///delete from hits where [hit_timestamp] &lt; @archiveDateMax
+        ///
+        ///-- Delete se [rest of string was truncated]&quot;;.
+        /// </summary>
+        internal static string Clean_Old_Data_Data {
+            get {
+                return ResourceManager.GetString("Clean_Old_Data_Data", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to {
         ///  &quot;view&quot;: [
         ///    {
