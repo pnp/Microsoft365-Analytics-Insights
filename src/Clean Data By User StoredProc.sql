@@ -214,7 +214,7 @@ BEGIN
 
         -- Unset any users with this user as their manager
         Update users set manager_id = null 
-            WHERE id = @UserId;
+            WHERE manager_id = @UserId;
 
 
 
