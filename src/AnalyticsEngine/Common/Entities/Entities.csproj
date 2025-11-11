@@ -443,20 +443,11 @@
     <PackageReference Include="Microsoft.IdentityModel.Abstractions">
       <Version>6.35.0</Version>
     </PackageReference>
-    <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory">
-      <Version>5.2.9</Version>
-    </PackageReference>
     <PackageReference Include="Microsoft.NETCore.Platforms">
       <Version>6.0.2</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.NETCore.Targets">
       <Version>5.0.0</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Rest.ClientRuntime">
-      <Version>2.3.24</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Rest.ClientRuntime.Azure">
-      <Version>3.3.19</Version>
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.1</Version>
