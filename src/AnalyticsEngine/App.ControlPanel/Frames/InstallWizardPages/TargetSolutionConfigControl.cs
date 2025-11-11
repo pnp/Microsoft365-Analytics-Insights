@@ -31,7 +31,7 @@ namespace App.ControlPanel.Controls
                         Calls = chkCalls.Checked,
                         WebTraffic = chkWeb.Checked
                     },
-                    SolutionTargeted = rdbAdoptify.Checked ? SolutionImportType.Adoptify : SolutionImportType.CustomOrInsights
+                    SolutionTargeted = SolutionImportType.CustomOrInsights
                 };
 
                 solConfig.Adoptify.ExistingSiteUrl = txtAdoptifySiteUrl.Text;
@@ -60,10 +60,10 @@ namespace App.ControlPanel.Controls
             chkUserMetadata.Checked = value.ImportTaskSettings.GraphUsersMetadata;
             chkCalls.Checked = value.ImportTaskSettings.Calls;
             chkWeb.Checked = value.ImportTaskSettings.WebTraffic;
-            rdbAdoptify.Checked = value.SolutionTargeted == SolutionImportType.Adoptify;
+            rdbAdoptify.Checked = false; // Always false as only Insights is supported now
             rdbInsights.Checked = value.SolutionTargeted == SolutionImportType.CustomOrInsights;
 
-            grpProductCfgAdoptify.Visible = value.SolutionTargeted == SolutionImportType.Adoptify;
+            grpProductCfgAdoptify.Visible = false;
             grpProductCfgInsights.Visible = value.SolutionTargeted == SolutionImportType.CustomOrInsights;
 
             foreach (var item in cmbLanguage.Items)

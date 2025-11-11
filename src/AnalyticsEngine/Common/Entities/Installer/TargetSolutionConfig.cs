@@ -21,21 +21,7 @@ namespace Common.Entities.Installer
         {
             get
             {
-                if (SolutionTargeted == SolutionImportType.Adoptify)
-                {
-                    // Adoptify has hard-coded import settings. This might need reviewing.
-                    return new ImportTaskSettings()
-                    {
-                        ActivityLog = false,
-                        Calls = true,                   // Call details; modalities etc are needed
-                        GraphTeams = true,              // Channel stats are gotten through usage reports, but we need reactions which we can only get from channels
-                        GraphUsageReports = true,       // Obviously needed per user
-                        GraphUserApps = true,           // App quests
-                        GraphUsersMetadata = true,      // For now import this as it might be useful
-                        WebTraffic = false              // No web code is deployed for Adoptify
-                    };
-                }
-                else return _importTaskSettings;
+                return _importTaskSettings;
             }
             set
             {
@@ -53,23 +39,13 @@ namespace Common.Entities.Installer
         /// </summary>
         public string SolutionLanguageCode { get; set; }
 
-        public override List<string> ValidatInputAndGetErrors()
-        {
-            var errors = new List<string>();
-            if (SolutionTargeted == SolutionImportType.Adoptify && (SolutionLanguageCode != LANG_ENGLISH || SolutionLanguageCode != LANG_ESPAÑOL))
-            {
-                errors.Add("Select a valid target language");
-            }
-            return errors;
-        }
     }
 
     /// <summary>
-    /// Insights can be tailored for specific imports. Adoptify is basically hard-coded imports
+    /// Insights can be tailored for specific imports. Adoptify is basically hard-coded imports - NOW DEPRECATED
     /// </summary>
     public enum SolutionImportType
     {
-        CustomOrInsights,
-        Adoptify
+        CustomOrInsights
     }
 }

@@ -248,12 +248,6 @@ namespace App.ControlPanel.Engine
                 errs.Add($"Duplicate tag names: {string.Join(", ", duplicateTags)}");
             }
 
-            if (SolutionConfig.SolutionTargeted == SolutionImportType.Adoptify)
-            {
-                // Check Adoptify config if targeted
-                errs.AddRange(SolutionConfig.Adoptify.ValidatInputAndGetErrors());
-            }
-
             // Software sources
             if (!this.DownloadLatestStable && !this.LocalSourceOverride.IsValid)
             {

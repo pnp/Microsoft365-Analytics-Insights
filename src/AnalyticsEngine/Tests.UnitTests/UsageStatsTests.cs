@@ -139,7 +139,7 @@ namespace Tests.UnitTests
                     AllowTelemetry = true,
                     SolutionConfig = new TargetSolutionConfig()
                     {
-                        SolutionTargeted = SolutionImportType.Adoptify,
+                        SolutionTargeted = SolutionImportType.CustomOrInsights,
                     }
                 };
                 db.ConfigStates.Add(new Common.Entities.Config.ConfigState

@@ -66,15 +66,6 @@ namespace App.ControlPanel.Engine
                 await webApp.StartAsync();
                 _logger.LogInformation("App-service started again after release copied");
             }
-
-            if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
-            {
-                // Install AITracker from downloaded source
-                var aiTrackerDownload = solutionSources.GetSolutionComponentLocation(SoftwareComponent.AITracker);
-
-                var spTasks = new SharePointWebComponentsInstallJob(Config, _logger, webApp.Data.DefaultHostName);
-                await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString);
-            }
         }
 
         FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo)

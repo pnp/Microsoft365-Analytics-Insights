@@ -230,7 +230,6 @@
             this.sharePointConfigControl1.Name = "sharePointConfigControl1";
             this.sharePointConfigControl1.Size = new System.Drawing.Size(632, 537);
             this.sharePointConfigControl1.TabIndex = 0;
-            this.sharePointConfigControl1.UninstallClicked += new System.EventHandler(this.sharePointConfigControl1_UninstallClicked);
             // 
             // tabSources
             // 

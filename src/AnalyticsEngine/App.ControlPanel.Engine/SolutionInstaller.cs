@@ -1,6 +1,5 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
-using App.ControlPanel.Engine.InstallerTasks.Adoptify;
 using App.ControlPanel.Engine.Models;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
@@ -68,11 +67,6 @@ namespace App.ControlPanel.Engine
 
                 _logger.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
 
-                // Install Adoptify components
-                if (Config.SolutionConfig.SolutionTargeted == SolutionImportType.Adoptify)
-                {
-                    await InstallAdoptifyComponents(azureSub);
-                }
 
                 // Open admin site?
                 if (Config.TasksConfig.OpenAdminSitePostInstall)
@@ -104,21 +98,6 @@ namespace App.ControlPanel.Engine
             }
 
             _logger.LogInformation("All tasks completed.");
-        }
-
-        private async Task InstallAdoptifyComponents(Azure.ResourceManager.Resources.SubscriptionResource azureSub)
-        {
-            _logger.LogInformation($"Launching web login pop-up for existing Adoptify site '{Config.SolutionConfig.Adoptify.ExistingSiteUrl}'...");
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(Config.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var adoptifyInstallJob = new AdoptifyInstallJob(_logger, Config, azureSub, ctx);
-
-                // Install SPSite content and Azure components
-                await adoptifyInstallJob.Install();
-
-                _logger.LogInformation("Adoptify back-end setup complete. Remember to authorize the API connections in the portal.");
-            }
         }
 
         private async Task WarmupAppServiceSite(string adminSiteUrl)

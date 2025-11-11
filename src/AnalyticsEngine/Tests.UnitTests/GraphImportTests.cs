@@ -6,7 +6,6 @@ using Common.Entities.Models;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
-using Microsoft.SharePoint.Client;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;

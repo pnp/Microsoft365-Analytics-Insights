@@ -317,10 +317,6 @@ namespace App.ControlPanel.Frames
             {
                 _installerEngine = new SolutionInstallVerifier(config, _logger, FtpConfig, this.TestsConfig);
             }
-            else if (task == InstallTask.UninstallFromSharePoint)
-            {
-                _installerEngine = new SolutionUninstaller(config, _logger);
-            }
             installerBackgroundWorker.RunWorkerAsync(task);
 
             SetFormGUIState(AppWaitState.Working);
@@ -331,8 +327,7 @@ namespace App.ControlPanel.Frames
         {
             Unknown,
             Install,
-            Test,
-            UninstallFromSharePoint
+            Test
         }
 
         #region Background Workers
@@ -362,18 +357,6 @@ namespace App.ControlPanel.Frames
                     try
                     {
                         ((SolutionInstaller)_installerEngine).InstallOrUpdate().Wait();
-                    }
-                    catch (AggregateException ex)
-                    {
-                        HandleNestedException(ex);
-                    }
-                }
-                else if (thingToDo == InstallTask.UninstallFromSharePoint)
-                {
-                    gotSomethingToDo = true;
-                    try
-                    {
-                        ((SolutionUninstaller)_installerEngine).UninstallFromSharePoint(_logger).Wait();
                     }
                     catch (AggregateException ex)
                     {
@@ -430,28 +413,6 @@ namespace App.ControlPanel.Frames
         private void importJobSettingsSelection_SolutionSelectionChange(object sender, EventArgs e)
         {
             RefreshTabsConfig();
-        }
-
-        private void sharePointConfigControl1_UninstallClicked(object sender, EventArgs e)
-        {
-            var cfg = this.GetConfigFromGUI();
-
-            var spErrors = cfg.SharePointConfig.ValidatInputAndGetErrors();
-
-            // Sanity
-            if (spErrors.Count > 0)
-            {
-                CommonUIThings.ShowValidationErrors(spErrors);
-                return;
-            }
-
-            var r = MessageBox.Show($"Are you sure you want to remove AITracker from these {cfg.SharePointConfig.TargetSites.Count} site(s)?",
-                "Uninstall SharePoint Online Tracking", MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button2);
-            if (r == DialogResult.Yes)
-            {
-                tabs.SelectedIndex = tabs.TabCount - 1;
-                StartBackgroundProcess(InstallTask.UninstallFromSharePoint);
-            }
         }
 
         #endregion
