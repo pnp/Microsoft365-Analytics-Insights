@@ -579,6 +579,114 @@ namespace Tests.UnitTests
                 Assert.IsTrue(totalTestTP.InRange(dayChunk.Start));
                 Assert.IsTrue(totalTestTP.InRange(dayChunk.End));
             }
+
+            // Test invalid range throws exception
+            Assert.ThrowsException<ArgumentOutOfRangeException>(() => TimePeriod.GetScanningTimeChunksFrom(d2, d1));
+
+            // Test that chunks are 24 hours apart (no overlap)
+            var dayChunksNoOverlap = TimePeriod.GetScanningTimeChunksFrom(d1, d1Plus3days, 0);
+            if (dayChunksNoOverlap.Count > 1)
+            {
+                for (int i = 0; i < dayChunksNoOverlap.Count - 1; i++)
+                {
+                    var chunk1End = dayChunksNoOverlap[i].End;
+                    var chunk2Start = dayChunksNoOverlap[i + 1].Start;
+                    Assert.AreEqual(chunk1End, chunk2Start, "Chunks should be consecutive with no overlap");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TimePeriodOverlapTests()
+        {
+            // Test with 5-minute overlap
+            var startDate = DateTime.ParseExact("01-01-2019 00:00:00", "dd-MM-yyyy HH:mm:ss", null);
+            var endDate = startDate.AddDays(3);
+            const int OVERLAP_MINUTES = 5;
+
+            var chunksWithOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, OVERLAP_MINUTES);
+
+            // Verify chunks overlap by exactly 5 minutes
+            Assert.IsTrue(chunksWithOverlap.Count > 1, "Should have multiple chunks for 3-day period");
+
+            for (int i = 0; i < chunksWithOverlap.Count - 1; i++)
+            {
+                var chunk1 = chunksWithOverlap[i];
+                var chunk2 = chunksWithOverlap[i + 1];
+
+                // The second chunk should start 5 minutes before the first chunk ends
+                var expectedChunk2Start = chunk1.End.AddMinutes(-OVERLAP_MINUTES);
+                Assert.AreEqual(expectedChunk2Start, chunk2.Start, 
+                    $"Chunk {i + 1} should start {OVERLAP_MINUTES} minutes before chunk {i} ends");
+
+                // Verify there is actually an overlap window
+                var overlapStart = chunk2.Start;
+                var overlapEnd = chunk1.End;
+                Assert.IsTrue(overlapStart < overlapEnd, "Chunks should have overlapping time period");
+                Assert.AreEqual(OVERLAP_MINUTES, (overlapEnd - overlapStart).TotalMinutes, 
+                    $"Overlap should be exactly {OVERLAP_MINUTES} minutes");
+
+                // Verify that a time in the overlap period is in range for both chunks
+                var timeInOverlap = overlapStart.AddMinutes(2);
+                Assert.IsTrue(chunk1.InRange(timeInOverlap), "Time in overlap should be in first chunk");
+                Assert.IsTrue(chunk2.InRange(timeInOverlap), "Time in overlap should be in second chunk");
+            }
+
+            // Test with zero overlap (should behave like original)
+            var chunksNoOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 0);
+            var chunksDefault = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate);
+            
+            Assert.AreEqual(chunksNoOverlap.Count, chunksDefault.Count, "Zero overlap should match default behavior");
+            for (int i = 0; i < chunksNoOverlap.Count; i++)
+            {
+                Assert.AreEqual(chunksNoOverlap[i].Start, chunksDefault[i].Start);
+                Assert.AreEqual(chunksNoOverlap[i].End, chunksDefault[i].End);
+            }
+
+            // Test with larger overlap (30 minutes)
+            var chunksLargeOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 30);
+            Assert.IsTrue(chunksLargeOverlap.Count > 1, "Should have multiple chunks");
+            
+            if (chunksLargeOverlap.Count > 1)
+            {
+                var firstChunk = chunksLargeOverlap[0];
+                var secondChunk = chunksLargeOverlap[1];
+                var expectedStart = firstChunk.End.AddMinutes(-30);
+                Assert.AreEqual(expectedStart, secondChunk.Start, "Should have 30-minute overlap");
+            }
+
+            // Test edge case: very short time period
+            var shortPeriodStart = startDate;
+            var shortPeriodEnd = startDate.AddHours(12);
+            var shortPeriodChunks = TimePeriod.GetScanningTimeChunksFrom(shortPeriodStart, shortPeriodEnd, 5);
+            
+            // Should be empty or have minimal chunks due to the "remove last chunk" logic
+            Assert.IsTrue(shortPeriodChunks.Count == 0, "Short period less than 1 day should result in no chunks after last chunk removal");
+
+            // Test with negative overlap (should behave as zero overlap - no exception)
+            var chunksNegativeOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, -10);
+            Assert.IsNotNull(chunksNegativeOverlap, "Negative overlap should not throw exception");
+            
+            // Should behave same as zero overlap
+            Assert.AreEqual(chunksNoOverlap.Count, chunksNegativeOverlap.Count, "Negative overlap should behave as zero overlap");
+            if (chunksNegativeOverlap.Count > 1)
+            {
+                for (int i = 0; i < chunksNegativeOverlap.Count - 1; i++)
+                {
+                    var chunk1End = chunksNegativeOverlap[i].End;
+                    var chunk2Start = chunksNegativeOverlap[i + 1].Start;
+                    Assert.AreEqual(chunk1End, chunk2Start, "Negative overlap should behave as no overlap");
+                }
+            }
+
+            // Test invalid overlap (>= 24 hours should throw)
+            Assert.ThrowsException<ArgumentOutOfRangeException>(() => 
+                TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 24 * 60), 
+                "Overlap >= 24 hours should throw ArgumentOutOfRangeException");
+
+            Assert.ThrowsException<ArgumentOutOfRangeException>(() => 
+                TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 25 * 60), 
+                "Overlap > 24 hours should throw ArgumentOutOfRangeException");
         }
 
         // Define lists of int, and copy list into another one. Verify various lengths

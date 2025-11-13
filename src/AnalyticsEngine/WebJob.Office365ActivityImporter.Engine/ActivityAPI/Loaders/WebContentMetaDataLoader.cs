@@ -17,11 +17,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     public class WebContentMetaDataLoader : ContentMetaDataLoader<ActivityReportInfo>
     {
         private readonly ConfidentialClientApplicationThrottledHttpClient _httpClient;
+        private int _metadataDownloadErrors = 0;
 
         public WebContentMetaDataLoader(ILogger telemetry, ConfidentialClientApplicationThrottledHttpClient httpClient, AppConfig settings) : base(telemetry, settings)
         {
             _httpClient = httpClient;
         }
+
+        /// <summary>
+        /// Gets the count of metadata download errors that occurred
+        /// </summary>
+        public int MetadataDownloadErrorCount => _metadataDownloadErrors;
 
         /// <summary>
         /// Recursively get all metadata for an event query URL
@@ -74,6 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             }
             catch (HttpRequestException ex)
             {
+                _metadataDownloadErrors++;
                 _telemetry.LogError(ex, $"Error downloading metadata {changeReportUri} with error '{ex.Message}'. " +
                     $"If this happens every time, this may be an issue. Ignoring for now.");
 #if DEBUG

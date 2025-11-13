@@ -36,9 +36,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Engine.Entities
         /// </summary>
         public static List<TimePeriod> GetScanningTimeChunksFrom(DateTime from, DateTime to)
         {
+            return GetScanningTimeChunksFrom(from, to, 0);
+        }
+
+        /// <summary>
+        /// Enumerates the period of time were retrieving metadata for bearing in mind the configuration
+        /// and the maximum chunk size and earliest date supported by the API, with optional overlap
+        /// </summary>
+        /// <param name="from">Start time</param>
+        /// <param name="to">End time</param>
+        /// <param name="overlapMinutes">Number of minutes to overlap between chunks to prevent missing events at boundaries</param>
+        public static List<TimePeriod> GetScanningTimeChunksFrom(DateTime from, DateTime to, int overlapMinutes)
+        {
             if (from > to)
             {
                 throw new ArgumentOutOfRangeException();
+            }
+
+            // Validate overlap is reasonable (must be less than chunk size to avoid infinite loops)
+            const int MAX_OVERLAP_MINUTES = 24 * 60 - 1; // Just under 24 hours
+            if (overlapMinutes >= MAX_OVERLAP_MINUTES)
+            {
+                throw new ArgumentOutOfRangeException(nameof(overlapMinutes), 
+                    $"Overlap cannot be >= {MAX_OVERLAP_MINUTES} minutes (chunk size is 24 hours)");
             }
 
             // We can only extract up to 1 day at a time
@@ -62,12 +82,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Engine.Entities
                 // Return the value
                 timeChunks.Add(new TimePeriod(start, end));
 
-                // Move forwards
-                start = end;
+                // Move forwards, accounting for overlap if specified
+                // Treat negative overlap as zero (no overlap)
+                if (overlapMinutes > 0)
+                {
+                    // If this was the last chunk (end == to), don't continue looping
+                    if (end >= to)
+                    {
+                        break;
+                    }
+                    start = end.AddMinutes(-overlapMinutes);
+                }
+                else
+                {
+                    start = end;
+                }
             }
 
             // Hack: remove most recent time-chunk as it's likely too small a window, and will generate an error in Activity API
-            timeChunks.RemoveAt(timeChunks.Count - 1);
+            if (timeChunks.Count > 0)
+            {
+                timeChunks.RemoveAt(timeChunks.Count - 1);
+            }
 
             return timeChunks;
         }
