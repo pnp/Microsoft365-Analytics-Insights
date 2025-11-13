@@ -40,7 +40,6 @@
             this.azurePaaSConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzurePaaSConfigControl();
             this.tabAzureStorage = new System.Windows.Forms.TabPage();
             this.azureStorageConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzureStorageConfigControl();
-            this.tabSharePoint = new System.Windows.Forms.TabPage();
             this.tabSources = new System.Windows.Forms.TabPage();
             this.grpLocalSources = new System.Windows.Forms.GroupBox();
             this.fileSelectionWebsite = new App.ControlPanel.Controls.FileSelection();
@@ -62,7 +61,6 @@
             this.tabPageAzureConfig.SuspendLayout();
             this.tabAzureResources.SuspendLayout();
             this.tabAzureStorage.SuspendLayout();
-            this.tabSharePoint.SuspendLayout();
             this.tabSources.SuspendLayout();
             this.grpLocalSources.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox12)).BeginInit();
@@ -79,7 +77,6 @@
             this.tabs.Controls.Add(this.tabPageAzureConfig);
             this.tabs.Controls.Add(this.tabAzureResources);
             this.tabs.Controls.Add(this.tabAzureStorage);
-            this.tabs.Controls.Add(this.tabSharePoint);
             this.tabs.Controls.Add(this.tabSources);
             this.tabs.Controls.Add(this.tabInstall);
             this.tabs.Location = new System.Drawing.Point(0, 0);
@@ -207,16 +204,6 @@
             this.azureStorageConfigControl1.SQLServerUsername = "";
             this.azureStorageConfigControl1.StorageAccount = "";
             this.azureStorageConfigControl1.TabIndex = 1;
-            // 
-            // tabSharePoint
-            // 
-            this.tabSharePoint.Location = new System.Drawing.Point(4, 22);
-            this.tabSharePoint.Name = "tabSharePoint";
-            this.tabSharePoint.Padding = new System.Windows.Forms.Padding(3);
-            this.tabSharePoint.Size = new System.Drawing.Size(638, 543);
-            this.tabSharePoint.TabIndex = 0;
-            this.tabSharePoint.Text = "SharePoint";
-            this.tabSharePoint.UseVisualStyleBackColor = true;
             // 
             // tabSources
             // 
@@ -404,7 +391,6 @@
             this.tabPageAzureConfig.ResumeLayout(false);
             this.tabAzureResources.ResumeLayout(false);
             this.tabAzureStorage.ResumeLayout(false);
-            this.tabSharePoint.ResumeLayout(false);
             this.tabSources.ResumeLayout(false);
             this.tabSources.PerformLayout();
             this.grpLocalSources.ResumeLayout(false);
@@ -416,7 +402,6 @@
 
         #endregion
         private System.Windows.Forms.TabControl tabs;
-        private System.Windows.Forms.TabPage tabSharePoint;
         private System.Windows.Forms.TabPage tabCredentials;
         private System.Windows.Forms.TabPage tabInstall;
         private System.ComponentModel.BackgroundWorker installerBackgroundWorker;
