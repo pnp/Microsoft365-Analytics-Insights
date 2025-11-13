@@ -40,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 daysToAdd = _settings.DaysBeforeNowToDownload * -1;
             }
             var extractStart = DateTime.UtcNow.AddDays(daysToAdd);
-            return TimePeriod.GetScanningTimeChunksFrom(extractStart, DateTime.UtcNow);
+            return TimePeriod.GetScanningTimeChunksFrom(extractStart, DateTime.UtcNow, _settings.TimeChunkOverlapMinutes);
         }
 
         /// <summary>
