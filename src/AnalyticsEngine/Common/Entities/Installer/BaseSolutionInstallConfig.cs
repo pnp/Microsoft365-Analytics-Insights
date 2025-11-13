@@ -9,7 +9,7 @@ namespace Common.Entities.Installer
     /// </summary>
     public class BaseSolutionInstallConfig : BaseConfig
     {
-        const string CONFIG_VERSION = "1.8.0";
+        const string CONFIG_VERSION = "1.9.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -95,6 +95,7 @@ namespace Common.Entities.Installer
         public List<AzTag> Tags { get; set; } = new List<AzTag>();
     }
 
+    [Serializable]
     public class AzTag
     {
         public AzTag(string name, string val)

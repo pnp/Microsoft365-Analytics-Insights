@@ -28,7 +28,8 @@
         /// </summary>
         private void InitializeComponent()
         {
-            App.ControlPanel.Engine.Entities.InstallTasksConfig installTasksConfig2 = new App.ControlPanel.Engine.Entities.InstallTasksConfig();
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(InstallSolutionControl));
+            App.ControlPanel.Engine.Entities.InstallTasksConfig installTasksConfig1 = new App.ControlPanel.Engine.Entities.InstallTasksConfig();
             this.tabs = new System.Windows.Forms.TabControl();
             this.tabTargets = new System.Windows.Forms.TabPage();
             this.importJobSettingsSelection = new App.ControlPanel.Controls.TargetSolutionConfigControl();
@@ -69,8 +70,8 @@
             // 
             // tabs
             // 
-            this.tabs.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left) 
+            this.tabs.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
+            | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.tabs.Controls.Add(this.tabTargets);
             this.tabs.Controls.Add(this.tabCredentials);
@@ -168,6 +169,7 @@
             this.azurePaaSConfigControl1.AppInsightsWorkspaceName = "";
             this.azurePaaSConfigControl1.AppServicePlanName = "";
             this.azurePaaSConfigControl1.AppServiceWebAppName = "";
+            this.azurePaaSConfigControl1.AutomationAccountName = "txtAutomationAccountName";
             this.azurePaaSConfigControl1.CognitiveEnabled = false;
             this.azurePaaSConfigControl1.CognitiveServiceName = "";
             this.azurePaaSConfigControl1.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -236,10 +238,10 @@
             // 
             // fileSelectionWebsite
             // 
-            this.fileSelectionWebsite.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            this.fileSelectionWebsite.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.fileSelectionWebsite.Label = "Website.zip";
-            this.fileSelectionWebsite.Location = new System.Drawing.Point(21, 164);
+            this.fileSelectionWebsite.Location = new System.Drawing.Point(20, 133);
             this.fileSelectionWebsite.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.fileSelectionWebsite.Name = "fileSelectionWebsite";
             this.fileSelectionWebsite.SelectedFileName = "";
@@ -248,10 +250,10 @@
             // 
             // fileSelectionControlPanel
             // 
-            this.fileSelectionControlPanel.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            this.fileSelectionControlPanel.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.fileSelectionControlPanel.Label = "ControlPanelApp.zip";
-            this.fileSelectionControlPanel.Location = new System.Drawing.Point(21, 132);
+            this.fileSelectionControlPanel.Location = new System.Drawing.Point(20, 101);
             this.fileSelectionControlPanel.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.fileSelectionControlPanel.Name = "fileSelectionControlPanel";
             this.fileSelectionControlPanel.SelectedFileName = "";
@@ -260,10 +262,10 @@
             // 
             // fileSelectionWebjobAppInsights
             // 
-            this.fileSelectionWebjobAppInsights.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            this.fileSelectionWebjobAppInsights.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.fileSelectionWebjobAppInsights.Label = "AppInsightsImporter.zip";
-            this.fileSelectionWebjobAppInsights.Location = new System.Drawing.Point(21, 99);
+            this.fileSelectionWebjobAppInsights.Location = new System.Drawing.Point(20, 68);
             this.fileSelectionWebjobAppInsights.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.fileSelectionWebjobAppInsights.Name = "fileSelectionWebjobAppInsights";
             this.fileSelectionWebjobAppInsights.SelectedFileName = "";
@@ -272,10 +274,10 @@
             // 
             // fileSelectionWebjobActivity
             // 
-            this.fileSelectionWebjobActivity.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            this.fileSelectionWebjobActivity.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.fileSelectionWebjobActivity.Label = "Office365ActivityImporter.zip";
-            this.fileSelectionWebjobActivity.Location = new System.Drawing.Point(21, 66);
+            this.fileSelectionWebjobActivity.Location = new System.Drawing.Point(20, 35);
             this.fileSelectionWebjobActivity.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.fileSelectionWebjobActivity.Name = "fileSelectionWebjobActivity";
             this.fileSelectionWebjobActivity.SelectedFileName = "";
@@ -347,17 +349,18 @@
             // 
             // installSolutionControl1
             // 
+            this.installSolutionControl1.AllowTelemetry = false;
             this.installSolutionControl1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.installSolutionControl1.Location = new System.Drawing.Point(3, 3);
             this.installSolutionControl1.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.installSolutionControl1.Name = "installSolutionControl1";
             this.installSolutionControl1.Size = new System.Drawing.Size(632, 537);
             this.installSolutionControl1.TabIndex = 0;
-            installTasksConfig2.InstallLatestSolutionContent = false;
-            installTasksConfig2.OpenAdminSitePostInstall = false;
-            installTasksConfig2.RegisterConfig = true;
-            installTasksConfig2.UpgradeSchema = false;
-            this.installSolutionControl1.TasksConfig = installTasksConfig2;
+            installTasksConfig1.InstallLatestSolutionContent = false;
+            installTasksConfig1.OpenAdminSitePostInstall = false;
+            installTasksConfig1.RegisterConfig = true;
+            installTasksConfig1.UpgradeSchema = false;
+            this.installSolutionControl1.TasksConfig = installTasksConfig1;
             this.installSolutionControl1.Install += new App.ControlPanel.Frames.InstallWizard.InstallSolutionControl.InstallEventHander(this.installSolutionControl1_Install);
             this.installSolutionControl1.TestConfig += new App.ControlPanel.Frames.InstallWizard.InstallSolutionControl.TestConfigEventHander(this.installSolutionControl1_TestConfig);
             // 
@@ -377,13 +380,13 @@
             this.btnNext.UseVisualStyleBackColor = true;
             this.btnNext.Click += new System.EventHandler(this.btnNext_Click);
             // 
-            // InstallSPOSitesControl
+            // InstallSolutionControl
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.Controls.Add(this.btnNext);
             this.Controls.Add(this.tabs);
-            this.Name = "InstallSPOSitesControl";
+            this.Name = "InstallSolutionControl";
             this.Size = new System.Drawing.Size(646, 595);
             this.tabs.ResumeLayout(false);
             this.tabTargets.ResumeLayout(false);

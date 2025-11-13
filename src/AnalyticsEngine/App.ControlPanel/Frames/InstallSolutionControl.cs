@@ -377,9 +377,6 @@ namespace App.ControlPanel.Frames
             SetFormGUIState(state);
         }
 
-        private bool _spTabVisible = true;
-
-
         #endregion
     }
 }
