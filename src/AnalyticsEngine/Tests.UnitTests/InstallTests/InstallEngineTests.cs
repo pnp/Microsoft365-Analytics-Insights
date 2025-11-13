@@ -76,12 +76,6 @@ namespace Tests.UnitTests
                 SolutionConfig = new TargetSolutionConfig
                 {
                     SolutionLanguageCode = TargetSolutionConfig.LANG_ENGLISH,
-                    Adoptify = new AdoptifySolutionInstallConfig
-                    {
-                        CreateDefaultData = true,
-                        ProvisionSchema = true,
-                        ExistingSiteUrl = "https://m365x72460609.sharepoint.com/sites/adoptifytests"
-                    },
                 }
 
             };

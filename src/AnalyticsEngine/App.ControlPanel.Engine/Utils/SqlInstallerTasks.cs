@@ -38,7 +38,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             if (_config.TasksConfig.UpgradeSchema)
             {
                 // Run downloaded installer to init DB schema
-                if (installerExeFile != null) await InitDatabaseSchema(_config.SharePointConfig.TargetSites);
+                if (installerExeFile != null) await InitDatabaseSchema();
                 else _logger.LogError("Couldn't find installer application to initialise database with.");
             }
 
@@ -62,12 +62,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// DB schema is control via EF migration. We have to assume the only valid model is via the downloaded build.
         /// Ergo we run the downloaded control-panel to deal with schema & run it via a specific switch
         /// </summary>
-        internal async Task InitDatabaseSchema(List<string> targetSites)
+        internal async Task InitDatabaseSchema()
         {
             // Create DB migration info
             var upgradeInfo = new DatabaseUpgradeInfo();
             upgradeInfo.ConnectionString = _dbInfo.ConnectionString;
-            upgradeInfo.OrgURLs = targetSites;
 
             _logger.LogInformation($"Calling downloaded control-panel app to init/update database. This could take a while if the existing schema needs updating.");
 

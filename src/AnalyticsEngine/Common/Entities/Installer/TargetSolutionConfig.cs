@@ -29,9 +29,6 @@ namespace Common.Entities.Installer
             }
         }
 
-
-        public AdoptifySolutionInstallConfig Adoptify { get; set; } = new AdoptifySolutionInstallConfig();
-
         public SolutionImportType SolutionTargeted { get; set; }
 
         /// <summary>

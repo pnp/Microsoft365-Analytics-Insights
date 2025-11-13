@@ -27,10 +27,8 @@ namespace App.ControlPanel.Engine
             AzureLocation = new AzureLocation();
             LocalSourceOverride = new LocalStorageInstallSourceInfo();
             Subscription = new AzureSubscription();
-            SharePointConfig = new SharePointInstallConfig();
             InstallerAccount = new AppRegistrationCredentials();
             ActivityAccount = new AppRegistrationCredentials();
-
         }
 
         #endregion
@@ -68,8 +66,6 @@ namespace App.ControlPanel.Engine
         public LocalStorageInstallSourceInfo LocalSourceOverride { get; set; } = new LocalStorageInstallSourceInfo();
 
         public AzureSubscription Subscription { get; set; } = new AzureSubscription();
-
-        public SharePointInstallConfig SharePointConfig { get; set; } = new SharePointInstallConfig();
 
         /// <summary>
         /// Account to create Azure resources with
@@ -111,8 +107,6 @@ namespace App.ControlPanel.Engine
             c.TasksConfig.UpgradeSchema = true;
             c.Tags = new List<AzTag>();
 
-            var sharePointInstallConfig = SharePointInstallConfig.Empty();
-            c.SharePointConfig = sharePointInstallConfig;
             return c;
         }
 
@@ -232,16 +226,6 @@ namespace App.ControlPanel.Engine
                 errs.Add("Nothing configured to import from Office 365");
             }
 
-            if (SolutionConfig.ImportTaskSettings.WebTraffic)
-            {
-                // Check SharePoint fields
-                var spErrs = this.SharePointConfig.ValidatInputAndGetErrors();
-                if (spErrs.Count > 0)
-                {
-                    errs.Add("SharePoint validation errors:");
-                    errs.AddRange(spErrs);
-                }
-            }
             var duplicateTags = this.Tags.GroupBy(t => t.Name.ToLower()).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
             if (duplicateTags.Count > 0)
             {

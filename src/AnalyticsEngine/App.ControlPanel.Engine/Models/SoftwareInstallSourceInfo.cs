@@ -113,7 +113,6 @@ namespace App.ControlPanel.Engine.Entities
     public enum SoftwareComponent
     {
         Unknown = 0,
-        AITracker,
         WebJobActivity,
         WebJobAppInsights,
         ControlPanel,

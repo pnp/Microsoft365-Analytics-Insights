@@ -27,10 +27,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 {
                     UpdateComponentInfoIfLatestBlob(azStorageInfo.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity), blob);
                 }
-                if (blob.Name.EndsWith(InstallerConstants.FILENAME_ZIP_AITRACKER))
-                {
-                    UpdateComponentInfoIfLatestBlob(azStorageInfo.GetSolutionComponentLocation(SoftwareComponent.AITracker), blob);
-                }
                 if (blob.Name.EndsWith(InstallerConstants.FILENAME_ZIP_CONTROL_PANEL))
                 {
                     UpdateComponentInfoIfLatestBlob(azStorageInfo.GetSolutionComponentLocation(SoftwareComponent.ControlPanel), blob);

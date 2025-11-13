@@ -74,6 +74,7 @@ namespace Common.Entities
         /// SPO analytics with JS
         /// </summary>
         [ImportProp]
+        [Obsolete]
         public bool WebTraffic { get; set; } = true;
 
         IEnumerable<PropertyInfo> GetImportProps()

@@ -46,7 +46,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var ftpDetails = profileData.GetPublishFtpsUrl();
 
                 _logger.LogInformation("Found latest stable release packages:");
-                _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.AITracker).FileLocation);
                 _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation);
                 _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation);
                 _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation);

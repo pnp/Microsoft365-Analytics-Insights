@@ -75,10 +75,10 @@ namespace App.ControlPanel.Engine
                 }
 
                 // Warn if no sites configured for import (and needed)
-                var needSiteFilter = Config.SolutionConfig.ImportTaskSettings.WebTraffic || Config.SolutionConfig.ImportTaskSettings.ActivityLog;
-                if (needSiteFilter && Config.SharePointConfig.TargetSites.Count == 0)
+                var needSiteFilter = Config.SolutionConfig.ImportTaskSettings.ActivityLog;
+                if (needSiteFilter)
                 {
-                    _logger.LogInformation($"IMPORTANT! There are no configured SharePoint urls specified. Please add manually at least one URL to allow site data import. " +
+                    _logger.LogInformation($"IMPORTANT! Please add manually at least one URL to SQL to allow site data import. " +
                         $"See 'Configure Filtered URLs' in deployment guide for more info.");
                 }
             }

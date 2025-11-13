@@ -40,7 +40,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // Get each local file in parrallel
             var localWebJobActivityTask = Task.Run(() => DownloadAzureBlobToDir(containerClient, sourceInfo.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).Blob, tempDir));
             var localWebJobAppInsightsTask = Task.Run(() => DownloadAzureBlobToDir(containerClient, sourceInfo.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).Blob, tempDir));
-            var localAITrackerTask = Task.Run(() => DownloadAzureBlobToDir(containerClient, sourceInfo.GetSolutionComponentLocation(SoftwareComponent.AITracker).Blob, tempDir));
             var localControlPanelTask = Task.Run(() => DownloadAzureBlobToDir(containerClient, sourceInfo.GetSolutionComponentLocation(SoftwareComponent.ControlPanel).Blob, tempDir));
             var localWebsiteTask = Task.Run(() => DownloadAzureBlobToDir(containerClient, sourceInfo.GetSolutionComponentLocation(SoftwareComponent.WebSite).Blob, tempDir));
 
@@ -49,14 +48,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             var localWebJobActivity = localWebJobActivityTask.Result;
             var localWebJobAppInsights = localWebJobAppInsightsTask.Result;
-            var localAITracker = localAITrackerTask.Result;
             var localControlPanel = localControlPanelTask.Result;
             var localWebsite = localWebsiteTask.Result;
 
             // Build return structure
             locallyDownloadedRelease.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation = localWebJobActivity;
             locallyDownloadedRelease.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation = localWebJobAppInsights;
-            locallyDownloadedRelease.GetSolutionComponentLocation(SoftwareComponent.AITracker).FileLocation = localAITracker;
             locallyDownloadedRelease.GetSolutionComponentLocation(SoftwareComponent.ControlPanel).FileLocation = localControlPanel;
             locallyDownloadedRelease.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation = localWebsite;
 
