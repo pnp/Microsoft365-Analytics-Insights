@@ -371,7 +371,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 if (i > 0 && i % 1000 == 0)
                 {
-                    Console.WriteLine($"New user {i}/{usersInserted.Count.ToString("N0")} processed for lookups.");
+                    Console.WriteLine($"New user {i.ToString("N0")}/{usersInserted.Count.ToString("N0")} processed for lookups.");
                 }
                 i++;
             }
