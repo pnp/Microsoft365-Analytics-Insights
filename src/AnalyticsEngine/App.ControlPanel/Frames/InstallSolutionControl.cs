@@ -9,11 +9,11 @@ using static App.ControlPanel.Frames.InstallWizard.InstallSolutionControl;
 
 namespace App.ControlPanel.Frames
 {
-    public partial class InstallSPOSitesControl : UserControl, ISolutionConfigurableComponent
+    public partial class InstallSolutionControl : UserControl, ISolutionConfigurableComponent
     {
         private BaseInstallProcess _installerEngine = null;
         private readonly InstallSPOSitesControlLogger _logger;
-        public InstallSPOSitesControl()
+        public InstallSolutionControl()
         {
             InitializeComponent();
             _logger = new InstallSPOSitesControlLogger(this);
@@ -93,7 +93,6 @@ namespace App.ControlPanel.Frames
                 AppInsightsName = azurePaaSConfigControl1.AppInsightsName,
                 CognitiveServiceName = azurePaaSConfigControl1.CognitiveServiceName,
                 CognitiveServicesEnabled = azurePaaSConfigControl1.CognitiveEnabled,
-                SharePointConfig = sharePointConfigControl1.SharePointInstallConfig,
                 KeyVaultName = azurePaaSConfigControl1.KeyVaultName,
                 AutomationAccountName = azurePaaSConfigControl1.AutomationAccountName,
                 ResourceGroupName = azureBaseConfigControl1.ResourceGroup,
@@ -118,8 +117,6 @@ namespace App.ControlPanel.Frames
             {
                 config.DownloadLatestStable = false;
 
-                config.LocalSourceOverride.GetSolutionComponentLocation(SoftwareComponent.AITracker).FileLocation =
-                    fileSelectionAITracker.SelectedFileName;
                 config.LocalSourceOverride.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation =
                     fileSelectionWebjobActivity.SelectedFileName;
                 config.LocalSourceOverride.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation =
@@ -170,8 +167,6 @@ namespace App.ControlPanel.Frames
             rdpSpecificLocation.Checked = !config.DownloadLatestStable;
             rdbLatest.Checked = config.DownloadLatestStable;
 
-            fileSelectionAITracker.SelectedFileName
-                = config.LocalSourceOverride.GetSolutionComponentLocation(SoftwareComponent.AITracker).FileLocation;
             fileSelectionWebjobActivity.SelectedFileName
                 = config.LocalSourceOverride.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation;
             fileSelectionWebjobAppInsights.SelectedFileName
@@ -189,12 +184,6 @@ namespace App.ControlPanel.Frames
             // Accounts
             systemCredentialsControl1.InstallerAccount = config.InstallerAccount;
             systemCredentialsControl1.RuntimeAccount = config.RuntimeAccountOffice365;
-
-            // SharePoint config
-            sharePointConfigControl1.SharePointInstallConfig = config.SharePointConfig;
-
-            // Show SP tab?
-            RefreshTabsConfig();
         }
 
         #endregion
@@ -251,27 +240,6 @@ namespace App.ControlPanel.Frames
         public SolutionInstallConfig GetConfigurationState()
         {
             return GetConfigFromGUI();
-        }
-
-        void RefreshTabsConfig()
-        {
-            // Show SP tab if either web or audit traffic is needed
-            if (importJobSettingsSelection.Config.ImportTaskSettings.WebTraffic || importJobSettingsSelection.Config.ImportTaskSettings.ActivityLog)
-            {
-                if (!_spTabVisible)
-                {
-                    tabs.TabPages.Insert(5, tabSharePoint);     //5th tab
-                    _spTabVisible = true;
-                }
-            }
-            else
-            {
-                if (_spTabVisible)
-                {
-                    tabs.TabPages.Remove(tabSharePoint);
-                    _spTabVisible = false;
-                }
-            }
         }
 
         #region Sources GUI
@@ -410,10 +378,7 @@ namespace App.ControlPanel.Frames
         }
 
         private bool _spTabVisible = true;
-        private void importJobSettingsSelection_SolutionSelectionChange(object sender, EventArgs e)
-        {
-            RefreshTabsConfig();
-        }
+
 
         #endregion
     }

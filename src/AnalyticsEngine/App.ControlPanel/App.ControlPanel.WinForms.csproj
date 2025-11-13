@@ -138,11 +138,11 @@
       <DependentUpon>EnterPasswordForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Enums.cs" />
-    <Compile Include="Frames\InstallSPOSitesControl.cs">
+    <Compile Include="Frames\InstallSolutionControl.cs">
       <SubType>UserControl</SubType>
     </Compile>
-    <Compile Include="Frames\InstallSPOSitesControl.Designer.cs">
-      <DependentUpon>InstallSPOSitesControl.cs</DependentUpon>
+    <Compile Include="Frames\InstallSolutionControl.Designer.cs">
+      <DependentUpon>InstallSolutionControl.cs</DependentUpon>
     </Compile>
     <Compile Include="Frames\InstallWizardPages\AzurePaaSConfigControl.cs">
       <SubType>UserControl</SubType>
@@ -161,12 +161,6 @@
     </Compile>
     <Compile Include="Frames\InstallWizardPages\InstallSolutionControl.Designer.cs">
       <DependentUpon>InstallSolutionControl.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\SharePointConfigControl.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
-    <Compile Include="Frames\InstallWizardPages\SharePointConfigControl.Designer.cs">
-      <DependentUpon>SharePointConfigControl.cs</DependentUpon>
     </Compile>
     <Compile Include="Frames\InstallWizardPages\SystemCredentialsControl.cs">
       <SubType>UserControl</SubType>
@@ -227,8 +221,8 @@
     <EmbeddedResource Include="EnterPasswordForm.resx">
       <DependentUpon>EnterPasswordForm.cs</DependentUpon>
     </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallSPOSitesControl.resx">
-      <DependentUpon>InstallSPOSitesControl.cs</DependentUpon>
+    <EmbeddedResource Include="Frames\InstallSolutionControl.resx">
+      <DependentUpon>InstallSolutionControl.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Frames\InstallWizardPages\AzurePaaSConfigControl.resx">
       <DependentUpon>AzurePaaSConfigControl.cs</DependentUpon>
@@ -238,9 +232,6 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Frames\InstallWizardPages\InstallSolutionControl.resx">
       <DependentUpon>InstallSolutionControl.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Frames\InstallWizardPages\SharePointConfigControl.resx">
-      <DependentUpon>SharePointConfigControl.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Frames\InstallWizardPages\SystemCredentialsControl.resx">
       <DependentUpon>SystemCredentialsControl.cs</DependentUpon>

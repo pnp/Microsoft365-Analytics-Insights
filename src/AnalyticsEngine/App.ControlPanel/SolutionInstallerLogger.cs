@@ -38,9 +38,9 @@ namespace App.ControlPanel
     /// </summary>
     internal class InstallSPOSitesControlLogger : SolutionInstallerLogger
     {
-        private readonly InstallSPOSitesControl _installSPOSitesControl;
+        private readonly InstallSolutionControl _installSPOSitesControl;
 
-        public InstallSPOSitesControlLogger(InstallSPOSitesControl installSPOSitesControl)
+        public InstallSPOSitesControlLogger(InstallSolutionControl installSPOSitesControl)
         {
             _installSPOSitesControl = installSPOSitesControl;
         }

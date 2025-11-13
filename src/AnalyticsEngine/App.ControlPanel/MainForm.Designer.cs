@@ -58,7 +58,7 @@
             this.grpStart = new System.Windows.Forms.GroupBox();
             this.label2 = new System.Windows.Forms.Label();
             this.solutionTestsConfigurationToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.installSPOSitesControl = new App.ControlPanel.Frames.InstallSPOSitesControl();
+            this.installSPOSitesControl = new App.ControlPanel.Frames.InstallSolutionControl();
             this.menu.SuspendLayout();
             this.statusStrip.SuspendLayout();
             this.grpInstall.SuspendLayout();
@@ -384,7 +384,7 @@
         private System.Windows.Forms.ToolStripMenuItem aboutToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem proxyConfigToolStripMenuItem;
         private System.Windows.Forms.GroupBox grpInstall;
-        private Frames.InstallSPOSitesControl installSPOSitesControl;
+        private Frames.InstallSolutionControl installSPOSitesControl;
         private System.Windows.Forms.Label lblIntroText;
         private System.Windows.Forms.CheckBox chkDisclaimer;
         private System.Windows.Forms.Button btnStartInstall;

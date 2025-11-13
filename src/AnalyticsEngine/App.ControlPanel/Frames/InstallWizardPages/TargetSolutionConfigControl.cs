@@ -26,21 +26,14 @@ namespace App.ControlPanel.Controls
                         ActivityLog = chkAuditLog.Checked,
                         GraphTeams = chkTeams.Checked,
                         GraphUsageReports = chkUsageReports.Checked,
-                        GraphUserApps = chkUserApps.Checked,
+                        GraphUserApps = false,  // Deprecated
                         GraphUsersMetadata = chkUserMetadata.Checked,
                         Calls = chkCalls.Checked,
-                        WebTraffic = chkWeb.Checked
+                        WebTraffic = true // Allow web traffic always as Insights needs it
                     },
                     SolutionTargeted = SolutionImportType.CustomOrInsights
                 };
 
-                solConfig.Adoptify.ExistingSiteUrl = txtAdoptifySiteUrl.Text;
-                solConfig.Adoptify.CreateDefaultData = chkInstallAdoptifyDefaultContent.Checked;
-                solConfig.Adoptify.ProvisionSchema = chkInstallAdoptifySchema.Checked;
-                if (cmbLanguage.SelectedItem is SolutionLingo)
-                {
-                    solConfig.SolutionLanguageCode = ((SolutionLingo)cmbLanguage.SelectedItem).Code;
-                }
                 return solConfig;
             }
             set
@@ -56,27 +49,12 @@ namespace App.ControlPanel.Controls
             chkAuditLog.Checked = value.ImportTaskSettings.ActivityLog;
             chkTeams.Checked = value.ImportTaskSettings.GraphTeams;
             chkUsageReports.Checked = value.ImportTaskSettings.GraphUsageReports;
-            chkUserApps.Checked = value.ImportTaskSettings.GraphUserApps;
             chkUserMetadata.Checked = value.ImportTaskSettings.GraphUsersMetadata;
             chkCalls.Checked = value.ImportTaskSettings.Calls;
-            chkWeb.Checked = value.ImportTaskSettings.WebTraffic;
-            rdbAdoptify.Checked = false; // Always false as only Insights is supported now
             rdbInsights.Checked = value.SolutionTargeted == SolutionImportType.CustomOrInsights;
 
-            grpProductCfgAdoptify.Visible = false;
             grpProductCfgInsights.Visible = value.SolutionTargeted == SolutionImportType.CustomOrInsights;
 
-            foreach (var item in cmbLanguage.Items)
-            {
-                if (item is SolutionLingo && ((SolutionLingo)item).Code == value.SolutionLanguageCode)
-                {
-                    cmbLanguage.SelectedItem = item;
-                    break;
-                }
-            }
-            txtAdoptifySiteUrl.Text = value.Adoptify.ExistingSiteUrl;
-            chkInstallAdoptifyDefaultContent.Checked = value.Adoptify.CreateDefaultData;
-            chkInstallAdoptifySchema.Checked = value.Adoptify.ProvisionSchema;
         }
 
 
@@ -87,11 +65,7 @@ namespace App.ControlPanel.Controls
 
         private void ImportJobSettingsSelection_Load(object sender, System.EventArgs e)
         {
-            grpProductCfgAdoptify.Dock = DockStyle.Fill;
             grpProductCfgInsights.Dock = DockStyle.Fill;
-
-            cmbLanguage.Items.Add(new SolutionLingo { Name = "English", Code = TargetSolutionConfig.LANG_ENGLISH });
-            cmbLanguage.Items.Add(new SolutionLingo { Name = "Español", Code = TargetSolutionConfig.LANG_ESPAÑOL });
         }
 
 

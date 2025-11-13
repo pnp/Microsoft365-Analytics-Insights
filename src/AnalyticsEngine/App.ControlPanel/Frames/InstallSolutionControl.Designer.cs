@@ -1,6 +1,6 @@
 ﻿namespace App.ControlPanel.Frames
 {
-    partial class InstallSPOSitesControl
+    partial class InstallSolutionControl
     {
         /// <summary> 
         /// Required designer variable.
@@ -41,14 +41,12 @@
             this.tabAzureStorage = new System.Windows.Forms.TabPage();
             this.azureStorageConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzureStorageConfigControl();
             this.tabSharePoint = new System.Windows.Forms.TabPage();
-            this.sharePointConfigControl1 = new App.ControlPanel.Frames.InstallWizard.SharePointConfigControl();
             this.tabSources = new System.Windows.Forms.TabPage();
             this.grpLocalSources = new System.Windows.Forms.GroupBox();
             this.fileSelectionWebsite = new App.ControlPanel.Controls.FileSelection();
             this.fileSelectionControlPanel = new App.ControlPanel.Controls.FileSelection();
             this.fileSelectionWebjobAppInsights = new App.ControlPanel.Controls.FileSelection();
             this.fileSelectionWebjobActivity = new App.ControlPanel.Controls.FileSelection();
-            this.fileSelectionAITracker = new App.ControlPanel.Controls.FileSelection();
             this.lblGUIAppSourcesDesc = new System.Windows.Forms.Label();
             this.lblGUIAppSourcesHeader = new System.Windows.Forms.Label();
             this.pictureBox12 = new System.Windows.Forms.PictureBox();
@@ -110,7 +108,6 @@
             this.importJobSettingsSelection.Name = "importJobSettingsSelection";
             this.importJobSettingsSelection.Size = new System.Drawing.Size(632, 537);
             this.importJobSettingsSelection.TabIndex = 0;
-            this.importJobSettingsSelection.SolutionSelectionChange += new System.EventHandler(this.importJobSettingsSelection_SolutionSelectionChange);
             // 
             // tabCredentials
             // 
@@ -213,7 +210,6 @@
             // 
             // tabSharePoint
             // 
-            this.tabSharePoint.Controls.Add(this.sharePointConfigControl1);
             this.tabSharePoint.Location = new System.Drawing.Point(4, 22);
             this.tabSharePoint.Name = "tabSharePoint";
             this.tabSharePoint.Padding = new System.Windows.Forms.Padding(3);
@@ -221,15 +217,6 @@
             this.tabSharePoint.TabIndex = 0;
             this.tabSharePoint.Text = "SharePoint";
             this.tabSharePoint.UseVisualStyleBackColor = true;
-            // 
-            // sharePointConfigControl1
-            // 
-            this.sharePointConfigControl1.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.sharePointConfigControl1.Location = new System.Drawing.Point(3, 3);
-            this.sharePointConfigControl1.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
-            this.sharePointConfigControl1.Name = "sharePointConfigControl1";
-            this.sharePointConfigControl1.Size = new System.Drawing.Size(632, 537);
-            this.sharePointConfigControl1.TabIndex = 0;
             // 
             // tabSources
             // 
@@ -253,7 +240,6 @@
             this.grpLocalSources.Controls.Add(this.fileSelectionControlPanel);
             this.grpLocalSources.Controls.Add(this.fileSelectionWebjobAppInsights);
             this.grpLocalSources.Controls.Add(this.fileSelectionWebjobActivity);
-            this.grpLocalSources.Controls.Add(this.fileSelectionAITracker);
             this.grpLocalSources.Location = new System.Drawing.Point(36, 194);
             this.grpLocalSources.Name = "grpLocalSources";
             this.grpLocalSources.Size = new System.Drawing.Size(566, 218);
@@ -308,18 +294,6 @@
             this.fileSelectionWebjobActivity.SelectedFileName = "";
             this.fileSelectionWebjobActivity.Size = new System.Drawing.Size(539, 27);
             this.fileSelectionWebjobActivity.TabIndex = 103;
-            // 
-            // fileSelectionAITracker
-            // 
-            this.fileSelectionAITracker.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.fileSelectionAITracker.Label = "AITrackerInstaller.zip";
-            this.fileSelectionAITracker.Location = new System.Drawing.Point(21, 33);
-            this.fileSelectionAITracker.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
-            this.fileSelectionAITracker.Name = "fileSelectionAITracker";
-            this.fileSelectionAITracker.SelectedFileName = "";
-            this.fileSelectionAITracker.Size = new System.Drawing.Size(530, 27);
-            this.fileSelectionAITracker.TabIndex = 102;
             // 
             // lblGUIAppSourcesDesc
             // 
@@ -452,7 +426,6 @@
         private System.Windows.Forms.GroupBox grpLocalSources;
         private Controls.FileSelection fileSelectionWebjobAppInsights;
         private Controls.FileSelection fileSelectionWebjobActivity;
-        private Controls.FileSelection fileSelectionAITracker;
         private System.Windows.Forms.Label lblGUIAppSourcesDesc;
         private System.Windows.Forms.Label lblGUIAppSourcesHeader;
         private System.Windows.Forms.PictureBox pictureBox12;
@@ -464,7 +437,6 @@
         private System.Windows.Forms.TabPage tabAzureStorage;
         private System.Windows.Forms.TabPage tabTargets;
         private Controls.TargetSolutionConfigControl importJobSettingsSelection;
-        private InstallWizard.SharePointConfigControl sharePointConfigControl1;
         private InstallWizard.InstallSolutionControl installSolutionControl1;
         private InstallWizard.AzurePaaSConfigControl azurePaaSConfigControl1;
         private InstallWizard.AzureStorageConfigControl azureStorageConfigControl1;
