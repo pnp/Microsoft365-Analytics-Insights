@@ -36,9 +36,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         protected override async Task<List<ActivityReportInfo>> LoadAllActivityReports(string auditContentType, TimePeriod chunk, int batchId)
         {
             // Build the uri to download 
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-reference#list-available-content
             var metadataUri = $"https://manage.office.com/api/v1.0/{_settings.TenantGUID}" +
-                $"/activity/feed/subscriptions/content?ContentType={auditContentType}&PublisherIdentifier={_settings.TenantGUID}&" +
-                $"startTime={FormatDate(chunk.Start)}&endTime={FormatDate(chunk.End)}";
+                $"/activity/feed/subscriptions/content?ContentType={auditContentType}&" +
+                $"PublisherIdentifier={_settings.TenantGUID}&" +
+                $"startTime={FormatDate(chunk.Start)}&" +
+                $"endTime={FormatDate(chunk.End)}";
 
             var data = await DownloadMetadata(metadataUri, batchId);
 #if DEBUG
