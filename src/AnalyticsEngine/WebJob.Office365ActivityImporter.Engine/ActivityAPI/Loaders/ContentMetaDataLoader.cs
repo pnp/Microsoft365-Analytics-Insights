@@ -61,7 +61,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             }
             else
             {
-                // https://msdn.microsoft.com/en-us/office-365/office-365-management-activity-api-reference
+                // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-reference
                 _telemetry.LogInformation($"Audit events import: getting changes summary from Office 365 Activity API from '{timeChunks.First().Start}' to '{timeChunks.Last().End}'...");
 
                 int batchId = 0;

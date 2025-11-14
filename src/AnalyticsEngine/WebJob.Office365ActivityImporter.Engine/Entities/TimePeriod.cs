@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace WebJob.Office365ActivityImporter.Engine.Engine.Entities
@@ -99,10 +98,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Engine.Entities
                 }
             }
 
-            // Hack: remove most recent time-chunk as it's likely too small a window, and will generate an error in Activity API
+            // Only remove the most recent time-chunk if it's too small (less than 1 hour) to avoid Activity API errors
+            // This allows today's data to be included when the time window is reasonable
             if (timeChunks.Count > 0)
             {
-                timeChunks.RemoveAt(timeChunks.Count - 1);
+                var lastChunk = timeChunks[timeChunks.Count - 1];
+                var lastChunkDuration = lastChunk.End.Subtract(lastChunk.Start);
+                
+                // Only remove if less than 1 hour to avoid API errors with very small windows
+                if (lastChunkDuration.TotalHours < 1)
+                {
+                    timeChunks.RemoveAt(timeChunks.Count - 1);
+                }
             }
 
             return timeChunks;
