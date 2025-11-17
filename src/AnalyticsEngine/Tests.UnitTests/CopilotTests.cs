@@ -303,5 +303,221 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Tests that AgentName and AgentId are correctly extracted from AppIdentity when they are not directly provided
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_ExtractsAgentFromAppIdentity()
+        {
+            // Arrange
+            var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
+            var expectedAgentName = "contoso_itAssistant";
+            var appIdentity = $"Copilot.Studio.Default-{organizationId}-{expectedAgentName}";
+            
+            var json = $@"{{
+                ""OrganizationId"": ""{organizationId}"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.AreEqual(expectedAgentName, result.AgentName, "AgentName should be extracted from AppIdentity");
+            Assert.AreEqual(appIdentity, result.AgentId, "AgentId should be set to AppIdentity value");
+            Assert.AreEqual(appIdentity, result.AppIdentity, "AppIdentity should be preserved");
+            Assert.AreEqual(organizationId, result.OrganizationId, "OrganizationId should be preserved");
+        }
+
+        /// <summary>
+        /// Tests that existing AgentName and AgentId values are not overwritten when they are already present
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_PreservesExistingAgentValues()
+        {
+            // Arrange
+            var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
+            var existingAgentName = "ExistingAgent";
+            var existingAgentId = "existing-agent-id-123";
+            var appIdentity = $"Copilot.Studio.Default-{organizationId}-contoso_itAssistant";
+            
+            var json = $@"{{
+                ""OrganizationId"": ""{organizationId}"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""AgentName"": ""{existingAgentName}"",
+                ""AgentId"": ""{existingAgentId}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.AreEqual(existingAgentName, result.AgentName, "Existing AgentName should be preserved");
+            Assert.AreEqual(existingAgentId, result.AgentId, "Existing AgentId should be preserved");
+        }
+
+        /// <summary>
+        /// Tests that extraction doesn't fail when AppIdentity is missing
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_HandlesNullAppIdentity()
+        {
+            // Arrange
+            var json = @"{
+                ""OrganizationId"": ""873ca9a3-4805-48f2-b419-fabf868641da"",
+                ""CopilotEventData"": {
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }
+            }";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.IsNull(result.AgentName, "AgentName should remain null");
+            Assert.IsNull(result.AgentId, "AgentId should remain null");
+        }
+
+        /// <summary>
+        /// Tests that extraction doesn't fail when OrganizationId is missing
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_HandlesNullOrganizationId()
+        {
+            // Arrange
+            var appIdentity = "Copilot.Studio.Default-873ca9a3-4805-48f2-b419-fabf868641da-contoso_itAssistant";
+            
+            var json = $@"{{
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.IsNull(result.AgentName, "AgentName should remain null when OrganizationId is missing");
+            Assert.IsNull(result.AgentId, "AgentId should remain null when OrganizationId is missing");
+        }
+
+        /// <summary>
+        /// Tests that extraction handles AppIdentity that doesn't contain the OrganizationId
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_HandlesAppIdentityWithoutOrgId()
+        {
+            // Arrange
+            var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
+            var appIdentity = "SomeOtherFormat-12345-agentName";
+            
+            var json = $@"{{
+                ""OrganizationId"": ""{organizationId}"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.IsNull(result.AgentName, "AgentName should remain null when OrganizationId not found in AppIdentity");
+            Assert.IsNull(result.AgentId, "AgentId should remain null when OrganizationId not found in AppIdentity");
+        }
+
+        /// <summary>
+        /// Tests edge case where AppIdentity ends with OrganizationId (no agent name after)
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_HandlesAppIdentityEndingWithOrgId()
+        {
+            // Arrange
+            var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
+            var appIdentity = $"Copilot.Studio.Default-{organizationId}";
+            
+            var json = $@"{{
+                ""OrganizationId"": ""{organizationId}"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.IsNull(result.AgentName, "AgentName should remain null when no content after OrganizationId");
+            Assert.IsNull(result.AgentId, "AgentId should remain null when no content after OrganizationId");
+        }
+
+        /// <summary>
+        /// Tests various agent name formats including special characters
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_HandlesVariousAgentNameFormats()
+        {
+            // Arrange
+            var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
+            var testCases = new[]
+            {
+                "contoso_itAssistant",
+                "agent-with-dashes",
+                "AgentWithCamelCase",
+                "agent.with.dots",
+                "123numericAgent",
+                "agent_with_multiple_underscores"
+            };
+
+            foreach (var expectedAgentName in testCases)
+            {
+                var appIdentity = $"Copilot.Studio.Default-{organizationId}-{expectedAgentName}";
+                var json = $@"{{
+                    ""OrganizationId"": ""{organizationId}"",
+                    ""AppIdentity"": ""{appIdentity}"",
+                    ""CopilotEventData"": {{
+                        ""AppHost"": ""Teams"",
+                        ""AccessedResources"": [],
+                        ""Contexts"": []
+                    }}
+                }}";
+
+                // Act
+                var result = CopilotAuditLogContent.FromJson(json);
+
+                // Assert
+                Assert.IsNotNull(result, $"Result should not be null for agent name: {expectedAgentName}");
+                Assert.AreEqual(expectedAgentName, result.AgentName, $"AgentName should be correctly extracted for: {expectedAgentName}");
+                Assert.AreEqual(appIdentity, result.AgentId, $"AgentId should be set to AppIdentity for: {expectedAgentName}");
+            }
+        }
+
     }
 }

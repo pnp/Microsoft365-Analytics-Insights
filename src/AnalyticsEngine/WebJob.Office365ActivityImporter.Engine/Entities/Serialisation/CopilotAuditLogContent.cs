@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
@@ -14,6 +15,54 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         public string AgentName { get; set; }
         public string AgentId { get; set; }
+
+        public string OrganizationId { get; set; }
+
+        public string AppIdentity { get; set; }
+
+        public static CopilotAuditLogContent FromJson(string json)
+        {
+            var thisAuditLogReport = JsonConvert.DeserializeObject<CopilotAuditLogContent>(json);
+
+            // We want to store the CopilotEventData but its current schema may change in the future. Keeping the full CopilotEventData object for now.
+            dynamic obj = JsonConvert.DeserializeObject<dynamic>(json);
+            thisAuditLogReport.EventRaw = JsonConvert.SerializeObject(obj.CopilotEventData);
+
+            // If AgentName and AgentId are not set, but AppIdentity has a value, extract from AppIdentity
+            if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) && 
+                string.IsNullOrEmpty(thisAuditLogReport.AgentId) && 
+                !string.IsNullOrEmpty(thisAuditLogReport.AppIdentity) &&
+                !string.IsNullOrEmpty(thisAuditLogReport.OrganizationId))
+            {
+                // AppIdentity format: "Copilot.Studio.Default-{OrganizationId}-{AgentName}"
+                // Example: "Copilot.Studio.Default-873ca9a3-4805-48f2-b419-fabf868641da-contoso_itAssistant"
+                var orgIdIndex = thisAuditLogReport.AppIdentity.IndexOf(thisAuditLogReport.OrganizationId);
+                if (orgIdIndex >= 0)
+                {
+                    // Find the position after the OrganizationId
+                    var afterOrgId = orgIdIndex + thisAuditLogReport.OrganizationId.Length;
+                    if (afterOrgId < thisAuditLogReport.AppIdentity.Length)
+                    {
+                        // Extract everything after OrganizationId, skipping the separator (typically a dash)
+                        var remainder = thisAuditLogReport.AppIdentity.Substring(afterOrgId);
+                        if (remainder.StartsWith("-") && remainder.Length > 1)
+                        {
+                            thisAuditLogReport.AgentName = remainder.Substring(1);
+                            // Only set AgentId if we successfully extracted an AgentName
+                            thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+                        }
+                        else if (!string.IsNullOrEmpty(remainder) && !remainder.Equals("-"))
+                        {
+                            thisAuditLogReport.AgentName = remainder;
+                            // Only set AgentId if we successfully extracted an AgentName
+                            thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+                        }
+                    }
+                }
+            }
+
+            return thisAuditLogReport;
+        }
 
         public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
