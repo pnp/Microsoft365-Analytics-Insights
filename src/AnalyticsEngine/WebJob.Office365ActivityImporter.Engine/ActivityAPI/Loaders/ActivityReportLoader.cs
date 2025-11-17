@@ -126,11 +126,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 {
                     try
                     {
-                        thisAuditLogReport = JsonConvert.DeserializeObject<CopilotAuditLogContent>(logJson);
-                        // We want to store the CopilotEventData but its current schema may change in the future. Keeping the full CopilotEventData object for now.
-                        var asCopilotReport = (CopilotAuditLogContent)thisAuditLogReport;
-                        dynamic obj = JsonConvert.DeserializeObject<dynamic>(logJson);
-                        asCopilotReport.EventRaw = JsonConvert.SerializeObject(obj.CopilotEventData);
+                        thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
                     }
                     catch (JsonReaderException)
                     {
