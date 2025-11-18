@@ -154,6 +154,7 @@
     <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
+    <Compile Include="Graph\User\IUserMetadataLoader.cs" />
     <Compile Include="Graph\User\UserApps\AbstractUserAppLoader.cs" />
     <Compile Include="Graph\User\UserApps\GraphAndSqlUserAppLoader.cs" />
     <Compile Include="Graph\User\UserApps\Models.cs" />

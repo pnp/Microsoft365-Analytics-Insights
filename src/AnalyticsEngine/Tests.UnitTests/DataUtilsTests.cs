@@ -173,8 +173,58 @@ namespace Tests.UnitTests
 
             var nullResult = await c.GetResourceOrNullIfNotExists(Guid.NewGuid().ToString());
             Assert.IsNull(nullResult);
-        }
 
+            // Test concurrent access (verifies SemaphoreSlim deadlock fix)
+            var concurrentCache = new TestObjectByIdCache();
+            var concurrentIds = new List<string>();
+            for (int i = 0; i < 50; i++)
+            {
+                var id = Guid.NewGuid().ToString();
+                concurrentIds.Add(id);
+                concurrentCache.AddId(id);
+            }
+
+            // Access cache from multiple threads simultaneously
+            var tasks = new List<Task<TestObject>>();
+            foreach (var id in concurrentIds)
+            {
+                tasks.Add(Task.Run(async () => await concurrentCache.GetResource(id)));
+            }
+
+            var results = await Task.WhenAll(tasks);
+            Assert.AreEqual(concurrentIds.Count, results.Length);
+            Assert.IsTrue(results.All(result => result != null));
+
+            // Test concurrent access with callback (verifies no deadlock with async callback)
+            var callbackCache = new TestObjectByIdCache();
+            var callbackTasks = new List<Task<TestObject>>();
+            var callbackIds = new List<string>();
+            
+            for (int i = 0; i < 20; i++)
+            {
+                var id = Guid.NewGuid().ToString();
+                callbackIds.Add(id);
+                
+                // Simulate async load with delay
+                callbackTasks.Add(Task.Run(async () => 
+                    await callbackCache.GetResource(id, async () => 
+                    {
+                        await Task.Delay(10); // Simulate async work
+                        return new TestObject();
+                    })));
+            }
+
+            var callbackResults = await Task.WhenAll(callbackTasks);
+            Assert.AreEqual(callbackIds.Count, callbackResults.Length);
+            Assert.IsTrue(callbackResults.All(result => result != null));
+
+            // Verify objects are properly cached after concurrent callback creation
+            foreach (var id in callbackIds)
+            {
+                var cached = await callbackCache.GetResource(id);
+                Assert.IsNotNull(cached);
+            }
+        }
         class TestObjectByIdCache : ObjectByIdCache<TestObject>
         {
             List<string> ids = new List<string>();
