@@ -361,8 +361,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
 
-            db.users.AddRange(usersInserted);
-
             _telemetry.LogInformation($"User import - Saving {usersInserted.Count.ToString("N0")} new users to SQL...");
             await db.SaveChangesAsync();
 

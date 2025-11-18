@@ -205,6 +205,19 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
+                // Cleanup: Remove any existing test users from previous runs
+                var existingTestUsers = await db.users
+                    .Where(u => u.UserPrincipalName == "newuser1@test.com" 
+                             || u.UserPrincipalName == "newuser2@test.com"
+                             || u.UserPrincipalName == "existinguser@test.com")
+                    .ToListAsync();
+                
+                if (existingTestUsers.Any())
+                {
+                    db.users.RemoveRange(existingTestUsers);
+                    await db.SaveChangesAsync();
+                }
+
                 // Setup existing user
                 var existingUser = new Common.Entities.User 
                 { 
@@ -244,6 +257,17 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
+                // Cleanup: Remove any existing test user from previous runs
+                var existingTestUser = await db.users
+                    .Where(u => u.UserPrincipalName == "validuser@test.com")
+                    .FirstOrDefaultAsync();
+                
+                if (existingTestUser != null)
+                {
+                    db.users.Remove(existingTestUser);
+                    await db.SaveChangesAsync();
+                }
+
                 // Act
                 var insertedUsers = await updater.InsertMissingUsers(db, graphUsers, new List<Common.Entities.User>(), false);
 
@@ -315,6 +339,17 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
+                // Cleanup: Remove any existing test user from previous runs
+                var existingTestUser = await db.users
+                    .Where(u => u.UserPrincipalName == "newuser@test.com")
+                    .FirstOrDefaultAsync();
+                
+                if (existingTestUser != null)
+                {
+                    db.users.Remove(existingTestUser);
+                    await db.SaveChangesAsync();
+                }
+
                 // Act
                 var insertedUsers = await updater.InsertMissingUsers(db, graphUsers, new List<Common.Entities.User>(), false);
 
