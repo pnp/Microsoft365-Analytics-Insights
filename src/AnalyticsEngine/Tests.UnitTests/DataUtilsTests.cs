@@ -710,8 +710,17 @@ namespace Tests.UnitTests
             var shortPeriodEnd = startDate.AddHours(12);
             var shortPeriodChunks = TimePeriod.GetScanningTimeChunksFrom(shortPeriodStart, shortPeriodEnd, 5);
             
-            // Should be empty or have minimal chunks due to the "remove last chunk" logic
-            Assert.IsTrue(shortPeriodChunks.Count == 0, "Short period less than 1 day should result in no chunks after last chunk removal");
+            // A 12-hour period should result in 1 chunk (the cleanup only removes chunks < 1 hour)
+            Assert.IsTrue(shortPeriodChunks.Count == 1, "12-hour period should result in 1 chunk");
+            Assert.AreEqual(12, (shortPeriodChunks[0].End - shortPeriodChunks[0].Start).TotalHours, "Chunk should be 12 hours long");
+            
+            // Test very short period (< 1 hour) - should be removed
+            var veryShortPeriodStart = startDate;
+            var veryShortPeriodEnd = startDate.AddMinutes(30);
+            var veryShortPeriodChunks = TimePeriod.GetScanningTimeChunksFrom(veryShortPeriodStart, veryShortPeriodEnd, 5);
+            
+            // Should be empty after removal of chunks < 1 hour
+            Assert.IsTrue(veryShortPeriodChunks.Count == 0, "Period less than 1 hour should result in no chunks after last chunk removal");
 
             // Test with negative overlap (should behave as zero overlap - no exception)
             var chunksNegativeOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, -10);
@@ -839,6 +848,7 @@ namespace Tests.UnitTests
                 strings.Add(DataGenerators.GetRandomString(20), null);
             }
         }
+
 
         //https://github.com/BcryptNet/bcrypt.net
         [TestMethod]
