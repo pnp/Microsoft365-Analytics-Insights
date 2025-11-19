@@ -87,6 +87,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var skus = await _userLoader.LoadTenantSkus();
 
                 var allDbUsers = await db.users.Include(u => u.LicenseLookups).ToListAsync();
+                
+                // Create lookup dictionaries for performance
+                var dbUsersByUpn = allDbUsers
+                    .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
+                    .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
+                
+                var dbUsersByAadId = allDbUsers
+                    .Where(u => !string.IsNullOrEmpty(u.AzureAdId))
+                    .GroupBy(u => u.AzureAdId)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
                 var graphMentionedExistingDbUsers = GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
 
                 // Insert any user we've not seen so far
@@ -100,8 +111,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _telemetry.LogInformation($"User import - updating {notInserted.Count.ToString("N0")} existing users...");
                 foreach (var existingGraphUser in notInserted)
                 {
-                    var dbUser = graphMentionedExistingDbUsers.Where(u => u.UserPrincipalName.ToLower() == existingGraphUser.UserPrincipalName.ToLower()).SingleOrDefault();
-                    await UpdateDbUserWithGraphData(db, existingGraphUser, allActiveGraphUsers, allDbUsers, dbUser, skus == null);
+                    var upn = existingGraphUser.UserPrincipalName?.ToLower();
+                    if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
+                    {
+                        await UpdateDbUserWithGraphData(db, existingGraphUser, allActiveGraphUsers, allDbUsers, dbUser, skus == null, dbUsersByAadId);
+                    }
                 }
 
                 // Combine inserted & modified db users
@@ -140,16 +154,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private async Task AddSkuForUsers(List<Common.Entities.User> graphFoundDbUsers, List<Microsoft.Graph.User> usersWithSku, SubscribedSku sku, AnalyticsEntitiesContext db)
         {
+            // Create dictionary for O(1) lookup of DB users by UPN
+            var dbUsersByUpn = graphFoundDbUsers
+                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
+                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
+
             var relevantDbUsers = new List<Common.Entities.User>();
             foreach (var graphUser in usersWithSku)
-                foreach (var dbUser in graphFoundDbUsers)
-                    if (graphUser.UserPrincipalName.ToLower() == dbUser.UserPrincipalName.ToLower())
-                    {
-                        relevantDbUsers.Add(dbUser);
-                        break;
-                    }
+            {
+                if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && 
+                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName.ToLower(), out var dbUser))
+                {
+                    relevantDbUsers.Add(dbUser);
+                }
+            }
 
-            _telemetry.LogInformation($"Found {relevantDbUsers.Count.ToString("N0")} users in SQL for SKU Part Number '{sku.SkuPartNumber}' from {usersWithSku.Count.ToString("N0")} Graph users.");
+            _telemetry.LogInformation($"User import - Found {relevantDbUsers.Count.ToString("N0")} users in SQL for SKU Part Number '{sku.SkuPartNumber}' from {usersWithSku.Count.ToString("N0")} Graph users.");
 
             var list = new List<UserLicenseTypeLookup>();
             int i = 0;
@@ -158,6 +178,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var licence = await GetLicenseType(sku.SkuPartNumber);
                 list.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
 
+                i++;
                 if (i > 0 && i % 1000 == 0)
                 {
                     Console.WriteLine($"User {i.ToString("N0")} / {relevantDbUsers.Count.ToString("N0")} processed for licenses.");
@@ -166,7 +187,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             db.UserLicenseTypeLookups.AddRange(list);
         }
 
-        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus)
+        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null)
         {
             UpdateDbUserFromGraphUser(dbUser, graphUser);
 
@@ -207,8 +228,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (graphUser.DefaultManagerInfo?.Id != null)
             {
-                // Try getting manager from DB 1st
-                var dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) && new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
+                // Try getting manager from DB using dictionary lookup if available
+                Common.Entities.User dbManager = null;
+                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out dbManager))
+                {
+                    // Found manager using fast dictionary lookup
+                }
+                else
+                {
+                    // Fallback to LINQ query if dictionary not provided (for backwards compatibility)
+                    dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) && new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
+                }
+                
                 if (dbManager == null)
                 {
                     var graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == graphUser.DefaultManagerInfo?.Id);
@@ -245,17 +276,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 if (userServicePlans != null)
                 {
-                    var allLicenses = new List<LicenseType>();
-                    foreach (var userPlan in userServicePlans)
+                    // Batch load all license types first to reduce repeated awaits
+                    var skuPartNumbers = userServicePlans.Select(p => p.SkuPartNumber).Distinct().ToList();
+                    var licenseTypesDict = new Dictionary<string, LicenseType>();
+                    foreach (var skuPartNumber in skuPartNumbers)
                     {
-                        allLicenses.Add(await GetLicenseType(userPlan.SkuPartNumber));
+                        var licenseType = await GetLicenseType(skuPartNumber);
+                        licenseTypesDict[skuPartNumber] = licenseType;
                     }
 
                     // Remove old lookups (simpler) & re-add
                     db.UserLicenseTypeLookups.RemoveRange(dbUser.LicenseLookups.Where(l => l.IsSavedToDB));
-                    foreach (var licence in allLicenses)
+                    foreach (var userPlan in userServicePlans)
                     {
-                        dbUser.LicenseLookups.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
+                        if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence))
+                        {
+                            dbUser.LicenseLookups.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
+                        }
                     }
                 }
             }
@@ -284,19 +321,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         internal List<Common.Entities.User> GetDbUsersFromGraphUsers(List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers)
         {
+            // Create dictionary for O(1) lookup of DB users by UPN
+            var dbUsersByUpn = allDbUsers
+                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
+                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
+
             var users = new List<Common.Entities.User>();
 
             foreach (var graphUser in allGraphUsers)
             {
-                // Do we have this graph user?
                 var upn = graphUser.UserPrincipalName?.ToLower();
-                if (!string.IsNullOrEmpty(upn))
+                if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
                 {
-                    var dbUser = allDbUsers.Where(u => u.UserPrincipalName.ToLower() == upn).SingleOrDefault();
-                    if (dbUser != null)
-                    {
-                        users.Add(dbUser);
-                    }
+                    users.Add(dbUser);
                 }
             }
 
@@ -327,6 +364,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 .Where(g => !string.IsNullOrEmpty(g.UserPrincipalName))
                 .ToDictionary(g => g.UserPrincipalName.ToLower(), g => g, StringComparer.OrdinalIgnoreCase);
 
+            // Create dictionary for fast DB user lookup by Azure AD ID
+            var dbUsersByAadId = graphMentionedDbUsers
+                .Where(u => !string.IsNullOrEmpty(u.AzureAdId))
+                .GroupBy(u => u.AzureAdId)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
             // Build list of users to insert - optimized with HashSet lookup
             foreach (var graphUser in allGraphUsers)
             {
@@ -352,7 +395,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Fast dictionary lookup instead of LINQ Where/FirstOrDefault
                 if (graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
                 {
-                    await UpdateDbUserWithGraphData(db, graphUser, allGraphUsers, graphMentionedDbUsers, newDbUser, readUserSkus);
+                    await UpdateDbUserWithGraphData(db, graphUser, allGraphUsers, graphMentionedDbUsers, newDbUser, readUserSkus, dbUsersByAadId);
 
                     if (i > 0 && i % 1000 == 0)
                     {
