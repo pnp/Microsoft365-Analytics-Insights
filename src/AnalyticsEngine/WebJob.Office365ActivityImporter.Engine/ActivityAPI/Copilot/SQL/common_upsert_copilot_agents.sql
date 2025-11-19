@@ -25,11 +25,17 @@ WHERE EXISTS (
 );
 
 
--- Insert chat
-insert into [event_copilot_chats] (event_id, app_host, agent_id)
-	SELECT 
-		imports.event_id
-		,app_host
-		,copilot_agents.id
-		FROM [${STAGING_TABLE_ACTIVITY}] imports
-	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id]
+-- Insert chat where there is no existing event_copilot_chats record for the event_id
+INSERT INTO dbo.event_copilot_chats (event_id, app_host, agent_id)
+SELECT
+    i.event_id,
+    i.app_host,
+    ca.id
+FROM dbo.[${STAGING_TABLE_ACTIVITY}]  AS i
+LEFT JOIN dbo.copilot_agents AS ca
+    ON ca.agent_id = i.agent_id
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM dbo.event_copilot_chats AS ec
+    WHERE ec.event_id = i.event_id
+    )
