@@ -4,6 +4,8 @@ using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
@@ -52,8 +54,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 _logger.LogWarning("CopilotAuditEventManager received null auditRecord or baseOfficeEvent.");
                 return;
             }
-
-            _logger.LogInformation($"Saving copilot event metadata to staging for event {baseOfficeEvent.Id}");
 
             // Per-event counts (for logging only)
             int eventMeetings = 0, eventFiles = 0, eventChats = 0;
@@ -181,16 +181,16 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AppHost = auditRecord.CopilotEventData.AppHost,
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
-                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources)
+                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources.Where(r=> r.IsValidOffice365Data))
             });
         }
 
         /// <summary>
         /// Serializes AccessedResources list to JSON for staging table storage
         /// </summary>
-        private string SerializeAccessedResources(System.Collections.Generic.List<AccessedResource> accessedResources)
+        private string SerializeAccessedResources(IEnumerable<AccessedResource> accessedResources)
         {
-            if (accessedResources == null || accessedResources.Count == 0)
+            if (accessedResources == null || accessedResources.Count() == 0)
             {
                 return null;
             }
