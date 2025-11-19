@@ -571,6 +571,159 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task UserMetadataUpdater_UserLicenseChange_DatabaseReflectsChange()
+        {
+            // Arrange
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+            
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"licensechangeuser{DateTime.Now.Ticks}@test.com";
+            
+            // Initial license SKUs
+            var initialSkuId = Guid.NewGuid();
+            var initialSkuPartNumber = "ENTERPRISEPACK";
+            var initialLicenseName = "Office 365 E3";
+            
+            // Changed license SKUs
+            var newSkuId = Guid.NewGuid();
+            var newSkuPartNumber = "ENTERPRISEPREMIUM";
+            var newLicenseName = "Office 365 E5";
+
+            // Cleanup: Remove any existing test data from previous runs
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+
+                // Clean up test license types
+                var testLicenses = await cleanupDb.LicenseTypes
+                    .Where(l => l.Name == initialLicenseName || l.Name == newLicenseName)
+                    .ToListAsync();
+                if (testLicenses.Any())
+                {
+                    cleanupDb.LicenseTypes.RemoveRange(testLicenses);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            // Step 1: Create user with initial license
+            var graphUser = new GraphUser 
+            { 
+                UserPrincipalName = userUpn, 
+                Id = userId,
+                AccountEnabled = true,
+                Mail = userUpn
+            };
+
+            var initialSku = new SubscribedSku
+            {
+                SkuId = initialSkuId,
+                SkuPartNumber = initialSkuPartNumber
+            };
+
+            var initialSkus = new GraphServiceSubscribedSkusCollectionPage
+            {
+                initialSku
+            };
+
+            var usersWithInitialSku = new List<Microsoft.Graph.User>
+            {
+                new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId }
+            };
+
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            {
+                { initialSkuId, usersWithInitialSku }
+            };
+
+            var fakeLoader = new FakeUserMetadataLoader(
+                new List<GraphUser> { graphUser },
+                initialSkus,
+                fakeUsersBySku
+            );
+
+            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+
+            // Act 1: Initial import with first license
+            await updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Assert 1: Verify user has initial license
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser, "User should be created in database");
+                Assert.AreEqual(1, dbUser.LicenseLookups.Count, "User should have exactly one license initially");
+                Assert.AreEqual(initialLicenseName, dbUser.LicenseLookups[0].License.Name, "Initial license should be Office 365 E3");
+                Assert.AreEqual(initialSkuPartNumber, dbUser.LicenseLookups[0].License.SKUID, "Initial SKU should match");
+            }
+
+            // Step 2: Change user's license
+            var newSku = new SubscribedSku
+            {
+                SkuId = newSkuId,
+                SkuPartNumber = newSkuPartNumber
+            };
+
+            var updatedSkus = new GraphServiceSubscribedSkusCollectionPage
+            {
+                newSku
+            };
+
+            var usersWithNewSku = new List<Microsoft.Graph.User>
+            {
+                new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId }
+            };
+
+            var updatedFakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            {
+                { newSkuId, usersWithNewSku }
+            };
+
+            var updatedFakeLoader = new FakeUserMetadataLoader(
+                new List<GraphUser> { graphUser },
+                updatedSkus,
+                updatedFakeUsersBySku
+            );
+
+            var updaterWithNewLicense = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
+
+            // Act 2: Update with changed license
+            await updaterWithNewLicense.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Assert 2: Verify user now has new license and old license is removed
+            using (var finalVerifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUserFinal = await finalVerifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUserFinal, "User should still exist in database");
+                Assert.AreEqual(1, dbUserFinal.LicenseLookups.Count, "User should still have exactly one license after update");
+                Assert.AreEqual(newLicenseName, dbUserFinal.LicenseLookups[0].License.Name, "New license should be Office 365 E5");
+                Assert.AreEqual(newSkuPartNumber, dbUserFinal.LicenseLookups[0].License.SKUID, "New SKU should match");
+                
+                // Verify old license is no longer associated with user
+                Assert.IsFalse(dbUserFinal.LicenseLookups.Any(l => l.License.Name == initialLicenseName), 
+                    "Old license should be removed from user");
+            }
+        }
+
         #endregion
     }
 }
