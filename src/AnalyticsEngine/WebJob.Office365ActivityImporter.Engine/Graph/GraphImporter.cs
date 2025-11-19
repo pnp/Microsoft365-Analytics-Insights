@@ -53,7 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Update Graph users first
                 var userUpdater = new UserMetadataUpdater(_telemetry, _settings, _graphAppIndentityOAuthContext.Creds, httpClient);
-                await userUpdater.InsertAndUpdateDatabaseUsersFromGraph();
+                await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
 
                 // Track finished event 
                 userMetadaTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);

@@ -18,6 +18,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             var assembly = Assembly.GetExecutingAssembly();
 
+            // https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
             // Format: "{Namespace}.{Folder}.{filename}.{Extension}"
             const string RESOURCE_NAME = "WebJob.Office365ActivityImporter.Engine.Resources.Product_names_and_service_plan_identifiers_for_licensing.csv";
             using (var stream = assembly.GetManifestResourceStream(RESOURCE_NAME))
