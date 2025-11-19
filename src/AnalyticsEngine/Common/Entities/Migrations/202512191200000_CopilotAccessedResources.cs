@@ -21,7 +21,7 @@ namespace Common.Entities.Migrations
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
-                        name = c.String(maxLength: 100),
+                        name = c.String(maxLength: 500),
                     })
                 .PrimaryKey(t => t.id);
             

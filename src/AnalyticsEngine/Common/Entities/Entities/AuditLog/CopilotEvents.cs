@@ -106,8 +106,11 @@ namespace Common.Entities.Entities.AuditLog
     /// Lookup table for accessed resource names
     /// </summary>
     [Table("copilot_accessed_resource_names")]
-    public class CopilotAccessedResourceName : AbstractEFEntityWithName
+    public class CopilotAccessedResourceName : AbstractEFEntity
     {
+        // Not using AbstractEFEntityWithName to allow longer names
+        [Column("name")]
+        public string Name { get; set; }
     }
 
     /// <summary>
