@@ -17,6 +17,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
         [Column("agent_id", true)]
         public string AgentId { get; set; }
+
+        // AccessedResources serialized as JSON
+        [Column("accessed_resources_json", true)]
+        public string AccessedResourcesJson { get; set; }
     }
 
     [TempTableName(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY)]

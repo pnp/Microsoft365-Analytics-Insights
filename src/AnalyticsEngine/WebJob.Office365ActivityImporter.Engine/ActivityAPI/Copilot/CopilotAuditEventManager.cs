@@ -2,6 +2,7 @@
 using DataUtils;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
@@ -55,21 +56,21 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _logger.LogInformation($"Saving copilot event metadata to staging for event {baseOfficeEvent.Id}");
 
             // Per-event counts (for logging only)
-            int eventMeetings =0, eventFiles =0, eventChats =0;
+            int eventMeetings = 0, eventFiles = 0, eventChats = 0;
 
             var contexts = auditRecord.CopilotEventData?.Contexts;
-            if (contexts != null && contexts.Count >0)
+            if (contexts != null && contexts.Count > 0)
             {
                 foreach (var context in contexts)
                 {
                     // Only one meeting OR file per event is relevant; chat contexts are additive.
                     if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING)
                     {
-                        if (eventMeetings ==0) // safeguard against multiple meeting contexts
+                        if (eventMeetings == 0) // safeguard against multiple meeting contexts
                         {
                             if (await TryAddMeetingAsync(context.Id, auditRecord, baseOfficeEvent))
                             {
-                                eventMeetings++; _totalMeetingsCount++; 
+                                eventMeetings++; _totalMeetingsCount++;
                             }
                         }
                         break; // meeting ends further processing for meeting/file
@@ -82,7 +83,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     }
                     else
                     {
-                        if (eventFiles ==0) // only capture first file-relevant context
+                        if (eventFiles == 0) // only capture first file-relevant context
                         {
                             if (await TryAddFileAsync(context.Id, auditRecord, baseOfficeEvent))
                             {
@@ -93,7 +94,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     }
 
                     // Preserve original logic: break after first meeting OR file context captured.
-                    if (eventMeetings >0 || eventFiles >0)
+                    if (eventMeetings > 0 || eventFiles > 0)
                         break;
                 }
             }
@@ -104,7 +105,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 eventChats++; _totalChatOnlyCount++;
             }
 
-            if (eventMeetings >0 || eventFiles >0 || eventChats >0)
+            if (eventMeetings > 0 || eventFiles > 0 || eventChats > 0)
             {
                 _logger.LogInformation($"Event {baseOfficeEvent.Id}: staged {eventChats} chat(s), {eventMeetings} meeting(s), {eventFiles} file(s).");
             }
@@ -131,6 +132,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     MeetingName = meetingInfo?.Subject,
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
+                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources)
                 });
                 return true; // staged regardless of meetingInfo retrieval success
             }
@@ -156,6 +158,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     UrlBase = spFileInfo?.SiteUrl,
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
+                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources)
                 });
                 if (spFileInfo == null)
                 {
@@ -178,7 +181,29 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AppHost = auditRecord.CopilotEventData.AppHost,
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
+                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources)
             });
+        }
+
+        /// <summary>
+        /// Serializes AccessedResources list to JSON for staging table storage
+        /// </summary>
+        private string SerializeAccessedResources(System.Collections.Generic.List<AccessedResource> accessedResources)
+        {
+            if (accessedResources == null || accessedResources.Count == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(accessedResources);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize AccessedResources");
+                return null;
+            }
         }
 
         /// <summary>
@@ -200,9 +225,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _copilotInsertsSP.Rows.Clear();
             _copilotInsertsTeams.Rows.Clear();
             _copilotInsertsChatsNoContext.Rows.Clear();
-            _totalFilesCount =0;
-            _totalMeetingsCount =0;
-            _totalChatOnlyCount =0;
+            _totalFilesCount = 0;
+            _totalMeetingsCount = 0;
+            _totalChatOnlyCount = 0;
         }
 
         private string GetSql(string tempTableName, string workloadSpecificScriptName)

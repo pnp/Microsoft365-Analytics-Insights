@@ -37,6 +37,20 @@ namespace Tests.UnitTests
             await db.SaveChangesAsync();
         }
 
+        async Task ClearAccessedResources(AnalyticsEntitiesContext db)
+        {
+            // Clear AccessedResources data for tests
+            if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() != 0)
+            {
+                db.CopilotEventAccessedResources.RemoveRange(db.CopilotEventAccessedResources);
+                db.CopilotAccessedResourceIds.RemoveRange(db.CopilotAccessedResourceIds);
+                db.CopilotAccessedResourceNames.RemoveRange(db.CopilotAccessedResourceNames);
+                db.CopilotAccessedResourceTypes.RemoveRange(db.CopilotAccessedResourceTypes);
+                db.CopilotSensitivityLabels.RemoveRange(db.CopilotSensitivityLabels);
+                await db.SaveChangesAsync();
+            }
+        }
+
         // Shared flow for saving Copilot events (normal + no permissions adaptor)
         // Returns list of CommonAuditEvent objects for created chat events (for further assertions if needed).
         private async Task<List<CommonAuditEvent>> ExecuteCopilotEventManagerSaveFlow(
@@ -267,11 +281,275 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Tests that AccessedResources are correctly saved to lookup tables and junction table
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesSaveTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip test if migration hasn't been run yet
+                if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                // Create a test event with AccessedResources
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test AccessedResources Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@user.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Save event with AccessedResources
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "resource-id-123",
+                                Name = "TestDocument.docx",
+                                Type = "Document",
+                                SensitivityLabelId = "label-456"
+                            },
+                            new AccessedResource
+                            {
+                                Id = "resource-id-789",
+                                Name = "AnotherDocument.xlsx",
+                                Type = "Spreadsheet",
+                                SensitivityLabelId = "label-789"
+                            }
+                        }
+                    }
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify lookup tables were populated
+                var resourceIds = await db.CopilotAccessedResourceIds.ToListAsync();
+                var resourceNames = await db.CopilotAccessedResourceNames.ToListAsync();
+                var resourceTypes = await db.CopilotAccessedResourceTypes.ToListAsync();
+                var sensitivityLabels = await db.CopilotSensitivityLabels.ToListAsync();
+
+                Assert.IsTrue(resourceIds.Any(r => r.ResourceId == "resource-id-123"), "Resource ID not saved");
+                Assert.IsTrue(resourceIds.Any(r => r.ResourceId == "resource-id-789"), "Resource ID not saved");
+                Assert.IsTrue(resourceNames.Any(r => r.Name == "TestDocument.docx"), "Resource name not saved");
+                Assert.IsTrue(resourceNames.Any(r => r.Name == "AnotherDocument.xlsx"), "Resource name not saved");
+                Assert.IsTrue(resourceTypes.Any(r => r.Name == "Document"), "Resource type not saved");
+                Assert.IsTrue(resourceTypes.Any(r => r.Name == "Spreadsheet"), "Resource type not saved");
+                Assert.IsTrue(sensitivityLabels.Any(l => l.LabelId == "label-456"), "Sensitivity label not saved");
+                Assert.IsTrue(sensitivityLabels.Any(l => l.LabelId == "label-789"), "Sensitivity label not saved");
+
+                // Verify junction table has records
+                var accessedResources = await db.CopilotEventAccessedResources
+                    .Include(ar => ar.ResourceId)
+                    .Include(ar => ar.ResourceName)
+                    .Include(ar => ar.ResourceType)
+                    .Include(ar => ar.SensitivityLabel)
+                    .Where(ar => ar.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(2, accessedResources.Count, "Expected 2 AccessedResource junction records");
+
+                // Verify first resource
+                var firstResource = accessedResources.FirstOrDefault(ar => ar.ResourceId?.ResourceId == "resource-id-123");
+                Assert.IsNotNull(firstResource, "First resource not found in junction table");
+                Assert.AreEqual("TestDocument.docx", firstResource.ResourceName?.Name);
+                Assert.AreEqual("Document", firstResource.ResourceType?.Name);
+                Assert.AreEqual("label-456", firstResource.SensitivityLabel?.LabelId);
+
+                // Verify second resource
+                var secondResource = accessedResources.FirstOrDefault(ar => ar.ResourceId?.ResourceId == "resource-id-789");
+                Assert.IsNotNull(secondResource, "Second resource not found in junction table");
+                Assert.AreEqual("AnotherDocument.xlsx", secondResource.ResourceName?.Name);
+                Assert.AreEqual("Spreadsheet", secondResource.ResourceType?.Name);
+                Assert.AreEqual("label-789", secondResource.SensitivityLabel?.LabelId);
+            }
+        }
+
+        /// <summary>
+        /// Tests that AccessedResources with null/missing properties are handled correctly
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesPartialDataTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip test if migration hasn't been run yet
+                if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Partial Data Test" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@partial.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Save event with partial AccessedResources (some properties null)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "resource-partial-123",
+                                Type = "Link"
+                                // Name and SensitivityLabelId are null
+                            }
+                        }
+                    }
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify the resource was saved even with partial data
+                var accessedResources = await db.CopilotEventAccessedResources
+                    .Include(ar => ar.ResourceId)
+                    .Include(ar => ar.ResourceName)
+                    .Include(ar => ar.ResourceType)
+                    .Include(ar => ar.SensitivityLabel)
+                    .Where(ar => ar.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(1, accessedResources.Count, "Expected 1 AccessedResource with partial data");
+
+                var resource = accessedResources.First();
+                Assert.IsNotNull(resource.ResourceId, "Resource ID should be populated");
+                Assert.AreEqual("resource-partial-123", resource.ResourceId.ResourceId);
+                Assert.IsNull(resource.ResourceName, "Resource name should be null");
+                Assert.IsNotNull(resource.ResourceType, "Resource type should be populated");
+                Assert.AreEqual("Link", resource.ResourceType.Name);
+                Assert.IsNull(resource.SensitivityLabel, "Sensitivity label should be null");
+            }
+        }
+
+        /// <summary>
+        /// Tests that duplicate AccessedResources are not created in lookup tables
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesDeduplicationTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip test if migration hasn't been run yet
+                if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                // Create two events with the same AccessedResource
+                var commonEvent1 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Dedup Test 1" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dedup1.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                var commonEvent2 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Dedup Test 2" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dedup2.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.AddRange(new[] { commonEvent1, commonEvent2 });
+                await db.SaveChangesAsync();
+
+                var sharedResource = new AccessedResource
+                {
+                    Id = "shared-resource-id",
+                    Name = "SharedDocument.docx",
+                    Type = "Document",
+                    SensitivityLabelId = "shared-label"
+                };
+
+                // Save first event
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource> { sharedResource }
+                    }
+                }, commonEvent1);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Save second event with same resource
+                copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource> { sharedResource }
+                    }
+                }, commonEvent2);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify lookup tables only have one entry each
+                var resourceIds = await db.CopilotAccessedResourceIds.Where(r => r.ResourceId == "shared-resource-id").ToListAsync();
+                var resourceNames = await db.CopilotAccessedResourceNames.Where(r => r.Name == "SharedDocument.docx").ToListAsync();
+                var resourceTypes = await db.CopilotAccessedResourceTypes.Where(r => r.Name == "Document").ToListAsync();
+                var sensitivityLabels = await db.CopilotSensitivityLabels.Where(l => l.LabelId == "shared-label").ToListAsync();
+
+                Assert.AreEqual(1, resourceIds.Count, "Should have only 1 unique resource ID");
+                Assert.AreEqual(1, resourceNames.Count, "Should have only 1 unique resource name");
+                Assert.AreEqual(1, resourceTypes.Count, "Should have only 1 unique resource type");
+                Assert.AreEqual(1, sensitivityLabels.Count, "Should have only 1 unique sensitivity label");
+
+                // But junction table should have 2 entries (one for each event)
+                var junctionRecords = await db.CopilotEventAccessedResources
+                    .Where(ar => ar.ResourceId.ResourceId == "shared-resource-id")
+                    .ToListAsync();
+
+                Assert.AreEqual(2, junctionRecords.Count, "Should have 2 junction records (one per event)");
+            }
+        }
+
+        /// <summary>
         /// Tests we can load metadata from Graph
         /// </summary>
-#if DEBUG
-        [TestMethod]
-#endif
         public async Task GraphCopilotMetadataLoaderTests()
         {
             var auth = new GraphAppIndentityOAuthContext(_logger, _config.ClientID, _config.TenantGUID.ToString(), _config.ClientSecret, string.Empty, false);

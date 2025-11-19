@@ -20,6 +20,7 @@ namespace Common.Entities.Entities.AuditLog
         [Column("agent_id")]
         public int? AgentId { get; set; }
         public CopilotAgent Agent { get; set; } = null;
+
     }
 
     /// <summary>
@@ -88,6 +89,76 @@ namespace Common.Entities.Entities.AuditLog
     {
         [Column("agent_id")]
         public string AgentID { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Lookup table for accessed resource IDs
+    /// </summary>
+    [Table("copilot_accessed_resource_ids")]
+    public class CopilotAccessedResourceId : AbstractEFEntity
+    {
+        [Column("resource_id")]
+        [MaxLength(500)]
+        public string ResourceId { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Lookup table for accessed resource names
+    /// </summary>
+    [Table("copilot_accessed_resource_names")]
+    public class CopilotAccessedResourceName : AbstractEFEntityWithName
+    {
+    }
+
+    /// <summary>
+    /// Lookup table for accessed resource types
+    /// </summary>
+    [Table("copilot_accessed_resource_types")]
+    public class CopilotAccessedResourceType : AbstractEFEntityWithName
+    {
+    }
+
+    /// <summary>
+    /// Lookup table for sensitivity label IDs
+    /// </summary>
+    [Table("sensitivity_labels")]
+    public class CopilotSensitivityLabel : AbstractEFEntity
+    {
+        [Column("label_id")]
+        [MaxLength(100)]
+        public string LabelId { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Junction table linking copilot events to accessed resources
+    /// </summary>
+    [Table("event_copilot_accessed_resources")]
+    public class CopilotEventAccessedResource : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [ForeignKey(nameof(ResourceId))]
+        [Column("resource_id_id")]
+        public int? ResourceIdId { get; set; }
+        public CopilotAccessedResourceId ResourceId { get; set; } = null;
+
+        [ForeignKey(nameof(ResourceName))]
+        [Column("resource_name_id")]
+        public int? ResourceNameId { get; set; }
+        public CopilotAccessedResourceName ResourceName { get; set; } = null;
+
+        [ForeignKey(nameof(ResourceType))]
+        [Column("resource_type_id")]
+        public int? ResourceTypeId { get; set; }
+        public CopilotAccessedResourceType ResourceType { get; set; } = null;
+
+        [ForeignKey(nameof(SensitivityLabel))]
+        [Column("sensitivity_label_id")]
+        public int? SensitivityLabelId { get; set; }
+        public CopilotSensitivityLabel SensitivityLabel { get; set; } = null;
     }
 
 }
