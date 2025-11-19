@@ -21,12 +21,19 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private AutoThrottleHttpClient _httpClient;
         private readonly ILogger _telemetry;
         private readonly string _tenantId;
+        private int _reportDownloadErrors = 0;
+
         public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger telemetry, string tenantId)
         {
             _httpClient = httpClient;
             _telemetry = telemetry;
             _tenantId = tenantId;
         }
+
+        /// <summary>
+        /// Gets the count of report download errors that occurred
+        /// </summary>
+        public int ReportDownloadErrorCount => _reportDownloadErrors;
 
         /// <summary>
         /// Load full activity reports from summary links
@@ -44,6 +51,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             }
             catch (HttpRequestException ex)
             {
+                _reportDownloadErrors++;
                 _telemetry.LogError(ex, $"Got error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
                 return new WebActivityReportSet();
             }
@@ -118,11 +126,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 {
                     try
                     {
-                        thisAuditLogReport = JsonConvert.DeserializeObject<CopilotAuditLogContent>(logJson);
-                        // We want to store the CopilotEventData but its current schema may change in the future. Keeping the full CopilotEventData object for now.
-                        var asCopilotReport = (CopilotAuditLogContent)thisAuditLogReport;
-                        dynamic obj = JsonConvert.DeserializeObject<dynamic>(logJson);
-                        asCopilotReport.EventRaw = JsonConvert.SerializeObject(obj.CopilotEventData);
+                        thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
                     }
                     catch (JsonReaderException)
                     {

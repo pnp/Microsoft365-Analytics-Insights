@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 {
@@ -57,11 +58,30 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 }
 
             });
+
+            // Capture error counts from loaders
+            if (ContentMetaDataLoader is WebContentMetaDataLoader webMetaLoader)
+            {
+                allStats.MetadataDownloadErrors = webMetaLoader.MetadataDownloadErrorCount;
+            }
+            if (ReportLoader is ActivityReportWebLoader webReportLoader)
+            {
+                allStats.ReportDownloadErrors = webReportLoader.ReportDownloadErrorCount;
+            }
+
 #if DEBUG
             Console.WriteLine($"DEBUG: Got {allStats.Total.ToString("N0")} reports from {allSummaries.Count.ToString("N0")} summary reports");
 #endif
             _telemetry.LogInformation($"Audit events import: Got {allStats.Total.ToString("N0")} audit events from {allSummaries.Count.ToString("N0")} summary reports. " +
                 $"{allStats.Imported} imported, {allStats.ProcessedAlready} processed already, {allStats.URLsOutOfScope} URLs out of scope of SharePoint site import whitelist (org_urls)");
+
+            // Log warning if there were download errors
+            if (allStats.MetadataDownloadErrors > 0 || allStats.ReportDownloadErrors > 0)
+            {
+                _telemetry.LogWarning($"Audit events import: DOWNLOAD ERRORS DETECTED - {allStats.MetadataDownloadErrors} metadata download failures, " +
+                    $"{allStats.ReportDownloadErrors} report download failures. Some data may be missing from this import cycle. " +
+                    $"These items will be retried on the next import cycle.");
+            }
 
             timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
 

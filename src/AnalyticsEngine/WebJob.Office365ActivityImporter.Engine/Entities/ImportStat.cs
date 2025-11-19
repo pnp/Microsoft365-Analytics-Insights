@@ -16,6 +16,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         public int DownloadErrors { get; set; }
         public int Total { get; set; }
 
+        /// <summary>
+        /// Number of metadata/summary download failures from the Activity API
+        /// </summary>
+        public int MetadataDownloadErrors { get; set; }
+
+        /// <summary>
+        /// Number of full report download failures from the Activity API
+        /// </summary>
+        public int ReportDownloadErrors { get; set; }
+
         public List<TimePeriod> ForTimeSlots { get; set; }
 
         public void AddStats(ImportStat statsToAdd)
@@ -28,6 +38,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.Imported += statsToAdd.Imported;
             this.URLsOutOfScope += statsToAdd.URLsOutOfScope;
             this.DownloadErrors += statsToAdd.DownloadErrors;
+            this.MetadataDownloadErrors += statsToAdd.MetadataDownloadErrors;
+            this.ReportDownloadErrors += statsToAdd.ReportDownloadErrors;
             this.Total += statsToAdd.Total;
         }
 
@@ -39,6 +51,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
                 $"URLs out of scope (orgs table): {this.URLsOutOfScope.ToString("n0")}, " +
                 $"users out of scope: {this.UsersOutOfScope.ToString("n0")}, " +
                 $"errors: {this.DownloadErrors.ToString("n0")}, " +
+                $"metadata download errors: {this.MetadataDownloadErrors.ToString("n0")}, " +
+                $"report download errors: {this.ReportDownloadErrors.ToString("n0")}, " +
                 $"total: {this.Total.ToString("n0")}";
         }
     }

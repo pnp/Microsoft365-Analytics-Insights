@@ -20,6 +20,7 @@
             AddColumn("dbo.event_copilot_chats", "agent_id", c => c.Int());
             CreateIndex("dbo.event_copilot_chats", "agent_id");
             AddForeignKey("dbo.event_copilot_chats", "agent_id", "dbo.copilot_agents", "id");
+            Console.WriteLine("DB SCHEMA: Applied 'Copilot Agents' succesfully.");
         }
         
         public override void Down()
