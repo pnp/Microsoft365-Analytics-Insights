@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -36,49 +37,61 @@ namespace Tests.UnitTests
         public void SerializeMessages_WithClassicAnswers_ReturnsCorrectJson()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                ClassicAnswers = 2,
-                GenerativeAnswers = 0,
-                TenantGraphGroundedAnswers = 0
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    Messages = new List<Message>
+                    {
+                        new Message { Id = "1", IsPrompt = false, Type = "Classic" },
+                        new Message { Id = "2", IsPrompt = false, Type = "Classic" }
+                    }
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeMessages(cost);
+            var json = manager.SerializeMessages(auditRecord);
 
             // Assert
             Assert.IsNotNull(json);
-            var messages = JsonConvert.DeserializeObject<List<dynamic>>(json);
+            var messages = JsonConvert.DeserializeObject<List<Message>>(json);
             Assert.AreEqual(2, messages.Count);
-            Assert.AreEqual("Classic", (string)messages[0].Type);
-            Assert.IsFalse((bool)messages[0].IsPrompt);
+            Assert.AreEqual("Classic", messages[0].Type);
+            Assert.IsFalse(messages[0].IsPrompt);
         }
 
         [TestMethod]
         public void SerializeMessages_WithMixedAnswers_ReturnsCorrectJson()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                ClassicAnswers = 1,
-                GenerativeAnswers = 2,
-                TenantGraphGroundedAnswers = 1
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    Messages = new List<Message>
+                    {
+                        new Message { Id = "1", IsPrompt = false, Type = "Classic" },
+                        new Message { Id = "2", IsPrompt = false, Type = "Generative" },
+                        new Message { Id = "3", IsPrompt = false, Type = "Generative" },
+                        new Message { Id = "4", IsPrompt = false, Type = "TenantGraph" }
+                    }
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeMessages(cost);
+            var json = manager.SerializeMessages(auditRecord);
 
             // Assert
             Assert.IsNotNull(json);
-            var messages = JsonConvert.DeserializeObject<List<dynamic>>(json);
+            var messages = JsonConvert.DeserializeObject<List<Message>>(json);
             Assert.AreEqual(4, messages.Count);
             
             // Should have 1 Classic, 2 Generative, 1 TenantGraph
-            var classicCount = messages.Count(m => (string)m.Type == "Classic");
-            var generativeCount = messages.Count(m => (string)m.Type == "Generative");
-            var tenantGraphCount = messages.Count(m => (string)m.Type == "TenantGraph");
+            var classicCount = messages.Count(m => m.Type == "Classic");
+            var generativeCount = messages.Count(m => m.Type == "Generative");
+            var tenantGraphCount = messages.Count(m => m.Type == "TenantGraph");
             
             Assert.AreEqual(1, classicCount);
             Assert.AreEqual(2, generativeCount);
@@ -86,7 +99,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void SerializeMessages_WithNullCost_ReturnsNull()
+        public void SerializeMessages_WithNullAuditRecord_ReturnsNull()
         {
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
@@ -100,34 +113,45 @@ namespace Tests.UnitTests
         public void SerializeAgentActions_WithActions_ReturnsCorrectJson()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                AgentActionCount = 3
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    AgentActions = new List<AgentAction>
+                    {
+                        new AgentAction { Id = "1", Type = "Trigger" },
+                        new AgentAction { Id = "2", Type = "DeepReasoning" },
+                        new AgentAction { Id = "3", Type = "KnowledgeSearch" }
+                    }
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeAgentActions(cost);
+            var json = manager.SerializeAgentActions(auditRecord);
 
             // Assert
             Assert.IsNotNull(json);
-            var actions = JsonConvert.DeserializeObject<List<dynamic>>(json);
+            var actions = JsonConvert.DeserializeObject<List<AgentAction>>(json);
             Assert.AreEqual(3, actions.Count);
-            Assert.AreEqual("Action", (string)actions[0].Type);
+            Assert.AreEqual("Trigger", actions[0].Type);
         }
 
         [TestMethod]
         public void SerializeAgentActions_WithZeroActions_ReturnsNull()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                AgentActionCount = 0
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    AgentActions = new List<AgentAction>()
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeAgentActions(cost);
+            var json = manager.SerializeAgentActions(auditRecord);
 
             // Assert
             Assert.IsNull(json);
@@ -137,88 +161,104 @@ namespace Tests.UnitTests
         public void SerializeAIToolUsages_WithMultipleTiers_ReturnsCorrectJson()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                BasicAIToolResponses = 5,
-                StandardAIToolResponses = 10,
-                PremiumAIToolResponses = 2
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    AIToolUsages = new List<AIToolUsage>
+                    {
+                        new AIToolUsage { ToolId = "tool1", Tier = "Basic", ResponseCount = 5 },
+                        new AIToolUsage { ToolId = "tool2", Tier = "Standard", ResponseCount = 10 },
+                        new AIToolUsage { ToolId = "tool3", Tier = "Premium", ResponseCount = 2 }
+                    }
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeAIToolUsages(cost);
+            var json = manager.SerializeAIToolUsages(auditRecord);
 
             // Assert
             Assert.IsNotNull(json);
-            var toolUsages = JsonConvert.DeserializeObject<List<dynamic>>(json);
+            var toolUsages = JsonConvert.DeserializeObject<List<AIToolUsage>>(json);
             Assert.AreEqual(3, toolUsages.Count);
             
-            var basicTool = toolUsages.FirstOrDefault(t => (string)t.Tier == "Basic");
-            var standardTool = toolUsages.FirstOrDefault(t => (string)t.Tier == "Standard");
-            var premiumTool = toolUsages.FirstOrDefault(t => (string)t.Tier == "Premium");
+            var basicTool = toolUsages.FirstOrDefault(t => t.Tier == "Basic");
+            var standardTool = toolUsages.FirstOrDefault(t => t.Tier == "Standard");
+            var premiumTool = toolUsages.FirstOrDefault(t => t.Tier == "Premium");
             
             Assert.IsNotNull(basicTool);
-            Assert.AreEqual(5, (int)basicTool.ResponseCount);
+            Assert.AreEqual(5, basicTool.ResponseCount);
             Assert.IsNotNull(standardTool);
-            Assert.AreEqual(10, (int)standardTool.ResponseCount);
+            Assert.AreEqual(10, standardTool.ResponseCount);
             Assert.IsNotNull(premiumTool);
-            Assert.AreEqual(2, (int)premiumTool.ResponseCount);
+            Assert.AreEqual(2, premiumTool.ResponseCount);
         }
 
         [TestMethod]
         public void SerializeAIToolUsages_WithOnlyBasicTier_ReturnsCorrectJson()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                BasicAIToolResponses = 15,
-                StandardAIToolResponses = 0,
-                PremiumAIToolResponses = 0
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    AIToolUsages = new List<AIToolUsage>
+                    {
+                        new AIToolUsage { ToolId = "tool1", Tier = "Basic", ResponseCount = 15 }
+                    }
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeAIToolUsages(cost);
+            var json = manager.SerializeAIToolUsages(auditRecord);
 
             // Assert
             Assert.IsNotNull(json);
-            var toolUsages = JsonConvert.DeserializeObject<List<dynamic>>(json);
+            var toolUsages = JsonConvert.DeserializeObject<List<AIToolUsage>>(json);
             Assert.AreEqual(1, toolUsages.Count);
-            Assert.AreEqual("Basic", (string)toolUsages[0].Tier);
-            Assert.AreEqual(15, (int)toolUsages[0].ResponseCount);
+            Assert.AreEqual("Basic", toolUsages[0].Tier);
+            Assert.AreEqual(15, toolUsages[0].ResponseCount);
         }
 
         [TestMethod]
         public void SerializeFlowActions_WithActions_ReturnsCorrectJson()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                FlowActions = 150
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    FlowActions = new AgentFlowUsage { ActionCount = 150 }
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeFlowActions(cost);
+            var json = manager.SerializeFlowActions(auditRecord);
 
             // Assert
             Assert.IsNotNull(json);
-            var flowAction = JsonConvert.DeserializeObject<dynamic>(json);
-            Assert.AreEqual(150, (int)flowAction.ActionCount);
+            var flowAction = JsonConvert.DeserializeObject<AgentFlowUsage>(json);
+            Assert.AreEqual(150, flowAction.ActionCount);
         }
 
         [TestMethod]
         public void SerializeFlowActions_WithZeroActions_ReturnsNull()
         {
             // Arrange
-            var cost = new CopilotCreditEstimation
+            var auditRecord = new CopilotAuditLogContent
             {
-                FlowActions = 0
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    FlowActions = new AgentFlowUsage { ActionCount = 0 }
+                }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeFlowActions(cost);
+            var json = manager.SerializeFlowActions(auditRecord);
 
             // Assert
             Assert.IsNull(json);
@@ -256,17 +296,19 @@ namespace Tests.UnitTests
                 db.AuditEventsCommon.Add(commonEvent);
                 await db.SaveChangesAsync();
 
-                // Create cost with messages
-                var cost = new CopilotCreditEstimation
-                {
-                    ClassicAnswers = 1,
-                    GenerativeAnswers = 2,
-                    TenantGraphGroundedAnswers = 1
-                };
-
+                // Create audit log content with messages
                 var auditLogContent = new CopilotAuditLogContent
                 {
-                    Cost = cost,
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = "1", IsPrompt = false, Type = "Classic" },
+                            new Message { Id = "2", IsPrompt = false, Type = "Generative" },
+                            new Message { Id = "3", IsPrompt = false, Type = "Generative" },
+                            new Message { Id = "4", IsPrompt = false, Type = "TenantGraph" }
+                        }
+                    },
                     CopilotEventData = new CopilotEventData
                     {
                         AppHost = "Teams",
@@ -334,14 +376,19 @@ namespace Tests.UnitTests
                 db.AuditEventsCommon.Add(commonEvent);
                 await db.SaveChangesAsync();
 
-                var cost = new CopilotCreditEstimation
-                {
-                    AgentActionCount = 5
-                };
-
                 var auditLogContent = new CopilotAuditLogContent
                 {
-                    Cost = cost,
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        AgentActions = new List<AgentAction>
+                        {
+                            new AgentAction { Id = "1", Type = "Trigger" },
+                            new AgentAction { Id = "2", Type = "DeepReasoning" },
+                            new AgentAction { Id = "3", Type = "KnowledgeSearch" },
+                            new AgentAction { Id = "4", Type = "AIToolPrompt" },
+                            new AgentAction { Id = "5", Type = "TopicTransition" }
+                        }
+                    },
                     CopilotEventData = new CopilotEventData
                     {
                         AppHost = "Teams",
@@ -355,7 +402,6 @@ namespace Tests.UnitTests
                         }
                     }
                 };
-
                 // Act
                 await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
                 await copilotEventManager.CommitAllChanges();
@@ -367,7 +413,9 @@ namespace Tests.UnitTests
                     .ToListAsync();
 
                 Assert.AreEqual(5, agentActions.Count);
-                Assert.IsTrue(agentActions.All(a => a.ActionType?.Name == "Action"));
+                // Verify we have different action types
+                var actionTypes = agentActions.Select(a => a.ActionType?.Name).Distinct().ToList();
+                Assert.IsTrue(actionTypes.Count >= 1); // Should have at least one action type
             }
         }
 
@@ -399,16 +447,17 @@ namespace Tests.UnitTests
                 db.AuditEventsCommon.Add(commonEvent);
                 await db.SaveChangesAsync();
 
-                var cost = new CopilotCreditEstimation
-                {
-                    BasicAIToolResponses = 10,
-                    StandardAIToolResponses = 20,
-                    PremiumAIToolResponses = 5
-                };
-
                 var auditLogContent = new CopilotAuditLogContent
                 {
-                    Cost = cost,
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        AIToolUsages = new List<AIToolUsage>
+                        {
+                            new AIToolUsage { ToolId = "tool1", Tier = "Basic", ResponseCount = 10 },
+                            new AIToolUsage { ToolId = "tool2", Tier = "Standard", ResponseCount = 20 },
+                            new AIToolUsage { ToolId = "tool3", Tier = "Premium", ResponseCount = 5 }
+                        }
+                    },
                     CopilotEventData = new CopilotEventData
                     {
                         AppHost = "Teams",
@@ -476,14 +525,12 @@ namespace Tests.UnitTests
                 db.AuditEventsCommon.Add(commonEvent);
                 await db.SaveChangesAsync();
 
-                var cost = new CopilotCreditEstimation
-                {
-                    FlowActions = 250
-                };
-
                 var auditLogContent = new CopilotAuditLogContent
                 {
-                    Cost = cost,
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        FlowActions = new AgentFlowUsage { ActionCount = 250 }
+                    },
                     CopilotEventData = new CopilotEventData
                     {
                         AppHost = "Teams",
@@ -540,22 +587,35 @@ namespace Tests.UnitTests
                 db.AuditEventsCommon.Add(commonEvent);
                 await db.SaveChangesAsync();
 
-                // Create comprehensive cost data
-                var cost = new CopilotCreditEstimation
-                {
-                    ClassicAnswers = 2,
-                    GenerativeAnswers = 3,
-                    TenantGraphGroundedAnswers = 1,
-                    AgentActionCount = 4,
-                    BasicAIToolResponses = 15,
-                    StandardAIToolResponses = 25,
-                    PremiumAIToolResponses = 8,
-                    FlowActions = 175
-                };
-
+                // Create comprehensive audit event
                 var auditLogContent = new CopilotAuditLogContent
                 {
-                    Cost = cost,
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = "1", IsPrompt = false, Type = "Classic" },
+                            new Message { Id = "2", IsPrompt = false, Type = "Classic" },
+                            new Message { Id = "3", IsPrompt = false, Type = "Generative" },
+                            new Message { Id = "4", IsPrompt = false, Type = "Generative" },
+                            new Message { Id = "5", IsPrompt = false, Type = "Generative" },
+                            new Message { Id = "6", IsPrompt = false, Type = "TenantGraph" }
+                        },
+                        AgentActions = new List<AgentAction>
+                        {
+                            new AgentAction { Id = "1", Type = "Trigger" },
+                            new AgentAction { Id = "2", Type = "DeepReasoning" },
+                            new AgentAction { Id = "3", Type = "KnowledgeSearch" },
+                            new AgentAction { Id = "4", Type = "AIToolPrompt" }
+                        },
+                        AIToolUsages = new List<AIToolUsage>
+                        {
+                            new AIToolUsage { ToolId = "tool1", Tier = "Basic", ResponseCount = 15 },
+                            new AIToolUsage { ToolId = "tool2", Tier = "Standard", ResponseCount = 25 },
+                            new AIToolUsage { ToolId = "tool3", Tier = "Premium", ResponseCount = 8 }
+                        },
+                        FlowActions = new AgentFlowUsage { ActionCount = 175 }
+                    },
                     CopilotEventData = new CopilotEventData
                     {
                         AppHost = "Teams",

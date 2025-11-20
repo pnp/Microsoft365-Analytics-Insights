@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
@@ -133,10 +134,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord.Cost),
-                    AgentActionsJson = SerializeAgentActions(auditRecord.Cost),
-                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord.Cost),
-                    FlowActionsJson = SerializeFlowActions(auditRecord.Cost)
+                    MessagesJson = SerializeMessages(auditRecord),
+                    AgentActionsJson = SerializeAgentActions(auditRecord),
+                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord),
+                    FlowActionsJson = SerializeFlowActions(auditRecord)
                 });
                 return true; // staged regardless of meetingInfo retrieval success
             }
@@ -163,10 +164,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord.Cost),
-                    AgentActionsJson = SerializeAgentActions(auditRecord.Cost),
-                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord.Cost),
-                    FlowActionsJson = SerializeFlowActions(auditRecord.Cost)
+                    MessagesJson = SerializeMessages(auditRecord),
+                    AgentActionsJson = SerializeAgentActions(auditRecord),
+                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord),
+                    FlowActionsJson = SerializeFlowActions(auditRecord)
                 });
                 if (spFileInfo == null)
                 {
@@ -190,10 +191,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
                 AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources.Where(r=> r.IsValidOffice365Data)),
-                MessagesJson = SerializeMessages(auditRecord.Cost),
-                AgentActionsJson = SerializeAgentActions(auditRecord.Cost),
-                AIToolUsagesJson = SerializeAIToolUsages(auditRecord.Cost),
-                FlowActionsJson = SerializeFlowActions(auditRecord.Cost)
+                MessagesJson = SerializeMessages(auditRecord),
+                AgentActionsJson = SerializeAgentActions(auditRecord),
+                AIToolUsagesJson = SerializeAIToolUsages(auditRecord),
+                FlowActionsJson = SerializeFlowActions(auditRecord)
             });
         }
 
@@ -219,131 +220,101 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         }
 
         /// <summary>
-        /// Serializes Messages from CopilotCreditEstimation to JSON for staging table storage.
-        /// Reconstructs message data from the credit estimation analysis.
+        /// Serializes Messages from CopilotAuditLogContent to JSON for staging table storage.
+        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
         /// </summary>
-        internal string SerializeMessages(CopilotCreditEstimation cost)
+        internal string SerializeMessages(CopilotAuditLogContent auditRecord)
         {
-            if (cost == null)
+            if (auditRecord?.ParsedAuditEvent?.Messages == null || auditRecord.ParsedAuditEvent.Messages.Count == 0)
             {
                 return null;
             }
 
             try
             {
-                // Build message list from cost analysis
-                var messages = new List<object>();
-                
-                // Add classic answers
-                for (int i = 0; i < cost.ClassicAnswers; i++)
-                {
-                    messages.Add(new { Type = "Classic", IsPrompt = false });
-                }
-                
-                // Add generative answers
-                for (int i = 0; i < cost.GenerativeAnswers; i++)
-                {
-                    messages.Add(new { Type = "Generative", IsPrompt = false });
-                }
-                
-                // Add tenant graph grounded answers
-                for (int i = 0; i < cost.TenantGraphGroundedAnswers; i++)
-                {
-                    messages.Add(new { Type = "TenantGraph", IsPrompt = false });
-                }
-
-                return messages.Count > 0 ? JsonConvert.SerializeObject(messages) : null;
+                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.Messages);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to serialize Messages");
+                _logger.LogWarning(ex, "Failed to serialize Messages from audit record");
                 return null;
             }
         }
 
         /// <summary>
-        /// Serializes AgentActions from CopilotCreditEstimation to JSON for staging table storage
+        /// Serializes AgentActions from CopilotAuditLogContent to JSON for staging table storage.
+        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
         /// </summary>
-        internal string SerializeAgentActions(CopilotCreditEstimation cost)
+        internal string SerializeAgentActions(CopilotAuditLogContent auditRecord)
         {
-            if (cost == null || cost.AgentActionCount == 0)
+            if (auditRecord?.ParsedAuditEvent == null)
             {
                 return null;
             }
 
             try
             {
-                // Build agent action list from cost analysis
-                var actions = new List<object>();
-                for (int i = 0; i < cost.AgentActionCount; i++)
+                // Check for new AgentActions property first
+                if (auditRecord.ParsedAuditEvent.AgentActions != null && auditRecord.ParsedAuditEvent.AgentActions.Count > 0)
                 {
-                    actions.Add(new { Type = "Action" });
+                    return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.AgentActions);
+                }
+                
+                // Fallback to AISystemPlugin for backwards compatibility
+                if (auditRecord.ParsedAuditEvent.AISystemPlugin != null && auditRecord.ParsedAuditEvent.AISystemPlugin.Count > 0)
+                {
+                    return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.AISystemPlugin);
                 }
 
-                return JsonConvert.SerializeObject(actions);
+                return null;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to serialize AgentActions");
+                _logger.LogWarning(ex, "Failed to serialize AgentActions from audit record");
                 return null;
             }
         }
 
         /// <summary>
-        /// Serializes AIToolUsages from CopilotCreditEstimation to JSON for staging table storage
+        /// Serializes AIToolUsages from CopilotAuditLogContent to JSON for staging table storage.
+        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
         /// </summary>
-        internal string SerializeAIToolUsages(CopilotCreditEstimation cost)
+        internal string SerializeAIToolUsages(CopilotAuditLogContent auditRecord)
         {
-            if (cost == null)
+            if (auditRecord?.ParsedAuditEvent?.AIToolUsages == null || auditRecord.ParsedAuditEvent.AIToolUsages.Count == 0)
             {
                 return null;
             }
 
             try
             {
-                var toolUsages = new List<object>();
-                
-                if (cost.BasicAIToolResponses > 0)
-                {
-                    toolUsages.Add(new { Tier = "Basic", ResponseCount = cost.BasicAIToolResponses });
-                }
-                
-                if (cost.StandardAIToolResponses > 0)
-                {
-                    toolUsages.Add(new { Tier = "Standard", ResponseCount = cost.StandardAIToolResponses });
-                }
-                
-                if (cost.PremiumAIToolResponses > 0)
-                {
-                    toolUsages.Add(new { Tier = "Premium", ResponseCount = cost.PremiumAIToolResponses });
-                }
-
-                return toolUsages.Count > 0 ? JsonConvert.SerializeObject(toolUsages) : null;
+                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.AIToolUsages);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to serialize AIToolUsages");
+                _logger.LogWarning(ex, "Failed to serialize AIToolUsages from audit record");
                 return null;
             }
         }
 
         /// <summary>
-        /// Serializes FlowActions from CopilotCreditEstimation to JSON for staging table storage
+        /// Serializes FlowActions from CopilotAuditLogContent to JSON for staging table storage.
+        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
         /// </summary>
-        internal string SerializeFlowActions(CopilotCreditEstimation cost)
+        internal string SerializeFlowActions(CopilotAuditLogContent auditRecord)
         {
-            if (cost == null || cost.FlowActions == 0)
+            if (auditRecord?.ParsedAuditEvent?.FlowActions == null || auditRecord.ParsedAuditEvent.FlowActions.ActionCount == 0)
             {
                 return null;
             }
 
             try
             {
-                return JsonConvert.SerializeObject(new { ActionCount = cost.FlowActions });
+                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.FlowActions);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to serialize FlowActions");
+                _logger.LogWarning(ex, "Failed to serialize FlowActions from audit record");
                 return null;
             }
         }
