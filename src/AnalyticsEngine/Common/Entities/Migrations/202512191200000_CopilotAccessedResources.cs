@@ -9,7 +9,7 @@ namespace Common.Entities.Migrations
         {
             // ===== Accessed Resources Tables =====
             CreateTable(
-                "dbo.copilot_accessed_resource_ids",
+                "dbo.copilot_event_accessed_resource_ids",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -18,7 +18,7 @@ namespace Common.Entities.Migrations
                 .PrimaryKey(t => t.id);
             
             CreateTable(
-                "dbo.copilot_accessed_resource_names",
+                "dbo.copilot_event_accessed_resource_names",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -27,7 +27,7 @@ namespace Common.Entities.Migrations
                 .PrimaryKey(t => t.id);
             
             CreateTable(
-                "dbo.copilot_accessed_resource_types",
+                "dbo.copilot_event_accessed_resource_types",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -36,7 +36,7 @@ namespace Common.Entities.Migrations
                 .PrimaryKey(t => t.id);
             
             CreateTable(
-                "dbo.sensitivity_labels",
+                "dbo.copilot_event_sensitivity_labels",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -45,7 +45,7 @@ namespace Common.Entities.Migrations
                 .PrimaryKey(t => t.id);
             
             CreateTable(
-                "dbo.event_copilot_accessed_resources",
+                "dbo.copilot_event_accessed_resources",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -57,10 +57,10 @@ namespace Common.Entities.Migrations
                     })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .ForeignKey("dbo.copilot_accessed_resource_ids", t => t.resource_id_id)
-                .ForeignKey("dbo.copilot_accessed_resource_names", t => t.resource_name_id)
-                .ForeignKey("dbo.copilot_accessed_resource_types", t => t.resource_type_id)
-                .ForeignKey("dbo.sensitivity_labels", t => t.sensitivity_label_id)
+                .ForeignKey("dbo.copilot_event_accessed_resource_ids", t => t.resource_id_id)
+                .ForeignKey("dbo.copilot_event_accessed_resource_names", t => t.resource_name_id)
+                .ForeignKey("dbo.copilot_event_accessed_resource_types", t => t.resource_type_id)
+                .ForeignKey("dbo.copilot_event_sensitivity_labels", t => t.sensitivity_label_id)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.resource_id_id)
                 .Index(t => t.resource_name_id)
@@ -70,7 +70,7 @@ namespace Common.Entities.Migrations
 
             // ===== Messages Tables =====
             CreateTable(
-                "dbo.copilot_message_types",
+                "dbo.copilot_event_message_types",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -80,7 +80,7 @@ namespace Common.Entities.Migrations
                 .Index(t => t.name, unique: true);
             
             CreateTable(
-                "dbo.event_copilot_messages",
+                "dbo.copilot_event_messages",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -91,14 +91,14 @@ namespace Common.Entities.Migrations
                     })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .ForeignKey("dbo.copilot_message_types", t => t.message_type_id)
+                .ForeignKey("dbo.copilot_event_message_types", t => t.message_type_id)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.message_id)
                 .Index(t => t.message_type_id);
 
             // ===== Agent Actions Tables =====
             CreateTable(
-                "dbo.copilot_agent_action_types",
+                "dbo.copilot_event_agent_action_types",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -108,7 +108,7 @@ namespace Common.Entities.Migrations
                 .Index(t => t.name, unique: true);
             
             CreateTable(
-                "dbo.event_copilot_agent_actions",
+                "dbo.copilot_event_agent_actions",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -118,7 +118,7 @@ namespace Common.Entities.Migrations
                     })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .ForeignKey("dbo.copilot_agent_action_types", t => t.action_type_id)
+                .ForeignKey("dbo.copilot_event_agent_action_types", t => t.action_type_id)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.action_id)
                 .Index(t => t.action_type_id);
@@ -126,7 +126,7 @@ namespace Common.Entities.Migrations
 
             // ===== AI Tool Usages Tables =====
             CreateTable(
-                "dbo.copilot_ai_tool_tiers",
+                "dbo.copilot_event_ai_tool_tiers",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -136,7 +136,7 @@ namespace Common.Entities.Migrations
                 .Index(t => t.name, unique: true);
             
             CreateTable(
-                "dbo.event_copilot_ai_tool_usages",
+                "dbo.copilot_event_ai_tool_usages",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -147,13 +147,13 @@ namespace Common.Entities.Migrations
                     })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .ForeignKey("dbo.copilot_ai_tool_tiers", t => t.tier_id)
+                .ForeignKey("dbo.copilot_event_ai_tool_tiers", t => t.tier_id)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.tier_id);
 
             // ===== Flow Actions Table =====
             CreateTable(
-                "dbo.event_copilot_flow_actions",
+                "dbo.copilot_event_flow_actions",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
@@ -170,55 +170,55 @@ namespace Common.Entities.Migrations
         public override void Down()
         {
             // ===== Drop Flow Actions =====
-            DropForeignKey("dbo.event_copilot_flow_actions", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.event_copilot_flow_actions", new[] { "copilot_chat_id" });
-            DropTable("dbo.event_copilot_flow_actions");
+            DropForeignKey("dbo.copilot_event_flow_actions", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.copilot_event_flow_actions", new[] { "copilot_chat_id" });
+            DropTable("dbo.copilot_event_flow_actions");
             
             // ===== Drop AI Tool Usages =====
-            DropForeignKey("dbo.event_copilot_ai_tool_usages", "tier_id", "dbo.copilot_ai_tool_tiers");
-            DropForeignKey("dbo.event_copilot_ai_tool_usages", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.event_copilot_ai_tool_usages", new[] { "tier_id" });
-            DropIndex("dbo.event_copilot_ai_tool_usages", new[] { "copilot_chat_id" });
-            DropTable("dbo.event_copilot_ai_tool_usages");
-            DropIndex("dbo.copilot_ai_tool_tiers", new[] { "name" });
-            DropTable("dbo.copilot_ai_tool_tiers");
+            DropForeignKey("dbo.copilot_event_ai_tool_usages", "tier_id", "dbo.copilot_event_ai_tool_tiers");
+            DropForeignKey("dbo.copilot_event_ai_tool_usages", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.copilot_event_ai_tool_usages", new[] { "tier_id" });
+            DropIndex("dbo.copilot_event_ai_tool_usages", new[] { "copilot_chat_id" });
+            DropTable("dbo.copilot_event_ai_tool_usages");
+            DropIndex("dbo.copilot_event_ai_tool_tiers", new[] { "name" });
+            DropTable("dbo.copilot_event_ai_tool_tiers");
             
             // ===== Drop Agent Actions =====
-            DropForeignKey("dbo.event_copilot_agent_actions", "action_type_id", "dbo.copilot_agent_action_types");
-            DropForeignKey("dbo.event_copilot_agent_actions", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.event_copilot_agent_actions", new[] { "action_type_id" });
-            DropIndex("dbo.event_copilot_agent_actions", new[] { "action_id" });
-            DropIndex("dbo.event_copilot_agent_actions", new[] { "copilot_chat_id" });
-            DropTable("dbo.event_copilot_agent_actions");
-            DropIndex("dbo.copilot_agent_action_types", new[] { "name" });
-            DropTable("dbo.copilot_agent_action_types");
+            DropForeignKey("dbo.copilot_event_agent_actions", "action_type_id", "dbo.copilot_event_agent_action_types");
+            DropForeignKey("dbo.copilot_event_agent_actions", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.copilot_event_agent_actions", new[] { "action_type_id" });
+            DropIndex("dbo.copilot_event_agent_actions", new[] { "action_id" });
+            DropIndex("dbo.copilot_event_agent_actions", new[] { "copilot_chat_id" });
+            DropTable("dbo.copilot_event_agent_actions");
+            DropIndex("dbo.copilot_event_agent_action_types", new[] { "name" });
+            DropTable("dbo.copilot_event_agent_action_types");
             
             // ===== Drop Messages =====
-            DropForeignKey("dbo.event_copilot_messages", "message_type_id", "dbo.copilot_message_types");
-            DropForeignKey("dbo.event_copilot_messages", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.event_copilot_messages", new[] { "message_type_id" });
-            DropIndex("dbo.event_copilot_messages", new[] { "message_id" });
-            DropIndex("dbo.event_copilot_messages", new[] { "copilot_chat_id" });
-            DropTable("dbo.event_copilot_messages");
-            DropIndex("dbo.copilot_message_types", new[] { "name" });
-            DropTable("dbo.copilot_message_types");
+            DropForeignKey("dbo.copilot_event_messages", "message_type_id", "dbo.copilot_event_message_types");
+            DropForeignKey("dbo.copilot_event_messages", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.copilot_event_messages", new[] { "message_type_id" });
+            DropIndex("dbo.copilot_event_messages", new[] { "message_id" });
+            DropIndex("dbo.copilot_event_messages", new[] { "copilot_chat_id" });
+            DropTable("dbo.copilot_event_messages");
+            DropIndex("dbo.copilot_event_message_types", new[] { "name" });
+            DropTable("dbo.copilot_event_message_types");
             
             // ===== Drop Accessed Resources =====
-            DropForeignKey("dbo.event_copilot_accessed_resources", "sensitivity_label_id", "dbo.sensitivity_labels");
-            DropForeignKey("dbo.event_copilot_accessed_resources", "resource_type_id", "dbo.copilot_accessed_resource_types");
-            DropForeignKey("dbo.event_copilot_accessed_resources", "resource_name_id", "dbo.copilot_accessed_resource_names");
-            DropForeignKey("dbo.event_copilot_accessed_resources", "resource_id_id", "dbo.copilot_accessed_resource_ids");
-            DropForeignKey("dbo.event_copilot_accessed_resources", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.event_copilot_accessed_resources", new[] { "sensitivity_label_id" });
-            DropIndex("dbo.event_copilot_accessed_resources", new[] { "resource_type_id" });
-            DropIndex("dbo.event_copilot_accessed_resources", new[] { "resource_name_id" });
-            DropIndex("dbo.event_copilot_accessed_resources", new[] { "resource_id_id" });
-            DropIndex("dbo.event_copilot_accessed_resources", new[] { "copilot_chat_id" });
-            DropTable("dbo.event_copilot_accessed_resources");
-            DropTable("dbo.sensitivity_labels");
-            DropTable("dbo.copilot_accessed_resource_types");
-            DropTable("dbo.copilot_accessed_resource_names");
-            DropTable("dbo.copilot_accessed_resource_ids");
+            DropForeignKey("dbo.copilot_event_accessed_resources", "sensitivity_label_id", "dbo.copilot_event_sensitivity_labels");
+            DropForeignKey("dbo.copilot_event_accessed_resources", "resource_type_id", "dbo.copilot_event_accessed_resource_types");
+            DropForeignKey("dbo.copilot_event_accessed_resources", "resource_name_id", "dbo.copilot_event_accessed_resource_names");
+            DropForeignKey("dbo.copilot_event_accessed_resources", "resource_id_id", "dbo.copilot_event_accessed_resource_ids");
+            DropForeignKey("dbo.copilot_event_accessed_resources", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.copilot_event_accessed_resources", new[] { "sensitivity_label_id" });
+            DropIndex("dbo.copilot_event_accessed_resources", new[] { "resource_type_id" });
+            DropIndex("dbo.copilot_event_accessed_resources", new[] { "resource_name_id" });
+            DropIndex("dbo.copilot_event_accessed_resources", new[] { "resource_id_id" });
+            DropIndex("dbo.copilot_event_accessed_resources", new[] { "copilot_chat_id" });
+            DropTable("dbo.copilot_event_accessed_resources");
+            DropTable("dbo.copilot_event_sensitivity_labels");
+            DropTable("dbo.copilot_event_accessed_resource_types");
+            DropTable("dbo.copilot_event_accessed_resource_names");
+            DropTable("dbo.copilot_event_accessed_resource_ids");
             
             Console.WriteLine("DB SCHEMA: Rolled back all Copilot extended data tables.");
         }

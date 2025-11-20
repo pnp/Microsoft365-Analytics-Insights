@@ -94,7 +94,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Lookup table for accessed resource IDs
     /// </summary>
-    [Table("copilot_accessed_resource_ids")]
+    [Table("copilot_event_accessed_resource_ids")]
     public class CopilotAccessedResourceId : AbstractEFEntity
     {
         [Column("resource_id")]
@@ -105,7 +105,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Lookup table for accessed resource names
     /// </summary>
-    [Table("copilot_accessed_resource_names")]
+    [Table("copilot_event_accessed_resource_names")]
     public class CopilotAccessedResourceName : AbstractEFEntity
     {
         // Not using AbstractEFEntityWithName to allow longer names
@@ -116,7 +116,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Lookup table for accessed resource types
     /// </summary>
-    [Table("copilot_accessed_resource_types")]
+    [Table("copilot_event_accessed_resource_types")]
     public class CopilotAccessedResourceType : AbstractEFEntityWithName
     {
     }
@@ -124,7 +124,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Lookup table for sensitivity label IDs
     /// </summary>
-    [Table("sensitivity_labels")]
+    [Table("copilot_event_sensitivity_labels")]
     public class CopilotSensitivityLabel : AbstractEFEntity
     {
         [Column("label_id")]
@@ -135,7 +135,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Junction table linking copilot events to accessed resources
     /// </summary>
-    [Table("event_copilot_accessed_resources")]
+    [Table("copilot_event_accessed_resources")]
     public class CopilotEventAccessedResource : AbstractEFEntity
     {
         [ForeignKey(nameof(RelatedChat))]
@@ -170,7 +170,7 @@ namespace Common.Entities.Entities.AuditLog
     /// Represents a message in a Copilot conversation.
     /// Messages can be prompts (user input) or responses (Copilot output).
     /// </summary>
-    [Table("event_copilot_messages")]
+    [Table("copilot_event_messages")]
     public class CopilotMessage : AbstractEFEntity
     {
         [ForeignKey(nameof(RelatedChat))]
@@ -197,7 +197,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Lookup table for message types (Classic, Generative, TenantGraph)
     /// </summary>
-    [Table("copilot_message_types")]
+    [Table("copilot_event_message_types")]
     public class CopilotMessageType : AbstractEFEntityWithName
     {
     }
@@ -209,7 +209,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Represents an agent action such as triggers, deep reasoning, topic transitions, etc.
     /// </summary>
-    [Table("event_copilot_agent_actions")]
+    [Table("copilot_event_agent_actions")]
     public class CopilotAgentAction : AbstractEFEntity
     {
         [ForeignKey(nameof(RelatedChat))]
@@ -230,7 +230,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Lookup table for agent action types (Trigger, DeepReasoning, TopicTransition, etc.)
     /// </summary>
-    [Table("copilot_agent_action_types")]
+    [Table("copilot_event_agent_action_types")]
     public class CopilotAgentActionType : AbstractEFEntityWithName
     {
     }
@@ -242,7 +242,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Represents AI tool usage with tiered billing
     /// </summary>
-    [Table("event_copilot_ai_tool_usages")]
+    [Table("copilot_event_ai_tool_usages")]
     public class CopilotAIToolUsage : AbstractEFEntity
     {
         [ForeignKey(nameof(RelatedChat))]
@@ -266,7 +266,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Lookup table for AI tool tiers (Basic, Standard, Premium)
     /// </summary>
-    [Table("copilot_ai_tool_tiers")]
+    [Table("copilot_event_ai_tool_tiers")]
     public class CopilotAIToolTier : AbstractEFEntityWithName
     {
     }
@@ -278,7 +278,7 @@ namespace Common.Entities.Entities.AuditLog
     /// <summary>
     /// Represents agent flow actions (predefined sequences)
     /// </summary>
-    [Table("event_copilot_flow_actions")]
+    [Table("copilot_event_flow_actions")]
     public class CopilotFlowAction : AbstractEFEntity
     {
         [ForeignKey(nameof(RelatedChat))]
