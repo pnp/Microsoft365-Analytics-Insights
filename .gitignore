@@ -31,3 +31,4 @@
 /src/SPO/AITracker/TypeScript/node_modules
 /src/SPO/AITracker/DevConfig.json
 /src/SPO/AITracker/aitracker.js
+/src/AnalyticsEngine/Directory.Build.props
