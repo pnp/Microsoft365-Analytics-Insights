@@ -223,6 +223,25 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         #endregion
 
         /// <summary>
+        /// Helper method to safely add credits to a specific category in the breakdown.
+        /// Handles the case where the key doesn't exist in the dictionary.
+        /// </summary>
+        /// <param name="breakdown">The credit breakdown dictionary</param>
+        /// <param name="category">The billing category name</param>
+        /// <param name="creditsToAdd">The number of credits to add</param>
+        private static void AddToBreakdown(Dictionary<string, int> breakdown, string category, int creditsToAdd)
+        {
+            if (breakdown.ContainsKey(category))
+            {
+                breakdown[category] += creditsToAdd;
+            }
+            else
+            {
+                breakdown[category] = creditsToAdd;
+            }
+        }
+
+        /// <summary>
         /// Analyzes a Copilot audit event JSON and calculates the total Copilot Credits consumed.
         /// 
         /// Billing Logic:
@@ -280,17 +299,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                             case "classic":
                                 report.ClassicAnswers++;
                                 totalCredits += CLASSIC_ANSWER_CREDITS;
-                                report.CreditBreakdown["Classic Answers"] = report.CreditBreakdown.GetValueOrDefault("Classic Answers", 0) + CLASSIC_ANSWER_CREDITS;
+                                AddToBreakdown(report.CreditBreakdown, "Classic Answers", CLASSIC_ANSWER_CREDITS);
                                 break;
                             case "generative":
                                 report.GenerativeAnswers++;
                                 totalCredits += GENERATIVE_ANSWER_CREDITS;
-                                report.CreditBreakdown["Generative Answers"] = report.CreditBreakdown.GetValueOrDefault("Generative Answers", 0) + GENERATIVE_ANSWER_CREDITS;
+                                AddToBreakdown(report.CreditBreakdown, "Generative Answers", GENERATIVE_ANSWER_CREDITS);
                                 break;
                             case "tenantgraph":
                                 report.TenantGraphGroundedAnswers++;
                                 totalCredits += TENANT_GRAPH_GROUNDING_CREDITS;
-                                report.CreditBreakdown["Tenant Graph Grounding"] = report.CreditBreakdown.GetValueOrDefault("Tenant Graph Grounding", 0) + TENANT_GRAPH_GROUNDING_CREDITS;
+                                AddToBreakdown(report.CreditBreakdown, "Tenant Graph Grounding", TENANT_GRAPH_GROUNDING_CREDITS);
                                 break;
                         }
                     }
@@ -303,14 +322,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                             // Microsoft Graph resources were accessed - bill as tenant graph grounding (10 credits)
                             report.TenantGraphGroundedAnswers++;
                             totalCredits += TENANT_GRAPH_GROUNDING_CREDITS;
-                            report.CreditBreakdown["Tenant Graph Grounding"] = report.CreditBreakdown.GetValueOrDefault("Tenant Graph Grounding", 0) + TENANT_GRAPH_GROUNDING_CREDITS;
+                            AddToBreakdown(report.CreditBreakdown, "Tenant Graph Grounding", TENANT_GRAPH_GROUNDING_CREDITS);
                         }
                         else
                         {
                             // Only web search or no resources - bill as standard generative answer (2 credits)
                             report.GenerativeAnswers++;
                             totalCredits += GENERATIVE_ANSWER_CREDITS;
-                            report.CreditBreakdown["Generative Answers"] = report.CreditBreakdown.GetValueOrDefault("Generative Answers", 0) + GENERATIVE_ANSWER_CREDITS;
+                            AddToBreakdown(report.CreditBreakdown, "Generative Answers", GENERATIVE_ANSWER_CREDITS);
                         }
                     }
                 }
@@ -352,18 +371,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                             report.BasicAIToolResponses += toolUsage.ResponseCount;
                             // Round up: 1-10 responses = 1 credit, 11-20 = 2 credits, etc.
                             credits = (int)Math.Ceiling(toolUsage.ResponseCount / 10.0) * AI_TOOLS_BASIC_PER_10;
-                            report.CreditBreakdown["AI Tools (Basic)"] = report.CreditBreakdown.GetValueOrDefault("AI Tools (Basic)", 0) + credits;
+                            AddToBreakdown(report.CreditBreakdown, "AI Tools (Basic)", credits);
                             break;
                         case "standard":
                             report.StandardAIToolResponses += toolUsage.ResponseCount;
                             credits = (int)Math.Ceiling(toolUsage.ResponseCount / 10.0) * AI_TOOLS_STANDARD_PER_10;
-                            report.CreditBreakdown["AI Tools (Standard)"] = report.CreditBreakdown.GetValueOrDefault("AI Tools (Standard)", 0) + credits;
+                            AddToBreakdown(report.CreditBreakdown, "AI Tools (Standard)", credits);
                             break;
                         case "premium":
                             // Premium tier includes deep reasoning capabilities
                             report.PremiumAIToolResponses += toolUsage.ResponseCount;
                             credits = (int)Math.Ceiling(toolUsage.ResponseCount / 10.0) * AI_TOOLS_PREMIUM_PER_10;
-                            report.CreditBreakdown["AI Tools (Premium)"] = report.CreditBreakdown.GetValueOrDefault("AI Tools (Premium)", 0) + credits;
+                            AddToBreakdown(report.CreditBreakdown, "AI Tools (Premium)", credits);
                             break;
                     }
                     totalCredits += credits;
