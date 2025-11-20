@@ -20,7 +20,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string AgentId { get; set; }
 
 
-        public CreditReport Cost { get; set; }
+        public CopilotCreditEstimation Cost { get; set; }
 
         public string OrganizationId { get; set; }
 
@@ -34,7 +34,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             dynamic obj = JsonConvert.DeserializeObject<dynamic>(json);
             thisAuditLogReport.EventRaw = JsonConvert.SerializeObject(obj.CopilotEventData);
 
-            thisAuditLogReport.Cost = CreditReport.Analyze(thisAuditLogReport.EventRaw);
+            thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw);
 
             // If AgentName and AgentId are not set, but AppIdentity has a value, extract from AppIdentity
             if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&

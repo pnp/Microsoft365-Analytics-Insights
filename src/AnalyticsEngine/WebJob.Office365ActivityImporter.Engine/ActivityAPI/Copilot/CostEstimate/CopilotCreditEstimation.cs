@@ -2,120 +2,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 {
-    /// <summary>
-    /// Represents a Microsoft Copilot audit event from the Office 365 Management API.
-    /// Contains information about Copilot interactions including messages, accessed resources, and actions.
-    /// </summary>
-    public class CopilotAuditEvent
-    {
-        [JsonProperty("AISystemPlugin")]
-        public List<AISystemPlugin> AISystemPlugin { get; set; }
-        
-        [JsonProperty("AccessedResources")]
-        public List<AccessedResource> AccessedResources { get; set; }
-        
-        [JsonProperty("Messages")]
-        public List<Message> Messages { get; set; }
-        
-        // Additional properties to support comprehensive billing calculation
-        [JsonProperty("AnswerType")]
-        public string AnswerType { get; set; } // "Classic", "Generative", "TenantGraph"
-        
-        [JsonProperty("AgentActions")]
-        public List<AgentAction> AgentActions { get; set; }
-        
-        [JsonProperty("AIToolUsages")]
-        public List<AIToolUsage> AIToolUsages { get; set; }
-        
-        [JsonProperty("FlowActions")]
-        public AgentFlowUsage FlowActions { get; set; }
-    }
-
-    /// <summary>
-    /// Represents an AI system plugin used during a Copilot interaction (e.g., BingWebSearch).
-    /// Each plugin invocation is billed as an Agent Action.
-    /// </summary>
-    public class AISystemPlugin
-    {
-        [JsonProperty("Id")]
-        public string Id { get; set; }
-        
-        [JsonProperty("Name")]
-        public string Name { get; set; }
-    }
-
-    /// <summary>
-    /// Represents a single message in a Copilot conversation.
-    /// Messages can be either prompts (user input) or responses (Copilot output).
-    /// Only response messages (isPrompt=false) are billable.
-    /// </summary>
-    public class Message
-    {
-        [JsonProperty("Id")]
-        public string Id { get; set; }
-        
-        [JsonProperty("isPrompt")]
-        public bool isPrompt { get; set; }
-        
-        /// <summary>
-        /// Type of response: "Classic" (1 credit), "Generative" (2 credits), or "TenantGraph" (10 credits).
-        /// If not specified, will be inferred from accessed resources.
-        /// </summary>
-        [JsonProperty("Type")]
-        public string Type { get; set; }
-    }
-
-    /// <summary>
-    /// Represents an agent action such as triggers, deep reasoning, topic transitions, etc.
-    /// Each action costs 5 Copilot Credits regardless of type.
-    /// </summary>
-    public class AgentAction
-    {
-        [JsonProperty("Id")]
-        public string Id { get; set; }
-        
-        [JsonProperty("Type")]
-        public string Type { get; set; } // "Trigger", "DeepReasoning", "TopicTransition", "KnowledgeSearch", "AIToolPrompt"
-    }
-
-    /// <summary>
-    /// Represents AI tool usage (prompts) with tiered billing.
-    /// Billed per 10 responses: Basic=1, Standard=15, Premium=100 credits.
-    /// </summary>
-    public class AIToolUsage
-    {
-        [JsonProperty("ToolId")]
-        public string ToolId { get; set; }
-        
-        [JsonProperty("Tier")]
-        public string Tier { get; set; } // "Basic", "Standard", "Premium"
-        
-        [JsonProperty("ResponseCount")]
-        public int ResponseCount { get; set; }
-    }
-
-    /// <summary>
-    /// Represents agent flow actions (predefined sequences).
-    /// Billed at 13 credits per 100 actions.
-    /// </summary>
-    public class AgentFlowUsage
-    {
-        [JsonProperty("ActionCount")]
-        public int ActionCount { get; set; }
-    }
-
+    
     /// <summary>
     /// Detailed billing report for a Copilot audit event.
     /// Calculates Copilot Credits consumed based on Microsoft Copilot Studio billing policies.
     /// Reference: https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management
     /// </summary>
-    public class CreditReport
+    public class CopilotCreditEstimation
     {
         #region Billing Constants
         // Based on Microsoft Copilot Studio billing documentation (as of March 2025)
@@ -222,24 +120,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         
         #endregion
 
-        /// <summary>
-        /// Helper method to safely add credits to a specific category in the breakdown.
-        /// Handles the case where the key doesn't exist in the dictionary.
-        /// </summary>
-        /// <param name="breakdown">The credit breakdown dictionary</param>
-        /// <param name="category">The billing category name</param>
-        /// <param name="creditsToAdd">The number of credits to add</param>
-        private static void AddToBreakdown(Dictionary<string, int> breakdown, string category, int creditsToAdd)
-        {
-            if (breakdown.ContainsKey(category))
-            {
-                breakdown[category] += creditsToAdd;
-            }
-            else
-            {
-                breakdown[category] = creditsToAdd;
-            }
-        }
 
         /// <summary>
         /// Analyzes a Copilot audit event JSON and calculates the total Copilot Credits consumed.
@@ -256,12 +136,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// </summary>
         /// <param name="json">JSON string containing the Copilot audit event data</param>
         /// <returns>CreditReport with detailed billing breakdown</returns>
-        public static CreditReport Analyze(string json)
+        public static CopilotCreditEstimation Analyze(string json)
         {
             var auditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(json);
             if (auditEvent == null)
             {
-                return new CreditReport
+                return new CopilotCreditEstimation
                 {
                     TotalCredits = 0,
                     ResourceTypeBreakdown = new Dictionary<string, int>(),
@@ -269,7 +149,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 };
             }
 
-            var report = new CreditReport
+            var report = new CopilotCreditEstimation
             {
                 ResourceTypeBreakdown = new Dictionary<string, int>(),
                 CreditBreakdown = new Dictionary<string, int>()
@@ -288,7 +168,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             // Each message is billed once regardless of how many resources it accessed.
             if (auditEvent.Messages != null)
             {
-                foreach (var message in auditEvent.Messages.Where(m => !m.isPrompt))
+                foreach (var message in auditEvent.Messages.Where(m => !m.IsPrompt))
                 {
                     // Check if message Type is explicitly set in the audit log
                     if (!string.IsNullOrEmpty(message.Type))
@@ -421,6 +301,25 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         }
 
         /// <summary>
+        /// Helper method to safely add credits to a specific category in the breakdown.
+        /// Handles the case where the key doesn't exist in the dictionary.
+        /// </summary>
+        /// <param name="breakdown">The credit breakdown dictionary</param>
+        /// <param name="category">The billing category name</param>
+        /// <param name="creditsToAdd">The number of credits to add</param>
+        private static void AddToBreakdown(Dictionary<string, int> breakdown, string category, int creditsToAdd)
+        {
+            if (breakdown.ContainsKey(category))
+            {
+                breakdown[category] += creditsToAdd;
+            }
+            else
+            {
+                breakdown[category] = creditsToAdd;
+            }
+        }
+
+        /// <summary>
         /// Determines if the accessed resources indicate tenant graph grounding was used.
         /// 
         /// Tenant graph grounding provides RAG over Microsoft Graph data including:
@@ -493,4 +392,5 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             return false;
         }
     }
+
 }

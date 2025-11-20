@@ -65,7 +65,8 @@
     <Compile Include="ActivityAPI\ActivityImporter.cs" />
     <Compile Include="ActivityAPI\AuditTraceConfig.cs" />
     <Compile Include="ActivityAPI\Copilot\CopilotAuditEventManager.cs" />
-    <Compile Include="ActivityAPI\Copilot\CopilotCostAnalyser.cs" />
+    <Compile Include="ActivityAPI\Copilot\CostEstimate\CopilotCreditEstimation.cs" />
+    <Compile Include="ActivityAPI\Copilot\CostEstimate\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\GraphCaches.cs" />
     <Compile Include="ActivityAPI\Copilot\GraphFileMetadataLoader.cs" />
     <Compile Include="ActivityAPI\Copilot\Models.cs" />
