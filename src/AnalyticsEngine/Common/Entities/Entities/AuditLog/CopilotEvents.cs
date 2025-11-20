@@ -98,7 +98,7 @@ namespace Common.Entities.Entities.AuditLog
     public class CopilotAccessedResourceId : AbstractEFEntity
     {
         [Column("resource_id")]
-        [MaxLength(500)]
+        [MaxLength(5000)]
         public string ResourceId { get; set; } = null;
     }
 

@@ -12,7 +12,7 @@ namespace Common.Entities.Migrations
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
-                        resource_id = c.String(maxLength: 500),
+                        resource_id = c.String(maxLength: 5000),
                     })
                 .PrimaryKey(t => t.id);
             
@@ -21,7 +21,7 @@ namespace Common.Entities.Migrations
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
-                        name = c.String(maxLength: 500),
+                        name = c.String(maxLength: 5000),
                     })
                 .PrimaryKey(t => t.id);
             
