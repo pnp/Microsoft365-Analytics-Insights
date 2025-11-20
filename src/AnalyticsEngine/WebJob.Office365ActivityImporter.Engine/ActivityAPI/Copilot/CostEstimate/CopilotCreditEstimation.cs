@@ -68,15 +68,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
         #region Properties
         
-        // Legacy properties (kept for backwards compatibility but deprecated)
-        [Obsolete("Use specific answer type counts instead")]
-        [JsonProperty("AgentActions")]
-        public int AgentActions { get; set; }
-        
-        [Obsolete("Use specific answer type counts instead")]
-        [JsonProperty("GenerativeTurns")]
-        public int GenerativeTurns { get; set; }
-        
         // New detailed properties
         [JsonProperty("ClassicAnswers")]
         public int ClassicAnswers { get; set; }
@@ -138,7 +129,37 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// <returns>CreditReport with detailed billing breakdown</returns>
         public static CopilotCreditEstimation Analyze(string json)
         {
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return new CopilotCreditEstimation
+                {
+                    TotalCredits = 0,
+                    ResourceTypeBreakdown = new Dictionary<string, int>(),
+                    CreditBreakdown = new Dictionary<string, int>()
+                };
+            }
+
             var auditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(json);
+            return Analyze(auditEvent);
+        }
+
+        /// <summary>
+        /// Analyzes a Copilot audit event object and calculates the total Copilot Credits consumed.
+        /// 
+        /// Billing Logic:
+        /// 1. Messages: Each response message is billed based on its type (Classic=1, Generative=2, TenantGraph=10)
+        /// 2. Agent Actions: Each action (plugin, tool invocation) costs 5 credits
+        /// 3. AI Tools: Billed per 10 responses based on tier (Basic=1, Standard=15, Premium=100)
+        /// 4. Flow Actions: Billed per 100 actions at 13 credits per 100
+        /// 5. Tenant Graph Grounding: Inferred from accessed resources if not explicitly specified
+        /// 
+        /// Note: The number of resources accessed does NOT multiply costs. Tenant graph grounding
+        /// costs 10 credits per message regardless of how many SharePoint files, emails, etc. are accessed.
+        /// </summary>
+        /// <param name="auditEvent">The Copilot audit event object to analyze</param>
+        /// <returns>CreditReport with detailed billing breakdown</returns>
+        public static CopilotCreditEstimation Analyze(CopilotAuditEvent auditEvent)
+        {
             if (auditEvent == null)
             {
                 return new CopilotCreditEstimation
@@ -288,12 +309,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             report.ResourceTypeBreakdown = auditEvent.AccessedResources?
                 .GroupBy(r => string.IsNullOrEmpty(r.Type) ? "WebPage" : r.Type)
                 .ToDictionary(g => g.Key, g => g.Count()) ?? new Dictionary<string, int>();
-
-            // Set legacy properties for backwards compatibility
-            #pragma warning disable CS0618 // Type or member is obsolete
-            report.AgentActions = report.AgentActionCount;
-            report.GenerativeTurns = report.GenerativeAnswers;
-            #pragma warning restore CS0618 // Type or member is obsolete
 
             report.TotalCredits = totalCredits;
 

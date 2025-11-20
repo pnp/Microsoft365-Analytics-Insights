@@ -132,7 +132,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     MeetingName = meetingInfo?.Subject,
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
-                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources)
+                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
+                    MessagesJson = SerializeMessages(auditRecord.Cost),
+                    AgentActionsJson = SerializeAgentActions(auditRecord.Cost),
+                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord.Cost),
+                    FlowActionsJson = SerializeFlowActions(auditRecord.Cost)
                 });
                 return true; // staged regardless of meetingInfo retrieval success
             }
@@ -158,7 +162,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     UrlBase = spFileInfo?.SiteUrl,
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
-                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources)
+                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
+                    MessagesJson = SerializeMessages(auditRecord.Cost),
+                    AgentActionsJson = SerializeAgentActions(auditRecord.Cost),
+                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord.Cost),
+                    FlowActionsJson = SerializeFlowActions(auditRecord.Cost)
                 });
                 if (spFileInfo == null)
                 {
@@ -181,14 +189,18 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AppHost = auditRecord.CopilotEventData.AppHost,
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
-                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources.Where(r=> r.IsValidOffice365Data))
+                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources.Where(r=> r.IsValidOffice365Data)),
+                MessagesJson = SerializeMessages(auditRecord.Cost),
+                AgentActionsJson = SerializeAgentActions(auditRecord.Cost),
+                AIToolUsagesJson = SerializeAIToolUsages(auditRecord.Cost),
+                FlowActionsJson = SerializeFlowActions(auditRecord.Cost)
             });
         }
 
         /// <summary>
         /// Serializes AccessedResources list to JSON for staging table storage
         /// </summary>
-        private string SerializeAccessedResources(IEnumerable<AccessedResource> accessedResources)
+        internal string SerializeAccessedResources(IEnumerable<AccessedResource> accessedResources)
         {
             if (accessedResources == null || accessedResources.Count() == 0)
             {
@@ -206,6 +218,135 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
         }
 
+        /// <summary>
+        /// Serializes Messages from CopilotCreditEstimation to JSON for staging table storage.
+        /// Reconstructs message data from the credit estimation analysis.
+        /// </summary>
+        internal string SerializeMessages(CopilotCreditEstimation cost)
+        {
+            if (cost == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                // Build message list from cost analysis
+                var messages = new List<object>();
+                
+                // Add classic answers
+                for (int i = 0; i < cost.ClassicAnswers; i++)
+                {
+                    messages.Add(new { Type = "Classic", IsPrompt = false });
+                }
+                
+                // Add generative answers
+                for (int i = 0; i < cost.GenerativeAnswers; i++)
+                {
+                    messages.Add(new { Type = "Generative", IsPrompt = false });
+                }
+                
+                // Add tenant graph grounded answers
+                for (int i = 0; i < cost.TenantGraphGroundedAnswers; i++)
+                {
+                    messages.Add(new { Type = "TenantGraph", IsPrompt = false });
+                }
+
+                return messages.Count > 0 ? JsonConvert.SerializeObject(messages) : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize Messages");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes AgentActions from CopilotCreditEstimation to JSON for staging table storage
+        /// </summary>
+        internal string SerializeAgentActions(CopilotCreditEstimation cost)
+        {
+            if (cost == null || cost.AgentActionCount == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                // Build agent action list from cost analysis
+                var actions = new List<object>();
+                for (int i = 0; i < cost.AgentActionCount; i++)
+                {
+                    actions.Add(new { Type = "Action" });
+                }
+
+                return JsonConvert.SerializeObject(actions);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize AgentActions");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes AIToolUsages from CopilotCreditEstimation to JSON for staging table storage
+        /// </summary>
+        internal string SerializeAIToolUsages(CopilotCreditEstimation cost)
+        {
+            if (cost == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var toolUsages = new List<object>();
+                
+                if (cost.BasicAIToolResponses > 0)
+                {
+                    toolUsages.Add(new { Tier = "Basic", ResponseCount = cost.BasicAIToolResponses });
+                }
+                
+                if (cost.StandardAIToolResponses > 0)
+                {
+                    toolUsages.Add(new { Tier = "Standard", ResponseCount = cost.StandardAIToolResponses });
+                }
+                
+                if (cost.PremiumAIToolResponses > 0)
+                {
+                    toolUsages.Add(new { Tier = "Premium", ResponseCount = cost.PremiumAIToolResponses });
+                }
+
+                return toolUsages.Count > 0 ? JsonConvert.SerializeObject(toolUsages) : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize AIToolUsages");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes FlowActions from CopilotCreditEstimation to JSON for staging table storage
+        /// </summary>
+        internal string SerializeFlowActions(CopilotCreditEstimation cost)
+        {
+            if (cost == null || cost.FlowActions == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(new { ActionCount = cost.FlowActions });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize FlowActions");
+                return null;
+            }
+        }
         /// <summary>
         /// Commits all staged entities to their respective staging tables + merge scripts, then clears internal state.
         /// </summary>

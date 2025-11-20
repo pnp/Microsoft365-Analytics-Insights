@@ -10,6 +10,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -796,6 +798,5 @@ namespace Tests.UnitTests
                 Assert.AreEqual(appIdentity, result.AgentId, $"AgentId should be set to AppIdentity for: {expectedAgentName}");
             }
         }
-
     }
 }

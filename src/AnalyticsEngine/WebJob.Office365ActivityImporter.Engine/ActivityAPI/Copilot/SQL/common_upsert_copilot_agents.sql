@@ -127,3 +127,121 @@ WHERE imports.accessed_resources_json IS NOT NULL
   );
 
 END
+
+
+-- Process Messages only if tables exist (after migration)
+IF OBJECT_ID('dbo.event_copilot_messages', 'U') IS NOT NULL
+BEGIN
+
+-- Insert unique message types
+INSERT INTO copilot_message_types ([name])
+SELECT DISTINCT JSON_VALUE(msg.value, '$.Type') AS message_type
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.messages_json) msg
+WHERE JSON_VALUE(msg.value, '$.Type') IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM copilot_message_types 
+    WHERE [name] = JSON_VALUE(msg.value, '$.Type')
+  );
+
+
+-- Insert message records
+INSERT INTO event_copilot_messages (copilot_chat_id, message_id, is_prompt, message_type_id)
+SELECT 
+    imports.event_id,
+    ISNULL(JSON_VALUE(msg.value, '$.Id'), NEWID()), -- Generate GUID if no ID provided
+    CAST(ISNULL(JSON_VALUE(msg.value, '$.IsPrompt'), '0') AS BIT),
+    mt.id
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.messages_json) msg
+LEFT JOIN copilot_message_types mt 
+    ON mt.[name] = JSON_VALUE(msg.value, '$.Type')
+WHERE imports.messages_json IS NOT NULL;
+
+END
+
+
+-- Process Agent Actions only if tables exist (after migration)
+IF OBJECT_ID('dbo.event_copilot_agent_actions', 'U') IS NOT NULL
+BEGIN
+
+-- Insert unique agent action types
+INSERT INTO copilot_agent_action_types ([name])
+SELECT DISTINCT JSON_VALUE(action.value, '$.Type') AS action_type
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.agent_actions_json) action
+WHERE JSON_VALUE(action.value, '$.Type') IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM copilot_agent_action_types 
+    WHERE [name] = JSON_VALUE(action.value, '$.Type')
+  );
+
+
+-- Insert agent action records
+INSERT INTO event_copilot_agent_actions (copilot_chat_id, action_id, action_type_id)
+SELECT 
+    imports.event_id,
+    ISNULL(JSON_VALUE(action.value, '$.Id'), NEWID()), -- Generate GUID if no ID provided
+    at.id
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.agent_actions_json) action
+LEFT JOIN copilot_agent_action_types at 
+    ON at.[name] = JSON_VALUE(action.value, '$.Type')
+WHERE imports.agent_actions_json IS NOT NULL;
+
+END
+
+
+-- Process AI Tool Usages only if tables exist (after migration)
+IF OBJECT_ID('dbo.event_copilot_ai_tool_usages', 'U') IS NOT NULL
+BEGIN
+
+-- Insert unique AI tool tiers
+INSERT INTO copilot_ai_tool_tiers ([name])
+SELECT DISTINCT JSON_VALUE(tool.value, '$.Tier') AS tier_name
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.ai_tool_usages_json) tool
+WHERE JSON_VALUE(tool.value, '$.Tier') IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM copilot_ai_tool_tiers 
+    WHERE [name] = JSON_VALUE(tool.value, '$.Tier')
+  );
+
+
+-- Insert AI tool usage records
+INSERT INTO event_copilot_ai_tool_usages (copilot_chat_id, tool_id, tier_id, response_count)
+SELECT 
+    imports.event_id,
+    ISNULL(JSON_VALUE(tool.value, '$.ToolId'), 'Unknown'),
+    tier.id,
+    CAST(JSON_VALUE(tool.value, '$.ResponseCount') AS INT)
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.ai_tool_usages_json) tool
+LEFT JOIN copilot_ai_tool_tiers tier 
+    ON tier.[name] = JSON_VALUE(tool.value, '$.Tier')
+WHERE imports.ai_tool_usages_json IS NOT NULL;
+
+END
+
+
+-- Process Flow Actions only if tables exist (after migration)
+IF OBJECT_ID('dbo.event_copilot_flow_actions', 'U') IS NOT NULL
+BEGIN
+
+-- Insert flow action records
+INSERT INTO event_copilot_flow_actions (copilot_chat_id, action_count)
+SELECT 
+    imports.event_id,
+    CAST(JSON_VALUE(imports.flow_actions_json, '$.ActionCount') AS INT)
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+WHERE imports.flow_actions_json IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM event_copilot_flow_actions
+    WHERE copilot_chat_id = imports.event_id
+  );
+
+END

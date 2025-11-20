@@ -164,5 +164,133 @@ namespace Common.Entities.Entities.AuditLog
         public CopilotSensitivityLabel SensitivityLabel { get; set; } = null;
     }
 
+    #region Message Tracking Tables
+
+    /// <summary>
+    /// Represents a message in a Copilot conversation.
+    /// Messages can be prompts (user input) or responses (Copilot output).
+    /// </summary>
+    [Table("event_copilot_messages")]
+    public class CopilotMessage : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [Column("message_id")]
+        [MaxLength(500)]
+        public string MessageId { get; set; } = null;
+
+        [Column("is_prompt")]
+        public bool IsPrompt { get; set; }
+
+        /// <summary>
+        /// Type of response: Classic, Generative, or TenantGraph
+        /// </summary>
+        [ForeignKey(nameof(MessageType))]
+        [Column("message_type_id")]
+        public int? MessageTypeId { get; set; }
+        public CopilotMessageType MessageType { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Lookup table for message types (Classic, Generative, TenantGraph)
+    /// </summary>
+    [Table("copilot_message_types")]
+    public class CopilotMessageType : AbstractEFEntityWithName
+    {
+    }
+
+    #endregion
+
+    #region Agent Action Tracking Tables
+
+    /// <summary>
+    /// Represents an agent action such as triggers, deep reasoning, topic transitions, etc.
+    /// </summary>
+    [Table("event_copilot_agent_actions")]
+    public class CopilotAgentAction : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [Column("action_id")]
+        [MaxLength(500)]
+        public string ActionId { get; set; } = null;
+
+        [ForeignKey(nameof(ActionType))]
+        [Column("action_type_id")]
+        public int? ActionTypeId { get; set; }
+        public CopilotAgentActionType ActionType { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Lookup table for agent action types (Trigger, DeepReasoning, TopicTransition, etc.)
+    /// </summary>
+    [Table("copilot_agent_action_types")]
+    public class CopilotAgentActionType : AbstractEFEntityWithName
+    {
+    }
+
+    #endregion
+
+    #region AI Tool Usage Tracking Tables
+
+    /// <summary>
+    /// Represents AI tool usage with tiered billing
+    /// </summary>
+    [Table("event_copilot_ai_tool_usages")]
+    public class CopilotAIToolUsage : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [Column("tool_id")]
+        [MaxLength(500)]
+        public string ToolId { get; set; } = null;
+
+        [ForeignKey(nameof(Tier))]
+        [Column("tier_id")]
+        public int? TierId { get; set; }
+        public CopilotAIToolTier Tier { get; set; } = null;
+
+        [Column("response_count")]
+        public int ResponseCount { get; set; }
+    }
+
+    /// <summary>
+    /// Lookup table for AI tool tiers (Basic, Standard, Premium)
+    /// </summary>
+    [Table("copilot_ai_tool_tiers")]
+    public class CopilotAIToolTier : AbstractEFEntityWithName
+    {
+    }
+
+    #endregion
+
+    #region Flow Action Tracking Tables
+
+    /// <summary>
+    /// Represents agent flow actions (predefined sequences)
+    /// </summary>
+    [Table("event_copilot_flow_actions")]
+    public class CopilotFlowAction : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [Column("action_count")]
+        public int ActionCount { get; set; }
+    }
+
+    #endregion
+
 }
 

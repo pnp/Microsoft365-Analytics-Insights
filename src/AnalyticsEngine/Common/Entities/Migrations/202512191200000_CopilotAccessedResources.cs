@@ -7,6 +7,7 @@ namespace Common.Entities.Migrations
     {
         public override void Up()
         {
+            // ===== Accessed Resources Tables =====
             CreateTable(
                 "dbo.copilot_accessed_resource_ids",
                 c => new
@@ -66,11 +67,143 @@ namespace Common.Entities.Migrations
                 .Index(t => t.resource_type_id)
                 .Index(t => t.sensitivity_label_id);
             
-            Console.WriteLine("DB SCHEMA: Applied 'Copilot Accessed Resources' successfully.");
+
+            // ===== Messages Tables =====
+            CreateTable(
+                "dbo.copilot_message_types",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        name = c.String(nullable: false, maxLength: 100),
+                    })
+                .PrimaryKey(t => t.id)
+                .Index(t => t.name, unique: true);
+            
+            CreateTable(
+                "dbo.event_copilot_messages",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        copilot_chat_id = c.Guid(nullable: false),
+                        message_id = c.Guid(nullable: false),
+                        is_prompt = c.Boolean(nullable: false),
+                        message_type_id = c.Int(),
+                    })
+                .PrimaryKey(t => t.id)
+                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
+                .ForeignKey("dbo.copilot_message_types", t => t.message_type_id)
+                .Index(t => t.copilot_chat_id)
+                .Index(t => t.message_id)
+                .Index(t => t.message_type_id);
+
+            // ===== Agent Actions Tables =====
+            CreateTable(
+                "dbo.copilot_agent_action_types",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        name = c.String(nullable: false, maxLength: 100),
+                    })
+                .PrimaryKey(t => t.id)
+                .Index(t => t.name, unique: true);
+            
+            CreateTable(
+                "dbo.event_copilot_agent_actions",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        copilot_chat_id = c.Guid(nullable: false),
+                        action_id = c.Guid(nullable: false),
+                        action_type_id = c.Int(),
+                    })
+                .PrimaryKey(t => t.id)
+                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
+                .ForeignKey("dbo.copilot_agent_action_types", t => t.action_type_id)
+                .Index(t => t.copilot_chat_id)
+                .Index(t => t.action_id)
+                .Index(t => t.action_type_id);
+            
+
+            // ===== AI Tool Usages Tables =====
+            CreateTable(
+                "dbo.copilot_ai_tool_tiers",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        name = c.String(nullable: false, maxLength: 50),
+                    })
+                .PrimaryKey(t => t.id)
+                .Index(t => t.name, unique: true);
+            
+            CreateTable(
+                "dbo.event_copilot_ai_tool_usages",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        copilot_chat_id = c.Guid(nullable: false),
+                        tool_id = c.String(nullable: false, maxLength: 500),
+                        tier_id = c.Int(),
+                        response_count = c.Int(nullable: false),
+                    })
+                .PrimaryKey(t => t.id)
+                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
+                .ForeignKey("dbo.copilot_ai_tool_tiers", t => t.tier_id)
+                .Index(t => t.copilot_chat_id)
+                .Index(t => t.tier_id);
+
+            // ===== Flow Actions Table =====
+            CreateTable(
+                "dbo.event_copilot_flow_actions",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        copilot_chat_id = c.Guid(nullable: false),
+                        action_count = c.Int(nullable: false),
+                    })
+                .PrimaryKey(t => t.id)
+                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
+                .Index(t => t.copilot_chat_id);
+            
+            Console.WriteLine("DB SCHEMA: All Copilot extended data tables created successfully.");
         }
         
         public override void Down()
         {
+            // ===== Drop Flow Actions =====
+            DropForeignKey("dbo.event_copilot_flow_actions", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.event_copilot_flow_actions", new[] { "copilot_chat_id" });
+            DropTable("dbo.event_copilot_flow_actions");
+            
+            // ===== Drop AI Tool Usages =====
+            DropForeignKey("dbo.event_copilot_ai_tool_usages", "tier_id", "dbo.copilot_ai_tool_tiers");
+            DropForeignKey("dbo.event_copilot_ai_tool_usages", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.event_copilot_ai_tool_usages", new[] { "tier_id" });
+            DropIndex("dbo.event_copilot_ai_tool_usages", new[] { "copilot_chat_id" });
+            DropTable("dbo.event_copilot_ai_tool_usages");
+            DropIndex("dbo.copilot_ai_tool_tiers", new[] { "name" });
+            DropTable("dbo.copilot_ai_tool_tiers");
+            
+            // ===== Drop Agent Actions =====
+            DropForeignKey("dbo.event_copilot_agent_actions", "action_type_id", "dbo.copilot_agent_action_types");
+            DropForeignKey("dbo.event_copilot_agent_actions", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.event_copilot_agent_actions", new[] { "action_type_id" });
+            DropIndex("dbo.event_copilot_agent_actions", new[] { "action_id" });
+            DropIndex("dbo.event_copilot_agent_actions", new[] { "copilot_chat_id" });
+            DropTable("dbo.event_copilot_agent_actions");
+            DropIndex("dbo.copilot_agent_action_types", new[] { "name" });
+            DropTable("dbo.copilot_agent_action_types");
+            
+            // ===== Drop Messages =====
+            DropForeignKey("dbo.event_copilot_messages", "message_type_id", "dbo.copilot_message_types");
+            DropForeignKey("dbo.event_copilot_messages", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.event_copilot_messages", new[] { "message_type_id" });
+            DropIndex("dbo.event_copilot_messages", new[] { "message_id" });
+            DropIndex("dbo.event_copilot_messages", new[] { "copilot_chat_id" });
+            DropTable("dbo.event_copilot_messages");
+            DropIndex("dbo.copilot_message_types", new[] { "name" });
+            DropTable("dbo.copilot_message_types");
+            
+            // ===== Drop Accessed Resources =====
             DropForeignKey("dbo.event_copilot_accessed_resources", "sensitivity_label_id", "dbo.sensitivity_labels");
             DropForeignKey("dbo.event_copilot_accessed_resources", "resource_type_id", "dbo.copilot_accessed_resource_types");
             DropForeignKey("dbo.event_copilot_accessed_resources", "resource_name_id", "dbo.copilot_accessed_resource_names");
@@ -86,6 +219,8 @@ namespace Common.Entities.Migrations
             DropTable("dbo.copilot_accessed_resource_types");
             DropTable("dbo.copilot_accessed_resource_names");
             DropTable("dbo.copilot_accessed_resource_ids");
+            
+            Console.WriteLine("DB SCHEMA: Rolled back all Copilot extended data tables.");
         }
     }
 }
