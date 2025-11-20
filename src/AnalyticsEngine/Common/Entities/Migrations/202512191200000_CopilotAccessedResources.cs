@@ -81,12 +81,44 @@ namespace Common.Entities.Migrations
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.message_id);
+
+            // ===== AI Model Transparency Tables =====
+            CreateTable(
+                "dbo.copilot_ai_models",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        name = c.String(maxLength: 100),
+                    })
+                .PrimaryKey(t => t.id);
             
-            Console.WriteLine("DB SCHEMA: All Copilot extended data tables created successfully.");
+            CreateTable(
+                "dbo.copilot_event_ai_models",
+                c => new
+                    {
+                        id = c.Int(nullable: false, identity: true),
+                        copilot_chat_id = c.Guid(nullable: false),
+                        model_id = c.Int(nullable: false),
+                    })
+                .PrimaryKey(t => t.id)
+                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
+                .ForeignKey("dbo.copilot_ai_models", t => t.model_id, cascadeDelete: true)
+                .Index(t => t.copilot_chat_id)
+                .Index(t => t.model_id);
+            
+            Console.WriteLine("DB SCHEMA: All Copilot extended data tables created successfully (including AI model transparency).");
         }
         
         public override void Down()
         {
+            // ===== Drop AI Model Transparency =====
+            DropForeignKey("dbo.copilot_event_ai_models", "model_id", "dbo.copilot_ai_models");
+            DropForeignKey("dbo.copilot_event_ai_models", "copilot_chat_id", "dbo.event_copilot_chats");
+            DropIndex("dbo.copilot_event_ai_models", new[] { "model_id" });
+            DropIndex("dbo.copilot_event_ai_models", new[] { "copilot_chat_id" });
+            DropTable("dbo.copilot_event_ai_models");
+            DropTable("dbo.copilot_ai_models");
+
             // ===== Drop Messages =====
             DropForeignKey("dbo.copilot_event_messages", "copilot_chat_id", "dbo.event_copilot_chats");
             DropIndex("dbo.copilot_event_messages", new[] { "message_id" });

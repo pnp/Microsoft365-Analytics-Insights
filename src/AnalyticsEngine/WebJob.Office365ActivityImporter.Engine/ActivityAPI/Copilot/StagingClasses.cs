@@ -25,6 +25,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         // Messages serialized as JSON
         [Column("messages_json", true)]
         public string MessagesJson { get; set; }
+
+        // Model Transparency Details serialized as JSON
+        [Column("model_transparency_json", true)]
+        public string ModelTransparencyDetailsJson { get; set; }
     }
 
     [TempTableName(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY)]

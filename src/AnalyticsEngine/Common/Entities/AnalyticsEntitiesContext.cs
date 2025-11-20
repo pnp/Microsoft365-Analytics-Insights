@@ -306,9 +306,12 @@ namespace Common.Entities
         public DbSet<CopilotSensitivityLabel> CopilotSensitivityLabels { get; set; }
         public DbSet<CopilotEventAccessedResource> CopilotEventAccessedResources { get; set; }
         
-        // New: Message tracking only (Agent Actions, AI Tool Usages, and Flow Actions removed as redundant)
+        // Message tracking
         public DbSet<CopilotMessage> CopilotMessages { get; set; }
-
+        
+        // AI Model transparency
+        public DbSet<CopilotAIModel> CopilotAIModels { get; set; }
+        public DbSet<CopilotEventAIModel> CopilotEventAIModels { get; set; }
         #endregion
     }
 

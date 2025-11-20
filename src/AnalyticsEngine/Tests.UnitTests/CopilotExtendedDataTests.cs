@@ -32,6 +32,321 @@ namespace Tests.UnitTests
             _config = new TestsAppConfig();
         }
 
+        #region Cost Estimation Tests
+
+        [TestMethod]
+        public void CostEstimation_GenerativeAnswersOnly_CalculatesCorrectly()
+        {
+            // Arrange - 3 response messages, no tenant resources, no deep reasoning
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': true },
+                    { 'Id': '2', 'isPrompt': false },
+                    { 'Id': '3', 'isPrompt': false },
+                    { 'Id': '4', 'isPrompt': false }
+                ],
+                'AccessedResources': [],
+                'AISystemPlugin': [{ 'Id': 'BingWebSearch', 'Name': 'BuiltIn' }]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            // 3 messages × 2 credits = 6 credits
+            Assert.AreEqual(6, cost.TotalCredits);
+            Assert.AreEqual(3, cost.GenerativeAnswers);
+            Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(0, cost.DeepReasoningActions);
+            Assert.AreEqual(6, cost.CreditBreakdown["Generative Answers"]);
+        }
+
+        [TestMethod]
+        public void CostEstimation_TenantGraphGrounding_CalculatesCorrectly()
+        {
+            // Arrange - 3 response messages with SharePoint resources (tenant graph grounding)
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': true },
+                    { 'Id': '2', 'isPrompt': false },
+                    { 'Id': '3', 'isPrompt': false },
+                    { 'Id': '4', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'SiteUrl': 'https://contoso.sharepoint.com/sites/sales/doc.docx', 'Type': 'docx' },
+                    { 'SiteUrl': 'https://contoso.sharepoint.com/sites/sales/sheet.xlsx', 'Type': 'xlsx' }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            // 3 messages × (2 credits generative + 10 credits tenant graph) = 36 credits
+            Assert.AreEqual(36, cost.TotalCredits);
+            Assert.AreEqual(3, cost.GenerativeAnswers);
+            Assert.AreEqual(3, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(0, cost.DeepReasoningActions);
+            Assert.AreEqual(6, cost.CreditBreakdown["Generative Answers"]); // 3 × 2
+            Assert.AreEqual(30, cost.CreditBreakdown["Tenant Graph Grounding"]); // 3 × 10
+        }
+
+        [TestMethod]
+        public void CostEstimation_DeepReasoningWithTenantGraph_CalculatesCorrectly()
+        {
+            // Arrange - Example payload with Teams files and DEEP_LEO model
+            var json = @"{
+                'AISystemPlugin': [
+                    { 'Id': 'BingWebSearch', 'Name': 'BuiltIn' }
+                ],
+                'AccessedResources': [
+                    {
+                        'Action': 'Read',
+                        'PolicyDetails': '',
+                        'SiteUrl': 'https://fr-prod.asyncgw.teams.microsoft.com/v1/objects/0-frca-d2-d7a936559e3d5f01eef884309ca6b0e1/views/original/comparativa_peajes_2025_2026_actualizado.xlsx',
+                        'XPIADetected': false
+                    },
+                    {
+                        'Action': 'Read',
+                        'PolicyDetails': '',
+                        'SiteUrl': 'https://fr-prod.asyncgw.teams.microsoft.com/v1/objects/0-frca-d15-8fc0b503d934582e98f8b1274353d7cf/views/original/comparativa_peajes_2025_2026.xlsx',
+                        'XPIADetected': false
+                    }
+                ],
+                'AppHost': 'Teams',
+                'Contexts': [],
+                'MessageIds': [],
+                'Messages': [
+                    { 'Id': '1763549047513', 'JailbreakDetected': false, 'isPrompt': true },
+                    { 'Id': '1763549047748', 'JailbreakDetected': false, 'isPrompt': false },
+                    { 'Id': '1763549047879', 'JailbreakDetected': false, 'isPrompt': false },
+                    { 'Id': '1763549048002', 'JailbreakDetected': false, 'isPrompt': false }
+                ],
+                'ModelTransparencyDetails': [
+                    { 'ModelName': 'DEEP_LEO' }
+                ],
+                'ThreadId': '19:UaHJMloQ_AuVUtFfv5B2tblIEniRRgkUI4mz9JDtZ3A1@thread.v2'
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            // 3 messages × 2 credits (generative) = 6 credits
+            // 3 messages × 10 credits (tenant graph) = 30 credits
+            // 1 deep reasoning agent action = 5 credits
+            // Total = 41 credits
+            Assert.AreEqual(41, cost.TotalCredits);
+            Assert.AreEqual(3, cost.GenerativeAnswers);
+            Assert.AreEqual(3, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(1, cost.DeepReasoningActions);
+            Assert.AreEqual(6, cost.CreditBreakdown["Generative Answers"]);
+            Assert.AreEqual(30, cost.CreditBreakdown["Tenant Graph Grounding"]);
+            Assert.AreEqual(5, cost.CreditBreakdown["Agent Actions (Deep Reasoning)"]);
+            Assert.IsTrue(cost.ModelsUsed.Contains("DEEP_LEO"));
+        }
+
+        [TestMethod]
+        public void CostEstimation_DeepReasoningWithoutTenantGraph_CalculatesCorrectly()
+        {
+            // Arrange - Deep reasoning with web search only
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false },
+                    { 'Id': '2', 'isPrompt': false }
+                ],
+                'AccessedResources': [],
+                'ModelTransparencyDetails': [
+                    { 'ModelName': 'DEEP_LEO' }
+                ],
+                'AISystemPlugin': [{ 'Id': 'BingWebSearch', 'Name': 'BuiltIn' }]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            // 2 messages × 2 credits (generative) = 4 credits
+            // 1 deep reasoning agent action = 5 credits
+            // Total = 9 credits
+            Assert.AreEqual(9, cost.TotalCredits);
+            Assert.AreEqual(2, cost.GenerativeAnswers);
+            Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(1, cost.DeepReasoningActions);
+            Assert.AreEqual(4, cost.CreditBreakdown["Generative Answers"]);
+            Assert.AreEqual(5, cost.CreditBreakdown["Agent Actions (Deep Reasoning)"]);
+        }
+
+        [TestMethod]
+        public void CostEstimation_OneDriveResources_DetectedAsTenantGraph()
+        {
+            // Arrange
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'SiteUrl': 'https://contoso-my.sharepoint.com/personal/user/Documents/file.docx', 'Type': 'docx' }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            // 1 message × (2 + 10) = 12 credits
+            Assert.AreEqual(12, cost.TotalCredits);
+            Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
+        }
+
+        [TestMethod]
+        public void CostEstimation_TeamsAsyncGatewayResources_DetectedAsTenantGraph()
+        {
+            // Arrange - Teams async gateway URL pattern
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'SiteUrl': 'https://fr-prod.asyncgw.teams.microsoft.com/v1/objects/file.xlsx' }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            Assert.AreEqual(12, cost.TotalCredits);
+            Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
+        }
+
+        [TestMethod]
+        public void CostEstimation_MultipleResourceTypes_CountedOnce()
+        {
+            // Arrange - Multiple resources but billing is per message, not per resource
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'SiteUrl': 'https://contoso.sharepoint.com/doc1.docx', 'Type': 'docx' },
+                    { 'SiteUrl': 'https://contoso.sharepoint.com/doc2.docx', 'Type': 'docx' },
+                    { 'SiteUrl': 'https://contoso.sharepoint.com/doc3.xlsx', 'Type': 'xlsx' },
+                    { 'SiteUrl': 'https://contoso.sharepoint.com/doc4.pptx', 'Type': 'pptx' }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            // Still just 1 message × (2 + 10) = 12 credits (not multiplied by resource count)
+            Assert.AreEqual(12, cost.TotalCredits);
+            Assert.AreEqual(4, cost.ResourceTypeBreakdown.Values.Sum()); // 4 resources for reference
+        }
+
+        [TestMethod]
+        public void CostEstimation_NullOrEmptyInput_ReturnsZero()
+        {
+            // Arrange & Act
+            var costNull = CopilotCreditEstimation.Analyze((string)null);
+            var costEmpty = CopilotCreditEstimation.Analyze("");
+            var costWhitespace = CopilotCreditEstimation.Analyze("   ");
+
+            // Assert
+            Assert.AreEqual(0, costNull.TotalCredits);
+            Assert.AreEqual(0, costEmpty.TotalCredits);
+            Assert.AreEqual(0, costWhitespace.TotalCredits);
+        }
+
+        [TestMethod]
+        public void CostEstimation_NoMessages_ReturnsZero()
+        {
+            // Arrange
+            var json = @"{
+                'Messages': [],
+                'AccessedResources': [
+                    { 'SiteUrl': 'https://contoso.sharepoint.com/doc.docx' }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            Assert.AreEqual(0, cost.TotalCredits);
+            Assert.AreEqual(0, cost.GenerativeAnswers);
+        }
+
+        [TestMethod]
+        public void CostEstimation_OnlyPromptMessages_ReturnsZero()
+        {
+            // Arrange
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': true },
+                    { 'Id': '2', 'isPrompt': true }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            Assert.AreEqual(0, cost.TotalCredits);
+            Assert.AreEqual(0, cost.GenerativeAnswers);
+        }
+
+        [TestMethod]
+        public void CostEstimation_ResourceTypeBreakdown_PopulatedCorrectly()
+        {
+            // Arrange
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'docx' },
+                    { 'Type': 'docx' },
+                    { 'Type': 'xlsx' },
+                    { 'Type': 'pptx' },
+                    { 'Type': '' }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            Assert.AreEqual(2, cost.ResourceTypeBreakdown["docx"]);
+            Assert.AreEqual(1, cost.ResourceTypeBreakdown["xlsx"]);
+            Assert.AreEqual(1, cost.ResourceTypeBreakdown["pptx"]);
+            Assert.AreEqual(1, cost.ResourceTypeBreakdown["WebPage"]); // Empty type defaults to WebPage
+        }
+
+        [TestMethod]
+        public void CostEstimation_CaseInsensitiveModelDetection_WorksCorrectly()
+        {
+            // Arrange - Test case insensitivity for DEEP_LEO
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'ModelTransparencyDetails': [
+                    { 'ModelName': 'deep_leo' }
+                ]
+            }";
+
+            // Act
+            var cost = CopilotCreditEstimation.Analyze(json);
+
+            // Assert
+            Assert.AreEqual(7, cost.TotalCredits); // 2 + 5
+            Assert.AreEqual(1, cost.DeepReasoningActions);
+        }
+
+        #endregion
+
         #region Serialization Tests
 
         [TestMethod]
@@ -302,37 +617,85 @@ namespace Tests.UnitTests
 
         #endregion
 
-        #region Edge Case Tests
+        #region Model Transparency Tests
 
         [TestMethod]
-        public void SerializeMessages_WithEmptyMessageList_ReturnsNull()
+        public void SerializeModelTransparencyDetails_WithValidDetails_ReturnsCorrectJson()
         {
             // Arrange
             var auditRecord = new CopilotAuditLogContent
             {
                 ParsedAuditEvent = new CopilotAuditEvent
                 {
-                    Messages = new List<Message>()
+                    ModelTransparencyDetails = new List<ModelTransparencyDetail>
+                    {
+                        new ModelTransparencyDetail { ModelName = "DEEP_LEO" },
+                        new ModelTransparencyDetail { ModelName = "GPT-4" }
+                    }
                 }
             };
 
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-            var json = manager.SerializeMessages(auditRecord);
+            var json = manager.SerializeModelTransparencyDetails(auditRecord);
+
+            // Assert
+            Assert.IsNotNull(json);
+            var deserializedModels = JsonConvert.DeserializeObject<List<ModelTransparencyDetail>>(json);
+            Assert.AreEqual(2, deserializedModels.Count);
+            Assert.AreEqual("DEEP_LEO", deserializedModels[0].ModelName);
+            Assert.AreEqual("GPT-4", deserializedModels[1].ModelName);
+        }
+
+        [TestMethod]
+        public void SerializeModelTransparencyDetails_WithNullDetails_ReturnsNull()
+        {
+            // Arrange
+            var auditRecord = new CopilotAuditLogContent
+            {
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    ModelTransparencyDetails = null
+                }
+            };
+
+            // Act
+            var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+            var json = manager.SerializeModelTransparencyDetails(auditRecord);
 
             // Assert
             Assert.IsNull(json);
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithMixedPromptAndResponseMessages_SavesOnlyResponses()
+        public void SerializeModelTransparencyDetails_WithEmptyList_ReturnsNull()
+        {
+            // Arrange
+            var auditRecord = new CopilotAuditLogContent
+            {
+                ParsedAuditEvent = new CopilotAuditEvent
+                {
+                    ModelTransparencyDetails = new List<ModelTransparencyDetail>()
+                }
+            };
+
+            // Act
+            var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+            var json = manager.SerializeModelTransparencyDetails(auditRecord);
+
+            // Assert
+            Assert.IsNull(json);
+        }
+
+        [TestMethod]
+        public async Task SaveCopilotEvent_WithModelTransparency_SavesCorrectly()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Skip if migration hasn't been run
-                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_messages', 'U')").FirstOrDefault() == null)
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_ai_models', 'U')").FirstOrDefault() == null)
                 {
-                    Assert.Inconclusive("Messages tables do not exist. Run migration first.");
+                    Assert.Inconclusive("AI Models tables do not exist. Run migration first.");
                     return;
                 }
 
@@ -344,8 +707,8 @@ namespace Tests.UnitTests
                 var commonEvent = new CommonAuditEvent
                 {
                     TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "Test Mixed Messages" + DateTime.Now.Ticks },
-                    User = new User { AzureAdId = "test", UserPrincipalName = "test@mixed.com" + DateTime.Now.Ticks },
+                    Operation = new EventOperation { Name = "Test Model Transparency" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@models.com" + DateTime.Now.Ticks },
                     Id = Guid.NewGuid()
                 };
 
@@ -358,127 +721,11 @@ namespace Tests.UnitTests
                     {
                         Messages = new List<Message>
                         {
-                            new Message { Id = "1", IsPrompt = true, Type = "Classic" },  // Should be filtered
-                            new Message { Id = "2", IsPrompt = false, Type = "Classic" },
-                            new Message { Id = "3", IsPrompt = true, Type = "Generative" }, // Should be filtered
-                            new Message { Id = "4", IsPrompt = false, Type = "Generative" }
-                        }
-                    },
-                    CopilotEventData = new CopilotEventData
-                    {
-                        AppHost = "Teams",
-                        Contexts = new List<Context>
+                            new Message { Id = "1", IsPrompt = false }
+                        },
+                        ModelTransparencyDetails = new List<ModelTransparencyDetail>
                         {
-                            new Context
-                            {
-                                Id = "https://microsoft.teams.com/threads/19:testchat@thread.v2",
-                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
-                            }
-                        }
-                    }
-                };
-
-                // Act
-                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
-                await copilotEventManager.CommitAllChanges();
-
-                // Assert - Should only save non-prompt messages (prompts are filtered during import)
-                var messages = await db.CopilotMessages
-                    .Where(m => m.ChatId == commonEvent.Id)
-                    .ToListAsync();
-
-                Assert.AreEqual(2, messages.Count); // Only 2 response messages, not 4 (prompts filtered out)
-            }
-        }
-
-        [TestMethod]
-        public async Task SaveCopilotEvent_WithNullParsedAuditEvent_HandlesGracefully()
-        {
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                // Arrange
-                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-
-                var commonEvent = new CommonAuditEvent
-                {
-                    TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "Test Null Event" + DateTime.Now.Ticks },
-                    User = new User { AzureAdId = "test", UserPrincipalName = "test@null.com" + DateTime.Now.Ticks },
-                    Id = Guid.NewGuid()
-                };
-
-                db.AuditEventsCommon.Add(commonEvent);
-                await db.SaveChangesAsync();
-
-                var auditLogContent = new CopilotAuditLogContent
-                {
-                    ParsedAuditEvent = null,
-                    CopilotEventData = new CopilotEventData
-                    {
-                        AppHost = "Teams",
-                        Contexts = new List<Context>
-                        {
-                            new Context
-                            {
-                                Id = "https://microsoft.teams.com/threads/19:testchat@thread.v2",
-                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
-                            }
-                        }
-                    }
-                };
-
-                // Act - Should not throw exception
-                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
-                await copilotEventManager.CommitAllChanges();
-
-                // Assert - Should complete without error (no data saved)
-                Assert.IsTrue(true);
-            }
-        }
-
-        #endregion
-
-        #region Database Integration Tests
-
-        [TestMethod]
-        public async Task SaveCopilotEvent_WithMessages_SavesCorrectly()
-        {
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                // Skip if migration hasn't been run
-                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_messages', 'U')").FirstOrDefault() == null)
-                {
-                    Assert.Inconclusive("Messages tables do not exist. Run migration first.");
-                    return;
-                }
-
-                // Arrange - Clear test data
-                await ClearExtendedDataTables(db);
-
-                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
-
-                var commonEvent = new CommonAuditEvent
-                {
-                    TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "Test Messages Op" + DateTime.Now.Ticks },
-                    User = new User { AzureAdId = "test", UserPrincipalName = "test@messages.com" + DateTime.Now.Ticks },
-                    Id = Guid.NewGuid()
-                };
-
-                db.AuditEventsCommon.Add(commonEvent);
-                await db.SaveChangesAsync();
-
-                // Create audit log content with messages
-                var auditLogContent = new CopilotAuditLogContent
-                {
-                    ParsedAuditEvent = new CopilotAuditEvent
-                    {
-                        Messages = new List<Message>
-                        {
-                            new Message { Id = "1", IsPrompt = false, Type = "Classic" },
-                            new Message { Id = "2", IsPrompt = false, Type = "Generative" },
-                            new Message { Id = "3", IsPrompt = false, Type = "Generative" },
-                            new Message { Id = "4", IsPrompt = false, Type = "TenantGraph" }
+                            new ModelTransparencyDetail { ModelName = "DEEP_LEO" }
                         }
                     },
                     CopilotEventData = new CopilotEventData
@@ -500,14 +747,339 @@ namespace Tests.UnitTests
                 await copilotEventManager.CommitAllChanges();
 
                 // Assert
-                var messages = await db.CopilotMessages
+                var aiModels = await db.CopilotEventAIModels
+                    .Include(m => m.AIModel)
                     .Where(m => m.ChatId == commonEvent.Id)
                     .ToListAsync();
 
-                Assert.AreEqual(4, messages.Count);
+                Assert.AreEqual(1, aiModels.Count);
+                Assert.AreEqual("DEEP_LEO", aiModels[0].AIModel.Name);
+            }
+        }
+
+        [TestMethod]
+        public async Task SaveCopilotEvent_WithMultipleModels_SavesAllCorrectly()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip if migration hasn't been run
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_ai_models', 'U')").FirstOrDefault() == null)
+                {
+                    Assert.Inconclusive("AI Models tables do not exist. Run migration first.");
+                    return;
+                }
+
+                // Arrange
+                await ClearExtendedDataTables(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test Multiple Models" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@multimodels.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                var auditLogContent = new CopilotAuditLogContent
+                {
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = "1", IsPrompt = false }
+                        },
+                        ModelTransparencyDetails = new List<ModelTransparencyDetail>
+                        {
+                            new ModelTransparencyDetail { ModelName = "DEEP_LEO" },
+                            new ModelTransparencyDetail { ModelName = "GPT-4" },
+                            new ModelTransparencyDetail { ModelName = "GPT-3.5-Turbo" }
+                        }
+                    },
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:testchat@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    }
+                };
+
+                // Act
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
+                await copilotEventManager.CommitAllChanges();
+
+                // Assert
+                var aiModels = await db.CopilotEventAIModels
+                    .Include(m => m.AIModel)
+                    .Where(m => m.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(3, aiModels.Count);
                 
-                // Note: MessageType was removed as it was never populated
-                // Messages are all responses (prompts filtered during import)
+                var modelNames = aiModels.Select(m => m.AIModel.Name).OrderBy(n => n).ToList();
+                Assert.IsTrue(modelNames.Contains("DEEP_LEO"));
+                Assert.IsTrue(modelNames.Contains("GPT-4"));
+                Assert.IsTrue(modelNames.Contains("GPT-3.5-Turbo"));
+            }
+        }
+
+        [TestMethod]
+        public async Task SaveCopilotEvent_WithDuplicateModels_DeduplicatesCorrectly()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip if migration hasn't been run
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_ai_models', 'U')").FirstOrDefault() == null)
+                {
+                    Assert.Inconclusive("AI Models tables do not exist. Run migration first.");
+                    return;
+                }
+
+                // Arrange
+                await ClearExtendedDataTables(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                // Create first event with DEEP_LEO
+                var commonEvent1 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test Dedup 1" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dedup1.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent1);
+                await db.SaveChangesAsync();
+
+                var auditLogContent1 = new CopilotAuditLogContent
+                {
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message> { new Message { Id = "1", IsPrompt = false } },
+                        ModelTransparencyDetails = new List<ModelTransparencyDetail>
+                        {
+                            new ModelTransparencyDetail { ModelName = "DEEP_LEO" }
+                        }
+                    },
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context { Id = "https://microsoft.teams.com/threads/19:testchat1@thread.v2", Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT }
+                        }
+                    }
+                };
+
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent1, commonEvent1);
+                await copilotEventManager.CommitAllChanges();
+
+                // Create second event with the same DEEP_LEO model
+                var commonEvent2 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test Dedup 2" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dedup2.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent2);
+                await db.SaveChangesAsync();
+
+                var auditLogContent2 = new CopilotAuditLogContent
+                {
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message> { new Message { Id = "2", IsPrompt = false } },
+                        ModelTransparencyDetails = new List<ModelTransparencyDetail>
+                        {
+                            new ModelTransparencyDetail { ModelName = "DEEP_LEO" }
+                        }
+                    },
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context { Id = "https://microsoft.teams.com/threads/19:testchat2@thread.v2", Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT }
+                        }
+                    }
+                };
+
+                // Act
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent2, commonEvent2);
+                await copilotEventManager.CommitAllChanges();
+
+                // Assert - Should only have one DEEP_LEO entry in lookup table
+                var allModels = await db.CopilotAIModels.ToListAsync();
+                var deepLeoModels = allModels.Where(m => m.Name == "DEEP_LEO").ToList();
+                Assert.AreEqual(1, deepLeoModels.Count, "DEEP_LEO should only appear once in lookup table");
+
+                // Assert - Both events should link to the same model
+                var event1Models = await db.CopilotEventAIModels.Include(m => m.AIModel).Where(m => m.ChatId == commonEvent1.Id).ToListAsync();
+                var event2Models = await db.CopilotEventAIModels.Include(m => m.AIModel).Where(m => m.ChatId == commonEvent2.Id).ToListAsync();
+
+                Assert.AreEqual(1, event1Models.Count);
+                Assert.AreEqual(1, event2Models.Count);
+                Assert.AreEqual(event1Models[0].ModelId, event2Models[0].ModelId, "Both events should reference the same model ID");
+            }
+        }
+
+        [TestMethod]
+        public async Task SaveCopilotEvent_WithNoModels_DoesNotCreateModelRecords()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip if migration hasn't been run
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_ai_models', 'U')").FirstOrDefault() == null)
+                {
+                    Assert.Inconclusive("AI Models tables do not exist. Run migration first.");
+                    return;
+                }
+
+                // Arrange
+                await ClearExtendedDataTables(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test No Models" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@nomodels.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                var auditLogContent = new CopilotAuditLogContent
+                {
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = "1", IsPrompt = false }
+                        },
+                        ModelTransparencyDetails = null // No model information
+                    },
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:testchat@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    }
+                };
+
+                // Act
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
+                await copilotEventManager.CommitAllChanges();
+
+                // Assert
+                var aiModels = await db.CopilotEventAIModels
+                    .Where(m => m.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(0, aiModels.Count, "Should not create model records when ModelTransparencyDetails is null");
+            }
+        }
+
+        [TestMethod]
+        public async Task SaveCopilotEvent_WithDeepReasoningModel_CalculatesCostCorrectly()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip if migration hasn't been run
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_ai_models', 'U')").FirstOrDefault() == null)
+                {
+                    Assert.Inconclusive("AI Models tables do not exist. Run migration first.");
+                    return;
+                }
+
+                // Arrange
+                await ClearExtendedDataTables(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test Deep Reasoning Cost" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@deepcost.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                var auditLogContent = new CopilotAuditLogContent
+                {
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = "1", IsPrompt = false },
+                            new Message { Id = "2", IsPrompt = false }
+                        },
+                        ModelTransparencyDetails = new List<ModelTransparencyDetail>
+                        {
+                            new ModelTransparencyDetail { ModelName = "DEEP_LEO" }
+                        },
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource { SiteUrl = "https://contoso.sharepoint.com/doc.docx", Type = "docx" }
+                        }
+                    },
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:testchat@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    }
+                };
+
+                // Act
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
+                await copilotEventManager.CommitAllChanges();
+
+                // Assert - Verify model was saved
+                var aiModels = await db.CopilotEventAIModels
+                    .Include(m => m.AIModel)
+                    .Where(m => m.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(1, aiModels.Count);
+                Assert.AreEqual("DEEP_LEO", aiModels[0].AIModel.Name);
+
+                // Assert - Verify cost calculation
+                var cost = CopilotCreditEstimation.Analyze(auditLogContent.ParsedAuditEvent);
+                // 2 messages × (2 generative + 10 tenant graph) + 5 deep reasoning = 29 credits
+                Assert.AreEqual(29, cost.TotalCredits);
+                Assert.AreEqual(1, cost.DeepReasoningActions);
+                Assert.IsTrue(cost.ModelsUsed.Contains("DEEP_LEO"));
             }
         }
 
@@ -517,6 +1089,13 @@ namespace Tests.UnitTests
 
         private async Task ClearExtendedDataTables(AnalyticsEntitiesContext db)
         {
+            // Clear AI Models
+            if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_ai_models', 'U')").FirstOrDefault() != null)
+            {
+                db.CopilotEventAIModels.RemoveRange(db.CopilotEventAIModels);
+                db.CopilotAIModels.RemoveRange(db.CopilotAIModels);
+            }
+
             // Clear Accessed Resources
             if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resources', 'U')").FirstOrDefault() != null)
             {

@@ -185,5 +185,37 @@ namespace Common.Entities.Entities.AuditLog
 
     #endregion
 
+    #region AI Model Transparency Tables
+
+    /// <summary>
+    /// Lookup table for AI model names used in Copilot conversations.
+    /// Stores unique model names like "DEEP_LEO" for deep reasoning.
+    /// </summary>
+    [Table("copilot_ai_models")]
+    public class CopilotAIModel : AbstractEFEntityWithName
+    {
+        // Name inherited from AbstractEFEntityWithName
+    }
+
+    /// <summary>
+    /// Junction table linking Copilot events to the AI models used.
+    /// Tracks which AI models were involved in generating responses for each conversation.
+    /// </summary>
+    [Table("copilot_event_ai_models")]
+    public class CopilotEventAIModel : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [ForeignKey(nameof(AIModel))]
+        [Column("model_id")]
+        public int ModelId { get; set; }
+        public CopilotAIModel AIModel { get; set; } = null;
+    }
+
+    #endregion
+
 }
 

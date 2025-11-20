@@ -134,7 +134,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord)
+                    MessagesJson = SerializeMessages(auditRecord),
+                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord)
                 });
                 return true; // staged regardless of meetingInfo retrieval success
             }
@@ -161,7 +162,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord)
+                    MessagesJson = SerializeMessages(auditRecord),
+                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord)
                 });
                 if (spFileInfo == null)
                 {
@@ -185,7 +187,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
                 AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                MessagesJson = SerializeMessages(auditRecord)
+                MessagesJson = SerializeMessages(auditRecord),
+                ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord)
             });
         }
 
@@ -237,6 +240,29 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to serialize Messages from audit record");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes ModelTransparencyDetails from CopilotAuditLogContent to JSON for staging table storage.
+        /// Used to track which AI models (e.g., DEEP_LEO for deep reasoning) were used in the conversation.
+        /// </summary>
+        internal string SerializeModelTransparencyDetails(CopilotAuditLogContent auditRecord)
+        {
+            if (auditRecord?.ParsedAuditEvent?.ModelTransparencyDetails == null || 
+                auditRecord.ParsedAuditEvent.ModelTransparencyDetails.Count == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.ModelTransparencyDetails);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize ModelTransparencyDetails from audit record");
                 return null;
             }
         }

@@ -143,3 +143,42 @@ CROSS APPLY OPENJSON(imports.messages_json) msg
 WHERE imports.messages_json IS NOT NULL;
 
 END
+
+
+-- Process AI Model Transparency only if tables exist (after migration)
+IF OBJECT_ID('dbo.copilot_ai_models', 'U') IS NOT NULL
+BEGIN
+
+-- Insert unique AI model names from model_transparency_json
+INSERT INTO copilot_ai_models ([name])
+SELECT DISTINCT JSON_VALUE(models.value, '$.ModelName') AS model_name
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.model_transparency_json) models
+WHERE imports.model_transparency_json IS NOT NULL
+  AND JSON_VALUE(models.value, '$.ModelName') IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM copilot_ai_models 
+    WHERE [name] = JSON_VALUE(models.value, '$.ModelName')
+  );
+
+
+-- Link AI models to copilot chats via junction table
+INSERT INTO copilot_event_ai_models (copilot_chat_id, model_id)
+SELECT DISTINCT 
+    imports.event_id,
+    cam.id
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.model_transparency_json) models
+INNER JOIN copilot_ai_models cam 
+    ON cam.[name] = JSON_VALUE(models.value, '$.ModelName')
+WHERE imports.model_transparency_json IS NOT NULL
+  AND JSON_VALUE(models.value, '$.ModelName') IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM copilot_event_ai_models ceam 
+    WHERE ceam.copilot_chat_id = imports.event_id
+      AND ceam.model_id = cam.id
+  );
+
+END

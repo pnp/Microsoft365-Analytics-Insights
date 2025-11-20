@@ -20,6 +20,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstima
         [JsonProperty("Messages")]
         public List<Message> Messages { get; set; }
 
+        [JsonProperty("ModelTransparencyDetails")]
+        public List<ModelTransparencyDetail> ModelTransparencyDetails { get; set; }
+
         // Additional properties to support comprehensive billing calculation
         [JsonProperty("AnswerType")]
         public string AnswerType { get; set; } // "Classic", "Generative", "TenantGraph"
@@ -58,5 +61,20 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstima
         /// </summary>
         [JsonProperty("Type")]
         public string Type { get; set; }
+    }
+
+    /// <summary>
+    /// Details about the AI model used for generating responses.
+    /// Used to detect deep reasoning (DEEP_LEO model) which has premium billing rates.
+    /// </summary>
+    public class ModelTransparencyDetail
+    {
+        /// <summary>
+        /// The name of the AI model used. Known values:
+        /// - "DEEP_LEO": Deep reasoning model (premium, 5 credits per agent action)
+        /// - Other GPT models: Standard generative models
+        /// </summary>
+        [JsonProperty("ModelName")]
+        public string ModelName { get; set; }
     }
 }

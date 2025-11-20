@@ -13,11 +13,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
     /// Calculates Copilot Credits consumed based on Microsoft Copilot Studio billing policies.
     /// 
     /// Note: This implementation provides estimates based on available audit log data.
-    /// Only Messages and AccessedResources are available in audit logs, so we can only
-    /// estimate message-level costs (Classic/Generative/TenantGraph answers).
+    /// Only Messages, AccessedResources, and ModelTransparencyDetails are available in audit logs.
     /// 
-    /// Agent Actions, AI Tool Usages, and Flow Actions are not included in audit logs,
-    /// so those costs cannot be calculated from this data source.
+    /// Agent Actions, AI Tool Usages, and Flow Actions are not explicitly listed in audit logs,
+    /// but some can be inferred (e.g., deep reasoning from DEEP_LEO model).
     /// 
     /// Reference: https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management
     /// </summary>
@@ -40,43 +39,16 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         
         /// <summary>
         /// Tenant graph grounding provides RAG over Microsoft Graph data (SharePoint, OneDrive, Email, Teams).
-        /// Cost: 10 credits per grounded message (not per resource accessed).
+        /// Cost: 10 credits per grounded message (additive with generative answer cost).
         /// This is an optional capability that can be enabled per agent.
         /// </summary>
         private const int TENANT_GRAPH_GROUNDING_CREDITS = 10;
         
-        // The following constants are for reference only - these costs cannot be calculated from audit logs
-        
         /// <summary>
         /// Agent actions (triggers, deep reasoning, topic transitions, tool invocations) cost 5 credits each.
-        /// Note: Not available in audit logs - cannot be calculated.
+        /// Deep reasoning can be detected from DEEP_LEO model in ModelTransparencyDetails.
         /// </summary>
         private const int AGENT_ACTION_CREDITS = 5;
-        
-        /// <summary>
-        /// Agent flow actions cost 13 credits per 100 actions (charged in increments).
-        /// Note: Not available in audit logs - cannot be calculated.
-        /// </summary>
-        private const int AGENT_FLOW_CREDITS_PER_100_ACTIONS = 13;
-        
-        // AI Tools billing (per 10 responses, rounded up)
-        /// <summary>
-        /// Basic AI tools: 1 credit per 10 responses.
-        /// Note: Not available in audit logs - cannot be calculated.
-        /// </summary>
-        private const int AI_TOOLS_BASIC_PER_10 = 1;
-        
-        /// <summary>
-        /// Standard AI tools: 15 credits per 10 responses.
-        /// Note: Not available in audit logs - cannot be calculated.
-        /// </summary>
-        private const int AI_TOOLS_STANDARD_PER_10 = 15;
-        
-        /// <summary>
-        /// Premium AI tools: 100 credits per 10 responses.
-        /// Note: Not available in audit logs - cannot be calculated.
-        /// </summary>
-        private const int AI_TOOLS_PREMIUM_PER_10 = 100;
         
         #endregion
 
@@ -88,6 +60,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [JsonProperty("TenantGraphGroundedAnswers")]
         public int TenantGraphGroundedAnswers { get; set; }
 
+        [JsonProperty("DeepReasoningActions")]
+        public int DeepReasoningActions { get; set; }
 
         [JsonProperty("TotalCredits")]
         public int TotalCredits { get; set; }
@@ -104,28 +78,36 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [JsonProperty("CreditBreakdown")]
         public Dictionary<string, int> CreditBreakdown { get; set; }
 
+        /// <summary>
+        /// List of AI models detected in the conversation (e.g., DEEP_LEO).
+        /// </summary>
+        [JsonProperty("ModelsUsed")]
+        public List<string> ModelsUsed { get; set; }
+
         #endregion
 
 
         /// <summary>
         /// Analyzes a Copilot audit event JSON and calculates the total Copilot Credits consumed.
         /// 
-        /// Billing Logic (based on available audit log data):
-        /// 1. Messages: Each response message is billed based on accessed resources
-        ///    - If tenant resources (SharePoint, OneDrive, etc.) accessed = 10 credits (Tenant Graph Grounding)
-        ///    - Otherwise = 2 credits (Generative Answer)
-        /// 2. AccessedResources: Used to detect tenant graph grounding, but does not multiply costs
+        /// Billing Logic (based on Microsoft documentation, effective March 25, 2025):
+        /// 1. Generative Answers: 2 credits per response message
+        /// 2. Tenant Graph Grounding: +10 credits per message (additive with generative)
+        /// 3. Deep Reasoning (DEEP_LEO model): 5 credits per agent action
+        /// 
+        /// Formula per message with tenant graph grounding:
+        ///   Total = 2 (generative) + 10 (tenant graph) = 12 credits
+        /// 
+        /// Formula per message with tenant graph + deep reasoning:
+        ///   Total = 2 (generative) + 10 (tenant graph) + 5 (deep reasoning) = 17 credits
         /// 
         /// Limitations:
-        /// - Agent Actions, AI Tool Usages, and Flow Actions are NOT included in audit logs
-        /// - Classic vs Generative answer types cannot be distinguished from audit logs
-        /// - This provides a minimum cost estimate based on available data
-        /// 
-        /// Note: The number of resources accessed does NOT multiply costs. Tenant graph grounding
-        /// costs 10 credits per message regardless of how many SharePoint files, emails, etc. are accessed.
+        /// - AI Tool Usages (premium tier billing) may be underestimated
+        /// - Flow Actions are NOT included in audit logs
+        /// - Classic vs Generative answer types cannot be fully distinguished
         /// </summary>
         /// <param name="json">JSON string containing the Copilot audit event data</param>
-        /// <returns>CreditReport with detailed billing breakdown based on available audit log data</returns>
+        /// <returns>CreditReport with detailed billing breakdown</returns>
         public static CopilotCreditEstimation Analyze(string json)
         {
             if (string.IsNullOrWhiteSpace(json))
@@ -134,7 +116,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 {
                     TotalCredits = 0,
                     ResourceTypeBreakdown = new Dictionary<string, int>(),
-                    CreditBreakdown = new Dictionary<string, int>()
+                    CreditBreakdown = new Dictionary<string, int>(),
+                    ModelsUsed = new List<string>()
                 };
             }
 
@@ -145,22 +128,23 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>
         /// Analyzes a Copilot audit event object and calculates the total Copilot Credits consumed.
         /// 
-        /// Billing Logic (based on available audit log data):
-        /// 1. Messages: Each response message is billed based on accessed resources
-        ///    - If tenant resources (SharePoint, OneDrive, etc.) accessed = 10 credits (Tenant Graph Grounding)
-        ///    - Otherwise = 2 credits (Generative Answer)
-        /// 2. AccessedResources: Used to detect tenant graph grounding, but does not multiply costs
+        /// Billing Logic (based on Microsoft documentation, effective March 25, 2025):
+        /// 1. Generative Answers: 2 credits per response message
+        /// 2. Tenant Graph Grounding: +10 credits per message (additive with generative)
+        /// 3. Deep Reasoning (DEEP_LEO model): 5 credits per agent action
         /// 
-        /// Limitations:
-        /// - Agent Actions, AI Tool Usages, and Flow Actions are NOT included in audit logs
-        /// - Classic vs Generative answer types cannot be distinguished from audit logs
-        /// - This provides a minimum cost estimate based on available data
+        /// Formula per message with tenant graph grounding:
+        ///   Total = 2 (generative) + 10 (tenant graph) = 12 credits
         /// 
-        /// Note: The number of resources accessed does NOT multiply costs. Tenant graph grounding
-        /// costs 10 credits per message regardless of how many SharePoint files, emails, etc. are accessed.
+        /// Formula per message with tenant graph + deep reasoning:
+        ///   Total = 2 (generative) + 10 (tenant graph) + 5 (deep reasoning) = 17 credits
+        /// 
+        /// Important: Deep reasoning is billed as an Agent Action (5 credits) when detected
+        /// via the DEEP_LEO model in ModelTransparencyDetails. This is separate from and
+        /// additive to message-level costs.
         /// </summary>
         /// <param name="auditEvent">The Copilot audit event object to analyze</param>
-        /// <returns>CreditReport with detailed billing breakdown based on available audit log data</returns>
+        /// <returns>CreditReport with detailed billing breakdown</returns>
         public static CopilotCreditEstimation Analyze(CopilotAuditEvent auditEvent)
         {
             if (auditEvent == null)
@@ -169,58 +153,79 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 {
                     TotalCredits = 0,
                     ResourceTypeBreakdown = new Dictionary<string, int>(),
-                    CreditBreakdown = new Dictionary<string, int>()
+                    CreditBreakdown = new Dictionary<string, int>(),
+                    ModelsUsed = new List<string>()
                 };
             }
 
             var report = new CopilotCreditEstimation
             {
                 ResourceTypeBreakdown = new Dictionary<string, int>(),
-                CreditBreakdown = new Dictionary<string, int>()
+                CreditBreakdown = new Dictionary<string, int>(),
+                ModelsUsed = new List<string>()
             };
 
             int totalCredits = 0;
 
             // STEP 1: Detect tenant graph usage
-            // If any Microsoft Graph resources (SharePoint, Email, Teams, etc.) were accessed,
+            // If any Microsoft Graph resources (SharePoint, OneDrive, Teams files, etc.) were accessed,
             // this indicates tenant graph grounding was used for the conversation.
-            // This affects billing: regular generative answers (2 credits) become tenant graph grounded (10 credits).
+            // Per Microsoft docs: "tenant graph grounding for messages" costs 10 credits
+            // PLUS the base generative answer cost of 2 credits = 12 credits total per message
             bool hasTenantGraphResources = HasTenantGraphResources(auditEvent.AccessedResources);
 
-            // STEP 2: Count and bill response messages
-            // Only non-prompt messages (isPrompt=false) are billable.
-            // Each message is billed once regardless of how many resources it accessed.
+            // STEP 2: Detect deep reasoning usage
+            // Deep reasoning is indicated by the DEEP_LEO model in ModelTransparencyDetails.
+            // Per Microsoft docs (March 25, 2025): "deep reasoning is available in AI prompts and
+            // agent flows. Charges for deep reasoning in AI prompts use the Text and generative 
+            // AI tools (premium) rate, and charges for agent flows use the Flow actions rate."
             // 
-            // Note: Audit logs don't include explicit message types, so we infer:
-            // - Messages with tenant resources = Tenant Graph Grounding (10 credits)
-            // - Messages without tenant resources = Generative Answer (2 credits)
-            // - Classic answers cannot be distinguished from audit logs
+            // For audit log purposes, we bill as an Agent Action: 5 credits per conversation
+            // that used DEEP_LEO, as this represents the deep reasoning invocation.
+            bool hasDeepReasoning = HasDeepReasoning(auditEvent.ModelTransparencyDetails);
+            if (hasDeepReasoning)
+            {
+                report.ModelsUsed.Add("DEEP_LEO");
+            }
+
+            // STEP 3: Count and bill response messages
+            // Only non-prompt messages (isPrompt=false) are billable.
+            // 
+            // Billing formula per message:
+            // - Generative Answer: 2 credits (always for AI-generated responses)
+            // - Tenant Graph Grounding: +10 credits (if tenant resources accessed)
+            // - Total per message: 2 or 12 credits
             if (auditEvent.Messages != null)
             {
                 foreach (var message in auditEvent.Messages.Where(m => !m.IsPrompt))
                 {
+                    // Every AI-generated response is a generative answer (2 credits)
+                    report.GenerativeAnswers++;
+                    totalCredits += GENERATIVE_ANSWER_CREDITS;
+                    AddToBreakdown(report.CreditBreakdown, "Generative Answers", GENERATIVE_ANSWER_CREDITS);
 
-                    // Type not specified - infer based on accessed resources
-                    // This is the current behavior as audit logs don't yet include explicit message types
+                    // If tenant resources were accessed, add tenant graph grounding cost (10 credits)
                     if (hasTenantGraphResources)
                     {
-                        // Microsoft Graph resources were accessed - bill as tenant graph grounding (10 credits)
                         report.TenantGraphGroundedAnswers++;
                         totalCredits += TENANT_GRAPH_GROUNDING_CREDITS;
                         AddToBreakdown(report.CreditBreakdown, "Tenant Graph Grounding", TENANT_GRAPH_GROUNDING_CREDITS);
                     }
-                    else
-                    {
-                        // Only web search or no resources - bill as standard generative answer (2 credits)
-                        report.GenerativeAnswers++;
-                        totalCredits += GENERATIVE_ANSWER_CREDITS;
-                        AddToBreakdown(report.CreditBreakdown, "Generative Answers", GENERATIVE_ANSWER_CREDITS);
-                    }
-
                 }
             }
 
-            // STEP 3: Build resource breakdown (for reference/analytics only)
+            // STEP 4: Bill deep reasoning as an Agent Action
+            // Deep reasoning (DEEP_LEO) is billed once per conversation as an Agent Action.
+            // This represents the invocation of the advanced reasoning capability.
+            // Cost: 5 credits per agent action
+            if (hasDeepReasoning)
+            {
+                report.DeepReasoningActions = 1;  // One deep reasoning action per conversation
+                totalCredits += AGENT_ACTION_CREDITS;
+                AddToBreakdown(report.CreditBreakdown, "Agent Actions (Deep Reasoning)", AGENT_ACTION_CREDITS);
+            }
+
+            // STEP 5: Build resource breakdown (for reference/analytics only)
             // This shows what types of resources were accessed but does NOT affect billing.
             // Resources are billed at the message level, not per resource.
             report.ResourceTypeBreakdown = auditEvent.AccessedResources?
@@ -310,10 +315,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 if (!string.IsNullOrEmpty(resource.SiteUrl))
                 {
                     var siteUrlLower = resource.SiteUrl.ToLower();
+                    
+                    // Teams file URLs contain specific patterns
                     if (siteUrlLower.Contains("sharepoint.com") ||
                         siteUrlLower.Contains("onedrive.") ||
                         siteUrlLower.Contains("outlook.office") ||
-                        siteUrlLower.Contains("teams.microsoft.com"))
+                        siteUrlLower.Contains("teams.microsoft.com") ||
+                        siteUrlLower.Contains("asyncgw.teams.microsoft.com"))  // Teams async gateway for file access
                     {
                         return true;
                     }
@@ -322,6 +330,37 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
             // No tenant resources found - likely web search only
             return false;
+        }
+
+        /// <summary>
+        /// Determines if deep reasoning (DEEP_LEO model) was used in the conversation.
+        /// 
+        /// Deep reasoning is Microsoft's advanced AI capability that provides more thorough
+        /// analysis and problem-solving. It's indicated by the "DEEP_LEO" model name in
+        /// the ModelTransparencyDetails field.
+        /// 
+        /// Billing: Deep reasoning is charged as an Agent Action (5 credits) per Microsoft
+        /// documentation (effective March 25, 2025). The charge is per conversation, not
+        /// per message, as it represents the invocation of the advanced reasoning capability.
+        /// 
+        /// Reference: "Starting on March 25, 2025, deep reasoning is available in AI prompts 
+        /// and agent flows. Charges for deep reasoning in AI prompts use the Text and 
+        /// generative AI tools (premium) rate, and charges for agent flows use the Flow 
+        /// actions rate."
+        /// </summary>
+        /// <param name="modelDetails">List of model transparency details from the audit log</param>
+        /// <returns>True if DEEP_LEO model was used, false otherwise</returns>
+        private static bool HasDeepReasoning(List<ModelTransparencyDetail> modelDetails)
+        {
+            if (modelDetails == null || modelDetails.Count == 0)
+            {
+                return false;
+            }
+
+            // Check if any model is DEEP_LEO (case-insensitive)
+            return modelDetails.Any(m => 
+                !string.IsNullOrEmpty(m.ModelName) && 
+                m.ModelName.Equals("DEEP_LEO", StringComparison.OrdinalIgnoreCase));
         }
     }
 
