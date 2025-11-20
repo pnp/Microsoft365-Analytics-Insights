@@ -308,7 +308,6 @@ namespace Common.Entities
         
         // New: Message, AgentAction, AIToolUsage, and FlowAction tracking
         public DbSet<CopilotMessage> CopilotMessages { get; set; }
-        public DbSet<CopilotMessageType> CopilotMessageTypes { get; set; }
         public DbSet<CopilotAgentAction> CopilotAgentActions { get; set; }
         public DbSet<CopilotAgentActionType> CopilotAgentActionTypes { get; set; }
         public DbSet<CopilotAIToolUsage> CopilotAIToolUsages { get; set; }

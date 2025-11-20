@@ -167,8 +167,8 @@ namespace Common.Entities.Entities.AuditLog
     #region Message Tracking Tables
 
     /// <summary>
-    /// Represents a message in a Copilot conversation.
-    /// Messages can be prompts (user input) or responses (Copilot output).
+    /// Represents a Copilot response message in a conversation.
+    /// Note: Only response messages (not user prompts) are tracked in the import process.
     /// </summary>
     [Table("copilot_event_messages")]
     public class CopilotMessage : AbstractEFEntity
@@ -181,25 +181,6 @@ namespace Common.Entities.Entities.AuditLog
         [Column("message_id")]
         [MaxLength(500)]
         public string MessageId { get; set; } = null;
-
-        [Column("is_prompt")]
-        public bool IsPrompt { get; set; }
-
-        /// <summary>
-        /// Type of response: Classic, Generative, or TenantGraph
-        /// </summary>
-        [ForeignKey(nameof(MessageType))]
-        [Column("message_type_id")]
-        public int? MessageTypeId { get; set; }
-        public CopilotMessageType MessageType { get; set; } = null;
-    }
-
-    /// <summary>
-    /// Lookup table for message types (Classic, Generative, TenantGraph)
-    /// </summary>
-    [Table("copilot_event_message_types")]
-    public class CopilotMessageType : AbstractEFEntityWithName
-    {
     }
 
     #endregion

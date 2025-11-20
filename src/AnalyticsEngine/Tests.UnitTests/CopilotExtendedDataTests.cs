@@ -602,13 +602,12 @@ namespace Tests.UnitTests
                 await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
                 await copilotEventManager.CommitAllChanges();
 
-                // Assert - Should only save non-prompt messages
+                // Assert - Should only save non-prompt messages (prompts are filtered during import)
                 var messages = await db.CopilotMessages
                     .Where(m => m.ChatId == commonEvent.Id)
                     .ToListAsync();
 
-                Assert.AreEqual(2, messages.Count); // Only 2 response messages, not 4
-                Assert.IsTrue(messages.All(m => !m.IsPrompt));
+                Assert.AreEqual(2, messages.Count); // Only 2 response messages, not 4 (prompts filtered out)
             }
         }
 
@@ -722,22 +721,13 @@ namespace Tests.UnitTests
 
                 // Assert
                 var messages = await db.CopilotMessages
-                    .Include(m => m.MessageType)
                     .Where(m => m.ChatId == commonEvent.Id)
                     .ToListAsync();
 
                 Assert.AreEqual(4, messages.Count);
                 
-                var classicMessages = messages.Where(m => m.MessageType?.Name == "Classic").ToList();
-                var generativeMessages = messages.Where(m => m.MessageType?.Name == "Generative").ToList();
-                var tenantGraphMessages = messages.Where(m => m.MessageType?.Name == "TenantGraph").ToList();
-
-                Assert.AreEqual(1, classicMessages.Count);
-                Assert.AreEqual(2, generativeMessages.Count);
-                Assert.AreEqual(1, tenantGraphMessages.Count);
-
-                // Verify all are marked as not prompts
-                Assert.IsTrue(messages.All(m => !m.IsPrompt));
+                // Note: MessageType was removed as it was never populated
+                // Messages are all responses (prompts filtered during import)
             }
         }
 
@@ -1072,7 +1062,6 @@ namespace Tests.UnitTests
             if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_messages', 'U')").FirstOrDefault() != null)
             {
                 db.CopilotMessages.RemoveRange(db.CopilotMessages);
-                db.CopilotMessageTypes.RemoveRange(db.CopilotMessageTypes);
             }
 
             // Clear Agent Actions

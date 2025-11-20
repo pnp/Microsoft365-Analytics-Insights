@@ -42,7 +42,7 @@ namespace Tests.UnitTests
         async Task ClearAccessedResources(AnalyticsEntitiesContext db)
         {
             // Clear AccessedResources data for tests
-            if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() != 0)
+            if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault().GetValueOrDefault() != 0)
             {
                 db.CopilotEventAccessedResources.RemoveRange(db.CopilotEventAccessedResources);
                 db.CopilotAccessedResourceIds.RemoveRange(db.CopilotAccessedResourceIds);
@@ -290,12 +290,6 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                // Skip test if migration hasn't been run yet
-                if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() == 0)
-                {
-                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
-                    return;
-                }
 
                 await ClearEvents(db);
                 await ClearAccessedResources(db);
@@ -392,12 +386,6 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                // Skip test if migration hasn't been run yet
-                if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() == 0)
-                {
-                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
-                    return;
-                }
 
                 await ClearEvents(db);
                 await ClearAccessedResources(db);
@@ -465,7 +453,7 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Skip test if migration hasn't been run yet
-                if (db.Database.SqlQuery<int>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault() == 0)
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resources', 'U')").FirstOrDefault().GetValueOrDefault() == 0)
                 {
                     Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
                     return;

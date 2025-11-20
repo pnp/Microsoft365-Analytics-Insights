@@ -126,10 +126,5 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string SensitivityLabelId { get; set; } = null;
         public string Type { get; set; } = null;
         public string SiteUrl { get; set; }
-
-        [JsonIgnore]
-        public bool IsValidOffice365Data => !string.IsNullOrEmpty(Id);
     }
-
-
 }

@@ -190,7 +190,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AppHost = auditRecord.CopilotEventData.AppHost,
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
-                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources.Where(r=> r.IsValidOffice365Data)),
+                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
                 MessagesJson = SerializeMessages(auditRecord),
                 AgentActionsJson = SerializeAgentActions(auditRecord),
                 AIToolUsagesJson = SerializeAIToolUsages(auditRecord),
@@ -222,6 +222,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>
         /// Serializes Messages from CopilotAuditLogContent to JSON for staging table storage.
         /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
+        /// Only serializes response messages (IsPrompt = false), not user prompts.
         /// </summary>
         internal string SerializeMessages(CopilotAuditLogContent auditRecord)
         {
@@ -232,7 +233,15 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             try
             {
-                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.Messages);
+                // Filter out prompt messages - only serialize responses
+                var responseMessages = auditRecord.ParsedAuditEvent.Messages.Where(m => !m.IsPrompt).ToList();
+                
+                if (responseMessages.Count == 0)
+                {
+                    return null;
+                }
+                
+                return JsonConvert.SerializeObject(responseMessages);
             }
             catch (Exception ex)
             {

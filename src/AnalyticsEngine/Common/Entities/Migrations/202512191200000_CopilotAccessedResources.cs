@@ -70,31 +70,17 @@ namespace Common.Entities.Migrations
 
             // ===== Messages Tables =====
             CreateTable(
-                "dbo.copilot_event_message_types",
-                c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        name = c.String(nullable: false, maxLength: 100),
-                    })
-                .PrimaryKey(t => t.id)
-                .Index(t => t.name, unique: true);
-            
-            CreateTable(
                 "dbo.copilot_event_messages",
                 c => new
                     {
                         id = c.Int(nullable: false, identity: true),
                         copilot_chat_id = c.Guid(nullable: false),
-                        message_id = c.Guid(nullable: false),
-                        is_prompt = c.Boolean(nullable: false),
-                        message_type_id = c.Int(),
+                        message_id = c.String(maxLength: 500),
                     })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .ForeignKey("dbo.copilot_event_message_types", t => t.message_type_id)
                 .Index(t => t.copilot_chat_id)
-                .Index(t => t.message_id)
-                .Index(t => t.message_type_id);
+                .Index(t => t.message_id);
 
             // ===== Agent Actions Tables =====
             CreateTable(
@@ -194,14 +180,10 @@ namespace Common.Entities.Migrations
             DropTable("dbo.copilot_event_agent_action_types");
             
             // ===== Drop Messages =====
-            DropForeignKey("dbo.copilot_event_messages", "message_type_id", "dbo.copilot_event_message_types");
             DropForeignKey("dbo.copilot_event_messages", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.copilot_event_messages", new[] { "message_type_id" });
             DropIndex("dbo.copilot_event_messages", new[] { "message_id" });
             DropIndex("dbo.copilot_event_messages", new[] { "copilot_chat_id" });
             DropTable("dbo.copilot_event_messages");
-            DropIndex("dbo.copilot_event_message_types", new[] { "name" });
-            DropTable("dbo.copilot_event_message_types");
             
             // ===== Drop Accessed Resources =====
             DropForeignKey("dbo.copilot_event_accessed_resources", "sensitivity_label_id", "dbo.copilot_event_sensitivity_labels");

@@ -1,4 +1,4 @@
---Insert new agents
+-- Insert new agents
 INSERT INTO copilot_agents([name], [agent_id])
 	SELECT distinct imports.agent_name, imports.agent_id
 	FROM [${STAGING_TABLE_ACTIVITY}] imports
@@ -133,32 +133,14 @@ END
 IF OBJECT_ID('dbo.copilot_event_messages', 'U') IS NOT NULL
 BEGIN
 
--- Insert unique message types
-INSERT INTO copilot_event_message_types ([name])
-SELECT DISTINCT JSON_VALUE(msg.value, '$.Type') AS message_type
-FROM [${STAGING_TABLE_ACTIVITY}] imports
-CROSS APPLY OPENJSON(imports.messages_json) msg
-WHERE JSON_VALUE(msg.value, '$.Type') IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 
-    FROM copilot_event_message_types 
-    WHERE [name] = JSON_VALUE(msg.value, '$.Type')
-  );
-
-
--- Insert message records (only responses, not prompts)
-INSERT INTO copilot_event_messages (copilot_chat_id, message_id, is_prompt, message_type_id)
+-- Insert message records (only responses, not prompts - prompts are filtered before this SQL runs)
+INSERT INTO copilot_event_messages (copilot_chat_id, message_id)
 SELECT 
     imports.event_id,
-    ISNULL(JSON_VALUE(msg.value, '$.Id'), NEWID()), -- Generate GUID if no ID provided
-    CASE WHEN JSON_VALUE(msg.value, '$.IsPrompt') = 'true' THEN 1 ELSE 0 END, -- Convert JSON boolean string to BIT
-    mt.id
+    ISNULL(JSON_VALUE(msg.value, '$.Id'), NEWID()) -- Generate GUID if no ID provided
 FROM [${STAGING_TABLE_ACTIVITY}] imports
 CROSS APPLY OPENJSON(imports.messages_json) msg
-LEFT JOIN copilot_event_message_types mt 
-    ON mt.[name] = JSON_VALUE(msg.value, '$.Type')
-WHERE imports.messages_json IS NOT NULL
-  AND (JSON_VALUE(msg.value, '$.IsPrompt') IS NULL OR JSON_VALUE(msg.value, '$.IsPrompt') <> 'true'); -- Only save response messages
+WHERE imports.messages_json IS NOT NULL;
 
 END
 
