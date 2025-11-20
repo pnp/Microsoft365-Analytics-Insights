@@ -81,104 +81,12 @@ namespace Common.Entities.Migrations
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.message_id);
-
-            // ===== Agent Actions Tables =====
-            CreateTable(
-                "dbo.copilot_event_agent_action_types",
-                c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        name = c.String(nullable: false, maxLength: 100),
-                    })
-                .PrimaryKey(t => t.id)
-                .Index(t => t.name, unique: true);
-            
-            CreateTable(
-                "dbo.copilot_event_agent_actions",
-                c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        copilot_chat_id = c.Guid(nullable: false),
-                        action_id = c.Guid(nullable: false),
-                        action_type_id = c.Int(),
-                    })
-                .PrimaryKey(t => t.id)
-                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .ForeignKey("dbo.copilot_event_agent_action_types", t => t.action_type_id)
-                .Index(t => t.copilot_chat_id)
-                .Index(t => t.action_id)
-                .Index(t => t.action_type_id);
-            
-
-            // ===== AI Tool Usages Tables =====
-            CreateTable(
-                "dbo.copilot_event_ai_tool_tiers",
-                c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        name = c.String(nullable: false, maxLength: 50),
-                    })
-                .PrimaryKey(t => t.id)
-                .Index(t => t.name, unique: true);
-            
-            CreateTable(
-                "dbo.copilot_event_ai_tool_usages",
-                c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        copilot_chat_id = c.Guid(nullable: false),
-                        tool_id = c.String(nullable: false, maxLength: 500),
-                        tier_id = c.Int(),
-                        response_count = c.Int(nullable: false),
-                    })
-                .PrimaryKey(t => t.id)
-                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .ForeignKey("dbo.copilot_event_ai_tool_tiers", t => t.tier_id)
-                .Index(t => t.copilot_chat_id)
-                .Index(t => t.tier_id);
-
-            // ===== Flow Actions Table =====
-            CreateTable(
-                "dbo.copilot_event_flow_actions",
-                c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        copilot_chat_id = c.Guid(nullable: false),
-                        action_count = c.Int(nullable: false),
-                    })
-                .PrimaryKey(t => t.id)
-                .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
-                .Index(t => t.copilot_chat_id);
             
             Console.WriteLine("DB SCHEMA: All Copilot extended data tables created successfully.");
         }
         
         public override void Down()
         {
-            // ===== Drop Flow Actions =====
-            DropForeignKey("dbo.copilot_event_flow_actions", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.copilot_event_flow_actions", new[] { "copilot_chat_id" });
-            DropTable("dbo.copilot_event_flow_actions");
-            
-            // ===== Drop AI Tool Usages =====
-            DropForeignKey("dbo.copilot_event_ai_tool_usages", "tier_id", "dbo.copilot_event_ai_tool_tiers");
-            DropForeignKey("dbo.copilot_event_ai_tool_usages", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.copilot_event_ai_tool_usages", new[] { "tier_id" });
-            DropIndex("dbo.copilot_event_ai_tool_usages", new[] { "copilot_chat_id" });
-            DropTable("dbo.copilot_event_ai_tool_usages");
-            DropIndex("dbo.copilot_event_ai_tool_tiers", new[] { "name" });
-            DropTable("dbo.copilot_event_ai_tool_tiers");
-            
-            // ===== Drop Agent Actions =====
-            DropForeignKey("dbo.copilot_event_agent_actions", "action_type_id", "dbo.copilot_event_agent_action_types");
-            DropForeignKey("dbo.copilot_event_agent_actions", "copilot_chat_id", "dbo.event_copilot_chats");
-            DropIndex("dbo.copilot_event_agent_actions", new[] { "action_type_id" });
-            DropIndex("dbo.copilot_event_agent_actions", new[] { "action_id" });
-            DropIndex("dbo.copilot_event_agent_actions", new[] { "copilot_chat_id" });
-            DropTable("dbo.copilot_event_agent_actions");
-            DropIndex("dbo.copilot_event_agent_action_types", new[] { "name" });
-            DropTable("dbo.copilot_event_agent_action_types");
-            
             // ===== Drop Messages =====
             DropForeignKey("dbo.copilot_event_messages", "copilot_chat_id", "dbo.event_copilot_chats");
             DropIndex("dbo.copilot_event_messages", new[] { "message_id" });

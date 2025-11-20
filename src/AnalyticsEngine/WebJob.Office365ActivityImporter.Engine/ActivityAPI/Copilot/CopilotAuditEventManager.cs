@@ -134,10 +134,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord),
-                    AgentActionsJson = SerializeAgentActions(auditRecord),
-                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord),
-                    FlowActionsJson = SerializeFlowActions(auditRecord)
+                    MessagesJson = SerializeMessages(auditRecord)
                 });
                 return true; // staged regardless of meetingInfo retrieval success
             }
@@ -164,10 +161,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord),
-                    AgentActionsJson = SerializeAgentActions(auditRecord),
-                    AIToolUsagesJson = SerializeAIToolUsages(auditRecord),
-                    FlowActionsJson = SerializeFlowActions(auditRecord)
+                    MessagesJson = SerializeMessages(auditRecord)
                 });
                 if (spFileInfo == null)
                 {
@@ -191,10 +185,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
                 AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                MessagesJson = SerializeMessages(auditRecord),
-                AgentActionsJson = SerializeAgentActions(auditRecord),
-                AIToolUsagesJson = SerializeAIToolUsages(auditRecord),
-                FlowActionsJson = SerializeFlowActions(auditRecord)
+                MessagesJson = SerializeMessages(auditRecord)
             });
         }
 
@@ -250,83 +241,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
         }
 
-        /// <summary>
-        /// Serializes AgentActions from CopilotAuditLogContent to JSON for staging table storage.
-        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
-        /// </summary>
-        internal string SerializeAgentActions(CopilotAuditLogContent auditRecord)
-        {
-            if (auditRecord?.ParsedAuditEvent == null)
-            {
-                return null;
-            }
-
-            try
-            {
-                // Check for new AgentActions property first
-                if (auditRecord.ParsedAuditEvent.AgentActions != null && auditRecord.ParsedAuditEvent.AgentActions.Count > 0)
-                {
-                    return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.AgentActions);
-                }
-                
-                // Fallback to AISystemPlugin for backwards compatibility
-                if (auditRecord.ParsedAuditEvent.AISystemPlugin != null && auditRecord.ParsedAuditEvent.AISystemPlugin.Count > 0)
-                {
-                    return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.AISystemPlugin);
-                }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to serialize AgentActions from audit record");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Serializes AIToolUsages from CopilotAuditLogContent to JSON for staging table storage.
-        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
-        /// </summary>
-        internal string SerializeAIToolUsages(CopilotAuditLogContent auditRecord)
-        {
-            if (auditRecord?.ParsedAuditEvent?.AIToolUsages == null || auditRecord.ParsedAuditEvent.AIToolUsages.Count == 0)
-            {
-                return null;
-            }
-
-            try
-            {
-                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.AIToolUsages);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to serialize AIToolUsages from audit record");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Serializes FlowActions from CopilotAuditLogContent to JSON for staging table storage.
-        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
-        /// </summary>
-        internal string SerializeFlowActions(CopilotAuditLogContent auditRecord)
-        {
-            if (auditRecord?.ParsedAuditEvent?.FlowActions == null || auditRecord.ParsedAuditEvent.FlowActions.ActionCount == 0)
-            {
-                return null;
-            }
-
-            try
-            {
-                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.FlowActions);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to serialize FlowActions from audit record");
-                return null;
-            }
-        }
         /// <summary>
         /// Commits all staged entities to their respective staging tables + merge scripts, then clears internal state.
         /// </summary>

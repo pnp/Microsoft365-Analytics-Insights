@@ -7,10 +7,18 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 {
-    
+
     /// <summary>
     /// Detailed billing report for a Copilot audit event.
     /// Calculates Copilot Credits consumed based on Microsoft Copilot Studio billing policies.
+    /// 
+    /// Note: This implementation provides estimates based on available audit log data.
+    /// Only Messages and AccessedResources are available in audit logs, so we can only
+    /// estimate message-level costs (Classic/Generative/TenantGraph answers).
+    /// 
+    /// Agent Actions, AI Tool Usages, and Flow Actions are not included in audit logs,
+    /// so those costs cannot be calculated from this data source.
+    /// 
     /// Reference: https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management
     /// </summary>
     public class CopilotCreditEstimation
@@ -21,6 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         
         /// <summary>
         /// Classic answers are manually authored, predefined responses. Cost: 1 credit per answer.
+        /// Note: Currently not distinguishable from audit logs - all answers estimated as Generative or TenantGraph.
         /// </summary>
         private const int CLASSIC_ANSWER_CREDITS = 1;
         
@@ -30,103 +39,93 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         private const int GENERATIVE_ANSWER_CREDITS = 2;
         
         /// <summary>
-        /// Agent actions include triggers, deep reasoning, topic transitions, and tool invocations.
-        /// Each action costs 5 credits regardless of complexity.
-        /// </summary>
-        private const int AGENT_ACTION_CREDITS = 5;
-        
-        /// <summary>
         /// Tenant graph grounding provides RAG over Microsoft Graph data (SharePoint, OneDrive, Email, Teams).
         /// Cost: 10 credits per grounded message (not per resource accessed).
         /// This is an optional capability that can be enabled per agent.
         /// </summary>
         private const int TENANT_GRAPH_GROUNDING_CREDITS = 10;
         
+        // The following constants are for reference only - these costs cannot be calculated from audit logs
+        
         /// <summary>
-        /// Agent flow actions are predefined sequences that execute without requiring reasoning at each step.
-        /// Cost: 13 credits per 100 actions (charged in increments).
+        /// Agent actions (triggers, deep reasoning, topic transitions, tool invocations) cost 5 credits each.
+        /// Note: Not available in audit logs - cannot be calculated.
+        /// </summary>
+        private const int AGENT_ACTION_CREDITS = 5;
+        
+        /// <summary>
+        /// Agent flow actions cost 13 credits per 100 actions (charged in increments).
+        /// Note: Not available in audit logs - cannot be calculated.
         /// </summary>
         private const int AGENT_FLOW_CREDITS_PER_100_ACTIONS = 13;
         
         // AI Tools billing (per 10 responses, rounded up)
         /// <summary>
-        /// Basic AI tools use lightweight language models. Cost: 1 credit per 10 responses.
+        /// Basic AI tools: 1 credit per 10 responses.
+        /// Note: Not available in audit logs - cannot be calculated.
         /// </summary>
         private const int AI_TOOLS_BASIC_PER_10 = 1;
         
         /// <summary>
-        /// Standard AI tools use standard language models. Cost: 15 credits per 10 responses.
+        /// Standard AI tools: 15 credits per 10 responses.
+        /// Note: Not available in audit logs - cannot be calculated.
         /// </summary>
         private const int AI_TOOLS_STANDARD_PER_10 = 15;
         
         /// <summary>
-        /// Premium AI tools use advanced models including deep reasoning. Cost: 100 credits per 10 responses.
+        /// Premium AI tools: 100 credits per 10 responses.
+        /// Note: Not available in audit logs - cannot be calculated.
         /// </summary>
         private const int AI_TOOLS_PREMIUM_PER_10 = 100;
         
         #endregion
 
         #region Properties
-        
-        // New detailed properties
-        [JsonProperty("ClassicAnswers")]
-        public int ClassicAnswers { get; set; }
-        
+
         [JsonProperty("GenerativeAnswers")]
         public int GenerativeAnswers { get; set; }
-        
+
         [JsonProperty("TenantGraphGroundedAnswers")]
         public int TenantGraphGroundedAnswers { get; set; }
-        
-        [JsonProperty("AgentActionCount")]
-        public int AgentActionCount { get; set; }
-        
-        [JsonProperty("FlowActions")]
-        public int FlowActions { get; set; }
-        
-        // AI Tools breakdown
-        [JsonProperty("BasicAIToolResponses")]
-        public int BasicAIToolResponses { get; set; }
-        
-        [JsonProperty("StandardAIToolResponses")]
-        public int StandardAIToolResponses { get; set; }
-        
-        [JsonProperty("PremiumAIToolResponses")]
-        public int PremiumAIToolResponses { get; set; }
+
 
         [JsonProperty("TotalCredits")]
         public int TotalCredits { get; set; }
-        
+
         /// <summary>
         /// Breakdown of accessed resource types (for reference only, does not affect billing).
         /// </summary>
         [JsonProperty("ResourceTypeBreakdown")]
         public Dictionary<string, int> ResourceTypeBreakdown { get; set; }
-        
+
         /// <summary>
         /// Detailed breakdown showing how many credits were consumed by each billing category.
         /// </summary>
         [JsonProperty("CreditBreakdown")]
         public Dictionary<string, int> CreditBreakdown { get; set; }
-        
+
         #endregion
 
 
         /// <summary>
         /// Analyzes a Copilot audit event JSON and calculates the total Copilot Credits consumed.
         /// 
-        /// Billing Logic:
-        /// 1. Messages: Each response message is billed based on its type (Classic=1, Generative=2, TenantGraph=10)
-        /// 2. Agent Actions: Each action (plugin, tool invocation) costs 5 credits
-        /// 3. AI Tools: Billed per 10 responses based on tier (Basic=1, Standard=15, Premium=100)
-        /// 4. Flow Actions: Billed per 100 actions at 13 credits per 100
-        /// 5. Tenant Graph Grounding: Inferred from accessed resources if not explicitly specified
+        /// Billing Logic (based on available audit log data):
+        /// 1. Messages: Each response message is billed based on accessed resources
+        ///    - If tenant resources (SharePoint, OneDrive, etc.) accessed = 10 credits (Tenant Graph Grounding)
+        ///    - Otherwise = 2 credits (Generative Answer)
+        /// 2. AccessedResources: Used to detect tenant graph grounding, but does not multiply costs
+        /// 
+        /// Limitations:
+        /// - Agent Actions, AI Tool Usages, and Flow Actions are NOT included in audit logs
+        /// - Classic vs Generative answer types cannot be distinguished from audit logs
+        /// - This provides a minimum cost estimate based on available data
         /// 
         /// Note: The number of resources accessed does NOT multiply costs. Tenant graph grounding
         /// costs 10 credits per message regardless of how many SharePoint files, emails, etc. are accessed.
         /// </summary>
         /// <param name="json">JSON string containing the Copilot audit event data</param>
-        /// <returns>CreditReport with detailed billing breakdown</returns>
+        /// <returns>CreditReport with detailed billing breakdown based on available audit log data</returns>
         public static CopilotCreditEstimation Analyze(string json)
         {
             if (string.IsNullOrWhiteSpace(json))
@@ -146,18 +145,22 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>
         /// Analyzes a Copilot audit event object and calculates the total Copilot Credits consumed.
         /// 
-        /// Billing Logic:
-        /// 1. Messages: Each response message is billed based on its type (Classic=1, Generative=2, TenantGraph=10)
-        /// 2. Agent Actions: Each action (plugin, tool invocation) costs 5 credits
-        /// 3. AI Tools: Billed per 10 responses based on tier (Basic=1, Standard=15, Premium=100)
-        /// 4. Flow Actions: Billed per 100 actions at 13 credits per 100
-        /// 5. Tenant Graph Grounding: Inferred from accessed resources if not explicitly specified
+        /// Billing Logic (based on available audit log data):
+        /// 1. Messages: Each response message is billed based on accessed resources
+        ///    - If tenant resources (SharePoint, OneDrive, etc.) accessed = 10 credits (Tenant Graph Grounding)
+        ///    - Otherwise = 2 credits (Generative Answer)
+        /// 2. AccessedResources: Used to detect tenant graph grounding, but does not multiply costs
+        /// 
+        /// Limitations:
+        /// - Agent Actions, AI Tool Usages, and Flow Actions are NOT included in audit logs
+        /// - Classic vs Generative answer types cannot be distinguished from audit logs
+        /// - This provides a minimum cost estimate based on available data
         /// 
         /// Note: The number of resources accessed does NOT multiply costs. Tenant graph grounding
         /// costs 10 credits per message regardless of how many SharePoint files, emails, etc. are accessed.
         /// </summary>
         /// <param name="auditEvent">The Copilot audit event object to analyze</param>
-        /// <returns>CreditReport with detailed billing breakdown</returns>
+        /// <returns>CreditReport with detailed billing breakdown based on available audit log data</returns>
         public static CopilotCreditEstimation Analyze(CopilotAuditEvent auditEvent)
         {
             if (auditEvent == null)
@@ -187,123 +190,37 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             // STEP 2: Count and bill response messages
             // Only non-prompt messages (isPrompt=false) are billable.
             // Each message is billed once regardless of how many resources it accessed.
+            // 
+            // Note: Audit logs don't include explicit message types, so we infer:
+            // - Messages with tenant resources = Tenant Graph Grounding (10 credits)
+            // - Messages without tenant resources = Generative Answer (2 credits)
+            // - Classic answers cannot be distinguished from audit logs
             if (auditEvent.Messages != null)
             {
                 foreach (var message in auditEvent.Messages.Where(m => !m.IsPrompt))
                 {
-                    // Check if message Type is explicitly set in the audit log
-                    if (!string.IsNullOrEmpty(message.Type))
+
+                    // Type not specified - infer based on accessed resources
+                    // This is the current behavior as audit logs don't yet include explicit message types
+                    if (hasTenantGraphResources)
                     {
-                        // Use explicit type if available (future audit log enhancement)
-                        switch (message.Type.ToLower())
-                        {
-                            case "classic":
-                                report.ClassicAnswers++;
-                                totalCredits += CLASSIC_ANSWER_CREDITS;
-                                AddToBreakdown(report.CreditBreakdown, "Classic Answers", CLASSIC_ANSWER_CREDITS);
-                                break;
-                            case "generative":
-                                report.GenerativeAnswers++;
-                                totalCredits += GENERATIVE_ANSWER_CREDITS;
-                                AddToBreakdown(report.CreditBreakdown, "Generative Answers", GENERATIVE_ANSWER_CREDITS);
-                                break;
-                            case "tenantgraph":
-                                report.TenantGraphGroundedAnswers++;
-                                totalCredits += TENANT_GRAPH_GROUNDING_CREDITS;
-                                AddToBreakdown(report.CreditBreakdown, "Tenant Graph Grounding", TENANT_GRAPH_GROUNDING_CREDITS);
-                                break;
-                        }
+                        // Microsoft Graph resources were accessed - bill as tenant graph grounding (10 credits)
+                        report.TenantGraphGroundedAnswers++;
+                        totalCredits += TENANT_GRAPH_GROUNDING_CREDITS;
+                        AddToBreakdown(report.CreditBreakdown, "Tenant Graph Grounding", TENANT_GRAPH_GROUNDING_CREDITS);
                     }
                     else
                     {
-                        // Type not specified - infer based on accessed resources
-                        // This is the current behavior as audit logs don't yet include explicit message types
-                        if (hasTenantGraphResources)
-                        {
-                            // Microsoft Graph resources were accessed - bill as tenant graph grounding (10 credits)
-                            report.TenantGraphGroundedAnswers++;
-                            totalCredits += TENANT_GRAPH_GROUNDING_CREDITS;
-                            AddToBreakdown(report.CreditBreakdown, "Tenant Graph Grounding", TENANT_GRAPH_GROUNDING_CREDITS);
-                        }
-                        else
-                        {
-                            // Only web search or no resources - bill as standard generative answer (2 credits)
-                            report.GenerativeAnswers++;
-                            totalCredits += GENERATIVE_ANSWER_CREDITS;
-                            AddToBreakdown(report.CreditBreakdown, "Generative Answers", GENERATIVE_ANSWER_CREDITS);
-                        }
+                        // Only web search or no resources - bill as standard generative answer (2 credits)
+                        report.GenerativeAnswers++;
+                        totalCredits += GENERATIVE_ANSWER_CREDITS;
+                        AddToBreakdown(report.CreditBreakdown, "Generative Answers", GENERATIVE_ANSWER_CREDITS);
                     }
+
                 }
             }
 
-            // STEP 3: Count agent actions
-            // Agent actions include triggers, topic transitions, knowledge searches, and tool invocations.
-            // Each action costs 5 credits regardless of type or complexity.
-            if (auditEvent.AgentActions != null)
-            {
-                // Use explicit AgentActions if available (future audit log enhancement)
-                report.AgentActionCount = auditEvent.AgentActions.Count;
-                int agentActionCredits = report.AgentActionCount * AGENT_ACTION_CREDITS;
-                totalCredits += agentActionCredits;
-                report.CreditBreakdown["Agent Actions"] = agentActionCredits;
-            }
-            else if (auditEvent.AISystemPlugin != null)
-            {
-                // Fallback: Use AISystemPlugin as proxy for agent actions
-                // Current audit logs use this field (e.g., BingWebSearch plugin)
-                // Each plugin invocation = 1 agent action = 5 credits
-                report.AgentActionCount = auditEvent.AISystemPlugin.Count;
-                int agentActionCredits = report.AgentActionCount * AGENT_ACTION_CREDITS;
-                totalCredits += agentActionCredits;
-                report.CreditBreakdown["Agent Actions"] = agentActionCredits;
-            }
-
-            // STEP 4: Count AI Tool usages
-            // AI tools are prompt-based intelligent processing with tiered pricing.
-            // Billed per 10 responses (rounded up): Basic=1, Standard=15, Premium=100 credits
-            if (auditEvent.AIToolUsages != null)
-            {
-                foreach (var toolUsage in auditEvent.AIToolUsages)
-                {
-                    int credits = 0;
-                    switch (toolUsage.Tier?.ToLower())
-                    {
-                        case "basic":
-                            report.BasicAIToolResponses += toolUsage.ResponseCount;
-                            // Round up: 1-10 responses = 1 credit, 11-20 = 2 credits, etc.
-                            credits = (int)Math.Ceiling(toolUsage.ResponseCount / 10.0) * AI_TOOLS_BASIC_PER_10;
-                            AddToBreakdown(report.CreditBreakdown, "AI Tools (Basic)", credits);
-                            break;
-                        case "standard":
-                            report.StandardAIToolResponses += toolUsage.ResponseCount;
-                            credits = (int)Math.Ceiling(toolUsage.ResponseCount / 10.0) * AI_TOOLS_STANDARD_PER_10;
-                            AddToBreakdown(report.CreditBreakdown, "AI Tools (Standard)", credits);
-                            break;
-                        case "premium":
-                            // Premium tier includes deep reasoning capabilities
-                            report.PremiumAIToolResponses += toolUsage.ResponseCount;
-                            credits = (int)Math.Ceiling(toolUsage.ResponseCount / 10.0) * AI_TOOLS_PREMIUM_PER_10;
-                            AddToBreakdown(report.CreditBreakdown, "AI Tools (Premium)", credits);
-                            break;
-                    }
-                    totalCredits += credits;
-                }
-            }
-
-            // STEP 5: Count agent flow actions
-            // Agent flows are predefined sequences that execute without AI reasoning at each step.
-            // More efficient than agent actions but still consume credits.
-            // Billed at 13 credits per 100 actions (rounded up)
-            if (auditEvent.FlowActions != null && auditEvent.FlowActions.ActionCount > 0)
-            {
-                report.FlowActions = auditEvent.FlowActions.ActionCount;
-                // Round up: 1-100 actions = 13 credits, 101-200 = 26 credits, etc.
-                int flowCredits = (int)Math.Ceiling(auditEvent.FlowActions.ActionCount / 100.0) * AGENT_FLOW_CREDITS_PER_100_ACTIONS;
-                totalCredits += flowCredits;
-                report.CreditBreakdown["Agent Flow Actions"] = flowCredits;
-            }
-
-            // STEP 6: Build resource breakdown (for reference/analytics only)
+            // STEP 3: Build resource breakdown (for reference/analytics only)
             // This shows what types of resources were accessed but does NOT affect billing.
             // Resources are billed at the message level, not per resource.
             report.ResourceTypeBreakdown = auditEvent.AccessedResources?
@@ -393,7 +310,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 if (!string.IsNullOrEmpty(resource.SiteUrl))
                 {
                     var siteUrlLower = resource.SiteUrl.ToLower();
-                    if (siteUrlLower.Contains("sharepoint.com") || 
+                    if (siteUrlLower.Contains("sharepoint.com") ||
                         siteUrlLower.Contains("onedrive.") ||
                         siteUrlLower.Contains("outlook.office") ||
                         siteUrlLower.Contains("teams.microsoft.com"))

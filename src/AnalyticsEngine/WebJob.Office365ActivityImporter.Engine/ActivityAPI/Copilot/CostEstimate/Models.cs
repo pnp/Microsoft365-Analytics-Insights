@@ -7,7 +7,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstima
 
     /// <summary>
     /// Represents a Microsoft Copilot audit event from the Office 365 Management API.
-    /// Contains information about Copilot interactions including messages, accessed resources, and actions.
+    /// Contains information about Copilot interactions including messages and accessed resources.
     /// </summary>
     public class CopilotAuditEvent
     {
@@ -23,15 +23,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstima
         // Additional properties to support comprehensive billing calculation
         [JsonProperty("AnswerType")]
         public string AnswerType { get; set; } // "Classic", "Generative", "TenantGraph"
-
-        [JsonProperty("AgentActions")]
-        public List<AgentAction> AgentActions { get; set; }
-
-        [JsonProperty("AIToolUsages")]
-        public List<AIToolUsage> AIToolUsages { get; set; }
-
-        [JsonProperty("FlowActions")]
-        public AgentFlowUsage FlowActions { get; set; }
     }
 
     /// <summary>
@@ -62,49 +53,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstima
 
         /// <summary>
         /// Type of response: "Classic" (1 credit), "Generative" (2 credits), or "TenantGraph" (10 credits).
-        /// If not specified, will be inferred from accessed resources.
+        /// Note: This property is available in audit logs but not currently populated by Microsoft.
+        /// Cost estimation infers type from accessed resources instead.
         /// </summary>
         [JsonProperty("Type")]
         public string Type { get; set; }
     }
-
-    /// <summary>
-    /// Represents an agent action such as triggers, deep reasoning, topic transitions, etc.
-    /// Each action costs 5 Copilot Credits regardless of type.
-    /// </summary>
-    public class AgentAction
-    {
-        [JsonProperty("Id")]
-        public string Id { get; set; }
-
-        [JsonProperty("Type")]
-        public string Type { get; set; } // "Trigger", "DeepReasoning", "TopicTransition", "KnowledgeSearch", "AIToolPrompt"
-    }
-
-    /// <summary>
-    /// Represents AI tool usage (prompts) with tiered billing.
-    /// Billed per 10 responses: Basic=1, Standard=15, Premium=100 credits.
-    /// </summary>
-    public class AIToolUsage
-    {
-        [JsonProperty("ToolId")]
-        public string ToolId { get; set; }
-
-        [JsonProperty("Tier")]
-        public string Tier { get; set; } // "Basic", "Standard", "Premium"
-
-        [JsonProperty("ResponseCount")]
-        public int ResponseCount { get; set; }
-    }
-
-    /// <summary>
-    /// Represents agent flow actions (predefined sequences).
-    /// Billed at 13 credits per 100 actions.
-    /// </summary>
-    public class AgentFlowUsage
-    {
-        [JsonProperty("ActionCount")]
-        public int ActionCount { get; set; }
-    }
-
 }
