@@ -26,11 +26,13 @@ WHERE EXISTS (
 
 
 -- Insert chat where there is no existing event_copilot_chats record for the event_id
-INSERT INTO dbo.event_copilot_chats (event_id, app_host, agent_id)
+INSERT INTO dbo.event_copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json)
 SELECT
     i.event_id,
     i.app_host,
-    ca.id
+    ca.id,
+    i.copilot_credit_estimate_total,
+    i.copilot_credit_estimate_json
 FROM dbo.[${STAGING_TABLE_ACTIVITY}]  AS i
 LEFT JOIN dbo.copilot_agents AS ca
     ON ca.agent_id = i.agent_id
@@ -39,6 +41,18 @@ WHERE NOT EXISTS (
     FROM dbo.event_copilot_chats AS ec
     WHERE ec.event_id = i.event_id
     )
+
+
+-- Update existing chat records with Copilot Credit estimation data if not already present
+UPDATE dbo.event_copilot_chats
+SET 
+    copilot_credit_estimate_total = i.copilot_credit_estimate_total,
+    copilot_credit_estimate_json = i.copilot_credit_estimate_json
+FROM dbo.event_copilot_chats AS ec
+INNER JOIN dbo.[${STAGING_TABLE_ACTIVITY}] AS i
+    ON ec.event_id = i.event_id
+WHERE ec.copilot_credit_estimate_total IS NULL 
+    AND i.copilot_credit_estimate_total IS NOT NULL;
 
 
 -- Process AccessedResources only if tables exist (after migration)

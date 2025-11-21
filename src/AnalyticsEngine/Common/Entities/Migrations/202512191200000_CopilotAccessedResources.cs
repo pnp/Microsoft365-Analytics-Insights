@@ -3,7 +3,14 @@ namespace Common.Entities.Migrations
     using System;
     using System.Data.Entity.Migrations;
     
-    public partial class CopilotAccessedResources : DbMigration
+    /// <summary>
+    /// Migration to add extended Copilot audit data tables including:
+    /// - Accessed Resources (files, emails, etc.)
+    /// - Messages (response tracking)
+    /// - AI Model Transparency (DEEP_LEO, GPT models, etc.)
+    /// - Copilot Credit Estimation (Copilot Credits usage tracking)
+    /// </summary>
+    public partial class CopilotExtendedData : DbMigration
     {
         public override void Up()
         {
@@ -83,6 +90,8 @@ namespace Common.Entities.Migrations
                 .Index(t => t.message_id);
 
             // ===== AI Model Transparency Tables =====
+            // Used for tracking which AI models (e.g., DEEP_LEO for deep reasoning) were used in conversations
+            // This enables cost calculation and reporting on deep reasoning usage (5 credits per conversation)
             CreateTable(
                 "dbo.copilot_ai_models",
                 c => new
@@ -105,12 +114,21 @@ namespace Common.Entities.Migrations
                 .ForeignKey("dbo.copilot_ai_models", t => t.model_id, cascadeDelete: true)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.model_id);
+
+            // ===== Copilot Credit Estimation Columns =====
+            // Add Copilot Credit estimation tracking to event_copilot_chats table
+            AddColumn("dbo.event_copilot_chats", "copilot_credit_estimate_total", c => c.Int());
+            AddColumn("dbo.event_copilot_chats", "copilot_credit_estimate_json", c => c.String());
             
-            Console.WriteLine("DB SCHEMA: All Copilot extended data tables created successfully (including AI model transparency).");
+            Console.WriteLine("DB SCHEMA: All Copilot extended data tables created successfully (accessed resources, messages, AI model transparency, and Copilot Credit estimation).");
         }
         
         public override void Down()
         {
+            // ===== Drop Copilot Credit Estimation Columns =====
+            DropColumn("dbo.event_copilot_chats", "copilot_credit_estimate_json");
+            DropColumn("dbo.event_copilot_chats", "copilot_credit_estimate_total");
+
             // ===== Drop AI Model Transparency =====
             DropForeignKey("dbo.copilot_event_ai_models", "model_id", "dbo.copilot_ai_models");
             DropForeignKey("dbo.copilot_event_ai_models", "copilot_chat_id", "dbo.event_copilot_chats");

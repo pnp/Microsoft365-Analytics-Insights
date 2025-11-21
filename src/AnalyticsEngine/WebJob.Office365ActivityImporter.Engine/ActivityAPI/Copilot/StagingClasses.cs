@@ -29,6 +29,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         // Model Transparency Details serialized as JSON
         [Column("model_transparency_json", true)]
         public string ModelTransparencyDetailsJson { get; set; }
+
+        // Copilot Credit estimate total
+        [Column("copilot_credit_estimate_total", true)]
+        public int? CopilotCreditEstimateTotal { get; set; }
+
+        // Copilot Credit estimate breakdown serialized as JSON
+        [Column("copilot_credit_estimate_json", true)]
+        public string CopilotCreditEstimateJson { get; set; }
     }
 
     [TempTableName(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY)]

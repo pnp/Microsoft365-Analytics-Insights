@@ -21,6 +21,19 @@ namespace Common.Entities.Entities.AuditLog
         public int? AgentId { get; set; }
         public CopilotAgent Agent { get; set; } = null;
 
+        /// <summary>
+        /// Estimated total Copilot Credits consumed for this interaction.
+        /// Calculated from CopilotCreditEstimation in CopilotAuditLogContent.
+        /// </summary>
+        [Column("copilot_credit_estimate_total")]
+        public int? CopilotCreditEstimateTotal { get; set; }
+
+        /// <summary>
+        /// JSON-serialized Copilot Credit estimation details from CopilotCreditEstimation.
+        /// Contains breakdown of generative answers, tenant graph grounding, deep reasoning, etc.
+        /// </summary>
+        [Column("copilot_credit_estimate_json")]
+        public string CopilotCreditEstimateJson { get; set; } = null;
     }
 
     /// <summary>

@@ -135,7 +135,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
                     MessagesJson = SerializeMessages(auditRecord),
-                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord)
+                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
+                    CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
+                    CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
                 });
                 return true; // staged regardless of meetingInfo retrieval success
             }
@@ -163,7 +165,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AgentName = auditRecord.AgentName,
                     AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
                     MessagesJson = SerializeMessages(auditRecord),
-                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord)
+                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
+                    CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
+                    CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
                 });
                 if (spFileInfo == null)
                 {
@@ -188,7 +192,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AgentName = auditRecord.AgentName,
                 AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
                 MessagesJson = SerializeMessages(auditRecord),
-                ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord)
+                ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
+                CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
+                CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
             });
         }
 
@@ -263,6 +269,28 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to serialize ModelTransparencyDetails from audit record");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes CopilotCreditEstimation from CopilotAuditLogContent to JSON for staging table storage.
+        /// Contains breakdown of Copilot Credits consumed including generative answers, tenant graph grounding, deep reasoning, etc.
+        /// </summary>
+        internal string SerializeCopilotCreditEstimation(CopilotAuditLogContent auditRecord)
+        {
+            if (auditRecord?.Cost == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(auditRecord.Cost);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize CopilotCreditEstimation from audit record");
                 return null;
             }
         }

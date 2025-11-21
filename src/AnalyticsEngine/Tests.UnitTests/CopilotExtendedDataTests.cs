@@ -35,7 +35,7 @@ namespace Tests.UnitTests
         #region Cost Estimation Tests
 
         [TestMethod]
-        public void CostEstimation_GenerativeAnswersOnly_CalculatesCorrectly()
+        public void Copilot_CostEstimation_GenerativeAnswersOnly_CalculatesCorrectly()
         {
             // Arrange - 3 response messages, no tenant resources, no deep reasoning
             var json = @"{
@@ -62,7 +62,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_TenantGraphGrounding_CalculatesCorrectly()
+        public void Copilot_CostEstimation_TenantGraphGrounding_CalculatesCorrectly()
         {
             // Arrange - 3 response messages with SharePoint resources (tenant graph grounding)
             var json = @"{
@@ -92,7 +92,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_DeepReasoningWithTenantGraph_CalculatesCorrectly()
+        public void Copilot_CostEstimation_DeepReasoningWithTenantGraph_CalculatesCorrectly()
         {
             // Arrange - Example payload with Teams files and DEEP_LEO model
             var json = @"{
@@ -147,7 +147,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_DeepReasoningWithoutTenantGraph_CalculatesCorrectly()
+        public void Copilot_CostEstimation_DeepReasoningWithoutTenantGraph_CalculatesCorrectly()
         {
             // Arrange - Deep reasoning with web search only
             var json = @"{
@@ -178,7 +178,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_OneDriveResources_DetectedAsTenantGraph()
+        public void Copilot_CostEstimation_OneDriveResources_DetectedAsTenantGraph()
         {
             // Arrange
             var json = @"{
@@ -200,7 +200,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_TeamsAsyncGatewayResources_DetectedAsTenantGraph()
+        public void Copilot_CostEstimation_TeamsAsyncGatewayResources_DetectedAsTenantGraph()
         {
             // Arrange - Teams async gateway URL pattern
             var json = @"{
@@ -221,7 +221,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_MultipleResourceTypes_CountedOnce()
+        public void Copilot_CostEstimation_MultipleResourceTypes_CountedOnce()
         {
             // Arrange - Multiple resources but billing is per message, not per resource
             var json = @"{
@@ -246,7 +246,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_NullOrEmptyInput_ReturnsZero()
+        public void Copilot_CostEstimation_NullOrEmptyInput_ReturnsZero()
         {
             // Arrange & Act
             var costNull = CopilotCreditEstimation.Analyze((string)null);
@@ -260,7 +260,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_NoMessages_ReturnsZero()
+        public void Copilot_CostEstimation_NoMessages_ReturnsZero()
         {
             // Arrange
             var json = @"{
@@ -279,7 +279,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_OnlyPromptMessages_ReturnsZero()
+        public void Copilot_CostEstimation_OnlyPromptMessages_ReturnsZero()
         {
             // Arrange
             var json = @"{
@@ -298,7 +298,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_ResourceTypeBreakdown_PopulatedCorrectly()
+        public void Copilot_CostEstimation_ResourceTypeBreakdown_PopulatedCorrectly()
         {
             // Arrange
             var json = @"{
@@ -325,7 +325,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CostEstimation_CaseInsensitiveModelDetection_WorksCorrectly()
+        public void Copilot_CostEstimation_CaseInsensitiveModelDetection_WorksCorrectly()
         {
             // Arrange - Test case insensitivity for DEEP_LEO
             var json = @"{
@@ -350,7 +350,7 @@ namespace Tests.UnitTests
         #region Serialization Tests
 
         [TestMethod]
-        public void SerializeMessages_WithResponses_ReturnsCorrectJson()
+        public void Copilot_SerializeMessages_WithResponses_ReturnsCorrectJson()
         {
             // Arrange
             var auditRecord = new CopilotAuditLogContent
@@ -377,7 +377,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void SerializeMessages_WithNullAuditRecord_ReturnsNull()
+        public void Copilot_SerializeMessages_WithNullAuditRecord_ReturnsNull()
         {
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
@@ -392,7 +392,7 @@ namespace Tests.UnitTests
         #region Accessed Resources Tests
 
         [TestMethod]
-        public void SerializeAccessedResources_WithValidResources_ReturnsCorrectJson()
+        public void Copilot_SerializeAccessedResources_WithValidResources_ReturnsCorrectJson()
         {
             // Arrange
             var resources = new List<AccessedResource>
@@ -428,7 +428,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void SerializeAccessedResources_WithEmptyList_ReturnsNull()
+        public void Copilot_SerializeAccessedResources_WithEmptyList_ReturnsNull()
         {
             // Arrange
             var resources = new List<AccessedResource>();
@@ -442,7 +442,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void SerializeAccessedResources_WithNullList_ReturnsNull()
+        public void Copilot_SerializeAccessedResources_WithNullList_ReturnsNull()
         {
             // Act
             var manager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
@@ -453,7 +453,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithAccessedResources_SavesCorrectly()
+        public async Task Copilot_SaveCopilotEvent_WithAccessedResources_SavesCorrectly()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -543,7 +543,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithMultipleResourceTypes_SavesAllCorrectly()
+        public async Task Copilot_SaveCopilotEvent_WithMultipleResourceTypes_SavesAllCorrectly()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -620,7 +620,7 @@ namespace Tests.UnitTests
         #region Model Transparency Tests
 
         [TestMethod]
-        public void SerializeModelTransparencyDetails_WithValidDetails_ReturnsCorrectJson()
+        public void Copilot_SerializeModelTransparencyDetails_WithValidDetails_ReturnsCorrectJson()
         {
             // Arrange
             var auditRecord = new CopilotAuditLogContent
@@ -648,7 +648,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void SerializeModelTransparencyDetails_WithNullDetails_ReturnsNull()
+        public void Copilot_SerializeModelTransparencyDetails_WithNullDetails_ReturnsNull()
         {
             // Arrange
             var auditRecord = new CopilotAuditLogContent
@@ -668,7 +668,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void SerializeModelTransparencyDetails_WithEmptyList_ReturnsNull()
+        public void Copilot_SerializeModelTransparencyDetails_WithEmptyList_ReturnsNull()
         {
             // Arrange
             var auditRecord = new CopilotAuditLogContent
@@ -688,7 +688,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithModelTransparency_SavesCorrectly()
+        public async Task Copilot_SaveCopilotEvent_WithModelTransparency_SavesCorrectly()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -758,7 +758,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithMultipleModels_SavesAllCorrectly()
+        public async Task Copilot_SaveCopilotEvent_WithMultipleModels_SavesAllCorrectly()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -834,7 +834,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithDuplicateModels_DeduplicatesCorrectly()
+        public async Task Copilot_SaveCopilotEvent_WithDuplicateModels_DeduplicatesCorrectly()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -937,7 +937,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithNoModels_DoesNotCreateModelRecords()
+        public async Task Copilot_SaveCopilotEvent_WithNoModels_DoesNotCreateModelRecords()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -1002,7 +1002,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task SaveCopilotEvent_WithDeepReasoningModel_CalculatesCostCorrectly()
+        public async Task Copilot_SaveCopilotEvent_WithDeepReasoningModel_CalculatesCostCorrectly()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -1118,3 +1118,4 @@ namespace Tests.UnitTests
         #endregion
     }
 }
+

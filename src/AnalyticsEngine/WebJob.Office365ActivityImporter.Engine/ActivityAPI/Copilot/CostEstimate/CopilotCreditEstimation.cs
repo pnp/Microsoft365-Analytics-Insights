@@ -23,14 +23,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
     public class CopilotCreditEstimation
     {
         #region Billing Constants
+
         // Based on Microsoft Copilot Studio billing documentation (as of March 2025)
         // https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#copilot-credits-and-events-scenarios
-        
-        /// <summary>
-        /// Classic answers are manually authored, predefined responses. Cost: 1 credit per answer.
-        /// Note: Currently not distinguishable from audit logs - all answers estimated as Generative or TenantGraph.
-        /// </summary>
-        private const int CLASSIC_ANSWER_CREDITS = 1;
         
         /// <summary>
         /// Generative answers use AI models (GPT) to create dynamic responses. Cost: 2 credits per answer.

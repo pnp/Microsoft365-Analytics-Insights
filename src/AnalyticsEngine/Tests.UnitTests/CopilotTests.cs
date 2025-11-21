@@ -3,6 +3,7 @@ using Common.Entities;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -536,6 +537,242 @@ namespace Tests.UnitTests
                 Assert.AreEqual(2, junctionRecords.Count, "Should have 2 junction records (one per event)");
             }
         }
+
+        #region Copilot Credit Estimation Tests
+
+        /// <summary>
+        /// Tests that Copilot Credit estimation data (total and JSON) is correctly saved to the database
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerCopilotCreditEstimationSaveTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                // Create a test event with Copilot Credit estimation data
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test Copilot Credit Estimation Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@creditest.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Create audit record with Copilot Credit estimation
+                var creditEstimation = new CopilotCreditEstimation
+                {
+                    GenerativeAnswers = 2,
+                    TenantGraphGroundedAnswers = 2,
+                    DeepReasoningActions = 1,
+                    TotalCredits = 29, // 2*(2+10) + 5 = 24 + 5 = 29
+                    CreditBreakdown = new Dictionary<string, int>
+                    {
+                        { "Generative Answers", 4 },
+                        { "Tenant Graph Grounding", 20 },
+                        { "Agent Actions (Deep Reasoning)", 5 }
+                    },
+                    ModelsUsed = new List<string> { "DEEP_LEO" }
+                };
+
+                var auditLogContent = new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource { Type = "File", Name = "Document.docx" }
+                        }
+                    },
+                    Cost = creditEstimation
+                };
+
+                // Save event with Copilot Credit estimation data
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify Copilot Credit estimation data was saved
+                var savedEvent = await db.CopilotChats
+                    .Where(e => e.AuditEvent.Id == commonEvent.Id)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(savedEvent, "CopilotChat event should be saved");
+                Assert.AreEqual(29, savedEvent.CopilotCreditEstimateTotal, "Copilot Credit estimate total should match");
+                Assert.IsNotNull(savedEvent.CopilotCreditEstimateJson, "Copilot Credit estimate JSON should not be null");
+                
+                // Verify JSON can be deserialized back
+                var deserializedCreditEstimate = JsonConvert.DeserializeObject<CopilotCreditEstimation>(savedEvent.CopilotCreditEstimateJson);
+                Assert.IsNotNull(deserializedCreditEstimate, "Copilot Credit estimate JSON should deserialize correctly");
+                Assert.AreEqual(2, deserializedCreditEstimate.GenerativeAnswers);
+                Assert.AreEqual(2, deserializedCreditEstimate.TenantGraphGroundedAnswers);
+                Assert.AreEqual(1, deserializedCreditEstimate.DeepReasoningActions);
+                Assert.AreEqual(29, deserializedCreditEstimate.TotalCredits);
+            }
+        }
+
+        /// <summary>
+        /// Tests that null Copilot Credit estimation data is handled correctly
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerNullCopilotCreditEstimationTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Null Copilot Credit Test" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@nullcredit.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Save event without Copilot Credit estimation data
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData { AppHost = "Teams" },
+                    Cost = null
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify event was saved with null Copilot Credit estimation data
+                var savedEvent = await db.CopilotChats
+                    .Where(e => e.AuditEvent.Id == commonEvent.Id)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(savedEvent, "CopilotChat event should be saved");
+                Assert.IsNull(savedEvent.CopilotCreditEstimateTotal, "Copilot Credit estimate total should be null");
+                Assert.IsNull(savedEvent.CopilotCreditEstimateJson, "Copilot Credit estimate JSON should be null");
+            }
+        }
+
+        /// <summary>
+        /// Tests Copilot Credit estimation tracking with different event types (file, meeting, chat)
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerCopilotCreditEstimationMultipleEventTypesTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var adaptor = new FakeCopilotMetadataLoader();
+
+                // File event with Copilot Credits
+                var fileEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "File Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@file.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                // Meeting event with Copilot Credits
+                var meetingEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Meeting Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@meeting.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                // Chat event with Copilot Credits
+                var chatEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Chat Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@chat.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.AddRange(new[] { fileEvent, meetingEvent, chatEvent });
+                await db.SaveChangesAsync();
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, adaptor, _logger);
+
+                // File event - 12 credits (generative + tenant graph)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        Contexts = new List<Context>
+                        {
+                            new Context { Id = _config.TestCopilotDocContextIdSpSite, Type = _config.TeamSiteFileExtension }
+                        }
+                    },
+                    Cost = new CopilotCreditEstimation { TotalCredits = 12, GenerativeAnswers = 1, TenantGraphGroundedAnswers = 1 }
+                }, fileEvent);
+
+                // Meeting event - 2 credits (generative only)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:meeting_test@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING
+                            }
+                        }
+                    },
+                    Cost = new CopilotCreditEstimation { TotalCredits = 2, GenerativeAnswers = 1 }
+                }, meetingEvent);
+
+                // Chat event - 17 credits (generative + tenant graph + deep reasoning)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:chat_test@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    },
+                    Cost = new CopilotCreditEstimation 
+                    { 
+                        TotalCredits = 17, 
+                        GenerativeAnswers = 1, 
+                        TenantGraphGroundedAnswers = 1, 
+                        DeepReasoningActions = 1 
+                    }
+                }, chatEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify all events have correct Copilot Credit estimation data
+                var savedFileEvent = await db.CopilotChats.Where(e => e.AuditEvent.Id == fileEvent.Id).FirstOrDefaultAsync();
+                var savedMeetingEvent = await db.CopilotChats.Where(e => e.AuditEvent.Id == meetingEvent.Id).FirstOrDefaultAsync();
+                var savedChatEvent = await db.CopilotChats.Where(e => e.AuditEvent.Id == chatEvent.Id).FirstOrDefaultAsync();
+
+                Assert.AreEqual(12, savedFileEvent?.CopilotCreditEstimateTotal, "File event Copilot Credits should be 12");
+                Assert.AreEqual(2, savedMeetingEvent?.CopilotCreditEstimateTotal, "Meeting event Copilot Credits should be 2");
+                Assert.AreEqual(17, savedChatEvent?.CopilotCreditEstimateTotal, "Chat event Copilot Credits should be 17");
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// Tests we can load metadata from Graph
