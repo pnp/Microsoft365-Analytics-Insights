@@ -9,7 +9,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
@@ -235,12 +234,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             {
                 // Filter out prompt messages - only serialize responses
                 var responseMessages = auditRecord.ParsedAuditEvent.Messages.Where(m => !m.IsPrompt).ToList();
-                
+
                 if (responseMessages.Count == 0)
                 {
                     return null;
                 }
-                
+
                 return JsonConvert.SerializeObject(responseMessages);
             }
             catch (Exception ex)
@@ -256,7 +255,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// </summary>
         internal string SerializeModelTransparencyDetails(CopilotAuditLogContent auditRecord)
         {
-            if (auditRecord?.ParsedAuditEvent?.ModelTransparencyDetails == null || 
+            if (auditRecord?.ParsedAuditEvent?.ModelTransparencyDetails == null ||
                 auditRecord.ParsedAuditEvent.ModelTransparencyDetails.Count == 0)
             {
                 return null;

@@ -1,4 +1,5 @@
-﻿using Azure.Messaging.ServiceBus;
+﻿using Azure.Identity; // Added for ClientSecretCredential
+using Azure.Messaging.ServiceBus;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Models;
@@ -11,7 +12,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
-using Azure.Identity; // Added for ClientSecretCredential
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {

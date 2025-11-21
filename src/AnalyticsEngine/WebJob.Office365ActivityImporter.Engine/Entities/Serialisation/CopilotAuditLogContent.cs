@@ -1,9 +1,7 @@
 ﻿using Common.Entities;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Serialization;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
@@ -42,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
             // Parse the event data for structured access (instead of using EventRaw later)
             thisAuditLogReport.ParsedAuditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(thisAuditLogReport.EventRaw);
-            
+
             // Calculate cost from the parsed event
             thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw);
 

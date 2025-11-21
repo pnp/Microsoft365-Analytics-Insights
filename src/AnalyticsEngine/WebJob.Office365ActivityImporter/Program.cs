@@ -14,12 +14,11 @@ using Newtonsoft.Json;
 using System;
 using System.Configuration;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
-using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
+using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
 
 namespace WebJob.Office365ActivityImporter

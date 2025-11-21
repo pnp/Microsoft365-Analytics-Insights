@@ -31,25 +31,25 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
         // Based on Microsoft Copilot Studio billing documentation (as of March 2025)
         // https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#copilot-credits-and-events-scenarios
-        
+
         /// <summary>
         /// Generative answers use AI models (GPT) to create dynamic responses. Cost: 2 credits per answer.
         /// </summary>
         private const int GENERATIVE_ANSWER_CREDITS = 2;
-        
+
         /// <summary>
         /// Tenant graph grounding provides RAG over Microsoft Graph data (SharePoint, OneDrive, Email, Teams).
         /// Cost: 10 credits per grounded message (additive with generative answer cost).
         /// This is an optional capability that can be enabled per agent.
         /// </summary>
         private const int TENANT_GRAPH_GROUNDING_CREDITS = 10;
-        
+
         /// <summary>
         /// Agent actions (triggers, deep reasoning, topic transitions, tool invocations) cost 5 credits each.
         /// Deep reasoning can be detected from DEEP_LEO model in ModelTransparencyDetails.
         /// </summary>
         private const int AGENT_ACTION_CREDITS = 5;
-        
+
         #endregion
 
         #region Properties
@@ -321,7 +321,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 if (!string.IsNullOrEmpty(resource.SiteUrl))
                 {
                     var siteUrlLower = resource.SiteUrl.ToLower();
-                    
+
                     // Teams file URLs contain specific patterns
                     if (siteUrlLower.Contains("sharepoint.com") ||
                         siteUrlLower.Contains("onedrive.") ||
@@ -364,8 +364,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             }
 
             // Check if any model is DEEP_LEO (case-insensitive)
-            return modelDetails.Any(m => 
-                !string.IsNullOrEmpty(m.ModelName) && 
+            return modelDetails.Any(m =>
+                !string.IsNullOrEmpty(m.ModelName) &&
                 m.ModelName.Equals("DEEP_LEO", StringComparison.OrdinalIgnoreCase));
         }
     }

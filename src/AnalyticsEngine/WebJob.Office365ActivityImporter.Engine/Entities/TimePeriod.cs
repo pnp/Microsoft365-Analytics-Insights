@@ -56,7 +56,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Engine.Entities
             const int MAX_OVERLAP_MINUTES = 24 * 60 - 1; // Just under 24 hours
             if (overlapMinutes >= MAX_OVERLAP_MINUTES)
             {
-                throw new ArgumentOutOfRangeException(nameof(overlapMinutes), 
+                throw new ArgumentOutOfRangeException(nameof(overlapMinutes),
                     $"Overlap cannot be >= {MAX_OVERLAP_MINUTES} minutes (chunk size is 24 hours)");
             }
 
@@ -104,7 +104,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Engine.Entities
             {
                 var lastChunk = timeChunks[timeChunks.Count - 1];
                 var lastChunkDuration = lastChunk.End.Subtract(lastChunk.Start);
-                
+
                 // Only remove if less than 1 hour to avoid API errors with very small windows
                 if (lastChunkDuration.TotalHours < 1)
                 {

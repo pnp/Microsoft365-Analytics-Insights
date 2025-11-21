@@ -2,7 +2,7 @@
 {
     using System;
     using System.Data.Entity.Migrations;
-    
+
     public partial class CopilotExtendedData : DbMigration
     {
         public override void Up()
@@ -10,50 +10,50 @@
             CreateTable(
                 "dbo.copilot_event_accessed_resource_ids",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        resource_id = c.String(),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    resource_id = c.String(),
+                })
                 .PrimaryKey(t => t.id);
-            
+
             CreateTable(
                 "dbo.copilot_event_accessed_resource_names",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        name = c.String(),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    name = c.String(),
+                })
                 .PrimaryKey(t => t.id);
-            
+
             CreateTable(
                 "dbo.copilot_event_accessed_resource_types",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        name = c.String(maxLength: 100),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    name = c.String(maxLength: 100),
+                })
                 .PrimaryKey(t => t.id);
-            
+
             CreateTable(
                 "dbo.copilot_ai_models",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        name = c.String(maxLength: 100),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    name = c.String(maxLength: 100),
+                })
                 .PrimaryKey(t => t.id);
-            
+
             CreateTable(
                 "dbo.copilot_event_accessed_resources",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        copilot_chat_id = c.Guid(nullable: false),
-                        resource_id_id = c.Int(),
-                        resource_name_id = c.Int(),
-                        resource_type_id = c.Int(),
-                        sensitivity_label_id = c.Int(),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    copilot_chat_id = c.Guid(nullable: false),
+                    resource_id_id = c.Int(),
+                    resource_name_id = c.Int(),
+                    resource_type_id = c.Int(),
+                    sensitivity_label_id = c.Int(),
+                })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
                 .ForeignKey("dbo.copilot_event_accessed_resource_ids", t => t.resource_id_id)
@@ -65,48 +65,48 @@
                 .Index(t => t.resource_name_id)
                 .Index(t => t.resource_type_id)
                 .Index(t => t.sensitivity_label_id);
-            
+
             CreateTable(
                 "dbo.copilot_event_sensitivity_labels",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        label_id = c.String(maxLength: 100),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    label_id = c.String(maxLength: 100),
+                })
                 .PrimaryKey(t => t.id);
-            
+
             CreateTable(
                 "dbo.copilot_event_ai_models",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        copilot_chat_id = c.Guid(nullable: false),
-                        model_id = c.Int(nullable: false),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    copilot_chat_id = c.Guid(nullable: false),
+                    model_id = c.Int(nullable: false),
+                })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.copilot_ai_models", t => t.model_id, cascadeDelete: true)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
                 .Index(t => t.copilot_chat_id)
                 .Index(t => t.model_id);
-            
+
             CreateTable(
                 "dbo.copilot_event_messages",
                 c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        copilot_chat_id = c.Guid(nullable: false),
-                        message_id = c.String(maxLength: 500),
-                    })
+                {
+                    id = c.Int(nullable: false, identity: true),
+                    copilot_chat_id = c.Guid(nullable: false),
+                    message_id = c.String(maxLength: 500),
+                })
                 .PrimaryKey(t => t.id)
                 .ForeignKey("dbo.event_copilot_chats", t => t.copilot_chat_id, cascadeDelete: true)
                 .Index(t => t.copilot_chat_id);
-            
+
             AddColumn("dbo.event_copilot_chats", "copilot_credit_estimate_total", c => c.Int());
             AddColumn("dbo.event_copilot_chats", "copilot_credit_estimate_json", c => c.String());
 
             Console.WriteLine("DB SCHEMA: Rolled back all Copilot extended data tables.");
         }
-        
+
         public override void Down()
         {
             DropForeignKey("dbo.copilot_event_messages", "copilot_chat_id", "dbo.event_copilot_chats");

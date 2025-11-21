@@ -397,18 +397,18 @@ namespace Tests.UnitTests
             // Arrange
             var resources = new List<AccessedResource>
             {
-                new AccessedResource 
-                { 
-                    Id = "resource-id-1", 
-                    Name = "Document1.docx", 
+                new AccessedResource
+                {
+                    Id = "resource-id-1",
+                    Name = "Document1.docx",
                     Type = "docx",
                     SiteUrl = "https://contoso.sharepoint.com/sites/sales",
                     SensitivityLabelId = "label-123"
                 },
-                new AccessedResource 
-                { 
-                    Id = "resource-id-2", 
-                    Name = "Presentation.pptx", 
+                new AccessedResource
+                {
+                    Id = "resource-id-2",
+                    Name = "Presentation.pptx",
                     Type = "pptx",
                     SiteUrl = "https://contoso.sharepoint.com/sites/marketing"
                 }
@@ -495,18 +495,18 @@ namespace Tests.UnitTests
                         },
                         AccessedResources = new List<AccessedResource>
                         {
-                            new AccessedResource 
-                            { 
-                                Id = "resource-id-1", 
-                                Name = "Document1.docx", 
+                            new AccessedResource
+                            {
+                                Id = "resource-id-1",
+                                Name = "Document1.docx",
                                 Type = "docx",
                                 SiteUrl = "https://contoso.sharepoint.com/sites/sales",
                                 SensitivityLabelId = "label-123"
                             },
-                            new AccessedResource 
-                            { 
-                                Id = "resource-id-2", 
-                                Name = "Presentation.pptx", 
+                            new AccessedResource
+                            {
+                                Id = "resource-id-2",
+                                Name = "Presentation.pptx",
                                 Type = "pptx",
                                 SiteUrl = "https://contoso.sharepoint.com/sites/marketing"
                             }
@@ -825,7 +825,7 @@ namespace Tests.UnitTests
                     .ToListAsync();
 
                 Assert.AreEqual(3, aiModels.Count);
-                
+
                 var modelNames = aiModels.Select(m => m.AIModel.Name).OrderBy(n => n).ToList();
                 Assert.IsTrue(modelNames.Contains("DEEP_LEO"));
                 Assert.IsTrue(modelNames.Contains("GPT-4"));
