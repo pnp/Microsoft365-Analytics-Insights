@@ -24,6 +24,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
     {
         #region Billing Constants
 
+        /// <summary>
+        /// Version of the cost estimation model.
+        /// </summary>
+        private const string COST_ESTIMATION_VERSION = "1.0.0.0";
+
         // Based on Microsoft Copilot Studio billing documentation (as of March 2025)
         // https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#copilot-credits-and-events-scenarios
         
@@ -48,6 +53,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         #endregion
 
         #region Properties
+
+        /// <summary>
+        /// The version of the cost estimation model used to generate this report.
+        /// </summary>
+        [JsonProperty("CostModelVersion")]
+        public string CostModelVersion { get; set; }
 
         [JsonProperty("GenerativeAnswers")]
         public int GenerativeAnswers { get; set; }
@@ -84,22 +95,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
         /// <summary>
         /// Analyzes a Copilot audit event JSON and calculates the total Copilot Credits consumed.
-        /// 
-        /// Billing Logic (based on Microsoft documentation, effective March 25, 2025):
-        /// 1. Generative Answers: 2 credits per response message
-        /// 2. Tenant Graph Grounding: +10 credits per message (additive with generative)
-        /// 3. Deep Reasoning (DEEP_LEO model): 5 credits per agent action
-        /// 
-        /// Formula per message with tenant graph grounding:
-        ///   Total = 2 (generative) + 10 (tenant graph) = 12 credits
-        /// 
-        /// Formula per message with tenant graph + deep reasoning:
-        ///   Total = 2 (generative) + 10 (tenant graph) + 5 (deep reasoning) = 17 credits
-        /// 
-        /// Limitations:
-        /// - AI Tool Usages (premium tier billing) may be underestimated
-        /// - Flow Actions are NOT included in audit logs
-        /// - Classic vs Generative answer types cannot be fully distinguished
+        /// This is an overload that deserializes the JSON string before analysis.
+        /// See <see cref="Analyze(CopilotAuditEvent)"/> for detailed billing logic.
         /// </summary>
         /// <param name="json">JSON string containing the Copilot audit event data</param>
         /// <returns>CreditReport with detailed billing breakdown</returns>
@@ -109,6 +106,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             {
                 return new CopilotCreditEstimation
                 {
+                    CostModelVersion = COST_ESTIMATION_VERSION,
                     TotalCredits = 0,
                     ResourceTypeBreakdown = new Dictionary<string, int>(),
                     CreditBreakdown = new Dictionary<string, int>(),
@@ -128,6 +126,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// 2. Tenant Graph Grounding: +10 credits per message (additive with generative)
         /// 3. Deep Reasoning (DEEP_LEO model): 5 credits per agent action
         /// 
+        /// Example from documentation ("Sales performance agent"):
+        /// - Scenario: 4 generative answers, all grounded in the tenant graph.
+        /// - Calculation: 4 messages * (2 for generative answer + 10 for tenant graph) = 48 credits.
+        /// - This model correctly calculates this as 4 * (GENERATIVE_ANSWER_CREDITS + TENANT_GRAPH_GROUNDING_CREDITS).
+        /// - Reference: https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#sales-performance-agent
+        /// 
         /// Formula per message with tenant graph grounding:
         ///   Total = 2 (generative) + 10 (tenant graph) = 12 credits
         /// 
@@ -137,6 +141,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// Important: Deep reasoning is billed as an Agent Action (5 credits) when detected
         /// via the DEEP_LEO model in ModelTransparencyDetails. This is separate from and
         /// additive to message-level costs.
+        /// 
+        /// Limitations:
+        /// - AI Tool Usages (premium tier billing) may be underestimated.
+        /// - Flow Actions are NOT included in audit logs and cannot be calculated.
+        /// - Classic vs. Generative answer types cannot be fully distinguished; all responses are billed as Generative.
         /// </summary>
         /// <param name="auditEvent">The Copilot audit event object to analyze</param>
         /// <returns>CreditReport with detailed billing breakdown</returns>
@@ -146,6 +155,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             {
                 return new CopilotCreditEstimation
                 {
+                    CostModelVersion = COST_ESTIMATION_VERSION,
                     TotalCredits = 0,
                     ResourceTypeBreakdown = new Dictionary<string, int>(),
                     CreditBreakdown = new Dictionary<string, int>(),
@@ -155,6 +165,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
             var report = new CopilotCreditEstimation
             {
+                CostModelVersion = COST_ESTIMATION_VERSION,
                 ResourceTypeBreakdown = new Dictionary<string, int>(),
                 CreditBreakdown = new Dictionary<string, int>(),
                 ModelsUsed = new List<string>()
