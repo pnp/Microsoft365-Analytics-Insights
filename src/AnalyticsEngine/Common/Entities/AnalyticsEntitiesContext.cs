@@ -302,8 +302,9 @@ namespace Common.Entities
         public DbSet<CopilotAgent> CopilotAgents { get; set; }
         public DbSet<CopilotAccessedResourceId> CopilotAccessedResourceIds { get; set; }
         public DbSet<CopilotAccessedResourceName> CopilotAccessedResourceNames { get; set; }
+        public DbSet<CopilotAccessedResourceSiteUrl> CopilotAccessedResourceSiteUrls { get; set; }
         public DbSet<CopilotAccessedResourceType> CopilotAccessedResourceTypes { get; set; }
-        public DbSet<CopilotSensitivityLabel> CopilotSensitivityLabels { get; set; }
+        public DbSet<SensitivityLabel> SensitivityLabels { get; set; }
         public DbSet<CopilotEventAccessedResource> CopilotEventAccessedResources { get; set; }
 
         // Message tracking

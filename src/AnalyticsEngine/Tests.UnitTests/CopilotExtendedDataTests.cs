@@ -1103,7 +1103,7 @@ namespace Tests.UnitTests
                 db.CopilotAccessedResourceIds.RemoveRange(db.CopilotAccessedResourceIds);
                 db.CopilotAccessedResourceNames.RemoveRange(db.CopilotAccessedResourceNames);
                 db.CopilotAccessedResourceTypes.RemoveRange(db.CopilotAccessedResourceTypes);
-                db.CopilotSensitivityLabels.RemoveRange(db.CopilotSensitivityLabels);
+                db.SensitivityLabels.RemoveRange(db.SensitivityLabels);
             }
 
             // Clear Messages
