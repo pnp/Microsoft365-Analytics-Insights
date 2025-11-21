@@ -1,9 +1,13 @@
 ﻿using Common.Entities;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 
 namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 {
@@ -15,6 +19,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         public string AgentName { get; set; }
         public string AgentId { get; set; }
+
+        public CopilotCreditEstimation Cost { get; set; }
+
+        /// <summary>
+        /// Parsed audit event containing Messages, AgentActions, AIToolUsages, and FlowActions.
+        /// Used for serializing extended event data to staging tables.
+        /// </summary>
+        public CopilotAuditEvent ParsedAuditEvent { get; set; }
 
         public string OrganizationId { get; set; }
 
@@ -28,9 +40,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             dynamic obj = JsonConvert.DeserializeObject<dynamic>(json);
             thisAuditLogReport.EventRaw = JsonConvert.SerializeObject(obj.CopilotEventData);
 
+            // Parse the event data for structured access (instead of using EventRaw later)
+            thisAuditLogReport.ParsedAuditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(thisAuditLogReport.EventRaw);
+            
+            // Calculate cost from the parsed event
+            thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw);
+
             // If AgentName and AgentId are not set, but AppIdentity has a value, extract from AppIdentity
-            if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) && 
-                string.IsNullOrEmpty(thisAuditLogReport.AgentId) && 
+            if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
+                string.IsNullOrEmpty(thisAuditLogReport.AgentId) &&
                 !string.IsNullOrEmpty(thisAuditLogReport.AppIdentity) &&
                 !string.IsNullOrEmpty(thisAuditLogReport.OrganizationId))
             {
@@ -107,6 +125,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string Name { get; set; } = null;
         public string SensitivityLabelId { get; set; } = null;
         public string Type { get; set; } = null;
+        public string SiteUrl { get; set; }
     }
-
 }
