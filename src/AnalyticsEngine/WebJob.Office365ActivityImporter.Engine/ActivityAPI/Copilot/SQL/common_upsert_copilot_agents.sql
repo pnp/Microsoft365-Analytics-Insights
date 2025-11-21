@@ -25,8 +25,8 @@ WHERE EXISTS (
 );
 
 
--- Insert chat where there is no existing event_copilot_chats record for the event_id
-INSERT INTO dbo.event_copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json)
+-- Insert chat where there is no existing copilot_chats record for the event_id
+INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json)
 SELECT
     i.event_id,
     i.app_host,
@@ -38,17 +38,17 @@ LEFT JOIN dbo.copilot_agents AS ca
     ON ca.agent_id = i.agent_id
 WHERE NOT EXISTS (
     SELECT 1
-    FROM dbo.event_copilot_chats AS ec
+    FROM dbo.copilot_chats AS ec
     WHERE ec.event_id = i.event_id
     )
 
 
 -- Update existing chat records with Copilot Credit estimation data if not already present
-UPDATE dbo.event_copilot_chats
+UPDATE dbo.copilot_chats
 SET 
     copilot_credit_estimate_total = i.copilot_credit_estimate_total,
     copilot_credit_estimate_json = i.copilot_credit_estimate_json
-FROM dbo.event_copilot_chats AS ec
+FROM dbo.copilot_chats AS ec
 INNER JOIN dbo.[${STAGING_TABLE_ACTIVITY}] AS i
     ON ec.event_id = i.event_id
 WHERE ec.copilot_credit_estimate_total IS NULL 
@@ -85,6 +85,19 @@ WHERE JSON_VALUE(ar.value, '$.Name') IS NOT NULL
   );
 
 
+-- Process AccessedResources: Insert unique resource site URLs
+INSERT INTO copilot_event_accessed_resource_site_urls (site_url)
+SELECT DISTINCT JSON_VALUE(ar.value, '$.SiteUrl') AS site_url
+FROM [${STAGING_TABLE_ACTIVITY}] imports
+CROSS APPLY OPENJSON(imports.accessed_resources_json) ar
+WHERE JSON_VALUE(ar.value, '$.SiteUrl') IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM copilot_event_accessed_resource_site_urls 
+    WHERE site_url = JSON_VALUE(ar.value, '$.SiteUrl')
+  );
+
+
 -- Process AccessedResources: Insert unique resource types
 INSERT INTO copilot_event_accessed_resource_types ([name])
 SELECT DISTINCT JSON_VALUE(ar.value, '$.Type') AS resource_type
@@ -99,24 +112,25 @@ WHERE JSON_VALUE(ar.value, '$.Type') IS NOT NULL
 
 
 -- Process AccessedResources: Insert unique sensitivity labels
-INSERT INTO copilot_event_sensitivity_labels (label_id)
+INSERT INTO sensitivity_labels (label_id)
 SELECT DISTINCT JSON_VALUE(ar.value, '$.SensitivityLabelId') AS label_id
 FROM [${STAGING_TABLE_ACTIVITY}] imports
 CROSS APPLY OPENJSON(imports.accessed_resources_json) ar
 WHERE JSON_VALUE(ar.value, '$.SensitivityLabelId') IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 
-    FROM copilot_event_sensitivity_labels 
+    FROM sensitivity_labels 
     WHERE label_id = JSON_VALUE(ar.value, '$.SensitivityLabelId')
   );
 
 
 -- Process AccessedResources: Insert junction table records linking events to accessed resources
-INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_name_id, resource_type_id, sensitivity_label_id)
+INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id)
 SELECT 
     imports.event_id,
     rid.id,
     rname.id,
+    rsiteurl.id,
     rtype.id,
     slabel.id
 FROM [${STAGING_TABLE_ACTIVITY}] imports
@@ -125,9 +139,11 @@ LEFT JOIN copilot_event_accessed_resource_ids rid
     ON rid.resource_id = JSON_VALUE(ar.value, '$.Id')
 LEFT JOIN copilot_event_accessed_resource_names rname 
     ON rname.[name] = JSON_VALUE(ar.value, '$.Name')
+LEFT JOIN copilot_event_accessed_resource_site_urls rsiteurl 
+    ON rsiteurl.site_url = JSON_VALUE(ar.value, '$.SiteUrl')
 LEFT JOIN copilot_event_accessed_resource_types rtype 
     ON rtype.[name] = JSON_VALUE(ar.value, '$.Type')
-LEFT JOIN copilot_event_sensitivity_labels slabel 
+LEFT JOIN sensitivity_labels slabel 
     ON slabel.label_id = JSON_VALUE(ar.value, '$.SensitivityLabelId')
 WHERE imports.accessed_resources_json IS NOT NULL
   AND NOT EXISTS (
@@ -136,6 +152,7 @@ WHERE imports.accessed_resources_json IS NOT NULL
     WHERE copilot_chat_id = imports.event_id
       AND (resource_id_id = rid.id OR (resource_id_id IS NULL AND rid.id IS NULL))
       AND (resource_name_id = rname.id OR (resource_name_id IS NULL AND rname.id IS NULL))
+      AND (resource_site_url_id = rsiteurl.id OR (resource_site_url_id IS NULL AND rsiteurl.id IS NULL))
       AND (resource_type_id = rtype.id OR (resource_type_id IS NULL AND rtype.id IS NULL))
       AND (sensitivity_label_id = slabel.id OR (sensitivity_label_id IS NULL AND slabel.id IS NULL))
   );

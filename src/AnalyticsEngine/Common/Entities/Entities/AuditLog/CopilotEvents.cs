@@ -9,7 +9,7 @@ namespace Common.Entities.Entities.AuditLog
     /// A copilot interaction event. May not be related to any file or meeting. 
     /// Relates back to a common audit event.
     /// </summary>
-    [Table("event_copilot_chats")]
+    [Table("copilot_chats")]
     public class CopilotChat : BaseOfficeEvent
     {
         [Column("app_host")]
@@ -53,7 +53,7 @@ namespace Common.Entities.Entities.AuditLog
     }
 
 
-    [Table("event_copilot_files")]
+    [Table("copilot_event_files")]
     public class CopilotEventMetadataFile : BaseCopilotSpecificEvent
     {
         [ForeignKey(nameof(FileExtension))]
@@ -82,7 +82,7 @@ namespace Common.Entities.Entities.AuditLog
         }
     }
 
-    [Table("event_copilot_meetings")]
+    [Table("copilot_event_meetings")]
     public class CopilotEventMetadataMeeting : BaseCopilotSpecificEvent
     {
         [ForeignKey(nameof(OnlineMeeting))]
@@ -127,6 +127,16 @@ namespace Common.Entities.Entities.AuditLog
     }
 
     /// <summary>
+    /// Lookup table for accessed resource site URLs
+    /// </summary>
+    [Table("copilot_event_accessed_resource_site_urls")]
+    public class CopilotAccessedResourceSiteUrl : AbstractEFEntity
+    {
+        [Column("site_url")]
+        public string SiteUrl { get; set; }
+    }
+
+    /// <summary>
     /// Lookup table for accessed resource types
     /// </summary>
     [Table("copilot_event_accessed_resource_types")]
@@ -135,10 +145,11 @@ namespace Common.Entities.Entities.AuditLog
     }
 
     /// <summary>
-    /// Lookup table for sensitivity label IDs
+    /// Lookup table for sensitivity label IDs.
+    /// Shared across multiple event types (Copilot, SharePoint, etc.)
     /// </summary>
-    [Table("copilot_event_sensitivity_labels")]
-    public class CopilotSensitivityLabel : AbstractEFEntity
+    [Table("sensitivity_labels")]
+    public class SensitivityLabel : AbstractEFEntity
     {
         [Column("label_id")]
         [MaxLength(100)]
@@ -166,6 +177,11 @@ namespace Common.Entities.Entities.AuditLog
         public int? ResourceNameId { get; set; }
         public CopilotAccessedResourceName ResourceName { get; set; } = null;
 
+        [ForeignKey(nameof(ResourceSiteUrl))]
+        [Column("resource_site_url_id")]
+        public int? ResourceSiteUrlId { get; set; }
+        public CopilotAccessedResourceSiteUrl ResourceSiteUrl { get; set; } = null;
+
         [ForeignKey(nameof(ResourceType))]
         [Column("resource_type_id")]
         public int? ResourceTypeId { get; set; }
@@ -174,7 +190,7 @@ namespace Common.Entities.Entities.AuditLog
         [ForeignKey(nameof(SensitivityLabel))]
         [Column("sensitivity_label_id")]
         public int? SensitivityLabelId { get; set; }
-        public CopilotSensitivityLabel SensitivityLabel { get; set; } = null;
+        public SensitivityLabel SensitivityLabel { get; set; } = null;
     }
 
     #region Message Tracking Tables

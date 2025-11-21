@@ -11,7 +11,7 @@ INSERT INTO online_meetings(created, meeting_id, name)
 				and imports.meeting_name = [name]
 		)
 
-insert into event_copilot_meetings (copilot_chat_id, meeting_id)
+insert into copilot_event_meetings (copilot_chat_id, meeting_id)
 	SELECT 
 		imports.event_id
 		,online_meetings.id as meetingId
@@ -19,4 +19,4 @@ insert into event_copilot_meetings (copilot_chat_id, meeting_id)
 		inner join online_meetings on online_meetings.meeting_id = imports.meeting_id
 		and online_meetings.name = imports.meeting_name
 		and online_meetings.created = CAST(imports.meeting_created_utc AS datetime)		
-	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id] 
+	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id]
