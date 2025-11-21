@@ -1,4 +1,5 @@
 
+
 -- Delete duplicate URLs. 
 -- For URL lookups that have +1 same URL string, we migrate all lookups to the 1st found result, then delete the old lookup.
 -- RECOMMENDED: For directly running against a SQL database, try in a transaction and rollback 1st.
@@ -44,7 +45,7 @@
 
 				--These are the dependant lookups for URL table. Move them to the 1st result for duplicate URLs
 				update hits set url_id = @skipped_url_id where url_id = @id
-				update event_copilot_files set url_id = @skipped_url_id where url_id = @id
+				update copilot_event_files set url_id = @skipped_url_id where url_id = @id
 				update event_meta_sharepoint set url_id = @skipped_url_id where url_id = @id
 				update page_likes set url_id = @skipped_url_id where url_id = @id
 				update page_comments set url_id = @skipped_url_id where url_id = @id
