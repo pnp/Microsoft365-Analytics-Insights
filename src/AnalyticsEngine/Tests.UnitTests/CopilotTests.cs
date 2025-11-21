@@ -12,7 +12,6 @@ using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -104,11 +103,13 @@ namespace Tests.UnitTests
             await db.SaveChangesAsync();
 
             // Save Copilot events - one for each type we know about
-            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = new CopilotEventData
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
             {
-                // Teams meeting event
-                AppHost = "test",
-                Contexts = new List<Context>
+                CopilotEventData = new CopilotEventData
+                {
+                    // Teams meeting event
+                    AppHost = "test",
+                    Contexts = new List<Context>
                 {
                     new Context
                     {
@@ -116,13 +117,18 @@ namespace Tests.UnitTests
                         Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING
                     }
                 }
-            }, AgentId = chatAgentIdAndName?.Item1, AgentName = chatAgentIdAndName?.Item2 }, commonEventMeeting);
+                },
+                AgentId = chatAgentIdAndName?.Item1,
+                AgentName = chatAgentIdAndName?.Item2
+            }, commonEventMeeting);
 
-            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = new CopilotEventData
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
             {
-                // Document event
-                AppHost = "Word",
-                Contexts = new List<Context>
+                CopilotEventData = new CopilotEventData
+                {
+                    // Document event
+                    AppHost = "Word",
+                    Contexts = new List<Context>
                 {
                     new Context
                     {
@@ -130,23 +136,33 @@ namespace Tests.UnitTests
                         Type = _config.TeamSiteFileExtension
                     }
                 }
-            }, AgentId = chatAgentIdAndName?.Item1, AgentName = chatAgentIdAndName?.Item2 }, commonEventDocEdit);
+                },
+                AgentId = chatAgentIdAndName?.Item1,
+                AgentName = chatAgentIdAndName?.Item2
+            }, commonEventDocEdit);
 
-            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = new CopilotEventData
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
             {
-                // Outlook event
-                AppHost = "Outlook",
-                AccessedResources = new List<AccessedResource>
+                CopilotEventData = new CopilotEventData
+                {
+                    // Outlook event
+                    AppHost = "Outlook",
+                    AccessedResources = new List<AccessedResource>
                 {
                     new AccessedResource{ Type = "http://schema.skype.com/HyperLink" }
                 },
-            }, AgentId = chatAgentIdAndName?.Item1, AgentName = chatAgentIdAndName?.Item2 }, commonOutlook);
+                },
+                AgentId = chatAgentIdAndName?.Item1,
+                AgentName = chatAgentIdAndName?.Item2
+            }, commonOutlook);
 
-            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = new CopilotEventData
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
             {
-                // Chat event
-                AppHost = "Teams",
-                Contexts = new List<Context>
+                CopilotEventData = new CopilotEventData
+                {
+                    // Chat event
+                    AppHost = "Teams",
+                    Contexts = new List<Context>
                 {
                     new Context
                     {
@@ -154,7 +170,10 @@ namespace Tests.UnitTests
                         Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
                     }
                 }
-            }, AgentId = chatAgentIdAndName?.Item1, AgentName = chatAgentIdAndName?.Item2 }, commonEventChat);
+                },
+                AgentId = chatAgentIdAndName?.Item1,
+                AgentName = chatAgentIdAndName?.Item2
+            }, commonEventChat);
 
             await copilotEventManager.CommitAllChanges();
 
@@ -605,7 +624,7 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(savedEvent, "CopilotChat event should be saved");
                 Assert.AreEqual(29, savedEvent.CopilotCreditEstimateTotal, "Copilot Credit estimate total should match");
                 Assert.IsNotNull(savedEvent.CopilotCreditEstimateJson, "Copilot Credit estimate JSON should not be null");
-                
+
                 // Verify JSON can be deserialized back
                 var deserializedCreditEstimate = JsonConvert.DeserializeObject<CopilotCreditEstimation>(savedEvent.CopilotCreditEstimateJson);
                 Assert.IsNotNull(deserializedCreditEstimate, "Copilot Credit estimate JSON should deserialize correctly");
@@ -750,12 +769,12 @@ namespace Tests.UnitTests
                             }
                         }
                     },
-                    Cost = new CopilotCreditEstimation 
-                    { 
-                        TotalCredits = 17, 
-                        GenerativeAnswers = 1, 
-                        TenantGraphGroundedAnswers = 1, 
-                        DeepReasoningActions = 1 
+                    Cost = new CopilotCreditEstimation
+                    {
+                        TotalCredits = 17,
+                        GenerativeAnswers = 1,
+                        TenantGraphGroundedAnswers = 1,
+                        DeepReasoningActions = 1
                     }
                 }, chatEvent);
 
@@ -818,7 +837,7 @@ namespace Tests.UnitTests
             var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
             var expectedAgentName = "contoso_itAssistant";
             var appIdentity = $"Copilot.Studio.Default-{organizationId}-{expectedAgentName}";
-            
+
             var json = $@"{{
                 ""OrganizationId"": ""{organizationId}"",
                 ""AppIdentity"": ""{appIdentity}"",
@@ -851,7 +870,7 @@ namespace Tests.UnitTests
             var existingAgentName = "ExistingAgent";
             var existingAgentId = "existing-agent-id-123";
             var appIdentity = $"Copilot.Studio.Default-{organizationId}-contoso_itAssistant";
-            
+
             var json = $@"{{
                 ""OrganizationId"": ""{organizationId}"",
                 ""AppIdentity"": ""{appIdentity}"",
@@ -906,7 +925,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             var appIdentity = "Copilot.Studio.Default-873ca9a3-4805-48f2-b419-fabf868641da-contoso_itAssistant";
-            
+
             var json = $@"{{
                 ""AppIdentity"": ""{appIdentity}"",
                 ""CopilotEventData"": {{
@@ -934,7 +953,7 @@ namespace Tests.UnitTests
             // Arrange
             var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
             var appIdentity = "SomeOtherFormat-12345-agentName";
-            
+
             var json = $@"{{
                 ""OrganizationId"": ""{organizationId}"",
                 ""AppIdentity"": ""{appIdentity}"",
@@ -963,7 +982,7 @@ namespace Tests.UnitTests
             // Arrange
             var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
             var appIdentity = $"Copilot.Studio.Default-{organizationId}";
-            
+
             var json = $@"{{
                 ""OrganizationId"": ""{organizationId}"",
                 ""AppIdentity"": ""{appIdentity}"",

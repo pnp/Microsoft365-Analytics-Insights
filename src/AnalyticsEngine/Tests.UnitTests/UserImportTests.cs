@@ -192,7 +192,7 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var graphUsers = new List<GraphUser>
             {
                 new GraphUser { UserPrincipalName = "newuser1@test.com", Id = Guid.NewGuid().ToString(), AccountEnabled = true },
@@ -207,11 +207,11 @@ namespace Tests.UnitTests
             {
                 // Cleanup: Remove any existing test users from previous runs
                 var existingTestUsers = await db.users
-                    .Where(u => u.UserPrincipalName == "newuser1@test.com" 
+                    .Where(u => u.UserPrincipalName == "newuser1@test.com"
                              || u.UserPrincipalName == "newuser2@test.com"
                              || u.UserPrincipalName == "existinguser@test.com")
                     .ToListAsync();
-                
+
                 if (existingTestUsers.Any())
                 {
                     db.users.RemoveRange(existingTestUsers);
@@ -219,8 +219,8 @@ namespace Tests.UnitTests
                 }
 
                 // Setup existing user
-                var existingUser = new Common.Entities.User 
-                { 
+                var existingUser = new Common.Entities.User
+                {
                     UserPrincipalName = "existinguser@test.com",
                     AzureAdId = graphUsers[2].Id
                 };
@@ -244,7 +244,7 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var graphUsers = new List<GraphUser>
             {
                 new GraphUser { UserPrincipalName = "validuser@test.com", Id = Guid.NewGuid().ToString(), AccountEnabled = true },
@@ -261,7 +261,7 @@ namespace Tests.UnitTests
                 var existingTestUser = await db.users
                     .Where(u => u.UserPrincipalName == "validuser@test.com")
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     db.users.Remove(existingTestUser);
@@ -283,7 +283,7 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var graphUsers = new List<GraphUser>
             {
                 new GraphUser { UserPrincipalName = "User@Test.COM", Id = Guid.NewGuid().ToString(), AccountEnabled = true }
@@ -295,8 +295,8 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Setup existing user with different casing
-                var existingUser = new Common.Entities.User 
-                { 
+                var existingUser = new Common.Entities.User
+                {
                     UserPrincipalName = "user@test.com",
                     AzureAdId = graphUsers[0].Id
                 };
@@ -317,13 +317,13 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var graphUsers = new List<GraphUser>
             {
-                new GraphUser 
-                { 
-                    UserPrincipalName = "newuser@test.com", 
+                new GraphUser
+                {
+                    UserPrincipalName = "newuser@test.com",
                     Id = userId,
                     AccountEnabled = true,
                     Department = "IT",
@@ -343,7 +343,7 @@ namespace Tests.UnitTests
                 var existingTestUser = await db.users
                     .Where(u => u.UserPrincipalName == "newuser@test.com")
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     db.users.Remove(existingTestUser);
@@ -356,7 +356,7 @@ namespace Tests.UnitTests
                 // Assert
                 Assert.AreEqual(1, insertedUsers.Count);
                 var insertedUser = insertedUsers[0];
-                
+
                 Assert.AreEqual("newuser@test.com", insertedUser.UserPrincipalName);
                 Assert.AreEqual(userId, insertedUser.AzureAdId);
                 Assert.AreEqual(true, insertedUser.AccountEnabled);
@@ -371,14 +371,14 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var graphUsers = new List<GraphUser>();
             // Reduced from 5000 to 100 for performance - still tests batching logic
             for (int i = 0; i < 100; i++)
             {
-                graphUsers.Add(new GraphUser 
-                { 
-                    UserPrincipalName = $"user{i}@test.com", 
+                graphUsers.Add(new GraphUser
+                {
+                    UserPrincipalName = $"user{i}@test.com",
                     Id = Guid.NewGuid().ToString(),
                     AccountEnabled = true
                 });
@@ -393,7 +393,7 @@ namespace Tests.UnitTests
                 var existingTestUsers = await db.users
                     .Where(u => u.UserPrincipalName.StartsWith("user") && u.UserPrincipalName.EndsWith("@test.com"))
                     .ToListAsync();
-                
+
                 if (existingTestUsers.Any())
                 {
                     db.users.RemoveRange(existingTestUsers);
@@ -518,8 +518,8 @@ namespace Tests.UnitTests
                 Mail = null
             };
 
-            var dbUser = new Common.Entities.User 
-            { 
+            var dbUser = new Common.Entities.User
+            {
                 UserPrincipalName = "test@test.com",
                 AccountEnabled = true,
                 PostalCode = "OLD",
@@ -543,17 +543,17 @@ namespace Tests.UnitTests
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser>());
-            
+
             // Set a delta token first
             await fakeLoader.DeltaValueProvider.SetDeltaToken("test-token");
-            
+
             var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Ensure no active users in DB
                 var activeUsers = await db.users.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value).ToListAsync();
-                
+
                 if (activeUsers.Count == 0)
                 {
                     // Act - This should clear the delta token
@@ -577,15 +577,15 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"licensechangeuser{DateTime.Now.Ticks}@test.com";
-            
+
             // Initial license SKUs
             var initialSkuId = Guid.NewGuid();
             var initialSkuPartNumber = "ENTERPRISEPACK";
             var initialLicenseName = "Office 365 E3";
-            
+
             // Changed license SKUs
             var newSkuId = Guid.NewGuid();
             var newSkuPartNumber = "ENTERPRISEPREMIUM";
@@ -598,7 +598,7 @@ namespace Tests.UnitTests
                     .Include(u => u.LicenseLookups)
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
@@ -618,9 +618,9 @@ namespace Tests.UnitTests
             }
 
             // Step 1: Create user with initial license
-            var graphUser = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUser = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn
@@ -717,9 +717,9 @@ namespace Tests.UnitTests
                 Assert.AreEqual(1, dbUserFinal.LicenseLookups.Count, "User should still have exactly one license after update");
                 Assert.AreEqual(newLicenseName, dbUserFinal.LicenseLookups[0].License.Name, "New license should be Office 365 E5");
                 Assert.AreEqual(newSkuPartNumber, dbUserFinal.LicenseLookups[0].License.SKUID, "New SKU should match");
-                
+
                 // Verify old license is no longer associated with user
-                Assert.IsFalse(dbUserFinal.LicenseLookups.Any(l => l.License.Name == initialLicenseName), 
+                Assert.IsFalse(dbUserFinal.LicenseLookups.Any(l => l.License.Name == initialLicenseName),
                     "Old license should be removed from user");
             }
         }
@@ -730,10 +730,10 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"licenseremoveduser{DateTime.Now.Ticks}@test.com";
-            
+
             var skuId = Guid.NewGuid();
             var skuPartNumber = "ENTERPRISEPACK";
             var licenseName = "Office 365 E3";
@@ -745,7 +745,7 @@ namespace Tests.UnitTests
                     .Include(u => u.LicenseLookups)
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
@@ -764,9 +764,9 @@ namespace Tests.UnitTests
             }
 
             // Step 1: Create user with license
-            var graphUser = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUser = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn
@@ -845,7 +845,7 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"deactivateduser{DateTime.Now.Ticks}@test.com";
 
@@ -855,7 +855,7 @@ namespace Tests.UnitTests
                 var existingTestUser = await cleanupDb.users
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.users.Remove(existingTestUser);
@@ -864,9 +864,9 @@ namespace Tests.UnitTests
             }
 
             // Step 1: Create active user
-            var graphUserActive = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUserActive = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn
@@ -887,9 +887,9 @@ namespace Tests.UnitTests
             }
 
             // Step 2: Deactivate user
-            var graphUserDeactivated = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUserDeactivated = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = false,
                 Mail = userUpn
@@ -917,7 +917,7 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"metadatachangeuser{DateTime.Now.Ticks}@test.com";
 
@@ -927,7 +927,7 @@ namespace Tests.UnitTests
                 var existingTestUser = await cleanupDb.users
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.users.Remove(existingTestUser);
@@ -936,9 +936,9 @@ namespace Tests.UnitTests
             }
 
             // Step 1: Create user with initial metadata
-            var graphUserInitial = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUserInitial = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn,
@@ -969,9 +969,9 @@ namespace Tests.UnitTests
             }
 
             // Step 2: Update user metadata
-            var graphUserUpdated = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUserUpdated = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn,
@@ -1009,14 +1009,14 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"multilicenseuser{DateTime.Now.Ticks}@test.com";
-            
+
             var sku1Id = Guid.NewGuid();
             var sku1PartNumber = "ENTERPRISEPACK";
             var license1Name = "Office 365 E3";
-            
+
             var sku2Id = Guid.NewGuid();
             var sku2PartNumber = "ENTERPRISEPREMIUM";  // Changed from PROJECTPROFESSIONAL to a valid SKU
             var license2Name = "Office 365 E5";        // Changed from Project Plan 3
@@ -1028,7 +1028,7 @@ namespace Tests.UnitTests
                     .Include(u => u.LicenseLookups)
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
@@ -1047,9 +1047,9 @@ namespace Tests.UnitTests
             }
 
             // Create user with multiple licenses
-            var graphUser = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUser = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn
@@ -1109,20 +1109,20 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var timestamp = DateTime.Now.Ticks;
             var user1Upn = $"batchuser1{timestamp}@test.com";
             var user2Upn = $"batchuser2{timestamp}@test.com";
             var user3Upn = $"batchuser3{timestamp}@test.com";
-            
+
             var user1Id = Guid.NewGuid().ToString();
             var user2Id = Guid.NewGuid().ToString();
             var user3Id = Guid.NewGuid().ToString();
-            
+
             var sku1Id = Guid.NewGuid();
             var sku1PartNumber = "ENTERPRISEPACK";
             var license1Name = "Office 365 E3";
-            
+
             var sku2Id = Guid.NewGuid();
             var sku2PartNumber = "ENTERPRISEPREMIUM";
             var license2Name = "Office 365 E5";
@@ -1134,7 +1134,7 @@ namespace Tests.UnitTests
                     .Include(u => u.LicenseLookups)
                     .Where(u => u.UserPrincipalName == user1Upn || u.UserPrincipalName == user2Upn || u.UserPrincipalName == user3Upn)
                     .ToListAsync();
-                
+
                 foreach (var user in existingTestUsers)
                 {
                     cleanupDb.UserLicenseTypeLookups.RemoveRange(user.LicenseLookups);
@@ -1167,21 +1167,21 @@ namespace Tests.UnitTests
             // User1: E3, User2: E5, User3: Both E3 and E5
             var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
             {
-                { 
-                    sku1Id, 
-                    new List<Microsoft.Graph.User> 
-                    { 
+                {
+                    sku1Id,
+                    new List<Microsoft.Graph.User>
+                    {
                         new Microsoft.Graph.User { UserPrincipalName = user1Upn, Id = user1Id },
                         new Microsoft.Graph.User { UserPrincipalName = user3Upn, Id = user3Id }
-                    } 
+                    }
                 },
-                { 
-                    sku2Id, 
-                    new List<Microsoft.Graph.User> 
-                    { 
+                {
+                    sku2Id,
+                    new List<Microsoft.Graph.User>
+                    {
                         new Microsoft.Graph.User { UserPrincipalName = user2Upn, Id = user2Id },
                         new Microsoft.Graph.User { UserPrincipalName = user3Upn, Id = user3Id }
-                    } 
+                    }
                 }
             };
 
@@ -1227,7 +1227,7 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"reimportuser{DateTime.Now.Ticks}@test.com";
 
@@ -1237,7 +1237,7 @@ namespace Tests.UnitTests
                 var existingTestUser = await cleanupDb.users
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.users.Remove(existingTestUser);
@@ -1246,9 +1246,9 @@ namespace Tests.UnitTests
             }
 
             // Create user
-            var graphUser = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUser = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn,
@@ -1261,7 +1261,7 @@ namespace Tests.UnitTests
 
             // Act: Import twice with identical data
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
-            
+
             DateTime? firstImportTime;
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -1294,12 +1294,12 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var timestamp = DateTime.Now.Ticks;
             var userUpn = $"employeemanager{timestamp}@test.com";
             var manager1Upn = $"manager1{timestamp}@test.com";
             var manager2Upn = $"manager2{timestamp}@test.com";
-            
+
             var userId = Guid.NewGuid().ToString();
             var manager1Id = Guid.NewGuid().ToString();
             var manager2Id = Guid.NewGuid().ToString();
@@ -1310,37 +1310,37 @@ namespace Tests.UnitTests
                 var existingTestUsers = await cleanupDb.users
                     .Where(u => u.UserPrincipalName == userUpn || u.UserPrincipalName == manager1Upn || u.UserPrincipalName == manager2Upn)
                     .ToListAsync();
-                
+
                 cleanupDb.users.RemoveRange(existingTestUsers);
                 await cleanupDb.SaveChangesAsync();
             }
 
             // Step 1: Create users with Manager1
-            var manager1 = new GraphUser 
-            { 
-                UserPrincipalName = manager1Upn, 
+            var manager1 = new GraphUser
+            {
+                UserPrincipalName = manager1Upn,
                 Id = manager1Id,
                 AccountEnabled = true,
                 Mail = manager1Upn
             };
 
-            var manager2 = new GraphUser 
-            { 
-                UserPrincipalName = manager2Upn, 
+            var manager2 = new GraphUser
+            {
+                UserPrincipalName = manager2Upn,
                 Id = manager2Id,
                 AccountEnabled = true,
                 Mail = manager2Upn
             };
 
-            var employee = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var employee = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn,
-                ManagerInfo = new List<ManagerInfo> 
-                { 
-                    new ManagerInfo { Id = manager1Id } 
+                ManagerInfo = new List<ManagerInfo>
+                {
+                    new ManagerInfo { Id = manager1Id }
                 }
             };
 
@@ -1361,15 +1361,15 @@ namespace Tests.UnitTests
             }
 
             // Step 2: Change manager to Manager2
-            var employeeWithNewManager = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var employeeWithNewManager = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn,
-                ManagerInfo = new List<ManagerInfo> 
-                { 
-                    new ManagerInfo { Id = manager2Id } 
+                ManagerInfo = new List<ManagerInfo>
+                {
+                    new ManagerInfo { Id = manager2Id }
                 }
             };
 
@@ -1396,10 +1396,10 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"orphanlicenseuser{DateTime.Now.Ticks}@test.com";
-            
+
             var skuId = Guid.NewGuid();
             var skuPartNumber = "ENTERPRISEPACK";
             var licenseName = "Office 365 E3";
@@ -1411,7 +1411,7 @@ namespace Tests.UnitTests
                     .Include(u => u.LicenseLookups)
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
@@ -1430,9 +1430,9 @@ namespace Tests.UnitTests
             }
 
             // Step 1: Create user with license (this creates the LicenseType)
-            var graphUser = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUser = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn
@@ -1500,7 +1500,7 @@ namespace Tests.UnitTests
             // Arrange
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            
+
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"deltatokenuser{DateTime.Now.Ticks}@test.com";
 
@@ -1510,7 +1510,7 @@ namespace Tests.UnitTests
                 var existingTestUser = await cleanupDb.users
                     .Where(u => u.UserPrincipalName == userUpn)
                     .FirstOrDefaultAsync();
-                
+
                 if (existingTestUser != null)
                 {
                     cleanupDb.users.Remove(existingTestUser);
@@ -1518,16 +1518,16 @@ namespace Tests.UnitTests
                 }
             }
 
-            var graphUser = new GraphUser 
-            { 
-                UserPrincipalName = userUpn, 
+            var graphUser = new GraphUser
+            {
+                UserPrincipalName = userUpn,
                 Id = userId,
                 AccountEnabled = true,
                 Mail = userUpn
             };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
-            
+
             // Verify delta token is initially null
             var tokenBefore = await fakeLoader.DeltaValueProvider.GetDeltaToken();
             Assert.IsNull(tokenBefore, "Delta token should be null initially");
