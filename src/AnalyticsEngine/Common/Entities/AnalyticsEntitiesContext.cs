@@ -300,8 +300,18 @@ namespace Common.Entities
         public DbSet<CopilotEventMetadataFile> CopilotEventMetadataFiles { get; set; }
         public DbSet<CopilotEventMetadataMeeting> CopilotEventMetadataMeetings { get; set; }
         public DbSet<CopilotAgent> CopilotAgents { get; set; }
-
-
+        public DbSet<CopilotAccessedResourceId> CopilotAccessedResourceIds { get; set; }
+        public DbSet<CopilotAccessedResourceName> CopilotAccessedResourceNames { get; set; }
+        public DbSet<CopilotAccessedResourceType> CopilotAccessedResourceTypes { get; set; }
+        public DbSet<CopilotSensitivityLabel> CopilotSensitivityLabels { get; set; }
+        public DbSet<CopilotEventAccessedResource> CopilotEventAccessedResources { get; set; }
+        
+        // Message tracking
+        public DbSet<CopilotMessage> CopilotMessages { get; set; }
+        
+        // AI Model transparency
+        public DbSet<CopilotAIModel> CopilotAIModels { get; set; }
+        public DbSet<CopilotEventAIModel> CopilotEventAIModels { get; set; }
         #endregion
     }
 

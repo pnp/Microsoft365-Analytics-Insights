@@ -3,6 +3,7 @@ using Common.Entities;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -10,6 +11,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -35,6 +38,20 @@ namespace Tests.UnitTests
             db.CopilotChats.RemoveRange(db.CopilotChats);
 
             await db.SaveChangesAsync();
+        }
+
+        async Task ClearAccessedResources(AnalyticsEntitiesContext db)
+        {
+            // Clear AccessedResources data for tests
+            if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.event_copilot_accessed_resources', 'U')").FirstOrDefault().GetValueOrDefault() != 0)
+            {
+                db.CopilotEventAccessedResources.RemoveRange(db.CopilotEventAccessedResources);
+                db.CopilotAccessedResourceIds.RemoveRange(db.CopilotAccessedResourceIds);
+                db.CopilotAccessedResourceNames.RemoveRange(db.CopilotAccessedResourceNames);
+                db.CopilotAccessedResourceTypes.RemoveRange(db.CopilotAccessedResourceTypes);
+                db.CopilotSensitivityLabels.RemoveRange(db.CopilotSensitivityLabels);
+                await db.SaveChangesAsync();
+            }
         }
 
         // Shared flow for saving Copilot events (normal + no permissions adaptor)
@@ -267,11 +284,499 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Tests that AccessedResources are correctly saved to lookup tables and junction table
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesSaveTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                // Create a test event with AccessedResources
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test AccessedResources Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@user.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Save event with AccessedResources
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "resource-id-123",
+                                Name = "TestDocument.docx",
+                                Type = "Document",
+                                SensitivityLabelId = "label-456"
+                            },
+                            new AccessedResource
+                            {
+                                Id = "resource-id-789",
+                                Name = "AnotherDocument.xlsx",
+                                Type = "Spreadsheet",
+                                SensitivityLabelId = "label-789"
+                            }
+                        }
+                    }
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify lookup tables were populated
+                var resourceIds = await db.CopilotAccessedResourceIds.ToListAsync();
+                var resourceNames = await db.CopilotAccessedResourceNames.ToListAsync();
+                var resourceTypes = await db.CopilotAccessedResourceTypes.ToListAsync();
+                var sensitivityLabels = await db.CopilotSensitivityLabels.ToListAsync();
+
+                Assert.IsTrue(resourceIds.Any(r => r.ResourceId == "resource-id-123"), "Resource ID not saved");
+                Assert.IsTrue(resourceIds.Any(r => r.ResourceId == "resource-id-789"), "Resource ID not saved");
+                Assert.IsTrue(resourceNames.Any(r => r.Name == "TestDocument.docx"), "Resource name not saved");
+                Assert.IsTrue(resourceNames.Any(r => r.Name == "AnotherDocument.xlsx"), "Resource name not saved");
+                Assert.IsTrue(resourceTypes.Any(r => r.Name == "Document"), "Resource type not saved");
+                Assert.IsTrue(resourceTypes.Any(r => r.Name == "Spreadsheet"), "Resource type not saved");
+                Assert.IsTrue(sensitivityLabels.Any(l => l.LabelId == "label-456"), "Sensitivity label not saved");
+                Assert.IsTrue(sensitivityLabels.Any(l => l.LabelId == "label-789"), "Sensitivity label not saved");
+
+                // Verify junction table has records
+                var accessedResources = await db.CopilotEventAccessedResources
+                    .Include(ar => ar.ResourceId)
+                    .Include(ar => ar.ResourceName)
+                    .Include(ar => ar.ResourceType)
+                    .Include(ar => ar.SensitivityLabel)
+                    .Where(ar => ar.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(2, accessedResources.Count, "Expected 2 AccessedResource junction records");
+
+                // Verify first resource
+                var firstResource = accessedResources.FirstOrDefault(ar => ar.ResourceId?.ResourceId == "resource-id-123");
+                Assert.IsNotNull(firstResource, "First resource not found in junction table");
+                Assert.AreEqual("TestDocument.docx", firstResource.ResourceName?.Name);
+                Assert.AreEqual("Document", firstResource.ResourceType?.Name);
+                Assert.AreEqual("label-456", firstResource.SensitivityLabel?.LabelId);
+
+                // Verify second resource
+                var secondResource = accessedResources.FirstOrDefault(ar => ar.ResourceId?.ResourceId == "resource-id-789");
+                Assert.IsNotNull(secondResource, "Second resource not found in junction table");
+                Assert.AreEqual("AnotherDocument.xlsx", secondResource.ResourceName?.Name);
+                Assert.AreEqual("Spreadsheet", secondResource.ResourceType?.Name);
+                Assert.AreEqual("label-789", secondResource.SensitivityLabel?.LabelId);
+            }
+        }
+
+        /// <summary>
+        /// Tests that AccessedResources with null/missing properties are handled correctly
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesPartialDataTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Partial Data Test" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@partial.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Save event with partial AccessedResources (some properties null)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "resource-partial-123",
+                                Type = "Link"
+                                // Name and SensitivityLabelId are null
+                            }
+                        }
+                    }
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify the resource was saved even with partial data
+                var accessedResources = await db.CopilotEventAccessedResources
+                    .Include(ar => ar.ResourceId)
+                    .Include(ar => ar.ResourceName)
+                    .Include(ar => ar.ResourceType)
+                    .Include(ar => ar.SensitivityLabel)
+                    .Where(ar => ar.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(1, accessedResources.Count, "Expected 1 AccessedResource with partial data");
+
+                var resource = accessedResources.First();
+                Assert.IsNotNull(resource.ResourceId, "Resource ID should be populated");
+                Assert.AreEqual("resource-partial-123", resource.ResourceId.ResourceId);
+                Assert.IsNull(resource.ResourceName, "Resource name should be null");
+                Assert.IsNotNull(resource.ResourceType, "Resource type should be populated");
+                Assert.AreEqual("Link", resource.ResourceType.Name);
+                Assert.IsNull(resource.SensitivityLabel, "Sensitivity label should be null");
+            }
+        }
+
+        /// <summary>
+        /// Tests that duplicate AccessedResources are not created in lookup tables
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesDeduplicationTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Skip test if migration hasn't been run yet
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resources', 'U')").FirstOrDefault().GetValueOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                // Create two events with the same AccessedResource
+                var commonEvent1 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Dedup Test 1" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dedup1.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                var commonEvent2 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Dedup Test 2" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dedup2.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.AddRange(new[] { commonEvent1, commonEvent2 });
+                await db.SaveChangesAsync();
+
+                var sharedResource = new AccessedResource
+                {
+                    Id = "shared-resource-id",
+                    Name = "SharedDocument.docx",
+                    Type = "Document",
+                    SensitivityLabelId = "shared-label"
+                };
+
+                // Save first event
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource> { sharedResource }
+                    }
+                }, commonEvent1);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Save second event with same resource
+                copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource> { sharedResource }
+                    }
+                }, commonEvent2);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify lookup tables only have one entry each
+                var resourceIds = await db.CopilotAccessedResourceIds.Where(r => r.ResourceId == "shared-resource-id").ToListAsync();
+                var resourceNames = await db.CopilotAccessedResourceNames.Where(r => r.Name == "SharedDocument.docx").ToListAsync();
+                var resourceTypes = await db.CopilotAccessedResourceTypes.Where(r => r.Name == "Document").ToListAsync();
+                var sensitivityLabels = await db.CopilotSensitivityLabels.Where(l => l.LabelId == "shared-label").ToListAsync();
+
+                Assert.AreEqual(1, resourceIds.Count, "Should have only 1 unique resource ID");
+                Assert.AreEqual(1, resourceNames.Count, "Should have only 1 unique resource name");
+                Assert.AreEqual(1, resourceTypes.Count, "Should have only 1 unique resource type");
+                Assert.AreEqual(1, sensitivityLabels.Count, "Should have only 1 unique sensitivity label");
+
+                // But junction table should have 2 entries (one for each event)
+                var junctionRecords = await db.CopilotEventAccessedResources
+                    .Where(ar => ar.ResourceId.ResourceId == "shared-resource-id")
+                    .ToListAsync();
+
+                Assert.AreEqual(2, junctionRecords.Count, "Should have 2 junction records (one per event)");
+            }
+        }
+
+        #region Copilot Credit Estimation Tests
+
+        /// <summary>
+        /// Tests that Copilot Credit estimation data (total and JSON) is correctly saved to the database
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerCopilotCreditEstimationSaveTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                // Create a test event with Copilot Credit estimation data
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Test Copilot Credit Estimation Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@creditest.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Create audit record with Copilot Credit estimation
+                var creditEstimation = new CopilotCreditEstimation
+                {
+                    GenerativeAnswers = 2,
+                    TenantGraphGroundedAnswers = 2,
+                    DeepReasoningActions = 1,
+                    TotalCredits = 29, // 2*(2+10) + 5 = 24 + 5 = 29
+                    CreditBreakdown = new Dictionary<string, int>
+                    {
+                        { "Generative Answers", 4 },
+                        { "Tenant Graph Grounding", 20 },
+                        { "Agent Actions (Deep Reasoning)", 5 }
+                    },
+                    ModelsUsed = new List<string> { "DEEP_LEO" }
+                };
+
+                var auditLogContent = new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource { Type = "File", Name = "Document.docx" }
+                        }
+                    },
+                    Cost = creditEstimation
+                };
+
+                // Save event with Copilot Credit estimation data
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(auditLogContent, commonEvent);
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify Copilot Credit estimation data was saved
+                var savedEvent = await db.CopilotChats
+                    .Where(e => e.AuditEvent.Id == commonEvent.Id)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(savedEvent, "CopilotChat event should be saved");
+                Assert.AreEqual(29, savedEvent.CopilotCreditEstimateTotal, "Copilot Credit estimate total should match");
+                Assert.IsNotNull(savedEvent.CopilotCreditEstimateJson, "Copilot Credit estimate JSON should not be null");
+                
+                // Verify JSON can be deserialized back
+                var deserializedCreditEstimate = JsonConvert.DeserializeObject<CopilotCreditEstimation>(savedEvent.CopilotCreditEstimateJson);
+                Assert.IsNotNull(deserializedCreditEstimate, "Copilot Credit estimate JSON should deserialize correctly");
+                Assert.AreEqual(2, deserializedCreditEstimate.GenerativeAnswers);
+                Assert.AreEqual(2, deserializedCreditEstimate.TenantGraphGroundedAnswers);
+                Assert.AreEqual(1, deserializedCreditEstimate.DeepReasoningActions);
+                Assert.AreEqual(29, deserializedCreditEstimate.TotalCredits);
+            }
+        }
+
+        /// <summary>
+        /// Tests that null Copilot Credit estimation data is handled correctly
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerNullCopilotCreditEstimationTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Null Copilot Credit Test" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@nullcredit.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Save event without Copilot Credit estimation data
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData { AppHost = "Teams" },
+                    Cost = null
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify event was saved with null Copilot Credit estimation data
+                var savedEvent = await db.CopilotChats
+                    .Where(e => e.AuditEvent.Id == commonEvent.Id)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(savedEvent, "CopilotChat event should be saved");
+                Assert.IsNull(savedEvent.CopilotCreditEstimateTotal, "Copilot Credit estimate total should be null");
+                Assert.IsNull(savedEvent.CopilotCreditEstimateJson, "Copilot Credit estimate JSON should be null");
+            }
+        }
+
+        /// <summary>
+        /// Tests Copilot Credit estimation tracking with different event types (file, meeting, chat)
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerCopilotCreditEstimationMultipleEventTypesTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var adaptor = new FakeCopilotMetadataLoader();
+
+                // File event with Copilot Credits
+                var fileEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "File Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@file.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                // Meeting event with Copilot Credits
+                var meetingEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Meeting Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@meeting.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                // Chat event with Copilot Credits
+                var chatEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Chat Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@chat.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.AddRange(new[] { fileEvent, meetingEvent, chatEvent });
+                await db.SaveChangesAsync();
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, adaptor, _logger);
+
+                // File event - 12 credits (generative + tenant graph)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        Contexts = new List<Context>
+                        {
+                            new Context { Id = _config.TestCopilotDocContextIdSpSite, Type = _config.TeamSiteFileExtension }
+                        }
+                    },
+                    Cost = new CopilotCreditEstimation { TotalCredits = 12, GenerativeAnswers = 1, TenantGraphGroundedAnswers = 1 }
+                }, fileEvent);
+
+                // Meeting event - 2 credits (generative only)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:meeting_test@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING
+                            }
+                        }
+                    },
+                    Cost = new CopilotCreditEstimation { TotalCredits = 2, GenerativeAnswers = 1 }
+                }, meetingEvent);
+
+                // Chat event - 17 credits (generative + tenant graph + deep reasoning)
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:chat_test@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    },
+                    Cost = new CopilotCreditEstimation 
+                    { 
+                        TotalCredits = 17, 
+                        GenerativeAnswers = 1, 
+                        TenantGraphGroundedAnswers = 1, 
+                        DeepReasoningActions = 1 
+                    }
+                }, chatEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify all events have correct Copilot Credit estimation data
+                var savedFileEvent = await db.CopilotChats.Where(e => e.AuditEvent.Id == fileEvent.Id).FirstOrDefaultAsync();
+                var savedMeetingEvent = await db.CopilotChats.Where(e => e.AuditEvent.Id == meetingEvent.Id).FirstOrDefaultAsync();
+                var savedChatEvent = await db.CopilotChats.Where(e => e.AuditEvent.Id == chatEvent.Id).FirstOrDefaultAsync();
+
+                Assert.AreEqual(12, savedFileEvent?.CopilotCreditEstimateTotal, "File event Copilot Credits should be 12");
+                Assert.AreEqual(2, savedMeetingEvent?.CopilotCreditEstimateTotal, "Meeting event Copilot Credits should be 2");
+                Assert.AreEqual(17, savedChatEvent?.CopilotCreditEstimateTotal, "Chat event Copilot Credits should be 17");
+            }
+        }
+
+        #endregion
+
+        /// <summary>
         /// Tests we can load metadata from Graph
         /// </summary>
-#if DEBUG
-        [TestMethod]
-#endif
         public async Task GraphCopilotMetadataLoaderTests()
         {
             var auth = new GraphAppIndentityOAuthContext(_logger, _config.ClientID, _config.TenantGUID.ToString(), _config.ClientSecret, string.Empty, false);
@@ -518,6 +1023,5 @@ namespace Tests.UnitTests
                 Assert.AreEqual(appIdentity, result.AgentId, $"AgentId should be set to AppIdentity for: {expectedAgentName}");
             }
         }
-
     }
 }

@@ -2,10 +2,14 @@
 using DataUtils;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
@@ -52,24 +56,22 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 return;
             }
 
-            _logger.LogInformation($"Saving copilot event metadata to staging for event {baseOfficeEvent.Id}");
-
             // Per-event counts (for logging only)
-            int eventMeetings =0, eventFiles =0, eventChats =0;
+            int eventMeetings = 0, eventFiles = 0, eventChats = 0;
 
             var contexts = auditRecord.CopilotEventData?.Contexts;
-            if (contexts != null && contexts.Count >0)
+            if (contexts != null && contexts.Count > 0)
             {
                 foreach (var context in contexts)
                 {
                     // Only one meeting OR file per event is relevant; chat contexts are additive.
                     if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING)
                     {
-                        if (eventMeetings ==0) // safeguard against multiple meeting contexts
+                        if (eventMeetings == 0) // safeguard against multiple meeting contexts
                         {
                             if (await TryAddMeetingAsync(context.Id, auditRecord, baseOfficeEvent))
                             {
-                                eventMeetings++; _totalMeetingsCount++; 
+                                eventMeetings++; _totalMeetingsCount++;
                             }
                         }
                         break; // meeting ends further processing for meeting/file
@@ -82,7 +84,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     }
                     else
                     {
-                        if (eventFiles ==0) // only capture first file-relevant context
+                        if (eventFiles == 0) // only capture first file-relevant context
                         {
                             if (await TryAddFileAsync(context.Id, auditRecord, baseOfficeEvent))
                             {
@@ -93,7 +95,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     }
 
                     // Preserve original logic: break after first meeting OR file context captured.
-                    if (eventMeetings >0 || eventFiles >0)
+                    if (eventMeetings > 0 || eventFiles > 0)
                         break;
                 }
             }
@@ -104,7 +106,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 eventChats++; _totalChatOnlyCount++;
             }
 
-            if (eventMeetings >0 || eventFiles >0 || eventChats >0)
+            if (eventMeetings > 0 || eventFiles > 0 || eventChats > 0)
             {
                 _logger.LogInformation($"Event {baseOfficeEvent.Id}: staged {eventChats} chat(s), {eventMeetings} meeting(s), {eventFiles} file(s).");
             }
@@ -131,6 +133,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     MeetingName = meetingInfo?.Subject,
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
+                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
+                    MessagesJson = SerializeMessages(auditRecord),
+                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
+                    CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
+                    CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
                 });
                 return true; // staged regardless of meetingInfo retrieval success
             }
@@ -156,6 +163,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     UrlBase = spFileInfo?.SiteUrl,
                     AgentId = auditRecord.AgentId,
                     AgentName = auditRecord.AgentName,
+                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
+                    MessagesJson = SerializeMessages(auditRecord),
+                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
+                    CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
+                    CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
                 });
                 if (spFileInfo == null)
                 {
@@ -178,7 +190,109 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 AppHost = auditRecord.CopilotEventData.AppHost,
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
+                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
+                MessagesJson = SerializeMessages(auditRecord),
+                ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
+                CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
+                CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
             });
+        }
+
+        /// <summary>
+        /// Serializes AccessedResources list to JSON for staging table storage
+        /// </summary>
+        internal string SerializeAccessedResources(IEnumerable<AccessedResource> accessedResources)
+        {
+            if (accessedResources == null || accessedResources.Count() == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(accessedResources);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize AccessedResources");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes Messages from CopilotAuditLogContent to JSON for staging table storage.
+        /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
+        /// Only serializes response messages (IsPrompt = false), not user prompts.
+        /// </summary>
+        internal string SerializeMessages(CopilotAuditLogContent auditRecord)
+        {
+            if (auditRecord?.ParsedAuditEvent?.Messages == null || auditRecord.ParsedAuditEvent.Messages.Count == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                // Filter out prompt messages - only serialize responses
+                var responseMessages = auditRecord.ParsedAuditEvent.Messages.Where(m => !m.IsPrompt).ToList();
+                
+                if (responseMessages.Count == 0)
+                {
+                    return null;
+                }
+                
+                return JsonConvert.SerializeObject(responseMessages);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize Messages from audit record");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes ModelTransparencyDetails from CopilotAuditLogContent to JSON for staging table storage.
+        /// Used to track which AI models (e.g., DEEP_LEO for deep reasoning) were used in the conversation.
+        /// </summary>
+        internal string SerializeModelTransparencyDetails(CopilotAuditLogContent auditRecord)
+        {
+            if (auditRecord?.ParsedAuditEvent?.ModelTransparencyDetails == null || 
+                auditRecord.ParsedAuditEvent.ModelTransparencyDetails.Count == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.ModelTransparencyDetails);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize ModelTransparencyDetails from audit record");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes CopilotCreditEstimation from CopilotAuditLogContent to JSON for staging table storage.
+        /// Contains breakdown of Copilot Credits consumed including generative answers, tenant graph grounding, deep reasoning, etc.
+        /// </summary>
+        internal string SerializeCopilotCreditEstimation(CopilotAuditLogContent auditRecord)
+        {
+            if (auditRecord?.Cost == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(auditRecord.Cost);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize CopilotCreditEstimation from audit record");
+                return null;
+            }
         }
 
         /// <summary>
@@ -200,9 +314,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _copilotInsertsSP.Rows.Clear();
             _copilotInsertsTeams.Rows.Clear();
             _copilotInsertsChatsNoContext.Rows.Clear();
-            _totalFilesCount =0;
-            _totalMeetingsCount =0;
-            _totalChatOnlyCount =0;
+            _totalFilesCount = 0;
+            _totalMeetingsCount = 0;
+            _totalChatOnlyCount = 0;
         }
 
         private string GetSql(string tempTableName, string workloadSpecificScriptName)
