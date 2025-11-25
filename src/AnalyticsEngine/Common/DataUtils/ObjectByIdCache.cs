@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DataUtils
@@ -10,28 +11,30 @@ namespace DataUtils
         private static readonly StringComparer _sqlStringComparer = CultureInfo.GetCultureInfo(1033).CompareInfo
                             .GetStringComparer(CompareOptions.IgnoreCase | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreWidth);
         private Dictionary<string, T> ObjectCache { get; set; } = new Dictionary<string, T>(_sqlStringComparer);
+        private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
         /// <summary>
         /// Load resource either from cache or external load.
         /// </summary>
         /// <param name="loadMethodFoundNoResultCallback">If nothing in cache found or externally, callback with result</param>
-        public Task<T> GetResource(string id, Func<Task<T>> loadMethodFoundNoResultCallback)
+        public async Task<T> GetResource(string id, Func<Task<T>> loadMethodFoundNoResultCallback)
         {
             if (string.IsNullOrEmpty(id))
             {
                 throw new ArgumentException($"'{nameof(id)}' cannot be null or empty.", nameof(id));
             }
 
-            lock (this)
+            await _semaphore.WaitAsync();
+            try
             {
                 if (!ObjectCache.ContainsKey(id))
                 {
-                    T obj = Load(id).Result;       // Cannot await in lock
+                    T obj = await Load(id);
 
                     // No object from load? Invoke callback
                     if (obj == null && loadMethodFoundNoResultCallback != null)
                     {
-                        obj = loadMethodFoundNoResultCallback().Result;
+                        obj = await loadMethodFoundNoResultCallback();
                     }
 
                     if (obj == null)
@@ -40,9 +43,14 @@ namespace DataUtils
                     }
                     ObjectCache.Add(id, obj);
                 }
-                return Task.FromResult(ObjectCache[id]);
+                return ObjectCache[id];
+            }
+            finally
+            {
+                _semaphore.Release();
             }
         }
+
         public async Task<T> GetResource(string id)
         {
             return await GetResource(id, null);

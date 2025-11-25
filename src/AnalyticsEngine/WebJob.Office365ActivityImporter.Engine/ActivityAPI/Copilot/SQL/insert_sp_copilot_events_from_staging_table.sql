@@ -31,7 +31,7 @@ INSERT INTO event_file_names(file_name)
 	where event_file_names.file_name is null and imports.file_name is not null and imports.file_name != '';
 
 
-insert into [event_copilot_files] (copilot_chat_id, file_name_id, file_extension_id, url_id, site_id)
+insert into [copilot_event_files] (copilot_chat_id, file_name_id, file_extension_id, url_id, site_id)
 	SELECT imports.event_id
 		,event_file_names.id as fileNameId
 		,event_file_ext.id as fileExtId

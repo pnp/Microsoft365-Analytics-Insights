@@ -55,7 +55,7 @@ namespace Tests.UnitTests
         {
             var user = new User { UserPrincipalName = "user" + DateTime.Now.Ticks + "@example.com", Mail = "user" + DateTime.Now.Ticks + "@example.com" };
             db.users.Add(user);
-            await InsertTestDataAll(user, db);  
+            await InsertTestDataAll(user, db);
             return user;
         }
         private async Task InsertTestDataAll(User user, AnalyticsEntitiesContext db)

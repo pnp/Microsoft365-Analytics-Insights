@@ -9,7 +9,7 @@ namespace Common.Entities.Entities.AuditLog
     /// A copilot interaction event. May not be related to any file or meeting. 
     /// Relates back to a common audit event.
     /// </summary>
-    [Table("event_copilot_chats")]
+    [Table("copilot_chats")]
     public class CopilotChat : BaseOfficeEvent
     {
         [Column("app_host")]
@@ -20,6 +20,20 @@ namespace Common.Entities.Entities.AuditLog
         [Column("agent_id")]
         public int? AgentId { get; set; }
         public CopilotAgent Agent { get; set; } = null;
+
+        /// <summary>
+        /// Estimated total Copilot Credits consumed for this interaction.
+        /// Calculated from CopilotCreditEstimation in CopilotAuditLogContent.
+        /// </summary>
+        [Column("copilot_credit_estimate_total")]
+        public int? CopilotCreditEstimateTotal { get; set; }
+
+        /// <summary>
+        /// JSON-serialized Copilot Credit estimation details from CopilotCreditEstimation.
+        /// Contains breakdown of generative answers, tenant graph grounding, deep reasoning, etc.
+        /// </summary>
+        [Column("copilot_credit_estimate_json")]
+        public string CopilotCreditEstimateJson { get; set; } = null;
     }
 
     /// <summary>
@@ -39,7 +53,7 @@ namespace Common.Entities.Entities.AuditLog
     }
 
 
-    [Table("event_copilot_files")]
+    [Table("copilot_event_files")]
     public class CopilotEventMetadataFile : BaseCopilotSpecificEvent
     {
         [ForeignKey(nameof(FileExtension))]
@@ -68,7 +82,7 @@ namespace Common.Entities.Entities.AuditLog
         }
     }
 
-    [Table("event_copilot_meetings")]
+    [Table("copilot_event_meetings")]
     public class CopilotEventMetadataMeeting : BaseCopilotSpecificEvent
     {
         [ForeignKey(nameof(OnlineMeeting))]
@@ -89,6 +103,148 @@ namespace Common.Entities.Entities.AuditLog
         [Column("agent_id")]
         public string AgentID { get; set; } = null;
     }
+
+    /// <summary>
+    /// Lookup table for accessed resource IDs
+    /// </summary>
+    [Table("copilot_event_accessed_resource_ids")]
+    public class CopilotAccessedResourceId : AbstractEFEntity
+    {
+        [Column("resource_id")]
+        [MaxLength(5000)]
+        public string ResourceId { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Lookup table for accessed resource names
+    /// </summary>
+    [Table("copilot_event_accessed_resource_names")]
+    public class CopilotAccessedResourceName : AbstractEFEntity
+    {
+        // Not using AbstractEFEntityWithName to allow longer names
+        [Column("name")]
+        public string Name { get; set; }
+    }
+
+    /// <summary>
+    /// Lookup table for accessed resource site URLs
+    /// </summary>
+    [Table("copilot_event_accessed_resource_site_urls")]
+    public class CopilotAccessedResourceSiteUrl : AbstractEFEntity
+    {
+        [Column("site_url")]
+        public string SiteUrl { get; set; }
+    }
+
+    /// <summary>
+    /// Lookup table for accessed resource types
+    /// </summary>
+    [Table("copilot_event_accessed_resource_types")]
+    public class CopilotAccessedResourceType : AbstractEFEntityWithName
+    {
+    }
+
+    /// <summary>
+    /// Lookup table for sensitivity label IDs.
+    /// Shared across multiple event types (Copilot, SharePoint, etc.)
+    /// </summary>
+    [Table("sensitivity_labels")]
+    public class SensitivityLabel : AbstractEFEntity
+    {
+        [Column("label_id")]
+        [MaxLength(100)]
+        public string LabelId { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Junction table linking copilot events to accessed resources
+    /// </summary>
+    [Table("copilot_event_accessed_resources")]
+    public class CopilotEventAccessedResource : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [ForeignKey(nameof(ResourceId))]
+        [Column("resource_id_id")]
+        public int? ResourceIdId { get; set; }
+        public CopilotAccessedResourceId ResourceId { get; set; } = null;
+
+        [ForeignKey(nameof(ResourceName))]
+        [Column("resource_name_id")]
+        public int? ResourceNameId { get; set; }
+        public CopilotAccessedResourceName ResourceName { get; set; } = null;
+
+        [ForeignKey(nameof(ResourceSiteUrl))]
+        [Column("resource_site_url_id")]
+        public int? ResourceSiteUrlId { get; set; }
+        public CopilotAccessedResourceSiteUrl ResourceSiteUrl { get; set; } = null;
+
+        [ForeignKey(nameof(ResourceType))]
+        [Column("resource_type_id")]
+        public int? ResourceTypeId { get; set; }
+        public CopilotAccessedResourceType ResourceType { get; set; } = null;
+
+        [ForeignKey(nameof(SensitivityLabel))]
+        [Column("sensitivity_label_id")]
+        public int? SensitivityLabelId { get; set; }
+        public SensitivityLabel SensitivityLabel { get; set; } = null;
+    }
+
+    #region Message Tracking Tables
+
+    /// <summary>
+    /// Represents a Copilot response message in a conversation.
+    /// Note: Only response messages (not user prompts) are tracked in the import process.
+    /// </summary>
+    [Table("copilot_event_messages")]
+    public class CopilotMessage : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [Column("message_id")]
+        [MaxLength(500)]
+        public string MessageId { get; set; } = null;
+    }
+
+    #endregion
+
+    #region AI Model Transparency Tables
+
+    /// <summary>
+    /// Lookup table for AI model names used in Copilot conversations.
+    /// Stores unique model names like "DEEP_LEO" for deep reasoning.
+    /// </summary>
+    [Table("copilot_ai_models")]
+    public class CopilotAIModel : AbstractEFEntityWithName
+    {
+        // Name inherited from AbstractEFEntityWithName
+    }
+
+    /// <summary>
+    /// Junction table linking Copilot events to the AI models used.
+    /// Tracks which AI models were involved in generating responses for each conversation.
+    /// </summary>
+    [Table("copilot_event_ai_models")]
+    public class CopilotEventAIModel : AbstractEFEntity
+    {
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        [ForeignKey(nameof(AIModel))]
+        [Column("model_id")]
+        public int ModelId { get; set; }
+        public CopilotAIModel AIModel { get; set; } = null;
+    }
+
+    #endregion
 
 }
 
