@@ -2,7 +2,6 @@
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
-using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
@@ -39,10 +38,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 telemetry.LogInformation($"User import - no redis found configured, using in-process cache for delta token.");
                 deltaProvider = new InProcessDeltaValueProvider(telemetry);
             }
-            
+
             var graphServiceClient = new GraphServiceClient(creds);
             graphServiceClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
-            
+
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _telemetry, graphServiceClient);
         }
 
@@ -87,12 +86,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var skus = await _userLoader.LoadTenantSkus();
 
                 var allDbUsers = await db.users.Include(u => u.LicenseLookups).ToListAsync();
-                
+
                 // Create lookup dictionaries for performance
                 var dbUsersByUpn = allDbUsers
                     .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
                     .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
-                
+
                 var dbUsersByAadId = allDbUsers
                     .Where(u => !string.IsNullOrEmpty(u.AzureAdId))
                     .GroupBy(u => u.AzureAdId)
@@ -162,7 +161,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var relevantDbUsers = new List<Common.Entities.User>();
             foreach (var graphUser in usersWithSku)
             {
-                if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && 
+                if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) &&
                     dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName.ToLower(), out var dbUser))
                 {
                     relevantDbUsers.Add(dbUser);
@@ -239,7 +238,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // Fallback to LINQ query if dictionary not provided (for backwards compatibility)
                     dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) && new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
                 }
-                
+
                 if (dbManager == null)
                 {
                     var graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == graphUser.DefaultManagerInfo?.Id);
@@ -378,7 +377,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     // Lookup manager will just add to cache but not to context
                     var dbUser = await _userMetaCache.UserCache.GetOrCreateNewResource(
-                        upn, 
+                        upn,
                         UpdateDbUserFromGraphUser(new Common.Entities.User { UserPrincipalName = upn }, graphUser));
                     usersInserted.Add(dbUser);
                 }
@@ -386,12 +385,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             // Update metadata for each user using dictionary lookup
             _telemetry.LogInformation($"User import - Loading metadata for {usersInserted.Count.ToString("N0")} new users...");
-            
+
             for (int i = 0; i < usersInserted.Count; i++)
             {
                 var newDbUser = usersInserted[i];
                 var upnLower = newDbUser.UserPrincipalName.ToLower();
-                
+
                 // Fast dictionary lookup instead of LINQ Where/FirstOrDefault
                 if (graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
                 {

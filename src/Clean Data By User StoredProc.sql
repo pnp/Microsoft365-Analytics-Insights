@@ -138,20 +138,20 @@ BEGIN
     -- Copilot (files/meetings before chats)
     -------------------------------------------------
     DELETE f
-    FROM event_copilot_files f
+    FROM copilot_event_files f
     WHERE f.copilot_chat_id IN (
-        SELECT c.event_id FROM event_copilot_chats c
+        SELECT c.event_id FROM copilot_chats c
         WHERE c.event_id IN (SELECT Id FROM #UserEvents)
     );
 
     DELETE m
-    FROM event_copilot_meetings m
+    FROM copilot_event_meetings m
     WHERE m.copilot_chat_id IN (
-        SELECT c.event_id FROM event_copilot_chats c
+        SELECT c.event_id FROM copilot_chats c
         WHERE c.event_id IN (SELECT Id FROM #UserEvents)
     );
 
-    DELETE FROM event_copilot_chats
+    DELETE FROM copilot_chats
     WHERE event_id IN (SELECT Id FROM #UserEvents);
 
     -------------------------------------------------
