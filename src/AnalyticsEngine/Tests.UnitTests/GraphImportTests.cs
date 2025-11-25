@@ -16,7 +16,6 @@ using System.Threading.Tasks;
 using System.Web.Http;
 using Tests.UnitTests.FakeControllers;
 using Tests.UnitTests.FakeEntities;
-using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Graph;

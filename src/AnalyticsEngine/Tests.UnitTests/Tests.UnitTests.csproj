@@ -90,6 +90,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
@@ -182,7 +183,7 @@
     </ProjectReference>
     <ProjectReference Include="..\Common\Entities\Entities.csproj">
       <Project>{637930bd-073b-421e-9f33-fe90bf2103c5}</Project>
-      <Name>Common.Entities</Name>
+      <Name>Entities</Name>
     </ProjectReference>
     <ProjectReference Include="..\Common\UsageReporting\UsageReporting.csproj">
       <Project>{a4448200-5dfa-486d-891b-2476b80233f6}</Project>
