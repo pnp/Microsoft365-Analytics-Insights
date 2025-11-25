@@ -173,8 +173,58 @@ namespace Tests.UnitTests
 
             var nullResult = await c.GetResourceOrNullIfNotExists(Guid.NewGuid().ToString());
             Assert.IsNull(nullResult);
-        }
 
+            // Test concurrent access (verifies SemaphoreSlim deadlock fix)
+            var concurrentCache = new TestObjectByIdCache();
+            var concurrentIds = new List<string>();
+            for (int i = 0; i < 50; i++)
+            {
+                var id = Guid.NewGuid().ToString();
+                concurrentIds.Add(id);
+                concurrentCache.AddId(id);
+            }
+
+            // Access cache from multiple threads simultaneously
+            var tasks = new List<Task<TestObject>>();
+            foreach (var id in concurrentIds)
+            {
+                tasks.Add(Task.Run(async () => await concurrentCache.GetResource(id)));
+            }
+
+            var results = await Task.WhenAll(tasks);
+            Assert.AreEqual(concurrentIds.Count, results.Length);
+            Assert.IsTrue(results.All(result => result != null));
+
+            // Test concurrent access with callback (verifies no deadlock with async callback)
+            var callbackCache = new TestObjectByIdCache();
+            var callbackTasks = new List<Task<TestObject>>();
+            var callbackIds = new List<string>();
+
+            for (int i = 0; i < 20; i++)
+            {
+                var id = Guid.NewGuid().ToString();
+                callbackIds.Add(id);
+
+                // Simulate async load with delay
+                callbackTasks.Add(Task.Run(async () =>
+                    await callbackCache.GetResource(id, async () =>
+                    {
+                        await Task.Delay(10); // Simulate async work
+                        return new TestObject();
+                    })));
+            }
+
+            var callbackResults = await Task.WhenAll(callbackTasks);
+            Assert.AreEqual(callbackIds.Count, callbackResults.Length);
+            Assert.IsTrue(callbackResults.All(result => result != null));
+
+            // Verify objects are properly cached after concurrent callback creation
+            foreach (var id in callbackIds)
+            {
+                var cached = await callbackCache.GetResource(id);
+                Assert.IsNotNull(cached);
+            }
+        }
         class TestObjectByIdCache : ObjectByIdCache<TestObject>
         {
             List<string> ids = new List<string>();
@@ -616,14 +666,14 @@ namespace Tests.UnitTests
 
                 // The second chunk should start 5 minutes before the first chunk ends
                 var expectedChunk2Start = chunk1.End.AddMinutes(-OVERLAP_MINUTES);
-                Assert.AreEqual(expectedChunk2Start, chunk2.Start, 
+                Assert.AreEqual(expectedChunk2Start, chunk2.Start,
                     $"Chunk {i + 1} should start {OVERLAP_MINUTES} minutes before chunk {i} ends");
 
                 // Verify there is actually an overlap window
                 var overlapStart = chunk2.Start;
                 var overlapEnd = chunk1.End;
                 Assert.IsTrue(overlapStart < overlapEnd, "Chunks should have overlapping time period");
-                Assert.AreEqual(OVERLAP_MINUTES, (overlapEnd - overlapStart).TotalMinutes, 
+                Assert.AreEqual(OVERLAP_MINUTES, (overlapEnd - overlapStart).TotalMinutes,
                     $"Overlap should be exactly {OVERLAP_MINUTES} minutes");
 
                 // Verify that a time in the overlap period is in range for both chunks
@@ -635,7 +685,7 @@ namespace Tests.UnitTests
             // Test with zero overlap (should behave like original)
             var chunksNoOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 0);
             var chunksDefault = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate);
-            
+
             Assert.AreEqual(chunksNoOverlap.Count, chunksDefault.Count, "Zero overlap should match default behavior");
             for (int i = 0; i < chunksNoOverlap.Count; i++)
             {
@@ -646,7 +696,7 @@ namespace Tests.UnitTests
             // Test with larger overlap (30 minutes)
             var chunksLargeOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 30);
             Assert.IsTrue(chunksLargeOverlap.Count > 1, "Should have multiple chunks");
-            
+
             if (chunksLargeOverlap.Count > 1)
             {
                 var firstChunk = chunksLargeOverlap[0];
@@ -659,23 +709,23 @@ namespace Tests.UnitTests
             var shortPeriodStart = startDate;
             var shortPeriodEnd = startDate.AddHours(12);
             var shortPeriodChunks = TimePeriod.GetScanningTimeChunksFrom(shortPeriodStart, shortPeriodEnd, 5);
-            
+
             // A 12-hour period should result in 1 chunk (the cleanup only removes chunks < 1 hour)
             Assert.IsTrue(shortPeriodChunks.Count == 1, "12-hour period should result in 1 chunk");
             Assert.AreEqual(12, (shortPeriodChunks[0].End - shortPeriodChunks[0].Start).TotalHours, "Chunk should be 12 hours long");
-            
+
             // Test very short period (< 1 hour) - should be removed
             var veryShortPeriodStart = startDate;
             var veryShortPeriodEnd = startDate.AddMinutes(30);
             var veryShortPeriodChunks = TimePeriod.GetScanningTimeChunksFrom(veryShortPeriodStart, veryShortPeriodEnd, 5);
-            
+
             // Should be empty after removal of chunks < 1 hour
             Assert.IsTrue(veryShortPeriodChunks.Count == 0, "Period less than 1 hour should result in no chunks after last chunk removal");
 
             // Test with negative overlap (should behave as zero overlap - no exception)
             var chunksNegativeOverlap = TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, -10);
             Assert.IsNotNull(chunksNegativeOverlap, "Negative overlap should not throw exception");
-            
+
             // Should behave same as zero overlap
             Assert.AreEqual(chunksNoOverlap.Count, chunksNegativeOverlap.Count, "Negative overlap should behave as zero overlap");
             if (chunksNegativeOverlap.Count > 1)
@@ -689,12 +739,12 @@ namespace Tests.UnitTests
             }
 
             // Test invalid overlap (>= 24 hours should throw)
-            Assert.ThrowsException<ArgumentOutOfRangeException>(() => 
-                TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 24 * 60), 
+            Assert.ThrowsException<ArgumentOutOfRangeException>(() =>
+                TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 24 * 60),
                 "Overlap >= 24 hours should throw ArgumentOutOfRangeException");
 
-            Assert.ThrowsException<ArgumentOutOfRangeException>(() => 
-                TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 25 * 60), 
+            Assert.ThrowsException<ArgumentOutOfRangeException>(() =>
+                TimePeriod.GetScanningTimeChunksFrom(startDate, endDate, 25 * 60),
                 "Overlap > 24 hours should throw ArgumentOutOfRangeException");
         }
 
