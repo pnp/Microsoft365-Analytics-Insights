@@ -1431,5 +1431,238 @@ namespace Tests.UnitTests
                 Assert.IsFalse(standardChat.Agent.IsCustomAgent.HasValue && standardChat.Agent.IsCustomAgent.Value, "IsCustomAgent should be false/null for standard agent");
             }
         }
+
+        /// <summary>
+        /// Tests that only custom agents are charged Copilot Credits.
+        /// Standard M365 Copilot should have 0 credits.
+        /// </summary>
+        [TestMethod]
+        public void CopilotCreditEstimation_CustomAgentOnly_ChargesCopilotCredits()
+        {
+            // Arrange - create audit event with messages and tenant graph resources
+            var json = @"{
+                ""Messages"": [
+                    { ""Id"": ""msg1"", ""isPrompt"": true },
+                    { ""Id"": ""msg2"", ""isPrompt"": false },
+                    { ""Id"": ""msg3"", ""isPrompt"": false }
+                ],
+                ""AccessedResources"": [
+                    { ""Type"": ""File"", ""SiteUrl"": ""https://contoso.sharepoint.com/sites/team"" }
+                ],
+                ""ModelTransparencyDetails"": []
+            }";
+
+            // Act - analyze for custom agent
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            // Assert - custom agent should be charged
+            Assert.AreEqual(2, customAgentCost.GenerativeAnswers, "Custom agent should have 2 generative answers");
+            Assert.AreEqual(2, customAgentCost.TenantGraphGroundedAnswers, "Custom agent should have 2 tenant graph grounded answers");
+            Assert.AreEqual(24, customAgentCost.TotalCredits, "Custom agent should be charged 24 credits (2 * (2 + 10))");
+
+            // Act - analyze for non-custom (standard M365) agent
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+
+            // Assert - standard agent should NOT be charged
+            Assert.AreEqual(0, standardAgentCost.GenerativeAnswers, "Standard agent should have 0 generative answers counted");
+            Assert.AreEqual(0, standardAgentCost.TenantGraphGroundedAnswers, "Standard agent should have 0 tenant graph answers counted");
+            Assert.AreEqual(0, standardAgentCost.TotalCredits, "Standard agent should have 0 credits");
+
+            // Verify analytics data is still captured for standard agents
+            Assert.IsTrue(standardAgentCost.ResourceTypeBreakdown.Count > 0, "Resource breakdown should still be captured for analytics");
+        }
+
+        /// <summary>
+        /// Tests that deep reasoning (premium model) is only charged for custom agents
+        /// </summary>
+        [TestMethod]
+        public void CopilotCreditEstimation_CustomAgentOnly_ChargesDeepReasoning()
+        {
+            // Arrange - create audit event with deep reasoning model
+            var json = @"{
+                ""Messages"": [
+                    { ""Id"": ""msg1"", ""isPrompt"": true },
+                    { ""Id"": ""msg2"", ""isPrompt"": false }
+                ],
+                ""AccessedResources"": [
+                    { ""Type"": ""File"", ""SiteUrl"": ""https://contoso.sharepoint.com/sites/team"" }
+                ],
+                ""ModelTransparencyDetails"": [
+                    { ""ModelName"": ""DEEP_LEO"" }
+                ]
+            }";
+
+            // Act - analyze for custom agent
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            // Assert - custom agent should be charged for deep reasoning
+            Assert.AreEqual(1, customAgentCost.DeepReasoningActions, "Custom agent should have 1 deep reasoning action");
+            Assert.AreEqual(17, customAgentCost.TotalCredits, "Custom agent should be charged 17 credits (2 + 10 + 5)");
+            Assert.IsTrue(customAgentCost.ModelsUsed.Contains("DEEP_LEO"), "DEEP_LEO model should be tracked for custom agent");
+
+            // Act - analyze for non-custom (standard M365) agent
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+
+            // Assert - standard agent should NOT be charged for deep reasoning
+            Assert.AreEqual(0, standardAgentCost.DeepReasoningActions, "Standard agent should have 0 deep reasoning actions counted");
+            Assert.AreEqual(0, standardAgentCost.TotalCredits, "Standard agent should have 0 credits");
+            
+            // Verify model is still tracked for analytics even though not charged
+            Assert.IsTrue(standardAgentCost.ModelsUsed.Contains("DEEP_LEO"), "DEEP_LEO model should still be tracked for analytics");
+        }
+
+        /// <summary>
+        /// Tests that web-only searches (no tenant resources) still result in 0 credits for standard agents
+        /// </summary>
+        [TestMethod]
+        public void CopilotCreditEstimation_StandardAgent_WebSearchesHaveZeroCredits()
+        {
+            // Arrange - create audit event with web-only resources (no tenant graph)
+            var json = @"{
+                ""Messages"": [
+                    { ""Id"": ""msg1"", ""isPrompt"": true },
+                    { ""Id"": ""msg2"", ""isPrompt"": false },
+                    { ""Id"": ""msg3"", ""isPrompt"": false }
+                ],
+                ""AccessedResources"": [
+                    { ""Type"": ""WebPage"", ""SiteUrl"": ""https://www.example.com"" }
+                ],
+                ""ModelTransparencyDetails"": []
+            }";
+
+            // Act - analyze for custom agent (should only charge for generative, not tenant graph)
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            // Assert - custom agent charged for generative only (no tenant graph)
+            Assert.AreEqual(2, customAgentCost.GenerativeAnswers, "Custom agent should have 2 generative answers");
+            Assert.AreEqual(0, customAgentCost.TenantGraphGroundedAnswers, "No tenant graph resources accessed");
+            Assert.AreEqual(4, customAgentCost.TotalCredits, "Custom agent should be charged 4 credits (2 * 2)");
+
+            // Act - analyze for standard agent
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+
+            // Assert - standard agent has 0 credits
+            Assert.AreEqual(0, standardAgentCost.TotalCredits, "Standard agent should have 0 credits even with web searches");
+        }
+
+        /// <summary>
+        /// Tests comprehensive scenario with all billing components for custom vs standard agents
+        /// </summary>
+        [TestMethod]
+        public void CopilotCreditEstimation_ComprehensiveScenario_DifferentiatesAgentTypes()
+        {
+            // Arrange - complex scenario with multiple messages, tenant resources, and deep reasoning
+            var json = @"{
+                ""Messages"": [
+                    { ""Id"": ""msg1"", ""isPrompt"": true },
+                    { ""Id"": ""msg2"", ""isPrompt"": false },
+                    { ""Id"": ""msg3"", ""isPrompt"": false },
+                    { ""Id"": ""msg4"", ""isPrompt"": true },
+                    { ""Id"": ""msg5"", ""isPrompt"": false }
+                ],
+                ""AccessedResources"": [
+                    { ""Type"": ""docx"", ""Name"": ""Document1.docx"", ""SiteUrl"": ""https://contoso.sharepoint.com/sites/team"" },
+                    { ""Type"": ""xlsx"", ""Name"": ""Spreadsheet1.xlsx"", ""SiteUrl"": ""https://contoso-my.sharepoint.com/personal/user"" },
+                    { ""Type"": ""Email"", ""Name"": ""Meeting Notes"" }
+                ],
+                ""ModelTransparencyDetails"": [
+                    { ""ModelName"": ""DEEP_LEO"" }
+                ]
+            }";
+
+            // Act - analyze for custom agent
+            var customAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            // Assert - custom agent full billing
+            Assert.AreEqual(3, customAgentCost.GenerativeAnswers, "3 response messages");
+            Assert.AreEqual(3, customAgentCost.TenantGraphGroundedAnswers, "All 3 responses use tenant graph");
+            Assert.AreEqual(1, customAgentCost.DeepReasoningActions, "1 deep reasoning action");
+            Assert.AreEqual(41, customAgentCost.TotalCredits, "Total: 3*(2+10) + 5 = 36 + 5 = 41 credits");
+            Assert.AreEqual(3, customAgentCost.ResourceTypeBreakdown.Count, "3 resource types accessed");
+            Assert.IsTrue(customAgentCost.CreditBreakdown.ContainsKey("Generative Answers"), "Should have generative breakdown");
+            Assert.IsTrue(customAgentCost.CreditBreakdown.ContainsKey("Tenant Graph Grounding"), "Should have tenant graph breakdown");
+            Assert.IsTrue(customAgentCost.CreditBreakdown.ContainsKey("Agent Actions (Deep Reasoning)"), "Should have deep reasoning breakdown");
+
+            // Act - analyze for standard agent
+            var standardAgentCost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+
+            // Assert - standard agent no billing but analytics preserved
+            Assert.AreEqual(0, standardAgentCost.GenerativeAnswers, "No answers counted for standard agent");
+            Assert.AreEqual(0, standardAgentCost.TenantGraphGroundedAnswers, "No grounding counted for standard agent");
+            Assert.AreEqual(0, standardAgentCost.DeepReasoningActions, "No actions counted for standard agent");
+            Assert.AreEqual(0, standardAgentCost.TotalCredits, "Standard M365 Copilot has 0 credits");
+            Assert.AreEqual(0, standardAgentCost.CreditBreakdown.Count, "No credit breakdown for standard agent");
+            
+            // Analytics data still captured
+            Assert.AreEqual(3, standardAgentCost.ResourceTypeBreakdown.Count, "Resource analytics still captured");
+            Assert.IsTrue(standardAgentCost.ModelsUsed.Contains("DEEP_LEO"), "Model analytics still captured");
+        }
+
+        /// <summary>
+        /// Tests empty/null scenarios for both agent types
+        /// </summary>
+        [TestMethod]
+        public void CopilotCreditEstimation_EmptyEvents_BothAgentTypesReturnZero()
+        {
+            // Arrange - empty event
+            var emptyJson = @"{
+                ""Messages"": [],
+                ""AccessedResources"": [],
+                ""ModelTransparencyDetails"": []
+            }";
+
+            // Act
+            var customAgentCost = CopilotCreditEstimation.Analyze(emptyJson, isCustomAgent: true);
+            var standardAgentCost = CopilotCreditEstimation.Analyze(emptyJson, isCustomAgent: false);
+
+            // Assert - both should return 0
+            Assert.AreEqual(0, customAgentCost.TotalCredits, "Empty custom agent event should have 0 credits");
+            Assert.AreEqual(0, standardAgentCost.TotalCredits, "Empty standard agent event should have 0 credits");
+
+            // Test null string
+            var nullCost = CopilotCreditEstimation.Analyze((string)null, isCustomAgent: true);
+            Assert.AreEqual(0, nullCost.TotalCredits, "Null event should have 0 credits");
+
+            // Test empty string
+            var emptyCost = CopilotCreditEstimation.Analyze(string.Empty, isCustomAgent: true);
+            Assert.AreEqual(0, emptyCost.TotalCredits, "Empty string should have 0 credits");
+        }
+
+        /// <summary>
+        /// Tests that when there's no agent information (AgentName is null/empty), Cost is set to NoCost (0 credits).
+        /// This verifies the logic in CopilotAuditLogContent.FromJson() that assigns NoCost when AgentName is empty.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_NoAgentName_HasNoCost()
+        {
+            // Arrange - JSON with Copilot event data but NO AgentName or AgentId
+            // This would normally result in charges, but without an agent identifier, no cost should be assigned
+            var jsonWithoutAgent = @"{
+                ""CopilotEventData"": {
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [
+                        {
+                            ""Id"": ""file123"",
+                            ""Type"": ""File"",
+                            ""SiteUrl"": ""https://contoso.sharepoint.com/sites/test""
+                        }
+                    ]
+                },
+                ""Messages"": [
+                    { ""IsPrompt"": true },
+                    { ""IsPrompt"": false }
+                ]
+            }";
+
+            // Act - Deserialize using FromJson (which applies the cost logic)
+            var auditLog = CopilotAuditLogContent.FromJson(jsonWithoutAgent);
+
+            // Assert - When AgentName is null/empty, Cost should be NoCost (0 credits)
+            Assert.IsNotNull(auditLog.Cost, "Cost should not be null");
+            Assert.AreEqual(0, auditLog.Cost.TotalCredits, "When AgentName is empty, TotalCredits should be 0");
+            Assert.IsTrue(string.IsNullOrEmpty(auditLog.AgentName), "AgentName should be null or empty");
+            Assert.IsTrue(string.IsNullOrEmpty(auditLog.AgentId), "AgentId should be null or empty");
+            Assert.IsNull(auditLog.IsCustomAgent, "IsCustomAgent should be null when agent info is not present");
+        }
     }
 }
