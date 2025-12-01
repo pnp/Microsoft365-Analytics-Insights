@@ -1137,6 +1137,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(appIdentity, result.AgentId, "AgentId should be set to AppIdentity value");
             Assert.AreEqual(appIdentity, result.AppIdentity, "AppIdentity should be preserved");
             Assert.AreEqual(organizationId, result.OrganizationId, "OrganizationId should be preserved");
+            Assert.IsTrue(result.IsCustomAgent.HasValue && result.IsCustomAgent.Value, "IsCustomAgent should be true when extracted from AppIdentity");
         }
 
         /// <summary>
@@ -1170,6 +1171,7 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.AreEqual(existingAgentName, result.AgentName, "Existing AgentName should be preserved");
             Assert.AreEqual(existingAgentId, result.AgentId, "Existing AgentId should be preserved");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should remain null when not extracted from AppIdentity");
         }
 
         /// <summary>
@@ -1195,6 +1197,7 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.IsNull(result.AgentName, "AgentName should remain null");
             Assert.IsNull(result.AgentId, "AgentId should remain null");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should remain null");
         }
 
         /// <summary>
@@ -1222,6 +1225,7 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.IsNull(result.AgentName, "AgentName should remain null when OrganizationId is missing");
             Assert.IsNull(result.AgentId, "AgentId should remain null when OrganizationId is missing");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should remain null when extraction fails");
         }
 
         /// <summary>
@@ -1251,6 +1255,7 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.IsNull(result.AgentName, "AgentName should remain null when OrganizationId not found in AppIdentity");
             Assert.IsNull(result.AgentId, "AgentId should remain null when OrganizationId not found in AppIdentity");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should remain null when extraction fails");
         }
 
         /// <summary>
@@ -1280,6 +1285,7 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.IsNull(result.AgentName, "AgentName should remain null when no content after OrganizationId");
             Assert.IsNull(result.AgentId, "AgentId should remain null when no content after OrganizationId");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should remain null when extraction fails");
         }
 
         /// <summary>
@@ -1320,6 +1326,109 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(result, $"Result should not be null for agent name: {expectedAgentName}");
                 Assert.AreEqual(expectedAgentName, result.AgentName, $"AgentName should be correctly extracted for: {expectedAgentName}");
                 Assert.AreEqual(appIdentity, result.AgentId, $"AgentId should be set to AppIdentity for: {expectedAgentName}");
+                Assert.IsTrue(result.IsCustomAgent.HasValue && result.IsCustomAgent.Value, $"IsCustomAgent should be true for: {expectedAgentName}");
+            }
+        }
+
+        /// <summary>
+        /// Tests that IsCustomAgent flag is correctly saved and persisted in the database
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerCustomAgentFlagSaveTest()
+        {
+            using (var db = new AnalyticsEntitiesContext(_config.ConnectionStrings.SQL, true, false))
+            {
+                await ClearEvents(db);
+
+                var adaptor = new FakeCopilotMetadataLoader();
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, adaptor, _logger);
+
+                // Test with custom agent (IsCustomAgent = true)
+                var customAgentId = "CustomAgent_" + DateTime.Now.Ticks;
+                var customAgentName = "Custom Agent " + DateTime.Now.Ticks;
+                var customAgentEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Custom Agent Test" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@customagent.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(customAgentEvent);
+                await db.SaveChangesAsync();
+
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:customchat@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    },
+                    AgentId = customAgentId,
+                    AgentName = customAgentName,
+                    IsCustomAgent = true
+                }, customAgentEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify custom agent saved with IsCustomAgent = true
+                var customChat = await db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == customAgentEvent.Id);
+                Assert.IsNotNull(customChat, "Custom agent chat should be saved");
+                Assert.IsNotNull(customChat.Agent, "Custom agent should exist");
+                Assert.AreEqual(customAgentId, customChat.Agent.AgentID, "Custom agent ID should match");
+                Assert.AreEqual(customAgentName, customChat.Agent.Name, "Custom agent name should match");
+                Assert.IsTrue(customChat.Agent.IsCustomAgent.HasValue && customChat.Agent.IsCustomAgent.Value, "IsCustomAgent should be true for custom agent");
+
+                // Test with standard agent (IsCustomAgent = null or false)
+                var standardAgentId = "StandardAgent_" + DateTime.Now.Ticks;
+                var standardAgentName = "Standard Agent " + DateTime.Now.Ticks;
+                var standardAgentEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Standard Agent Test" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@standardagent.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(standardAgentEvent);
+                await db.SaveChangesAsync();
+
+                copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, adaptor, _logger);
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:standardchat@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    },
+                    AgentId = standardAgentId,
+                    AgentName = standardAgentName,
+                    IsCustomAgent = null // or false
+                }, standardAgentEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify standard agent saved with IsCustomAgent = null
+                var standardChat = await db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == standardAgentEvent.Id);
+                Assert.IsNotNull(standardChat, "Standard agent chat should be saved");
+                Assert.IsNotNull(standardChat.Agent, "Standard agent should exist");
+                Assert.AreEqual(standardAgentId, standardChat.Agent.AgentID, "Standard agent ID should match");
+                Assert.AreEqual(standardAgentName, standardChat.Agent.Name, "Standard agent name should match");
+                Assert.IsFalse(standardChat.Agent.IsCustomAgent.HasValue && standardChat.Agent.IsCustomAgent.Value, "IsCustomAgent should be false/null for standard agent");
             }
         }
     }
