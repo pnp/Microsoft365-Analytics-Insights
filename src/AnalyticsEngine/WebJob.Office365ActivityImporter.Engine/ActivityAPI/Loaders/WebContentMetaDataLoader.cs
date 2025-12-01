@@ -17,11 +17,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     public class WebContentMetaDataLoader : ContentMetaDataLoader<ActivityReportInfo>
     {
         private readonly ConfidentialClientApplicationThrottledHttpClient _httpClient;
+        private int _metadataDownloadErrors = 0;
 
         public WebContentMetaDataLoader(ILogger telemetry, ConfidentialClientApplicationThrottledHttpClient httpClient, AppConfig settings) : base(telemetry, settings)
         {
             _httpClient = httpClient;
         }
+
+        /// <summary>
+        /// Gets the count of metadata download errors that occurred
+        /// </summary>
+        public int MetadataDownloadErrorCount => _metadataDownloadErrors;
 
         /// <summary>
         /// Recursively get all metadata for an event query URL
@@ -30,9 +36,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         protected override async Task<List<ActivityReportInfo>> LoadAllActivityReports(string auditContentType, TimePeriod chunk, int batchId)
         {
             // Build the uri to download 
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-reference#list-available-content
             var metadataUri = $"https://manage.office.com/api/v1.0/{_settings.TenantGUID}" +
-                $"/activity/feed/subscriptions/content?ContentType={auditContentType}&PublisherIdentifier={_settings.TenantGUID}&" +
-                $"startTime={FormatDate(chunk.Start)}&endTime={FormatDate(chunk.End)}";
+                $"/activity/feed/subscriptions/content?ContentType={auditContentType}&" +
+                $"PublisherIdentifier={_settings.TenantGUID}&" +
+                $"startTime={FormatDate(chunk.Start)}&" +
+                $"endTime={FormatDate(chunk.End)}";
 
             var data = await DownloadMetadata(metadataUri, batchId);
 #if DEBUG
@@ -74,6 +83,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             }
             catch (HttpRequestException ex)
             {
+                _metadataDownloadErrors++;
                 _telemetry.LogError(ex, $"Error downloading metadata {changeReportUri} with error '{ex.Message}'. " +
                     $"If this happens every time, this may be an issue. Ignoring for now.");
 #if DEBUG

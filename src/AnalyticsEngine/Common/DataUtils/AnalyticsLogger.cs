@@ -67,7 +67,7 @@ namespace DataUtils
 
         void TrackTrace(string sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel severityLevel)
         {
-            Console.WriteLine($"{DateTime.Now.ToString("HH-mm-ss:ff")}: {sayWut}");
+            Console.WriteLine($"{DateTime.Now.ToString("HH:mm:ss")}: {sayWut}");
 
             if (AppInsights != null)
             {

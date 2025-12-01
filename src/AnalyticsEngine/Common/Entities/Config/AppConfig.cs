@@ -54,6 +54,11 @@ namespace Common.Entities.Config
             int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out daysBeforeNowToDownload);
             this.DaysBeforeNowToDownload = daysBeforeNowToDownload;
 
+            // Time chunk overlap in minutes to prevent missing events at boundaries
+            int timeChunkOverlapMinutes = 5;
+            int.TryParse(ConfigurationManager.AppSettings.Get("TimeChunkOverlapMinutes"), out timeChunkOverlapMinutes);
+            this.TimeChunkOverlapMinutes = timeChunkOverlapMinutes;
+
 
             this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
             this.CognitiveKey = ConfigurationManager.AppSettings.Get("CognitiveKey");
@@ -136,6 +141,13 @@ namespace Common.Entities.Config
         public string ContentTypesString { get; set; }
 
         public int DaysBeforeNowToDownload { get; set; }
+
+        /// <summary>
+        /// Number of minutes to overlap between time chunks to prevent missing events at boundaries.
+        /// Default: 5 minutes
+        /// </summary>
+        public int TimeChunkOverlapMinutes { get; set; } = 5;
+
         public string CognitiveEndpoint { get; set; }
         public string CognitiveKey { get; set; }
 

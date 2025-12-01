@@ -3,12 +3,11 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
-using System.IO;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // AuditTraceConfig
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 {
@@ -21,12 +20,19 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private AutoThrottleHttpClient _httpClient;
         private readonly ILogger _telemetry;
         private readonly string _tenantId;
+        private int _reportDownloadErrors = 0;
+
         public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger telemetry, string tenantId)
         {
             _httpClient = httpClient;
             _telemetry = telemetry;
             _tenantId = tenantId;
         }
+
+        /// <summary>
+        /// Gets the count of report download errors that occurred
+        /// </summary>
+        public int ReportDownloadErrorCount => _reportDownloadErrors;
 
         /// <summary>
         /// Load full activity reports from summary links
@@ -44,6 +50,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             }
             catch (HttpRequestException ex)
             {
+                _reportDownloadErrors++;
                 _telemetry.LogError(ex, $"Got error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
                 return new WebActivityReportSet();
             }
@@ -74,7 +81,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 {
                     if (!string.IsNullOrWhiteSpace(AuditTraceConfig.TraceEmail) && !string.IsNullOrWhiteSpace(AuditTraceConfig.TraceDirectory))
                     {
-                        if (logJson.IndexOf(AuditTraceConfig.TraceEmail, StringComparison.OrdinalIgnoreCase) >=0)
+                        if (logJson.IndexOf(AuditTraceConfig.TraceEmail, StringComparison.OrdinalIgnoreCase) >= 0)
                         {
                             var safeEmail = AuditTraceConfig.TraceEmail.Trim().ToLower();
                             // Sanitize for filesystem
@@ -82,7 +89,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                             {
                                 safeEmail = safeEmail.Replace(c, '_');
                             }
-                            var fileName = $"audit_trace_{safeEmail}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid().ToString().Substring(0,8)}.json";
+                            var fileName = $"audit_trace_{safeEmail}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid().ToString().Substring(0, 8)}.json";
                             var fullPath = Path.Combine(AuditTraceConfig.TraceDirectory, fileName);
                             File.WriteAllText(fullPath, logJson);
                             _telemetry.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
@@ -118,11 +125,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 {
                     try
                     {
-                        thisAuditLogReport = JsonConvert.DeserializeObject<CopilotAuditLogContent>(logJson);
-                        // We want to store the CopilotEventData but its current schema may change in the future. Keeping the full CopilotEventData object for now.
-                        var asCopilotReport = (CopilotAuditLogContent)thisAuditLogReport;
-                        dynamic obj = JsonConvert.DeserializeObject<dynamic>(logJson);
-                        asCopilotReport.EventRaw = JsonConvert.SerializeObject(obj.CopilotEventData);
+                        thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
                     }
                     catch (JsonReaderException)
                     {

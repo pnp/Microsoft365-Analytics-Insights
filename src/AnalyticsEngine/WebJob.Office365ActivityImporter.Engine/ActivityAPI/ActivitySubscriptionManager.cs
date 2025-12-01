@@ -48,8 +48,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                         }
                         catch (HttpRequestException)
                         {
-                            _telemetry.LogInformation("Can't create subscription. Check service-account permissions to Office 365 Activity API & that audit-log is turned on for tenant.");
-                            _telemetry.LogInformation("https://docs.microsoft.com/en-gb/microsoft-365/compliance/turn-audit-log-search-on-or-off?view=o365-worldwide");
+                            _telemetry.LogError("Can't create subscription. Check service-account permissions to Office 365 Activity API & that audit-log is turned on for tenant. https://docs.microsoft.com/en-gb/microsoft-365/compliance/turn-audit-log-search-on-or-off?view=o365-worldwide");
                             throw;
                         }
 
