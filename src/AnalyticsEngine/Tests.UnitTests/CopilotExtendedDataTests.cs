@@ -50,7 +50,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             // 3 messages × 2 credits = 6 credits
@@ -79,7 +79,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             // 3 messages × (2 credits generative + 10 credits tenant graph) = 36 credits
@@ -129,7 +129,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             // 3 messages × 2 credits (generative) = 6 credits
@@ -163,7 +163,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             // 2 messages × 2 credits (generative) = 4 credits
@@ -191,7 +191,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             // 1 message × (2 + 10) = 12 credits
@@ -213,7 +213,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             Assert.AreEqual(12, cost.TotalCredits);
@@ -237,7 +237,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             // Still just 1 message × (2 + 10) = 12 credits (not multiplied by resource count)
@@ -249,9 +249,9 @@ namespace Tests.UnitTests
         public void Copilot_CostEstimation_NullOrEmptyInput_ReturnsZero()
         {
             // Arrange & Act
-            var costNull = CopilotCreditEstimation.Analyze((string)null);
-            var costEmpty = CopilotCreditEstimation.Analyze("");
-            var costWhitespace = CopilotCreditEstimation.Analyze("   ");
+            var costNull = CopilotCreditEstimation.Analyze((string)null, isCustomAgent: true);
+            var costEmpty = CopilotCreditEstimation.Analyze("", isCustomAgent: true);
+            var costWhitespace = CopilotCreditEstimation.Analyze("   ", isCustomAgent: true);
 
             // Assert
             Assert.AreEqual(0, costNull.TotalCredits);
@@ -271,7 +271,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             Assert.AreEqual(0, cost.TotalCredits);
@@ -290,7 +290,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             Assert.AreEqual(0, cost.TotalCredits);
@@ -315,7 +315,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             Assert.AreEqual(2, cost.ResourceTypeBreakdown["docx"]);
@@ -338,7 +338,7 @@ namespace Tests.UnitTests
             }";
 
             // Act
-            var cost = CopilotCreditEstimation.Analyze(json);
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
             Assert.AreEqual(7, cost.TotalCredits); // 2 + 5
@@ -1075,7 +1075,7 @@ namespace Tests.UnitTests
                 Assert.AreEqual("DEEP_LEO", aiModels[0].AIModel.Name);
 
                 // Assert - Verify cost calculation
-                var cost = CopilotCreditEstimation.Analyze(auditLogContent.ParsedAuditEvent);
+                var cost = CopilotCreditEstimation.Analyze(auditLogContent.ParsedAuditEvent, isCustomAgent: true);
                 // 2 messages × (2 generative + 10 tenant graph) + 5 deep reasoning = 29 credits
                 Assert.AreEqual(29, cost.TotalCredits);
                 Assert.AreEqual(1, cost.DeepReasoningActions);

@@ -47,9 +47,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             // Parse the event data for structured access (instead of using EventRaw later)
             thisAuditLogReport.ParsedAuditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(thisAuditLogReport.EventRaw);
 
-            // Calculate cost from the parsed event
-            thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw);
-
             // If AgentName and AgentId are not set, but AppIdentity has a value, extract from AppIdentity
             if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
                 string.IsNullOrEmpty(thisAuditLogReport.AgentId) &&
@@ -85,6 +82,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                         }
                     }
                 }
+            }
+
+            if (!string.IsNullOrEmpty(thisAuditLogReport.AgentName))
+            {
+                // Calculate cost from the parsed event for agents
+                thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw, thisAuditLogReport.IsCustomAgent.HasValue && thisAuditLogReport.IsCustomAgent.Value);
+            }
+            else
+            {
+                // No agent identified = no cost
+                thisAuditLogReport.Cost = CopilotCreditEstimation.NoCost;
             }
 
             return thisAuditLogReport;
