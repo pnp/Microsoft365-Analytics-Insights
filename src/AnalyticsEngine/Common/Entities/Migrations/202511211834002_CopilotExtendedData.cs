@@ -119,7 +119,7 @@
             AddColumn("dbo.copilot_chats", "copilot_credit_estimate_total", c => c.Int());
             AddColumn("dbo.copilot_chats", "copilot_credit_estimate_json", c => c.String());
 
-            Console.WriteLine("DB SCHEMA: Rolled back all Copilot extended data tables.");
+            Console.WriteLine("DB SCHEMA: Applied 'Copilot extended data tables' succesfully.");
         }
         
         public override void Down()
