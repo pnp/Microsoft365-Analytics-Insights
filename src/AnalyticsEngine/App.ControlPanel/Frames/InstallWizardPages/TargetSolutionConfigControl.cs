@@ -117,6 +117,7 @@ namespace App.ControlPanel.Controls
         private void SolutionSelectionUIChange()
         {
             SolutionSelectionChange?.Invoke(this, EventArgs.Empty);
+            pnlAuditLogOptions.Visible = chkAuditLog.Checked;
         }
 
     }
