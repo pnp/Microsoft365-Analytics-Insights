@@ -57,29 +57,14 @@ namespace App.ControlPanel.Controls
 
         }
 
-
         private void rdbSolutionOps_CheckedChanged(object sender, System.EventArgs e)
         {
             SetGui(Config);     // New prop will reflect GUI change
         }
-
         private void ImportJobSettingsSelection_Load(object sender, System.EventArgs e)
         {
             grpProductCfgInsights.Dock = DockStyle.Fill;
         }
-
-
-        class SolutionLingo
-        {
-            public string Code { get; set; }
-            public string Name { get; set; }
-
-            public override string ToString()
-            {
-                return Name;
-            }
-        }
-
         private void chkTeams_CheckedChanged(object sender, System.EventArgs e)
         {
             SolutionSelectionUIChange();
@@ -88,12 +73,6 @@ namespace App.ControlPanel.Controls
         {
             SolutionSelectionUIChange();
         }
-
-        private void chkUserApps_CheckedChanged(object sender, System.EventArgs e)
-        {
-            SolutionSelectionUIChange();
-        }
-
         private void chkUsageReports_CheckedChanged(object sender, System.EventArgs e)
         {
             SolutionSelectionUIChange();
@@ -103,12 +82,6 @@ namespace App.ControlPanel.Controls
         {
             SolutionSelectionUIChange();
         }
-
-        private void chkWeb_CheckedChanged(object sender, System.EventArgs e)
-        {
-            SolutionSelectionUIChange();
-        }
-
         private void chkAuditLog_CheckedChanged(object sender, System.EventArgs e)
         {
             SolutionSelectionUIChange();
@@ -117,8 +90,7 @@ namespace App.ControlPanel.Controls
         private void SolutionSelectionUIChange()
         {
             SolutionSelectionChange?.Invoke(this, EventArgs.Empty);
-            pnlAuditLogOptions.Visible = chkAuditLog.Checked;
+            pnlAuditLogOptions.Enabled = chkAuditLog.Checked;
         }
-
     }
 }
