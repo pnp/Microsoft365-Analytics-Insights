@@ -27,7 +27,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>
         /// Version of the cost estimation model.
         /// </summary>
-        private const string COST_ESTIMATION_VERSION = "1.0.0.0";
+        private const string COST_ESTIMATION_VERSION = "1.0.0.1";
 
         // Based on Microsoft Copilot Studio billing documentation (as of March 2025)
         // https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#copilot-credits-and-events-scenarios
@@ -92,15 +92,24 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 
         #endregion
 
+        public static CopilotCreditEstimation NoCost = new CopilotCreditEstimation
+        {
+            CostModelVersion = COST_ESTIMATION_VERSION,
+            TotalCredits = 0,
+            ResourceTypeBreakdown = new Dictionary<string, int>(),
+            CreditBreakdown = new Dictionary<string, int>(),
+            ModelsUsed = new List<string>()
+        };
 
         /// <summary>
         /// Analyzes a Copilot audit event JSON and calculates the total Copilot Credits consumed.
         /// This is an overload that deserializes the JSON string before analysis.
-        /// See <see cref="Analyze(CopilotAuditEvent)"/> for detailed billing logic.
+        /// See <see cref="Analyze(CopilotAuditEvent, bool)"/> for detailed billing logic.
         /// </summary>
         /// <param name="json">JSON string containing the Copilot audit event data</param>
+        /// <param name="isCustomAgent">True if this is a custom Copilot Studio agent (billable), false for standard M365 Copilot (not billable via credits)</param>
         /// <returns>CreditReport with detailed billing breakdown</returns>
-        public static CopilotCreditEstimation Analyze(string json)
+        public static CopilotCreditEstimation Analyze(string json, bool isCustomAgent)
         {
             if (string.IsNullOrWhiteSpace(json))
             {
@@ -115,27 +124,31 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             }
 
             var auditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(json);
-            return Analyze(auditEvent);
+            return Analyze(auditEvent, isCustomAgent);
         }
 
         /// <summary>
         /// Analyzes a Copilot audit event object and calculates the total Copilot Credits consumed.
         /// 
         /// Billing Logic (based on Microsoft documentation, effective March 25, 2025):
+        /// - Only custom agents (Copilot Studio agents) incur Copilot Credit charges.
+        /// - Standard Microsoft 365 Copilot agents (Word, Excel, Teams, etc.) are not charged via Copilot Credits.
+        /// 
+        /// For custom agents:
         /// 1. Generative Answers: 2 credits per response message
         /// 2. Tenant Graph Grounding: +10 credits per message (additive with generative)
         /// 3. Deep Reasoning (DEEP_LEO model): 5 credits per agent action
         /// 
         /// Example from documentation ("Sales performance agent"):
-        /// - Scenario: 4 generative answers, all grounded in the tenant graph.
+        /// - Scenario: 4 generative answers, all grounded in the tenant graph (custom agent).
         /// - Calculation: 4 messages * (2 for generative answer + 10 for tenant graph) = 48 credits.
         /// - This model correctly calculates this as 4 * (GENERATIVE_ANSWER_CREDITS + TENANT_GRAPH_GROUNDING_CREDITS).
         /// - Reference: https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#sales-performance-agent
         /// 
-        /// Formula per message with tenant graph grounding:
+        /// Formula per message with tenant graph grounding (custom agent only):
         ///   Total = 2 (generative) + 10 (tenant graph) = 12 credits
         /// 
-        /// Formula per message with tenant graph + deep reasoning:
+        /// Formula per message with tenant graph + deep reasoning (custom agent only):
         ///   Total = 2 (generative) + 10 (tenant graph) + 5 (deep reasoning) = 17 credits
         /// 
         /// Important: Deep reasoning is billed as an Agent Action (5 credits) when detected
@@ -148,8 +161,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         /// - Classic vs. Generative answer types cannot be fully distinguished; all responses are billed as Generative.
         /// </summary>
         /// <param name="auditEvent">The Copilot audit event object to analyze</param>
+        /// <param name="isCustomAgent">True if this is a custom Copilot Studio agent (billable), false for standard M365 Copilot (not billable via credits)</param>
         /// <returns>CreditReport with detailed billing breakdown</returns>
-        public static CopilotCreditEstimation Analyze(CopilotAuditEvent auditEvent)
+        public static CopilotCreditEstimation Analyze(CopilotAuditEvent auditEvent, bool isCustomAgent)
         {
             if (auditEvent == null)
             {
@@ -170,6 +184,25 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 CreditBreakdown = new Dictionary<string, int>(),
                 ModelsUsed = new List<string>()
             };
+
+            // Only custom agents incur Copilot Credit charges
+            // Standard Microsoft 365 Copilot (Word, Excel, Teams, etc.) is not charged via Copilot Credits
+            if (!isCustomAgent)
+            {
+                // Build resource breakdown for analytics but don't charge any credits
+                report.ResourceTypeBreakdown = auditEvent.AccessedResources?
+                    .GroupBy(r => string.IsNullOrEmpty(r.Type) ? "WebPage" : r.Type)
+                    .ToDictionary(g => g.Key, g => g.Count()) ?? new Dictionary<string, int>();
+
+                // Track models used for analytics even if not charging
+                if (HasDeepReasoning(auditEvent.ModelTransparencyDetails))
+                {
+                    report.ModelsUsed.Add("DEEP_LEO");
+                }
+
+                report.TotalCredits = 0;
+                return report;
+            }
 
             int totalCredits = 0;
 

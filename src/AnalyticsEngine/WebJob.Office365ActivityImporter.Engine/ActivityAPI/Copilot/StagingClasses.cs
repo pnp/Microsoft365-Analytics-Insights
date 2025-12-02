@@ -18,6 +18,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [Column("agent_id", true)]
         public string AgentId { get; set; }
 
+        [Column("is_custom_agent", true)]
+        public bool? IsCustomAgent { get; set; }
+
         // AccessedResources serialized as JSON
         [Column("accessed_resources_json", true)]
         public string AccessedResourcesJson { get; set; }

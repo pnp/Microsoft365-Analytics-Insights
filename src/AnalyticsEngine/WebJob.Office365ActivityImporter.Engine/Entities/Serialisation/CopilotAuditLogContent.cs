@@ -18,6 +18,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string AgentName { get; set; }
         public string AgentId { get; set; }
 
+        /// <summary>
+        /// Indicates whether this is a custom agent (extracted from AppIdentity) or a standard Copilot agent.
+        /// True when AgentName/AgentId were extracted from AppIdentity during deserialization.
+        /// </summary>
+        public bool? IsCustomAgent { get; set; }
+
         public CopilotCreditEstimation Cost { get; set; }
 
         /// <summary>
@@ -41,9 +47,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             // Parse the event data for structured access (instead of using EventRaw later)
             thisAuditLogReport.ParsedAuditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(thisAuditLogReport.EventRaw);
 
-            // Calculate cost from the parsed event
-            thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw);
-
             // If AgentName and AgentId are not set, but AppIdentity has a value, extract from AppIdentity
             if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
                 string.IsNullOrEmpty(thisAuditLogReport.AgentId) &&
@@ -66,15 +69,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                             thisAuditLogReport.AgentName = remainder.Substring(1);
                             // Only set AgentId if we successfully extracted an AgentName
                             thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+                            // Mark this as a custom agent since we extracted it from AppIdentity
+                            thisAuditLogReport.IsCustomAgent = true;
                         }
                         else if (!string.IsNullOrEmpty(remainder) && !remainder.Equals("-"))
                         {
                             thisAuditLogReport.AgentName = remainder;
                             // Only set AgentId if we successfully extracted an AgentName
                             thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+                            // Mark this as a custom agent since we extracted it from AppIdentity
+                            thisAuditLogReport.IsCustomAgent = true;
                         }
                     }
                 }
+            }
+
+            if (!string.IsNullOrEmpty(thisAuditLogReport.AgentName))
+            {
+                // Calculate cost from the parsed event for agents
+                thisAuditLogReport.Cost = CopilotCreditEstimation.Analyze(thisAuditLogReport.EventRaw, thisAuditLogReport.IsCustomAgent.HasValue && thisAuditLogReport.IsCustomAgent.Value);
+            }
+            else
+            {
+                // No agent identified = no cost
+                thisAuditLogReport.Cost = CopilotCreditEstimation.NoCost;
             }
 
             return thisAuditLogReport;

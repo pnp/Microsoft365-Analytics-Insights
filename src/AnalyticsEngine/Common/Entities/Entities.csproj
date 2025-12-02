@@ -263,6 +263,10 @@
     <Compile Include="Migrations\202511211834002_CopilotExtendedData.Designer.cs">
       <DependentUpon>202511211834002_CopilotExtendedData.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202512011404129_CopilotExtendedDataAgentType.cs" />
+    <Compile Include="Migrations\202512011404129_CopilotExtendedDataAgentType.Designer.cs">
+      <DependentUpon>202512011404129_CopilotExtendedDataAgentType.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -379,6 +383,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202511211834002_CopilotExtendedData.resx">
       <DependentUpon>202511211834002_CopilotExtendedData.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202512011404129_CopilotExtendedDataAgentType.resx">
+      <DependentUpon>202512011404129_CopilotExtendedDataAgentType.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
