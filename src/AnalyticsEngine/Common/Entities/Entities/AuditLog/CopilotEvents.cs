@@ -102,6 +102,13 @@ namespace Common.Entities.Entities.AuditLog
     {
         [Column("agent_id")]
         public string AgentID { get; set; } = null;
+
+        /// <summary>
+        /// Indicates whether this is a custom agent (extracted from AppIdentity) or a standard Copilot agent.
+        /// Nullable to support backward compatibility with existing data.
+        /// </summary>
+        [Column("is_custom_agent")]
+        public bool? IsCustomAgent { get; set; }
     }
 
     /// <summary>

@@ -432,6 +432,15 @@ namespace Tests.UnitTests
             [Column("boolprop")]
             public bool BoolProp { get; set; } = true;
 
+            /// <summary>
+            /// This should automatically be nullable without needing to specify it in the attribute
+            /// </summary>
+            [Column("nullable_boolprop")]
+            public bool? NullableBoolProp { get; set; } = null;
+
+            [Column("nullable_boolprop_with_value")]
+            public bool? NullableBoolPropWithValue { get; set; } = false;
+
             [Column("prop2", ColationOverride = "SQL_Latin1_General_CP1_CS_AS")]
             public string CaseSensitiveProp { get; set; } = "OhHey";
 

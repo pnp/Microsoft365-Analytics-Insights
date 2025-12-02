@@ -15,7 +15,7 @@ namespace DataUtils.Sql.Inserts
         static List<Type> _validTempColumnTypes = new List<Type>()
         {
             typeof(string), typeof(DateTime), typeof(DateTime?), typeof(int), typeof(float), typeof(double), typeof(bool), typeof(Guid), typeof(int?),
-            typeof(int?), typeof(double?)
+            typeof(int?), typeof(double?), typeof(bool?)
         };
 
         public List<InsertBatchPropertyMapping> PropertyMappingInfo
@@ -94,6 +94,10 @@ namespace DataUtils.Sql.Inserts
             else if (propertyType == typeof(bool))
             {
                 return ("bit", false);
+            }
+            else if (propertyType == typeof(bool?))
+            {
+                return ("bit", true);
             }
             else if (propertyType == typeof(Guid))
             {
