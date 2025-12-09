@@ -33,6 +33,10 @@ namespace Tests.FakeDataGen
             Console.WriteLine("Connection string configured.");
             Console.WriteLine();
 
+            // Display SQL Server and Database information
+            DisplayConnectionInfo(connectionString);
+            Console.WriteLine();
+
             // Check if database has existing data
             if (!CheckDatabaseAndConfirm(connectionString))
             {
@@ -96,6 +100,25 @@ namespace Tests.FakeDataGen
                 return args[0];
             }
             return null;
+        }
+
+        static void DisplayConnectionInfo(string connectionString)
+        {
+            try
+            {
+                var builder = new System.Data.SqlClient.SqlConnectionStringBuilder(connectionString);
+                
+                Console.WriteLine("SQL Server Connection Information:");
+                Console.WriteLine("-------------------------------------------");
+                Console.WriteLine($"  Server: {builder.DataSource}");
+                Console.WriteLine($"  Database: {builder.InitialCatalog}");
+                Console.WriteLine($"  Authentication: {(builder.IntegratedSecurity ? "Windows (Integrated Security)" : "SQL Server")}");
+                Console.WriteLine("-------------------------------------------");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not parse connection string details: {ex.Message}");
+            }
         }
 
         static void GenerateCopilotActivity(string connectionString)

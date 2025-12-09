@@ -54,6 +54,10 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CopilotActivityGenerator.cs" />
+    <Compile Include="CopilotActivityGeneratorConfig.cs" />
+    <Compile Include="CopilotLicenseManager.cs" />
+    <Compile Include="CopilotResourceGenerator.cs" />
+    <Compile Include="CopilotUserManager.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

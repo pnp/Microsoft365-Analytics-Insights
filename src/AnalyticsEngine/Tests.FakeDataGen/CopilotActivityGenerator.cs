@@ -3,7 +3,6 @@ using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using System;
 using System.Collections.Generic;
-using System.Data.Entity;
 using System.Linq;
 
 namespace Tests.FakeDataGen
@@ -15,22 +14,16 @@ namespace Tests.FakeDataGen
     {
         private readonly string _connectionString;
         private readonly Random _random = new Random();
-
-        private static readonly string[] AppHosts = { "Teams", "Word", "Excel", "PowerPoint", "Outlook", "M365Chat" };
-        private static readonly string[] AgentNames = { "Researcher", "Sales Assistant", "HR Helper", "IT Support Bot", "Marketing Agent" };
-        private static readonly string[] StandardAgentIds = { "Microsoft.Copilot.Researcher", "Microsoft.Copilot.Teams", "Microsoft.Copilot.Office" };
-        private static readonly string[] DepartmentNames = { "Engineering", "Sales", "Marketing", "Human Resources", "Finance", "IT", "Customer Support", "Operations", "Product Management", "Legal" };
-
-        // License SKU IDs - https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
-        private const string COPILOT_LICENSE_SKU = "Microsoft_365_Copilot";
-        private const string E5_LICENSE_SKU = "ENTERPRISEPREMIUM";
-        private const string E3_LICENSE_SKU = "ENTERPRISEPACK";
-        private const string BUSINESS_PREMIUM_SKU = "SPB";
-        private const string EXCHANGE_ONLINE_SKU = "EXCHANGESTANDARD";
+        private readonly CopilotLicenseManager _licenseManager;
+        private readonly CopilotUserManager _userManager;
+        private readonly CopilotResourceGenerator _resourceGenerator;
 
         public CopilotActivityGenerator(string connectionString)
         {
             _connectionString = connectionString;
+            _licenseManager = new CopilotLicenseManager();
+            _userManager = new CopilotUserManager(_random, _licenseManager);
+            _resourceGenerator = new CopilotResourceGenerator(_random);
         }
 
         /// <summary>
@@ -50,14 +43,14 @@ namespace Tests.FakeDataGen
             using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
             {
                 // Ensure we have licenses
-                EnsureLicensesExist(db);
+                _licenseManager.EnsureLicensesExist(db);
 
                 // Ensure we have users
                 var users = db.users.Take(10).ToList();
                 if (users.Count == 0)
                 {
                     Console.WriteLine("No users found in database. Creating test users...");
-                    users = CreateTestUsers(db, 10, copilotLicensePercentage);
+                    users = _userManager.CreateTestUsers(db, 10, copilotLicensePercentage);
                 }
                 else
                 {
@@ -76,6 +69,7 @@ namespace Tests.FakeDataGen
                 int inserted = 0;
                 int withAgents = 0;
                 int withCustomAgents = 0;
+                int withAccessedResources = 0;
 
                 for (int i = 0; i < count; i++)
                 {
@@ -91,6 +85,7 @@ namespace Tests.FakeDataGen
                         if (isCustomAgent)
                         {
                             withCustomAgents++;
+                            withAccessedResources++;
                         }
                     }
 
@@ -110,12 +105,19 @@ namespace Tests.FakeDataGen
                 Console.WriteLine($"Total events: {inserted}");
                 Console.WriteLine($"Events with agents: {withAgents} ({(withAgents * 100.0 / inserted):F1}%)");
                 Console.WriteLine($"Events with custom agents: {withCustomAgents} ({(withCustomAgents * 100.0 / inserted):F1}%)");
+                Console.WriteLine($"Events with accessed resources: {withAccessedResources} ({(withAccessedResources * 100.0 / inserted):F1}%)");
             }
         }
 
         private CopilotChat GenerateSingleCopilotEvent(AnalyticsEntitiesContext db, User user, EventOperation operation, bool withAgent, bool isCustomAgent)
         {
-            var eventId = Guid.NewGuid();
+            // Generate unique event ID - ensure it doesn't already exist
+            Guid eventId;
+            do
+            {
+                eventId = Guid.NewGuid();
+            } while (db.AuditEventsCommon.Any(e => e.Id == eventId));
+
             var timestamp = DateTime.UtcNow.AddDays(-_random.Next(0, 30)).AddHours(-_random.Next(0, 24));
 
             // Create common audit event
@@ -135,7 +137,7 @@ namespace Tests.FakeDataGen
             {
                 EventID = eventId,
                 AuditEvent = auditEvent,
-                AppHost = AppHosts[_random.Next(AppHosts.Length)],
+                AppHost = CopilotActivityGeneratorConfig.AppHosts[_random.Next(CopilotActivityGeneratorConfig.AppHosts.Length)],
                 CopilotCreditEstimateTotal = _random.Next(1, 50)
             };
 
@@ -144,6 +146,12 @@ namespace Tests.FakeDataGen
             {
                 var agent = GetOrCreateAgent(db, isCustomAgent);
                 copilotChat.Agent = agent;
+
+                // Add accessed resources for custom agents
+                if (isCustomAgent)
+                {
+                    _resourceGenerator.AddAccessedResources(db, copilotChat);
+                }
             }
 
             db.CopilotChats.Add(copilotChat);
@@ -179,6 +187,7 @@ namespace Tests.FakeDataGen
                     MeetingId = Guid.NewGuid().ToString()
                 };
                 db.Set<OnlineMeeting>().Add(meeting);
+                // SaveChanges here is OK because OnlineMeeting is independent
                 db.SaveChanges();
             }
 
@@ -221,14 +230,14 @@ namespace Tests.FakeDataGen
             if (isCustomAgent)
             {
                 // Custom agent with organization-specific naming
-                agentName = AgentNames[_random.Next(1, AgentNames.Length)]; // Skip "Copilot" which is standard
+                agentName = CopilotActivityGeneratorConfig.AgentNames[_random.Next(1, CopilotActivityGeneratorConfig.AgentNames.Length)]; // Skip "Copilot" which is standard
                 agentId = $"Copilot.Studio.Default-{Guid.NewGuid()}-{agentName.Replace(" ", "")}";
             }
             else
             {
                 // Standard Microsoft agent
-                agentName = AgentNames[0]; // "Copilot"
-                agentId = StandardAgentIds[_random.Next(StandardAgentIds.Length)];
+                agentName = CopilotActivityGeneratorConfig.AgentNames[0]; // "Copilot"
+                agentId = CopilotActivityGeneratorConfig.StandardAgentIds[_random.Next(CopilotActivityGeneratorConfig.StandardAgentIds.Length)];
             }
 
             var agent = db.CopilotAgents.FirstOrDefault(a => a.AgentID == agentId);
@@ -241,6 +250,7 @@ namespace Tests.FakeDataGen
                     IsCustomAgent = isCustomAgent
                 };
                 db.CopilotAgents.Add(agent);
+                // SaveChanges here is OK because CopilotAgent is independent and may be referenced by multiple events
                 db.SaveChanges();
             }
 
@@ -254,7 +264,7 @@ namespace Tests.FakeDataGen
             {
                 fileName = new SPEventFileName { Name = name };
                 db.event_file_names.Add(fileName);
-                db.SaveChanges();
+                // Don't call SaveChanges here - let the parent method handle it
             }
             return fileName;
         }
@@ -266,7 +276,7 @@ namespace Tests.FakeDataGen
             {
                 fileExt = new SPEventFileExtension { extension_name = ext };
                 db.event_file_ext.Add(fileExt);
-                db.SaveChanges();
+                // Don't call SaveChanges here - let the parent method handle it
             }
             return fileExt;
         }
@@ -278,7 +288,7 @@ namespace Tests.FakeDataGen
             {
                 url = new Url { FullUrl = fullUrl };
                 db.urls.Add(url);
-                db.SaveChanges();
+                // Don't call SaveChanges here - let the parent method handle it
             }
             return url;
         }
@@ -290,128 +300,9 @@ namespace Tests.FakeDataGen
             {
                 site = new Site { UrlBase = siteUrl };
                 db.sites.Add(site);
-                db.SaveChanges();
+                // Don't call SaveChanges here - let the parent method handle it
             }
             return site;
-        }
-
-        private List<User> CreateTestUsers(AnalyticsEntitiesContext db, int count, int copilotLicensePercentage)
-        {
-            var users = new List<User>();
-            var copilotLicense = db.LicenseTypes.FirstOrDefault(l => l.SKUID == COPILOT_LICENSE_SKU);
-            var e5License = db.LicenseTypes.FirstOrDefault(l => l.SKUID == E5_LICENSE_SKU);
-            var e3License = db.LicenseTypes.FirstOrDefault(l => l.SKUID == E3_LICENSE_SKU);
-
-            Console.WriteLine($"Creating {count} test users with {copilotLicensePercentage}% having Copilot licenses...");
-
-            for (int i = 0; i < count; i++)
-            {
-                // Get or create a random department
-                var departmentName = DepartmentNames[_random.Next(DepartmentNames.Length)];
-                var department = GetOrCreateDepartment(db, departmentName);
-
-                var upn = $"testuser{i}@contoso.com";
-                var user = new User
-                {
-                    UserPrincipalName = upn,
-                    Mail = upn,
-                    Department = department,
-                    AccountEnabled = true,
-                    AzureAdId = Guid.NewGuid().ToString()
-                };
-                db.users.Add(user);
-                users.Add(user);
-            }
-            db.SaveChanges();
-
-            // Assign licenses to users
-            int usersWithCopilot = 0;
-            for (int i = 0; i < users.Count; i++)
-            {
-                var user = users[i];
-                bool shouldHaveCopilot = _random.Next(100) < copilotLicensePercentage;
-
-                if (shouldHaveCopilot && copilotLicense != null)
-                {
-                    // User gets Copilot + E5
-                    AssignLicenseToUser(db, user, copilotLicense);
-                    if (e5License != null)
-                    {
-                        AssignLicenseToUser(db, user, e5License);
-                    }
-                    usersWithCopilot++;
-                }
-                else if (e3License != null)
-                {
-                    // User gets E3 only
-                    AssignLicenseToUser(db, user, e3License);
-                }
-            }
-            db.SaveChanges();
-
-            Console.WriteLine($"Assigned Copilot licenses to {usersWithCopilot}/{count} users ({(usersWithCopilot * 100.0 / count):F1}%)");
-
-            return users;
-        }
-
-        private UserDepartment GetOrCreateDepartment(AnalyticsEntitiesContext db, string departmentName)
-        {
-            var department = db.UserDepartments.FirstOrDefault(d => d.Name == departmentName);
-            if (department == null)
-            {
-                department = new UserDepartment { Name = departmentName };
-                db.UserDepartments.Add(department);
-                db.SaveChanges();
-            }
-            return department;
-        }
-
-        private void EnsureLicensesExist(AnalyticsEntitiesContext db)
-        {
-            // Check if licenses already exist
-            var licenseCount = db.LicenseTypes.Count();
-            if (licenseCount > 0)
-            {
-                Console.WriteLine($"Found {licenseCount} existing license types in database.");
-                return;
-            }
-
-            Console.WriteLine("No licenses found. Creating test license types...");
-
-            // Create license types
-            var licenses = new[]
-            {
-                new LicenseType { Name = "Microsoft 365 Copilot", SKUID = COPILOT_LICENSE_SKU },
-                new LicenseType { Name = "Office 365 E5", SKUID = E5_LICENSE_SKU },
-                new LicenseType { Name = "Office 365 E3", SKUID = E3_LICENSE_SKU },
-                new LicenseType { Name = "Microsoft 365 Business Premium", SKUID = BUSINESS_PREMIUM_SKU },
-                new LicenseType { Name = "Exchange Online Plan 1", SKUID = EXCHANGE_ONLINE_SKU }
-            };
-
-            foreach (var license in licenses)
-            {
-                db.LicenseTypes.Add(license);
-            }
-            db.SaveChanges();
-
-            Console.WriteLine($"Created {licenses.Length} license types.");
-        }
-
-        private void AssignLicenseToUser(AnalyticsEntitiesContext db, User user, LicenseType license)
-        {
-            // Check if user already has this license
-            var existingLookup = db.UserLicenseTypeLookups
-                .FirstOrDefault(l => l.UserId == user.ID && l.LicenseTypeId == license.ID);
-
-            if (existingLookup == null)
-            {
-                var lookup = new UserLicenseTypeLookup
-                {
-                    User = user,
-                    License = license
-                };
-                db.UserLicenseTypeLookups.Add(lookup);
-            }
         }
 
         private string GenerateEventData()
@@ -421,8 +312,7 @@ namespace Tests.FakeDataGen
 
         private string GetRandomExtension()
         {
-            string[] extensions = { "docx", "xlsx", "pptx", "pdf", "txt" };
-            return extensions[_random.Next(extensions.Length)];
+            return CopilotActivityGeneratorConfig.FileExtensions[_random.Next(CopilotActivityGeneratorConfig.FileExtensions.Length)];
         }
 
         /// <summary>
