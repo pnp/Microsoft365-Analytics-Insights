@@ -435,7 +435,7 @@
   <ItemGroup>
     <ProjectReference Include="..\DataUtils\DataUtils.csproj">
       <Project>{b8da83ac-9151-4922-b255-12d105b33dc6}</Project>
-      <Name>Common.DataUtils</Name>
+      <Name>DataUtils</Name>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
