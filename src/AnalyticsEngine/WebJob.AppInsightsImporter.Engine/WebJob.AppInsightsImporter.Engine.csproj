@@ -97,11 +97,11 @@
   <ItemGroup>
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">
       <Project>{b8da83ac-9151-4922-b255-12d105b33dc6}</Project>
-      <Name>Common.DataUtils</Name>
+      <Name>DataUtils</Name>
     </ProjectReference>
     <ProjectReference Include="..\Common\Entities\Entities.csproj">
       <Project>{637930bd-073b-421e-9f33-fe90bf2103c5}</Project>
-      <Name>Common.Entities</Name>
+      <Name>Entities</Name>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

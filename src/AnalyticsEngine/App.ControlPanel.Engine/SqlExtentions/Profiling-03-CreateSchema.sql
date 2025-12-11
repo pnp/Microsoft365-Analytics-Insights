@@ -1903,7 +1903,7 @@ BEGIN
           @StartDate AS "date",
           "user_id",
           event_id
-        FROM dbo.event_copilot_chats AS c
+        FROM dbo.copilot_chats AS c
           JOIN dbo.audit_events AS au ON c.event_id = au.id
         WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
       ) t
@@ -1973,10 +1973,10 @@ BEGIN
         c.event_id AS chat_id,
         f.copilot_chat_id AS has_file,
         m.copilot_chat_id AS has_meeting
-      FROM dbo.event_copilot_chats AS c
+      FROM dbo.copilot_chats AS c
         JOIN dbo.audit_events AS au ON c.event_id = au.id
-        LEFT JOIN dbo.event_copilot_files AS f ON c.event_id = f.copilot_chat_id
-        LEFT JOIN dbo.event_copilot_meetings AS m ON c.event_id = m.copilot_chat_id
+        LEFT JOIN dbo.copilot_event_files AS f ON c.event_id = f.copilot_chat_id
+        LEFT JOIN dbo.copilot_event_meetings AS m ON c.event_id = m.copilot_chat_id
       WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
     ),
     event_counts AS (

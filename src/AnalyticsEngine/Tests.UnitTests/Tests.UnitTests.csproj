@@ -102,6 +102,7 @@
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
+    <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
@@ -179,7 +180,7 @@
     </ProjectReference>
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">
       <Project>{b8da83ac-9151-4922-b255-12d105b33dc6}</Project>
-      <Name>Common.DataUtils</Name>
+      <Name>DataUtils</Name>
     </ProjectReference>
     <ProjectReference Include="..\Common\Entities\Entities.csproj">
       <Project>{637930bd-073b-421e-9f33-fe90bf2103c5}</Project>
@@ -187,7 +188,7 @@
     </ProjectReference>
     <ProjectReference Include="..\Common\UsageReporting\UsageReporting.csproj">
       <Project>{a4448200-5dfa-486d-891b-2476b80233f6}</Project>
-      <Name>Common.UsageReporting</Name>
+      <Name>UsageReporting</Name>
     </ProjectReference>
     <ProjectReference Include="..\WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj">
       <Project>{974b3b6c-b89a-45e6-a5a3-a0292beb1ba4}</Project>
