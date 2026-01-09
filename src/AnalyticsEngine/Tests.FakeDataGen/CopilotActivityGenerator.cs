@@ -176,8 +176,13 @@ namespace Tests.FakeDataGen
 
         private void CreateMeetingEvent(AnalyticsEntitiesContext db, CopilotChat copilotChat, User user)
         {
-            // Check if we have any existing meetings, otherwise create one
-            var meeting = db.Set<OnlineMeeting>().FirstOrDefault();
+            // Check if we have any existing meetings in local context first, then database
+            var meeting = db.Set<OnlineMeeting>().Local.FirstOrDefault();
+            if (meeting == null)
+            {
+                meeting = db.Set<OnlineMeeting>().FirstOrDefault();
+            }
+            
             if (meeting == null)
             {
                 meeting = new OnlineMeeting
@@ -187,8 +192,6 @@ namespace Tests.FakeDataGen
                     MeetingId = Guid.NewGuid().ToString()
                 };
                 db.Set<OnlineMeeting>().Add(meeting);
-                // SaveChanges here is OK because OnlineMeeting is independent
-                db.SaveChanges();
             }
 
             var meetingEvent = new CopilotEventMetadataMeeting
@@ -240,7 +243,13 @@ namespace Tests.FakeDataGen
                 agentId = CopilotActivityGeneratorConfig.StandardAgentIds[_random.Next(CopilotActivityGeneratorConfig.StandardAgentIds.Length)];
             }
 
-            var agent = db.CopilotAgents.FirstOrDefault(a => a.AgentID == agentId);
+            // Check both database and local context for existing agent
+            var agent = db.CopilotAgents.Local.FirstOrDefault(a => a.AgentID == agentId);
+            if (agent == null)
+            {
+                agent = db.CopilotAgents.FirstOrDefault(a => a.AgentID == agentId);
+            }
+            
             if (agent == null)
             {
                 agent = new CopilotAgent
@@ -250,8 +259,6 @@ namespace Tests.FakeDataGen
                     IsCustomAgent = isCustomAgent
                 };
                 db.CopilotAgents.Add(agent);
-                // SaveChanges here is OK because CopilotAgent is independent and may be referenced by multiple events
-                db.SaveChanges();
             }
 
             return agent;
@@ -259,48 +266,68 @@ namespace Tests.FakeDataGen
 
         private SPEventFileName GetOrCreateFileName(AnalyticsEntitiesContext db, string name)
         {
-            var fileName = db.event_file_names.FirstOrDefault(f => f.Name == name);
+            // Check both database and local context for existing file name
+            var fileName = db.event_file_names.Local.FirstOrDefault(f => f.Name == name);
+            if (fileName == null)
+            {
+                fileName = db.event_file_names.FirstOrDefault(f => f.Name == name);
+            }
+            
             if (fileName == null)
             {
                 fileName = new SPEventFileName { Name = name };
                 db.event_file_names.Add(fileName);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return fileName;
         }
 
         private SPEventFileExtension GetOrCreateFileExtension(AnalyticsEntitiesContext db, string ext)
         {
-            var fileExt = db.event_file_ext.FirstOrDefault(f => f.extension_name == ext);
+            // Check both database and local context for existing file extension
+            var fileExt = db.event_file_ext.Local.FirstOrDefault(f => f.extension_name == ext);
+            if (fileExt == null)
+            {
+                fileExt = db.event_file_ext.FirstOrDefault(f => f.extension_name == ext);
+            }
+            
             if (fileExt == null)
             {
                 fileExt = new SPEventFileExtension { extension_name = ext };
                 db.event_file_ext.Add(fileExt);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return fileExt;
         }
 
         private Url GetOrCreateUrl(AnalyticsEntitiesContext db, string fullUrl)
         {
-            var url = db.urls.FirstOrDefault(u => u.FullUrl == fullUrl);
+            // Check both database and local context for existing url
+            var url = db.urls.Local.FirstOrDefault(u => u.FullUrl == fullUrl);
+            if (url == null)
+            {
+                url = db.urls.FirstOrDefault(u => u.FullUrl == fullUrl);
+            }
+            
             if (url == null)
             {
                 url = new Url { FullUrl = fullUrl };
                 db.urls.Add(url);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return url;
         }
 
         private Site GetOrCreateSite(AnalyticsEntitiesContext db, string siteUrl)
         {
-            var site = db.sites.FirstOrDefault(s => s.UrlBase == siteUrl);
+            // Check both database and local context for existing site
+            var site = db.sites.Local.FirstOrDefault(s => s.UrlBase == siteUrl);
+            if (site == null)
+            {
+                site = db.sites.FirstOrDefault(s => s.UrlBase == siteUrl);
+            }
+            
             if (site == null)
             {
                 site = new Site { UrlBase = siteUrl };
                 db.sites.Add(site);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return site;
         }
