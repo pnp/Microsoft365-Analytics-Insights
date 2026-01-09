@@ -95,48 +95,68 @@ namespace Tests.FakeDataGen
 
         private CopilotAccessedResourceId GetOrCreateAccessedResourceId(AnalyticsEntitiesContext db, string resourceId)
         {
-            var resource = db.CopilotAccessedResourceIds.FirstOrDefault(r => r.ResourceId == resourceId);
+            // Check both database and local context for existing resource
+            var resource = db.CopilotAccessedResourceIds.Local.FirstOrDefault(r => r.ResourceId == resourceId);
+            if (resource == null)
+            {
+                resource = db.CopilotAccessedResourceIds.FirstOrDefault(r => r.ResourceId == resourceId);
+            }
+            
             if (resource == null)
             {
                 resource = new CopilotAccessedResourceId { ResourceId = resourceId };
                 db.CopilotAccessedResourceIds.Add(resource);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return resource;
         }
 
         private CopilotAccessedResourceName GetOrCreateAccessedResourceName(AnalyticsEntitiesContext db, string name)
         {
-            var resource = db.CopilotAccessedResourceNames.FirstOrDefault(r => r.Name == name);
+            // Check both database and local context for existing resource
+            var resource = db.CopilotAccessedResourceNames.Local.FirstOrDefault(r => r.Name == name);
+            if (resource == null)
+            {
+                resource = db.CopilotAccessedResourceNames.FirstOrDefault(r => r.Name == name);
+            }
+            
             if (resource == null)
             {
                 resource = new CopilotAccessedResourceName { Name = name };
                 db.CopilotAccessedResourceNames.Add(resource);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return resource;
         }
 
         private CopilotAccessedResourceSiteUrl GetOrCreateAccessedResourceSiteUrl(AnalyticsEntitiesContext db, string siteUrl)
         {
-            var resource = db.CopilotAccessedResourceSiteUrls.FirstOrDefault(r => r.SiteUrl == siteUrl);
+            // Check both database and local context for existing resource
+            var resource = db.CopilotAccessedResourceSiteUrls.Local.FirstOrDefault(r => r.SiteUrl == siteUrl);
+            if (resource == null)
+            {
+                resource = db.CopilotAccessedResourceSiteUrls.FirstOrDefault(r => r.SiteUrl == siteUrl);
+            }
+            
             if (resource == null)
             {
                 resource = new CopilotAccessedResourceSiteUrl { SiteUrl = siteUrl };
                 db.CopilotAccessedResourceSiteUrls.Add(resource);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return resource;
         }
 
         private CopilotAccessedResourceType GetOrCreateAccessedResourceType(AnalyticsEntitiesContext db, string typeName)
         {
-            var resourceType = db.CopilotAccessedResourceTypes.FirstOrDefault(r => r.Name == typeName);
+            // Check both database and local context for existing resource type
+            var resourceType = db.CopilotAccessedResourceTypes.Local.FirstOrDefault(r => r.Name == typeName);
+            if (resourceType == null)
+            {
+                resourceType = db.CopilotAccessedResourceTypes.FirstOrDefault(r => r.Name == typeName);
+            }
+            
             if (resourceType == null)
             {
                 resourceType = new CopilotAccessedResourceType { Name = typeName };
                 db.CopilotAccessedResourceTypes.Add(resourceType);
-                // Don't call SaveChanges here - let the parent method handle it
             }
             return resourceType;
         }
