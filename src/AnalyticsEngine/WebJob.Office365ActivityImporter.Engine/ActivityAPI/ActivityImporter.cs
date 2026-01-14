@@ -110,7 +110,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 async (threadListChunk, threadIndex) => await ProcessSummaryChunkAsync(threadListChunk, listBatchProcessor, activityReportLoader),
                     threads => _telemetry.LogInformation($"Audit events import: full-loading activity reports from {reportSummaries.Count.ToString("n0")} links, across {threads.ToString("n0")} thread(s)..."));
 
-            listBatchProcessor.Flush();
+            await listBatchProcessor.Flush();
         }
 
         private async Task ProcessSummaryChunkAsync(List<SUMMARYTYPE> summariesToLoad, ListBatchProcessor<AbstractAuditLogContent> listBatchProcessor, IActivityReportLoader<SUMMARYTYPE> activityReportLoader)
@@ -119,7 +119,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             {
                 var metaReports = await activityReportLoader.Load(job);
 
-                listBatchProcessor.AddRange(metaReports);
+                await listBatchProcessor.AddRange(metaReports);
 
                 // Update reports done stats
                 lock (this)
