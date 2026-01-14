@@ -60,17 +60,8 @@ namespace WebJob.AppInsightsImporter.Engine
             var listProc = new ListBatchProcessor<PageUpdateEventAppInsightsQueryResult>(_chunkSize,
                 async chunk => await SaveChunk(chunk, updatedUrls));
 
-            listProc.AddRange(pageUpdateEvents);
-            listProc.Flush();
-
-#if DEBUG
-            _debugTracer.LogInformation($"DEBUG: Waiting for {listProc.BufferSize} URLs to be updated");
-#endif
-            // Wait for threads to finish
-            while (listProc.BufferSize > 0)
-            {
-                await Task.Delay(1000);
-            }
+            await listProc.AddRange(pageUpdateEvents);
+            await listProc.Flush();
 
             // Update any URLs that have been updated
             var uniqueUpdatedUrls = updatedUrls.Distinct().ToList();

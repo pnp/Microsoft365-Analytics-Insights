@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DataUtils
@@ -13,6 +14,7 @@ namespace DataUtils
     {
         private readonly Func<List<T>, Task> _batchDone;
         private readonly int _batchSize;
+        private readonly SemaphoreSlim _batchSemaphore = new SemaphoreSlim(1, 1);
 
         private List<T> _buffer;
 
@@ -22,44 +24,58 @@ namespace DataUtils
             _batchSize = batchSize;
             _buffer = new List<T>();
         }
-        public void Add(T i)
+        public async Task Add(T i)
         {
-            lock (this)
+            await _batchSemaphore.WaitAsync();
+            try
             {
                 _buffer.Add(i);
-                BatchCheck();
+                await BatchCheck();
+            }
+            finally
+            {
+                _batchSemaphore.Release();
             }
 
         }
-        public void AddRange(IEnumerable<T> source)
+        public async Task AddRange(IEnumerable<T> source)
         {
-            lock (this)
+            await _batchSemaphore.WaitAsync();
+            try
             {
                 _buffer.AddRange(source);
-                BatchCheck();
+                await BatchCheck();
+            }
+            finally
+            {
+                _batchSemaphore.Release();
             }
         }
-        void BatchCheck()
+        async Task BatchCheck()
         {
-            lock (this)
+            while (_buffer.Count >= _batchSize)
             {
-                while (_buffer.Count >= _batchSize)
-                {
-                    _batchDone(_buffer.Take(_batchSize).ToList()).Wait();
-                    _buffer.RemoveRange(0, _batchSize);
-                }
+                var batch = _buffer.Take(_batchSize).ToList();
+                _buffer.RemoveRange(0, _batchSize);
+                await _batchDone(batch);
             }
         }
 
-        public void Flush()
+        public async Task Flush()
         {
-            lock (this)
+            await _batchSemaphore.WaitAsync();
+            try
             {
                 if (_buffer.Count > 0)
                 {
-                    _batchDone(_buffer).Wait();
-                    _buffer.Clear();
+                    var finalBuffer = _buffer;
+                    _buffer = new List<T>();
+                    await _batchDone(finalBuffer);
                 }
+            }
+            finally
+            {
+                _batchSemaphore.Release();
             }
         }
 

@@ -261,19 +261,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ListBatchProcessor()
+        public async Task ListBatchProcessor()
         {
             // Test BufferSize moves
             var listBatchProcessor = new ListBatchProcessor<int>(10, (newChunk) => Task.CompletedTask);
-            listBatchProcessor.Add(1);
+            await listBatchProcessor.Add(1);
             Assert.IsTrue(listBatchProcessor.BufferSize > 0);
 
-            TestListBatch(1);
-            TestListBatch(100);
-            TestListBatch(101);
+            await TestListBatch(1);
+            await TestListBatch(100);
+            await TestListBatch(101);
         }
 
-        void TestListBatch(int size)
+        async Task TestListBatch(int size)
         {
 
             var resultList = new List<int>();
@@ -286,7 +286,13 @@ namespace Tests.UnitTests
             Assert.IsTrue(listBatchProcessor.BufferSize == 0);
 
             // Add direct to ListBatchProcessor, multithreaded
-            Parallel.For(0, size, i => listBatchProcessor.Add(i));
+            var tasks = new List<Task>();
+            for (int i = 0; i < size; i++)
+            {
+                int index = i;
+                tasks.Add(Task.Run(async () => await listBatchProcessor.Add(index)));
+            }
+            await Task.WhenAll(tasks);
 
             var intList = new List<int>();
             for (int i = 0; i < size; i++)
@@ -294,7 +300,7 @@ namespace Tests.UnitTests
                 intList.Add(i);
             }
 
-            listBatchProcessor.Flush();
+            await listBatchProcessor.Flush();
             Assert.IsTrue(listBatchProcessor.BufferSize == 0);
             Assert.IsTrue(resultList.Count == intList.Count);
             foreach (var a in resultList)
@@ -304,8 +310,8 @@ namespace Tests.UnitTests
 
             // Reset and test again via Add(List<T>)
             resultList.Clear();
-            listBatchProcessor.AddRange(intList);
-            listBatchProcessor.Flush();
+            await listBatchProcessor.AddRange(intList);
+            await listBatchProcessor.Flush();
             Assert.IsTrue(resultList.Count == intList.Count);
         }
 
