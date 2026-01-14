@@ -62,8 +62,6 @@ namespace DataUtils
                 threadsNeeded++;        // Make sure the last thread doesn't include diving remainder
             }
 
-            Task unlockThreadLimitTask = null;
-
             var recordsInsertedAlready = 0;
             if (startingDelegate != null)
             {
