@@ -74,7 +74,6 @@
   <ItemGroup>
     <Compile Include="BaseInstallProcessClasses.cs" />
     <Compile Include="InstallerLogs.cs" />
-    <Compile Include="InstallerTasks\JobTasks\CreateOrUpdateRunbookConfigureTask.cs" />
     <Compile Include="InstallerTasks\JobTasks\ProfilingScriptsUploadToBlobStorageTask.cs" />
     <Compile Include="InstallerTasks\JobTasks\AutomationAccountTask.cs" />
     <Compile Include="ConfigureAzureComponentsTasks.cs" />
