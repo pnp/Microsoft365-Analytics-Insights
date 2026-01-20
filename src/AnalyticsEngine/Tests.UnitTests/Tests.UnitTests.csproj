@@ -108,7 +108,7 @@
     <Compile Include="DataUtilsTests.cs" />
     <Compile Include="AuditTests.cs" />
     <Compile Include="EntityTests.cs" />
-    <Compile Include="FakeControllers\FakePageableResultsController - Copy.cs" />
+    <Compile Include="FakeControllers\FakePageableResultsController.cs" />
     <Compile Include="FakeControllers\FakeCallsController.cs" />
     <Compile Include="FakeControllers\Office365FakeController.cs" />
     <Compile Include="FakeEntities\DataGenerators.cs" />
