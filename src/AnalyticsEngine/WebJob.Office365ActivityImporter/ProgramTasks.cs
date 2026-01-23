@@ -129,7 +129,8 @@ namespace WebJob.Office365ActivityImporter
                 _telemetry.LogInformation($"Starting activity import for {spFilterList.OrgUrlConfigs.Count} url filters");
 
                 // Start new O365 activity download session
-                const int MAX_IMPORTS_PER_BATCH = 20000;
+                // Reduced from 20000 to 5000, then to 2000 to prevent OutOfMemoryException with large datasets
+                const int MAX_IMPORTS_PER_BATCH = 2000;
                 var importer = new ActivityWebImporter(_settings, _telemetry, MAX_IMPORTS_PER_BATCH);
 
                 var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _telemetry, _settings);
