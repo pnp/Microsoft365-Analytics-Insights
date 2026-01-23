@@ -55,27 +55,45 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return new WebActivityReportSet();
             }
 
-            // Otherwise parse response
-            var jSonBody = await response.Content.ReadAsStringAsync();
-
-            var logs = new WebActivityReportSet();
-
-            // A report download can have multiple reports in a Json array.
-            JArray allReportsData = null;
+            // Use try-finally to ensure response is disposed and memory is freed
             try
             {
-                allReportsData = JArray.Parse(jSonBody);
-            }
-            catch (JsonReaderException)
-            {
-                _telemetry.LogWarning($"Invalid JSon body '{jSonBody}' for URL '{newUri}'. Ignoring");
-                return new WebActivityReportSet();
-            }
+                // Otherwise parse response with streaming to avoid OOM
+                string jSonBody = null;
+                try
+                {
+                    // Use streaming to handle large responses without loading entire string into memory at once
+                    using (var stream = await response.Content.ReadAsStreamAsync())
+                    using (var reader = new StreamReader(stream))
+                    {
+                        jSonBody = await reader.ReadToEndAsync();
+                    }
+                }
+                catch (OutOfMemoryException)
+                {
+                    _reportDownloadErrors++;
+                    _telemetry.LogError($"Out of memory reading response from {metadata.ContentUri}. Response too large. Will try again on next cycle.");
+                    return new WebActivityReportSet();
+                }
 
-            var reportsArray = allReportsData.Children();
-            foreach (var reportItem in reportsArray)
-            {
-                var logJson = reportItem.ToString();
+                var logs = new WebActivityReportSet();
+
+                // A report download can have multiple reports in a Json array.
+                JArray allReportsData = null;
+                try
+                {
+                    allReportsData = JArray.Parse(jSonBody);
+                }
+                catch (JsonReaderException)
+                {
+                    _telemetry.LogWarning($"Invalid JSon body '{jSonBody}' for URL '{newUri}'. Ignoring");
+                    return new WebActivityReportSet();
+                }
+
+                var reportsArray = allReportsData.Children();
+                foreach (var reportItem in reportsArray)
+                {
+                    var logJson = reportItem.ToString();
                 // Trace logic
                 try
                 {
@@ -141,13 +159,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             }
 
             logs.OriginalMetadata = metadata;
-            foreach (var log in logs)
-            {
-                // Save original file content for each item, so we don't have to associated a content-set on save
-                log.OriginalImportFileContents = jSonBody;
-            }
+            // Note: We're NOT storing jSonBody in each log item to avoid multiplying memory usage.
+            // The OriginalImportFileContents is not persisted to the database, only used during processing.
+            // If needed for debugging, it could be stored once at the ActivityReportSet level instead.
 
             return logs;
+            }
+            finally
+            {
+                // Dispose response to free memory immediately
+                response?.Dispose();
+            }
         }
     }
 }

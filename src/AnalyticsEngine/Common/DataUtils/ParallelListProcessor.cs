@@ -54,9 +54,13 @@ namespace DataUtils
                 throw new ArgumentNullException(nameof(processListChunkDelegate));
             }
 
+            // Materialize the enumerable once to avoid repeated enumeration and prevent OOM from sorting
+            var itemsList = allItems as List<T> ?? allItems.ToList();
+            var totalCount = itemsList.Count;
+
             // Figure out how many threads we'll need
             int rem = 0;
-            var threadsNeeded = Math.DivRem(allItems.Count(), _maxItemsPerChunk, out rem);
+            var threadsNeeded = Math.DivRem(totalCount, _maxItemsPerChunk, out rem);
             if (rem > 0)
             {
                 threadsNeeded++;        // Make sure the last thread doesn't include diving remainder
@@ -74,11 +78,20 @@ namespace DataUtils
                 var recordsToTake = _maxItemsPerChunk;
                 if (threadIndex == threadsNeeded - 1)
                 {
-                    recordsToTake = allItems.Count() - recordsInsertedAlready;
+                    recordsToTake = totalCount - recordsInsertedAlready;
                 }
 
-                // Split unique work for new thread
-                var threadListChunk = allItems.Skip(recordsInsertedAlready).Take(recordsToTake).ToList();
+                // Split unique work for new thread using GetRange for better performance
+                List<T> threadListChunk;
+                if (recordsInsertedAlready + recordsToTake <= itemsList.Count)
+                {
+                    threadListChunk = itemsList.GetRange(recordsInsertedAlready, recordsToTake);
+                }
+                else
+                {
+                    // Fallback for edge cases
+                    threadListChunk = itemsList.Skip(recordsInsertedAlready).Take(recordsToTake).ToList();
+                }
                 recordsInsertedAlready += recordsToTake;
 
                 // Throttle threads to max
