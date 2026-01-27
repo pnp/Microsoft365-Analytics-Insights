@@ -268,16 +268,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
-                // Save batch
+                // Save batch and clear change tracker to free memory
                 db.ChangeTracker.DetectChanges();
                 await db.SaveChangesAsync();
                 
                 usersInserted.AddRange(batchInserted);
                 _telemetry.LogInformation($"User import - Saved batch {usersInserted.Count.ToString("N0")}/{usersToInsert.Count.ToString("N0")} new users to SQL");
 
-                // Clear change tracker to free memory after each batch
-                _batchProcessor.DetachAllEntities(db);
-SqlException: Cannot insert duplicate key row in object 'dbo.user_office_locations' with unique index 'IX_name'. The duplicate key value is (Princesa 47 Seguros).
+                // Clear change tracker to free memory after each batch, but preserve lookups
+                _batchProcessor.DetachAllEntitiesExceptLookups(db);
                 batchInserted.Clear();
             }
 

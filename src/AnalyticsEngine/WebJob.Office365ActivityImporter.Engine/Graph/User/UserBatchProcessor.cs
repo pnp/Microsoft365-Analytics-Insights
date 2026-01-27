@@ -62,8 +62,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 processedCount += batch.Count;
                 _telemetry.LogInformation($"User import - processed batch {processedCount.ToString("N0")}/{batchedGraphUsers.Count.ToString("N0")} existing users");
 
-                // Clear change tracker to release memory
-                DetachAllEntities(db);
+                // Clear change tracker to release memory, but preserve lookups
+                DetachAllEntitiesExceptLookups(db);
             }
 
             return processedCount;
@@ -77,6 +77,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             foreach (var entry in db.ChangeTracker.Entries().ToList())
             {
                 entry.State = EntityState.Detached;
+            }
+        }
+
+        /// <summary>
+        /// Detach all entities except lookup entities to free memory while preserving lookup cache consistency.
+        /// This prevents FK constraint violations when processing users in batches.
+        /// </summary>
+        public void DetachAllEntitiesExceptLookups(AnalyticsEntitiesContext db)
+        {
+            var lookupTypes = new HashSet<Type>
+            {
+                typeof(UserDepartment),
+                typeof(UserJobTitle),
+                typeof(UserOfficeLocation),
+                typeof(UserUsageLocation),
+                typeof(CountryOrRegion),
+                typeof(StateOrProvince),
+                typeof(CompanyName),
+                typeof(LicenseType)
+            };
+
+            foreach (var entry in db.ChangeTracker.Entries().ToList())
+            {
+                if (!lookupTypes.Contains(entry.Entity.GetType()))
+                {
+                    entry.State = EntityState.Detached;
+                }
             }
         }
 
