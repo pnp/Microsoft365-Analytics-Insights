@@ -22,6 +22,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private readonly string _tenantId;
         private int _reportDownloadErrors = 0;
 
+        private static readonly char[] _debugTraceFileNameInvalidChars = new char[] { '@', '.', ':', ';', '/', '\\', '"', '\'', '*', '?', '<', '>', '|' };
+
         public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger telemetry, string tenantId)
         {
             _httpClient = httpClient;
@@ -40,9 +42,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         public async Task<ActivityReportSet> Load(ActivityReportInfo metadata)
         {
             // Apply the PublisherIdentifier value as a parameter to each audit event fetch from the API
-            var newUri = metadata.ContentUri.ToString() + "?PublisherIdentifier=" + _tenantId;
+            var newUri = $"{metadata.ContentUri}?PublisherIdentifier={_tenantId}";
 
-            // Get the HTTP response from Activity API. Block if a reauth request is happening though. 
             HttpResponseMessage response = null;
             try
             {
@@ -55,18 +56,20 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return new WebActivityReportSet();
             }
 
-            // Use try-finally to ensure response is disposed and memory is freed
-            try
+            // Use 'using' to ensure response is disposed and memory is freed
+            using (response)
             {
-                // Otherwise parse response with streaming to avoid OOM
-                string jSonBody = null;
+                var logs = new WebActivityReportSet();
+
+                // Parse JSON directly from stream to avoid loading entire response into memory as string
+                JArray allReportsData = null;
                 try
                 {
-                    // Use streaming to handle large responses without loading entire string into memory at once
                     using (var stream = await response.Content.ReadAsStreamAsync())
-                    using (var reader = new StreamReader(stream))
+                    using (var streamReader = new StreamReader(stream))
+                    using (var jsonReader = new JsonTextReader(streamReader))
                     {
-                        jSonBody = await reader.ReadToEndAsync();
+                        allReportsData = await JArray.LoadAsync(jsonReader);
                     }
                 }
                 catch (OutOfMemoryException)
@@ -75,100 +78,121 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                     _telemetry.LogError($"Out of memory reading response from {metadata.ContentUri}. Response too large. Will try again on next cycle.");
                     return new WebActivityReportSet();
                 }
-
-                var logs = new WebActivityReportSet();
-
-                // A report download can have multiple reports in a Json array.
-                JArray allReportsData = null;
-                try
+                catch (JsonReaderException ex)
                 {
-                    allReportsData = JArray.Parse(jSonBody);
-                }
-                catch (JsonReaderException)
-                {
-                    _telemetry.LogWarning($"Invalid JSon body '{jSonBody}' for URL '{newUri}'. Ignoring");
+                    _reportDownloadErrors++;
+                    _telemetry.LogWarning($"Invalid JSON response for URL '{newUri}': {ex.Message}. Ignoring");
                     return new WebActivityReportSet();
                 }
 
-                var reportsArray = allReportsData.Children();
-                foreach (var reportItem in reportsArray)
+                if (allReportsData == null || allReportsData.Count == 0)
                 {
-                    var logJson = reportItem.ToString();
-                // Trace logic
-                try
+                    return logs;
+                }
+
+                foreach (var reportItem in allReportsData)
                 {
+                    AbstractAuditLogContent thisAuditLogReport = null;
+                    WorkloadOnlyAuditLogContent logBase = null;
+
+                    #region Debug Disk Logging if Configure
+
+                    // Only convert to string if trace logging is enabled to save memory
+                    string logJson = null;
                     if (!string.IsNullOrWhiteSpace(AuditTraceConfig.TraceEmail) && !string.IsNullOrWhiteSpace(AuditTraceConfig.TraceDirectory))
                     {
-                        if (logJson.IndexOf(AuditTraceConfig.TraceEmail, StringComparison.OrdinalIgnoreCase) >= 0)
+                        try
                         {
-                            var safeEmail = AuditTraceConfig.TraceEmail.Trim().ToLower();
-                            // Sanitize for filesystem
-                            foreach (var c in new char[] { '@', '.', ':', ';', '/', '\\', '"', '\'', '*', '?', '<', '>', '|' })
+                            logJson = reportItem.ToString();
+                            if (logJson.IndexOf(AuditTraceConfig.TraceEmail, StringComparison.OrdinalIgnoreCase) >= 0)
                             {
-                                safeEmail = safeEmail.Replace(c, '_');
+                                var safeEmail = AuditTraceConfig.TraceEmail.Trim().ToLower();
+                                // Sanitize for filesystem
+                                foreach (var c in _debugTraceFileNameInvalidChars)
+                                {
+                                    safeEmail = safeEmail.Replace(c, '_');
+                                }
+                                var fileName = $"audit_trace_{safeEmail}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}_{DateTime.UtcNow.Ticks % 1000000}.json";
+                                var fullPath = Path.Combine(AuditTraceConfig.TraceDirectory, fileName);
+                                File.WriteAllText(fullPath, logJson);
+                                _telemetry.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
                             }
-                            var fileName = $"audit_trace_{safeEmail}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid().ToString().Substring(0, 8)}.json";
-                            var fullPath = Path.Combine(AuditTraceConfig.TraceDirectory, fileName);
-                            File.WriteAllText(fullPath, logJson);
-                            _telemetry.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
+                        }
+                        catch (Exception ex)
+                        {
+                            _telemetry.LogWarning($"TRACE: Failed to write trace audit log file: {ex.Message}");
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _telemetry.LogWarning($"TRACE: Failed to write trace audit log file: {ex.Message}");
-                }
+                    #endregion
 
-                var logBase = JsonConvert.DeserializeObject<WorkloadOnlyAuditLogContent>(logJson);
-                AbstractAuditLogContent thisAuditLogReport = null;
-
-                // Determine which deserialization to use, depending on the workload
-                if (logBase.Workload == ActivityImportConstants.WORKLOAD_SP || logBase.Workload == ActivityImportConstants.WORKLOAD_OD)
-                {
-                    thisAuditLogReport = JsonConvert.DeserializeObject<SharePointAuditLogContent>(logJson);
-                }
-                else if (logBase.Workload == ActivityImportConstants.WORKLOAD_EXCHANGE)
-                {
-                    thisAuditLogReport = JsonConvert.DeserializeObject<ExchangeAuditLogContent>(logJson);
-                }
-                else if (logBase.Workload == ActivityImportConstants.WORKLOAD_AZURE_AD)
-                {
-                    thisAuditLogReport = JsonConvert.DeserializeObject<AzureADAuditLogContent>(logJson);
-                }
-                else if (logBase.Workload == ActivityImportConstants.WORKLOAD_STREAM)
-                {
-                    thisAuditLogReport = JsonConvert.DeserializeObject<StreamAuditLogContent>(logJson);
-                }
-                else if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT)
-                {
+                    // Deserialize directly from JToken to determine workload type
                     try
                     {
-                        thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
+                        logBase = reportItem.ToObject<WorkloadOnlyAuditLogContent>();
                     }
-                    catch (JsonReaderException)
+                    catch (JsonSerializationException)
                     {
-                        Console.WriteLine($"Failed to deserialize Copilot log: {logJson}");
-                        throw;
+                        continue; // Skip this report if we can't determine workload
+                    }
+
+                    if (logBase == null)
+                    {
+                        continue;
+                    }
+
+                    // Determine which deserialization to use, depending on the workload
+                    // Deserialize directly from JToken to avoid creating intermediate string
+                    try
+                    {
+                        if (logBase.Workload == ActivityImportConstants.WORKLOAD_SP || logBase.Workload == ActivityImportConstants.WORKLOAD_OD)
+                        {
+                            thisAuditLogReport = reportItem.ToObject<SharePointAuditLogContent>();
+                        }
+                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_EXCHANGE)
+                        {
+                            thisAuditLogReport = reportItem.ToObject<ExchangeAuditLogContent>();
+                        }
+                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_AZURE_AD)
+                        {
+                            thisAuditLogReport = reportItem.ToObject<AzureADAuditLogContent>();
+                        }
+                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_STREAM)
+                        {
+                            thisAuditLogReport = reportItem.ToObject<StreamAuditLogContent>();
+                        }
+                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT)
+                        {
+                            // Convert to string only if needed for Copilot's custom parser
+                            if (logJson == null)
+                            {
+                                logJson = reportItem.ToString();
+                            }
+                            thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
+                        }
+                    }
+                    catch (JsonReaderException ex)
+                    {
+                        _telemetry.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
+                        continue;
+                    }
+                    catch (JsonSerializationException ex)
+                    {
+                        _telemetry.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
+                        continue;
+                    }
+
+                    if (thisAuditLogReport != null)
+                    {
+                        logs.Add(thisAuditLogReport);
                     }
                 }
 
-                if (thisAuditLogReport != null)
-                {
-                    logs.Add(thisAuditLogReport);
-                }
-            }
+                logs.OriginalMetadata = metadata;
+                // Note: We're NOT storing the JSON string in each log item to avoid multiplying memory usage.
+                // The OriginalImportFileContents is not persisted to the database, only used during processing.
+                // If needed for debugging, it could be stored once at the ActivityReportSet level instead.
 
-            logs.OriginalMetadata = metadata;
-            // Note: We're NOT storing jSonBody in each log item to avoid multiplying memory usage.
-            // The OriginalImportFileContents is not persisted to the database, only used during processing.
-            // If needed for debugging, it could be stored once at the ActivityReportSet level instead.
-
-            return logs;
-            }
-            finally
-            {
-                // Dispose response to free memory immediately
-                response?.Dispose();
+                return logs;
             }
         }
     }
