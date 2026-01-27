@@ -188,7 +188,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _copilotInsertsChatsNoContext.Rows.Add(new ChatOnlyCopilotLogTempEntity
             {
                 EventId = baseOfficeEvent.Id,
-                AppHost = auditRecord.CopilotEventData.AppHost,
+                AppHost = auditRecord.CopilotEventData?.AppHost ?? "Unknown",
                 AgentId = auditRecord.AgentId,
                 AgentName = auditRecord.AgentName,
                 IsCustomAgent = auditRecord.IsCustomAgent,
