@@ -1390,6 +1390,588 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Test for fix of duplicate key error when newly inserted users are set as managers of existing users.
+        /// This reproduces the scenario: "Cannot insert duplicate key row in object 'dbo.users' with unique index 'IX_users'"
+        /// Root cause: Lookup dictionaries (dbUsersByUpn, dbUsersByAadId) were created BEFORE bulk insert, 
+        /// so they didn't contain newly inserted users. When processing existing users and setting their 
+        /// manager relationships, the cache couldn't find newly inserted managers and tried to insert them again.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_NewlyInsertedUserAsManager_NoDuplicateKeyError()
+        {
+            // Arrange
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var timestamp = DateTime.Now.Ticks;
+            
+            // Existing user that will get a newly inserted user as manager
+            var existingUserId = Guid.NewGuid().ToString();
+            var existingUserUpn = $"existingemployee{timestamp}@test.com";
+            
+            // New user that will be inserted via bulk insert and set as manager
+            var newManagerId = Guid.NewGuid().ToString();
+            var newManagerUpn = $"newmanager{timestamp}@test.com";
+
+            // Cleanup
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var usersToClean = await cleanupDb.users
+                    .Where(u => u.UserPrincipalName == existingUserUpn || u.UserPrincipalName == newManagerUpn)
+                    .ToListAsync();
+
+                if (usersToClean.Any())
+                {
+                    cleanupDb.users.RemoveRange(usersToClean);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            // Step 1: Create existing user WITHOUT manager
+            var existingUser = new GraphUser
+            {
+                UserPrincipalName = existingUserUpn,
+                Id = existingUserId,
+                AccountEnabled = true,
+                Mail = existingUserUpn
+            };
+
+            var initialLoader = new FakeUserMetadataLoader(new List<GraphUser> { existingUser });
+            var initialUpdater = new UserMetadataUpdater(telemetry, config, initialLoader);
+            await initialUpdater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Verify existing user was created
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Where(u => u.UserPrincipalName == existingUserUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser, "Existing user should be created");
+                Assert.IsNull(dbUser.ManagerId, "Existing user should not have a manager yet");
+            }
+
+            // Step 2: Add new manager (to be bulk inserted) and update existing user to have this new manager
+            var newManager = new GraphUser
+            {
+                UserPrincipalName = newManagerUpn,
+                Id = newManagerId,
+                AccountEnabled = true,
+                Mail = newManagerUpn
+            };
+
+            var existingUserWithNewManager = new GraphUser
+            {
+                UserPrincipalName = existingUserUpn,
+                Id = existingUserId,
+                AccountEnabled = true,
+                Mail = existingUserUpn,
+                ManagerInfo = new List<ManagerInfo>
+                {
+                    new ManagerInfo { Id = newManagerId } // Manager will be newly inserted!
+                }
+            };
+
+            // This simulates the scenario where:
+            // 1. newManager is bulk-inserted (not in dictionary initially)
+            // 2. existingUserWithNewManager is updated (already exists in DB)
+            // 3. When processing existing user's manager relationship, the lookup should find the newly inserted manager
+            //    WITHOUT trying to insert them again (which would cause duplicate key error)
+            var updatedLoader = new FakeUserMetadataLoader(new List<GraphUser> { newManager, existingUserWithNewManager });
+            var updater = new UserMetadataUpdater(telemetry, config, updatedLoader);
+            
+            // Act: This should NOT throw "Cannot insert duplicate key row in object 'dbo.users'"
+            await updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Assert: Verify both users exist and manager relationship is set correctly
+            using (var finalVerifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbExistingUser = await finalVerifyDb.users
+                    .Include(u => u.Manager)
+                    .Where(u => u.UserPrincipalName == existingUserUpn)
+                    .FirstOrDefaultAsync();
+
+                var dbNewManager = await finalVerifyDb.users
+                    .Where(u => u.UserPrincipalName == newManagerUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbExistingUser, "Existing user should still exist");
+                Assert.IsNotNull(dbNewManager, "New manager should be inserted");
+                Assert.IsNotNull(dbExistingUser.Manager, "Existing user should have a manager assigned");
+                Assert.AreEqual(newManagerUpn, dbExistingUser.Manager.UserPrincipalName, 
+                    "Manager relationship should be set to the newly inserted manager");
+                Assert.AreEqual(dbNewManager.ID, dbExistingUser.ManagerId, 
+                    "Manager ID should match the newly inserted manager's ID");
+
+                // Verify no duplicate users were created
+                var allTestUsers = await finalVerifyDb.users
+                    .Where(u => u.UserPrincipalName == existingUserUpn || u.UserPrincipalName == newManagerUpn)
+                    .ToListAsync();
+
+                Assert.AreEqual(2, allTestUsers.Count, "Should only have 2 users (no duplicates)");
+            }
+        }
+
+        /// <summary>
+        /// Test for the specific production error: "Cannot insert duplicate key row in object 'dbo.users' with unique index 'IX_users'"
+        /// This error occurred in ProcessExistingUsersInBatches when:
+        /// 1. New users were bulk-inserted (bypassing EF and cache)
+        /// 2. Existing users were processed in batches
+        /// 3. An existing user's manager was updated to a newly inserted user
+        /// 4. The lookup dictionaries had detached entities or were missing newly inserted users
+        /// 5. Manager resolution tried to insert the newly inserted manager again ? duplicate key error
+        /// 
+        /// This test validates the complete workflow including both InsertMissingUsers AND ProcessExistingUsersInBatches
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_ExistingUserManagerUpdatedToNewlyInsertedUser_NoDuplicateKeyInBatchProcessing()
+        {
+            // Arrange
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var timestamp = DateTime.Now.Ticks;
+            
+            // Existing user already in database (will be processed in ProcessExistingUsersInBatches)
+            var existingEmployeeId = Guid.NewGuid().ToString();
+            var existingEmployeeUpn = $"existingemployee{timestamp}@test.com";
+            
+            // New manager that will be bulk-inserted (not in DB yet)
+            var newManagerId = Guid.NewGuid().ToString();
+            var newManagerUpn = $"bulkinsertedmanager{timestamp}@test.com";
+
+            // Cleanup
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var usersToClean = await cleanupDb.users
+                    .Where(u => u.UserPrincipalName == existingEmployeeUpn || u.UserPrincipalName == newManagerUpn)
+                    .ToListAsync();
+
+                if (usersToClean.Any())
+                {
+                    cleanupDb.users.RemoveRange(usersToClean);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            // Step 1: Create existing employee user WITHOUT manager (simulates user already in production DB)
+            var existingEmployee = new GraphUser
+            {
+                UserPrincipalName = existingEmployeeUpn,
+                Id = existingEmployeeId,
+                AccountEnabled = true,
+                Mail = existingEmployeeUpn
+            };
+
+            var step1Loader = new FakeUserMetadataLoader(new List<GraphUser> { existingEmployee });
+            var step1Updater = new UserMetadataUpdater(telemetry, config, step1Loader);
+            await step1Updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Verify existing employee was created without manager
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Include(u => u.Manager)
+                    .Where(u => u.UserPrincipalName == existingEmployeeUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser, "Existing employee should be created");
+                Assert.IsNull(dbUser.ManagerId, "Existing employee should not have a manager yet");
+            }
+
+            // Step 2: Simulate the production scenario:
+            // - New manager user is returned from Graph API (will be bulk-inserted)
+            // - Existing employee is also returned from Graph API with manager relationship updated
+            // This triggers:
+            //   a) InsertMissingUsers ? bulk inserts newManager
+            //   b) ProcessExistingUsersInBatches ? updates existingEmployee's manager
+            
+            var newManager = new GraphUser
+            {
+                UserPrincipalName = newManagerUpn,
+                Id = newManagerId,
+                AccountEnabled = true,
+                Mail = newManagerUpn
+            };
+
+            var existingEmployeeWithManager = new GraphUser
+            {
+                UserPrincipalName = existingEmployeeUpn,
+                Id = existingEmployeeId,
+                AccountEnabled = true,
+                Mail = existingEmployeeUpn,
+                ManagerInfo = new List<ManagerInfo>
+                {
+                    new ManagerInfo { Id = newManagerId } // Points to newly inserted manager!
+                }
+            };
+
+            var step2Loader = new FakeUserMetadataLoader(new List<GraphUser> { newManager, existingEmployeeWithManager });
+            var step2Updater = new UserMetadataUpdater(telemetry, config, step2Loader);
+            
+            // Act: This is where the production error occurred
+            // The fix ensures:
+            // 1. dbUsersByUpn and dbUsersByAadId are updated after bulk insert with tracked entities
+            // 2. Cache is pre-populated with tracked entities
+            // 3. When ProcessExistingUsersInBatches runs, manager lookups find the newly inserted manager
+            // 4. No duplicate insert attempts
+            await step2Updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Assert: Verify the complete workflow succeeded without duplicate key errors
+            using (var finalVerifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbEmployee = await finalVerifyDb.users
+                    .Include(u => u.Manager)
+                    .Where(u => u.UserPrincipalName == existingEmployeeUpn)
+                    .FirstOrDefaultAsync();
+
+                var dbManager = await finalVerifyDb.users
+                    .Where(u => u.UserPrincipalName == newManagerUpn)
+                    .FirstOrDefaultAsync();
+
+                // Verify both users exist
+                Assert.IsNotNull(dbEmployee, "Existing employee should still exist");
+                Assert.IsNotNull(dbManager, "New manager should be inserted");
+
+                // Verify manager relationship was set correctly
+                Assert.IsNotNull(dbEmployee.Manager, "Employee should have a manager assigned");
+                Assert.AreEqual(newManagerUpn, dbEmployee.Manager.UserPrincipalName, 
+                    "Manager should be the newly inserted user");
+                Assert.AreEqual(dbManager.ID, dbEmployee.ManagerId, 
+                    "Manager ID should match the newly inserted manager");
+
+                // Verify no duplicates were created (the critical assertion!)
+                var allTestUsers = await finalVerifyDb.users
+                    .Where(u => u.UserPrincipalName == existingEmployeeUpn || u.UserPrincipalName == newManagerUpn)
+                    .ToListAsync();
+
+                Assert.AreEqual(2, allTestUsers.Count, 
+                    "Should only have exactly 2 users - no duplicates created during ProcessExistingUsersInBatches");
+
+                // Verify each user appears only once
+                var employeeCount = allTestUsers.Count(u => u.UserPrincipalName == existingEmployeeUpn);
+                var managerCount = allTestUsers.Count(u => u.UserPrincipalName == newManagerUpn);
+                
+                Assert.AreEqual(1, employeeCount, "Employee should exist exactly once");
+                Assert.AreEqual(1, managerCount, "Manager should exist exactly once (not inserted twice)");
+            }
+        }
+
+        /// <summary>
+        /// REPRODUCTION TEST for production error: "Cannot insert duplicate key row in object 'dbo.users' 
+        /// with unique index 'IX_users'. The duplicate key value is (alice_anderson@contoso.com)"
+        /// 
+        /// This test specifically reproduces the scenario where:
+        /// 1. Multiple users exist in DB from previous run
+        /// 2. Graph returns NEW users to bulk-insert + EXISTING users to update
+        /// 3. An EXISTING user (Employee) has their manager changed to a NEWLY INSERTED user
+        /// 4. The newly inserted user (Manager) ALSO has THEIR manager changed to another NEWLY INSERTED user
+        /// 
+        /// This creates a chain: ExistingEmployee -> NewManager1 -> NewManager2
+        /// 
+        /// Expected behavior: All relationships set correctly, no duplicate inserts
+        /// Bug behavior: NewManager1 tries to be inserted twice when processing ExistingEmployee's manager relationship
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_ProductionScenario_ExistingUserWithNewlyInsertedManagerChain_NoDuplicateKey()
+        {
+            // Arrange
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var timestamp = DateTime.Now.Ticks;
+            
+            // Simulate alice_anderson (existing user in production)
+            var existingEmployeeId = Guid.NewGuid().ToString();
+            var existingEmployeeUpn = $"alice_anderson{timestamp}@contoso.com";
+            
+            // New manager 1 (will be bulk-inserted, becomes alice's manager)
+            var newManager1Id = Guid.NewGuid().ToString();
+            var newManager1Upn = $"newmanager1_{timestamp}@contoso.com";
+            
+            // New manager 2 (will be bulk-inserted, becomes manager1's manager)
+            var newManager2Id = Guid.NewGuid().ToString();
+            var newManager2Upn = $"newmanager2_{timestamp}@contoso.com";
+
+            // Cleanup
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var usersToClean = await cleanupDb.users
+                    .Where(u => u.UserPrincipalName == existingEmployeeUpn || 
+                                u.UserPrincipalName == newManager1Upn ||
+                                u.UserPrincipalName == newManager2Upn)
+                    .ToListAsync();
+
+                if (usersToClean.Any())
+                {
+                    cleanupDb.users.RemoveRange(usersToClean);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            // Step 1: Create existing employee WITHOUT manager (simulates production DB state before the failing run)
+            telemetry.LogInformation("TEST STEP 1: Creating existing employee in DB without manager");
+            var existingEmployee = new GraphUser
+            {
+                UserPrincipalName = existingEmployeeUpn,
+                Id = existingEmployeeId,
+                AccountEnabled = true,
+                Mail = existingEmployeeUpn
+            };
+
+            var step1Loader = new FakeUserMetadataLoader(new List<GraphUser> { existingEmployee });
+            var step1Updater = new UserMetadataUpdater(telemetry, config, step1Loader);
+            await step1Updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Verify existing employee exists
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Where(u => u.UserPrincipalName == existingEmployeeUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser, "Existing employee should exist in DB before the failing scenario");
+                Assert.IsNull(dbUser.ManagerId, "Existing employee should not have a manager yet");
+            }
+
+            // Step 2: Simulate the EXACT production scenario that caused the error
+            // Graph API returns:
+            // - NEW manager users (to be bulk-inserted)
+            // - EXISTING employee (to be updated with new manager relationship)
+            // This creates a manager chain where both managers are newly inserted
+            
+            telemetry.LogInformation("TEST STEP 2: Simulating production scenario - new managers bulk-inserted, existing user updated");
+
+            var newManager2 = new GraphUser
+            {
+                UserPrincipalName = newManager2Upn,
+                Id = newManager2Id,
+                AccountEnabled = true,
+                Mail = newManager2Upn
+            };
+
+            var newManager1 = new GraphUser
+            {
+                UserPrincipalName = newManager1Upn,
+                Id = newManager1Id,
+                AccountEnabled = true,
+                Mail = newManager1Upn,
+                ManagerInfo = new List<ManagerInfo>
+                {
+                    new ManagerInfo { Id = newManager2Id } // Manager1's manager is also newly inserted!
+                }
+            };
+
+            var existingEmployeeWithNewManager = new GraphUser
+            {
+                UserPrincipalName = existingEmployeeUpn,
+                Id = existingEmployeeId,
+                AccountEnabled = true,
+                Mail = existingEmployeeUpn,
+                ManagerInfo = new List<ManagerInfo>
+                {
+                    new ManagerInfo { Id = newManager1Id } // Existing user's manager is newly inserted!
+                }
+            };
+
+            // This is the exact scenario:
+            // - newManager1 and newManager2 will go through InsertMissingUsers (bulk insert)
+            // - existingEmployeeWithNewManager will go through ProcessExistingUsersInBatches
+            // - When ProcessExistingUsersInBatches tries to set existingEmployee.Manager = newManager1:
+            //   * If dbUsersByAadId has detached entity for newManager1 ? EF tries to INSERT ? DUPLICATE KEY ERROR!
+            //   * If dbUsersByAadId has tracked entity for newManager1 ? EF recognizes as existing ? SUCCESS!
+            
+            var step2Loader = new FakeUserMetadataLoader(new List<GraphUser> 
+            { 
+                newManager2,           // Will be bulk-inserted
+                newManager1,           // Will be bulk-inserted
+                existingEmployeeWithNewManager  // Will be updated in ProcessExistingUsersInBatches
+            });
+            var step2Updater = new UserMetadataUpdater(telemetry, config, step2Loader);
+            
+            // Act: This should NOT throw "Cannot insert duplicate key row in object 'dbo.users'"
+            // If this throws the error, the test will FAIL and show us the exact problem
+            telemetry.LogInformation("TEST ACT: Running InsertAndUpdateDatabaseFromExternalUsers - this is where production error occurred");
+            await step2Updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Assert: Verify everything worked correctly with no duplicate inserts
+            telemetry.LogInformation("TEST ASSERT: Verifying no duplicates and relationships are correct");
+            using (var finalVerifyDb = new AnalyticsEntitiesContext())
+            {
+                // Load all test users
+                var allTestUsers = await finalVerifyDb.users
+                    .Include(u => u.Manager)
+                    .Where(u => u.UserPrincipalName == existingEmployeeUpn || 
+                                u.UserPrincipalName == newManager1Upn ||
+                                u.UserPrincipalName == newManager2Upn)
+                    .ToListAsync();
+
+                // CRITICAL: Should be exactly 3 users, no duplicates
+                Assert.AreEqual(3, allTestUsers.Count, 
+                    "Should have exactly 3 users total - NO DUPLICATES (this is the production bug!)");
+
+                var dbEmployee = allTestUsers.FirstOrDefault(u => u.UserPrincipalName == existingEmployeeUpn);
+                var dbManager1 = allTestUsers.FirstOrDefault(u => u.UserPrincipalName == newManager1Upn);
+                var dbManager2 = allTestUsers.FirstOrDefault(u => u.UserPrincipalName == newManager2Upn);
+
+                // Verify all users exist
+                Assert.IsNotNull(dbEmployee, "Employee should exist");
+                Assert.IsNotNull(dbManager1, "Manager 1 should be inserted exactly once");
+                Assert.IsNotNull(dbManager2, "Manager 2 should be inserted exactly once");
+
+                // Verify manager chain relationships
+                Assert.IsNotNull(dbEmployee.Manager, "Employee should have a manager");
+                Assert.AreEqual(newManager1Upn, dbEmployee.Manager.UserPrincipalName, 
+                    "Employee's manager should be Manager 1 (newly inserted)");
+                
+                Assert.IsNotNull(dbManager1.Manager, "Manager 1 should have a manager");
+                Assert.AreEqual(newManager2Upn, dbManager1.Manager.UserPrincipalName, 
+                    "Manager 1's manager should be Manager 2 (newly inserted)");
+
+                // Verify each user appears exactly once (no duplicates!)
+                var employeeCount = allTestUsers.Count(u => u.UserPrincipalName == existingEmployeeUpn);
+                var manager1Count = allTestUsers.Count(u => u.UserPrincipalName == newManager1Upn);
+                var manager2Count = allTestUsers.Count(u => u.UserPrincipalName == newManager2Upn);
+                
+                Assert.AreEqual(1, employeeCount, "Employee should exist exactly once");
+                Assert.AreEqual(1, manager1Count, 
+                    "Manager 1 should exist exactly once (NOT INSERTED TWICE - this was the production bug!)");
+                Assert.AreEqual(1, manager2Count, "Manager 2 should exist exactly once");
+
+                telemetry.LogInformation("TEST PASSED: No duplicate key errors, all relationships correct!");
+            }
+        }
+
+        /// <summary>
+        /// CRITICAL REPRODUCTION TEST: Tests the scenario where reloaded tracked entities become 
+        /// detached when there are NO operations between reload and ProcessExistingUsersInBatches.
+        /// 
+        /// In production with 500k users:
+        /// 1. Reload 500k users with tracking (in batches of 1000)
+        /// 2. Update dictionaries with tracked entities
+        /// 3. NO SaveChanges() called after reload
+        /// 4. ProcessExistingUsersInBatches called
+        /// 5. When attaching existing users, their NEW managers from dictionary are still tracked
+        /// 6. But if tracking is lost somehow, we get duplicate key error
+        /// 
+        /// This test validates that entities remain tracked across the workflow boundary.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_LargeScaleBatching_ReloadedEntitiesRemainTracked()
+        {
+            // Arrange
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var timestamp = DateTime.Now.Ticks;
+            
+            // Create scenario: 1 existing user + 2 newly inserted users in manager chain
+            var existingUserId = Guid.NewGuid().ToString();
+            var existingUserUpn = $"existing_employee{timestamp}@test.com";
+            
+            var newMgr1Id = Guid.NewGuid().ToString();
+            var newMgr1Upn = $"newmgr1_{timestamp}@test.com";
+            
+            var newMgr2Id = Guid.NewGuid().ToString();
+            var newMgr2Upn = $"newmgr2_{timestamp}@test.com";
+
+            // Cleanup
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var usersToClean = await cleanupDb.users
+                    .Where(u => u.UserPrincipalName == existingUserUpn || 
+                                u.UserPrincipalName == newMgr1Upn ||
+                                u.UserPrincipalName == newMgr2Upn)
+                    .ToListAsync();
+
+                if (usersToClean.Any())
+                {
+                    cleanupDb.users.RemoveRange(usersToClean);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            // Step 1: Create existing user
+            telemetry.LogInformation("Creating existing user in DB");
+            var existingUser = new GraphUser
+            {
+                UserPrincipalName = existingUserUpn,
+                Id = existingUserId,
+                AccountEnabled = true,
+                Mail = existingUserUpn
+            };
+
+            var loader1 = new FakeUserMetadataLoader(new List<GraphUser> { existingUser });
+            var updater1 = new UserMetadataUpdater(telemetry, config, loader1);
+            await updater1.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Step 2: Simulate production - insert new managers and update existing user
+            // The key difference: We need to verify the entities in dbUsersByAadId are truly tracked
+            // when ProcessExistingUsersInBatches runs
+            telemetry.LogInformation("Simulating production scenario with manager chain");
+
+            var newMgr2 = new GraphUser
+            {
+                UserPrincipalName = newMgr2Upn,
+                Id = newMgr2Id,
+                AccountEnabled = true,
+                Mail = newMgr2Upn
+            };
+
+            var newMgr1 = new GraphUser
+            {
+                UserPrincipalName = newMgr1Upn,
+                Id = newMgr1Id,
+                AccountEnabled = true,
+                Mail = newMgr1Upn,
+                ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = newMgr2Id } }
+            };
+
+            var existingUserUpdated = new GraphUser
+            {
+                UserPrincipalName = existingUserUpn,
+                Id = existingUserId,
+                AccountEnabled = true,
+                Mail = existingUserUpn,
+                ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = newMgr1Id } }
+            };
+
+            var loader2 = new FakeUserMetadataLoader(new List<GraphUser> { newMgr2, newMgr1, existingUserUpdated });
+            var updater2 = new UserMetadataUpdater(telemetry, config, loader2);
+            
+            // This is where we need to verify the fix works
+            // If reloaded entities are not properly tracked when ProcessExistingUsersInBatches runs,
+            // we'll get the duplicate key error
+            await updater2.InsertAndUpdateDatabaseFromExternalUsers();
+
+            // Assert
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var allUsers = await verifyDb.users
+                    .Include(u => u.Manager)
+                    .Where(u => u.UserPrincipalName == existingUserUpn ||
+                                u.UserPrincipalName == newMgr1Upn ||
+                                u.UserPrincipalName == newMgr2Upn)
+                    .ToListAsync();
+
+                Assert.AreEqual(3, allUsers.Count, "Should have exactly 3 users, no duplicates");
+
+                var existing = allUsers.First(u => u.UserPrincipalName == existingUserUpn);
+                var mgr1 = allUsers.First(u => u.UserPrincipalName == newMgr1Upn);
+                var mgr2 = allUsers.First(u => u.UserPrincipalName == newMgr2Upn);
+
+                Assert.IsNotNull(existing.Manager);
+                Assert.AreEqual(newMgr1Upn, existing.Manager.UserPrincipalName);
+                Assert.IsNotNull(mgr1.Manager);
+                Assert.AreEqual(newMgr2Upn, mgr1.Manager.UserPrincipalName);
+
+                // Verify no duplicates
+                Assert.AreEqual(1, allUsers.Count(u => u.UserPrincipalName == newMgr1Upn),
+                    "Manager 1 should exist exactly once - production bug was duplicate insert here!");
+            }
+        }
+
         [TestMethod]
         public async Task UserMetadataUpdater_NoUsersWithLicense_LicenseTypeRemains()
         {

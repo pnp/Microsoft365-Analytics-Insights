@@ -44,14 +44,43 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 var batch = batchedGraphUsers.Skip(i).Take(batchSize).ToList();
 
+                // CRITICAL: Ensure all entities in the dictionaries that might be referenced
+                // by this batch are properly attached BEFORE processing
+                // This prevents "Cannot insert duplicate key" errors when assigning navigation properties
+                var referencedUserIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                
+                foreach (var graphUser in batch)
+                {
+                    // Collect all Azure AD IDs that might be referenced (managers, etc.)
+                    if (graphUser.DefaultManagerInfo?.Id != null)
+                    {
+                        referencedUserIds.Add(graphUser.DefaultManagerInfo.Id);
+                    }
+                }
+                
+                // Attach any detached users that will be referenced in this batch
+                foreach (var aadId in referencedUserIds)
+                {
+                    if (dbUsersByAadId.TryGetValue(aadId, out var referencedUser))
+                    {
+                        if (db.Entry(referencedUser).State == EntityState.Detached)
+                        {
+                            db.users.Attach(referencedUser);
+                        }
+                    }
+                }
+
                 foreach (var existingGraphUser in batch)
                 {
                     var upn = existingGraphUser.UserPrincipalName?.ToLower();
                     if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
                     {
-                        // Attach the user to context for tracking
-                        var trackedUser = db.users.Attach(dbUser);
-                        await updateAction(existingGraphUser, trackedUser);
+                        // Attach the user to context for tracking (or get already tracked version)
+                        if (db.Entry(dbUser).State == EntityState.Detached)
+                        {
+                            dbUser = db.users.Attach(dbUser);
+                        }
+                        await updateAction(existingGraphUser, dbUser);
                     }
                 }
 

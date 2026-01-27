@@ -5,7 +5,9 @@ using DataUtils;
 using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Data.Entity;
+using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -115,6 +117,52 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Insert any user we've not seen so far
                 var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null);
                 
+                // Reload newly inserted users WITH TRACKING and update dictionaries
+                // This ensures they're properly tracked when used as managers in ProcessExistingUsersInBatches
+                if (insertedDbUsers.Count > 0)
+                {
+                    _telemetry.LogInformation($"User import - Reloading {insertedDbUsers.Count.ToString("N0")} newly inserted users with tracking for manager relationships...");
+                    
+                    var insertedUpns = insertedDbUsers.Select(u => u.UserPrincipalName.ToLower()).ToList();
+                    
+                    // Load with tracking in reasonable batches to avoid memory issues
+                    const int RELOAD_BATCH_SIZE = 1000;
+                    var reloadedUsers = new List<Common.Entities.User>();
+                    
+                    for (int i = 0; i < insertedUpns.Count; i += RELOAD_BATCH_SIZE)
+                    {
+                        var batchUpns = insertedUpns.Skip(i).Take(RELOAD_BATCH_SIZE).ToList();
+                        var batchReloaded = await db.users
+                            .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLower()))
+                            .ToListAsync();
+                        reloadedUsers.AddRange(batchReloaded);
+                    }
+                    
+                    // Update lookup dictionaries with TRACKED entities
+                    foreach (var insertedUser in reloadedUsers)
+                    {
+                        var upnLower = insertedUser.UserPrincipalName?.ToLower();
+                        if (!string.IsNullOrEmpty(upnLower))
+                        {
+                            dbUsersByUpn[upnLower] = insertedUser; // Replace with tracked
+                        }
+                        
+                        if (!string.IsNullOrEmpty(insertedUser.AzureAdId))
+                        {
+                            dbUsersByAadId[insertedUser.AzureAdId] = insertedUser; // Replace with tracked
+                        }
+                        
+                        // Update cache with tracked entities
+                        if (!string.IsNullOrEmpty(upnLower))
+                        {
+                            await _userMetaCache.UserCache.GetOrCreateNewResource(upnLower, insertedUser);
+                        }
+                    }
+                    
+                    // Update insertedDbUsers reference to tracked entities for later SKU processing
+                    insertedDbUsers = reloadedUsers;
+                }
+                
                 // Identify users that need updating
                 var notInsertedUpns = new HashSet<string>(
                     allActiveGraphUsers
@@ -139,10 +187,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Combine inserted & modified db users for SKU processing
                 var allProcessedDbUsers = new List<Common.Entities.User>(insertedDbUsers);
+                
+                // Create HashSet of inserted UPNs for quick exclusion check
+                var insertedUserUpns = new HashSet<string>(
+                    insertedDbUsers.Select(u => u.UserPrincipalName?.ToLower()).Where(upn => !string.IsNullOrEmpty(upn)),
+                    StringComparer.OrdinalIgnoreCase);
+                
+                // Get existing (non-inserted) users that were updated
                 var notInsertDbUsers = allActiveGraphUsers
-                    .Where(g => !string.IsNullOrEmpty(g.UserPrincipalName) && dbUsersByUpn.ContainsKey(g.UserPrincipalName.ToLower()))
+                    .Where(g => !string.IsNullOrEmpty(g.UserPrincipalName) && 
+                                dbUsersByUpn.ContainsKey(g.UserPrincipalName.ToLower()) &&
+                                !insertedUserUpns.Contains(g.UserPrincipalName.ToLower())) // Exclude newly inserted users to avoid duplicates
                     .Select(g => dbUsersByUpn[g.UserPrincipalName.ToLower()])
                     .ToList();
+                    
                 allProcessedDbUsers.AddRange(notInsertDbUsers);
 
                 // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
@@ -188,11 +246,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Inserts missing users into DB & calls UpdateDbUserWithGraphData
+        /// Inserts missing users into DB using two-phase approach: fast bulk insert, then metadata enrichment
         /// </summary>
         public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus)
         {
-            const int BATCH_SIZE = 500;
+            const int BULK_INSERT_BATCH_SIZE = 10000;
+            const int METADATA_BATCH_SIZE = 500;
 
             // Ensure cache and helpers are initialized (for direct method calls from tests)
             if (_userMetaCache == null)
@@ -208,24 +267,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _licenseProcessor = new UserLicenseProcessor(_telemetry, _userLoader, _userMetaCache);
             }
 
-            _telemetry.LogInformation($"User import - Inserting missing users...");
-            var usersInserted = new List<Common.Entities.User>();
+            _telemetry.LogInformation($"User import - Inserting missing users (two-phase: bulk insert + metadata enrichment)...");
 
             // Create HashSet for O(1) lookup of existing DB users
             var existingUpns = new HashSet<string>(
                 graphMentionedDbUsers.Select(u => u.UserPrincipalName?.ToLower()).Where(upn => !string.IsNullOrEmpty(upn)),
                 StringComparer.OrdinalIgnoreCase);
-
-            // Create dictionary for fast Graph user lookup
-            var graphUsersByUpn = allGraphUsers
-                .Where(g => !string.IsNullOrEmpty(g.UserPrincipalName))
-                .ToDictionary(g => g.UserPrincipalName.ToLower(), g => g, StringComparer.OrdinalIgnoreCase);
-
-            // Create dictionary for fast DB user lookup by Azure AD ID
-            var dbUsersByAadId = graphMentionedDbUsers
-                .Where(u => !string.IsNullOrEmpty(u.AzureAdId))
-                .GroupBy(u => u.AzureAdId)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
             // Build list of users to insert - optimized with HashSet lookup
             var usersToInsert = new List<GraphUser>();
@@ -240,55 +287,221 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             _telemetry.LogInformation($"User import - Found {usersToInsert.Count.ToString("N0")} new users to insert");
 
-            // Process in batches to reduce memory pressure
-            for (int batchStart = 0; batchStart < usersToInsert.Count; batchStart += BATCH_SIZE)
+            if (usersToInsert.Count == 0)
             {
-                var batch = usersToInsert.Skip(batchStart).Take(BATCH_SIZE).ToList();
-                var batchInserted = new List<Common.Entities.User>();
-
-                foreach (var graphUser in batch)
-                {
-                    var upn = graphUser.UserPrincipalName?.ToLower();
-                    // Lookup manager will just add to cache but not to context
-                    var dbUser = await _userMetaCache.UserCache.GetOrCreateNewResource(
-                        upn,
-                        _dataMapper.UpdateDbUserFromGraphUser(new Common.Entities.User { UserPrincipalName = upn }, graphUser));
-                    batchInserted.Add(dbUser);
-                }
-
-                // Update metadata for each user in batch
-                for (int i = 0; i < batchInserted.Count; i++)
-                {
-                    var newDbUser = batchInserted[i];
-                    var upnLower = newDbUser.UserPrincipalName.ToLower();
-
-                    if (graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
-                    {
-                        await UpdateDbUserWithGraphData(db, graphUser, allGraphUsers, graphMentionedDbUsers, newDbUser, readUserSkus, dbUsersByAadId);
-                    }
-                }
-
-                // Save batch and clear change tracker to free memory
-                db.ChangeTracker.DetectChanges();
-                await db.SaveChangesAsync();
-                
-                usersInserted.AddRange(batchInserted);
-                _telemetry.LogInformation($"User import - Saved batch {usersInserted.Count.ToString("N0")}/{usersToInsert.Count.ToString("N0")} new users to SQL");
-
-                // Clear change tracker to free memory after each batch, but preserve lookups
-                _batchProcessor.DetachAllEntitiesExceptLookups(db);
-                batchInserted.Clear();
+                return new List<Common.Entities.User>();
             }
+
+            // PHASE 1: Fast bulk insert with minimal data
+            _telemetry.LogInformation($"User import - Phase 1: Starting bulk insert of {usersToInsert.Count.ToString("N0")} users...");
+            await BulkInsertUsers(db, usersToInsert, BULK_INSERT_BATCH_SIZE);
+            _telemetry.LogInformation($"User import - Phase 1: Bulk insert completed");
+
+            // PHASE 2: Load inserted users and enrich with metadata
+            _telemetry.LogInformation($"User import - Phase 2: Starting metadata enrichment...");
+            var insertedUserUpns = usersToInsert.Select(u => u.UserPrincipalName.ToLower()).ToList();
+            var insertedDbUsers = await EnrichInsertedUsersWithMetadata(
+                db, 
+                allGraphUsers, 
+                graphMentionedDbUsers, 
+                insertedUserUpns, 
+                readUserSkus, 
+                METADATA_BATCH_SIZE);
+
+            _telemetry.LogInformation($"User import - Phase 2: Metadata enrichment completed for {insertedDbUsers.Count.ToString("N0")} users");
 
             // Cleanup
             existingUpns.Clear();
+            usersToInsert.Clear();
+            insertedUserUpns.Clear();
+
+            _telemetry.LogInformation($"User import - Completed inserting and enriching {insertedDbUsers.Count.ToString("N0")} new users");
+
+            return insertedDbUsers;
+        }
+
+        /// <summary>
+        /// Phase 1: Uses SqlBulkCopy for fast bulk insert of minimal user data
+        /// </summary>
+        private async Task BulkInsertUsers(AnalyticsEntitiesContext db, List<GraphUser> graphUsers, int batchSize)
+        {
+            var connectionString = db.Database.Connection.ConnectionString;
+            var totalInserted = 0;
+
+            // Process in batches to manage memory
+            for (int batchStart = 0; batchStart < graphUsers.Count; batchStart += batchSize)
+            {
+                var batch = graphUsers.Skip(batchStart).Take(batchSize).ToList();
+                var dataTable = CreateUserDataTable(batch);
+
+                using (var bulkCopy = new SqlBulkCopy(connectionString))
+                {
+                    bulkCopy.DestinationTableName = "dbo.users";
+                    bulkCopy.BatchSize = batchSize;
+                    bulkCopy.BulkCopyTimeout = 600; // 10 minutes
+
+                    // Map only columns that exist in both GraphUser and the User table
+                    bulkCopy.ColumnMappings.Add("UserPrincipalName", "user_name");
+                    bulkCopy.ColumnMappings.Add("AzureAdId", "azure_ad_id");
+                    bulkCopy.ColumnMappings.Add("AccountEnabled", "account_enabled");
+                    bulkCopy.ColumnMappings.Add("Mail", "mail");
+                    bulkCopy.ColumnMappings.Add("PostalCode", "postalcode");
+
+                    await bulkCopy.WriteToServerAsync(dataTable);
+                }
+
+                totalInserted += batch.Count;
+                _telemetry.LogInformation($"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL");
+
+                dataTable.Clear();
+                dataTable.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Creates a DataTable from GraphUser list with minimal essential columns for bulk insert
+        /// </summary>
+        private DataTable CreateUserDataTable(List<GraphUser> graphUsers)
+        {
+            var dataTable = new DataTable();
+            
+            // Add only columns that exist in both GraphUser and the User database table
+            dataTable.Columns.Add("UserPrincipalName", typeof(string));
+            dataTable.Columns.Add("AzureAdId", typeof(string));
+            dataTable.Columns.Add("AccountEnabled", typeof(bool));
+            dataTable.Columns.Add("Mail", typeof(string));
+            dataTable.Columns.Add("PostalCode", typeof(string));
+
+            // Populate rows
+            foreach (var graphUser in graphUsers)
+            {
+                var row = dataTable.NewRow();
+                row["UserPrincipalName"] = graphUser.UserPrincipalName ?? (object)DBNull.Value;
+                row["AzureAdId"] = graphUser.Id ?? (object)DBNull.Value;
+                row["AccountEnabled"] = graphUser.AccountEnabled ?? false;
+                row["Mail"] = graphUser.Mail ?? (object)DBNull.Value;
+                row["PostalCode"] = graphUser.PostalCode ?? (object)DBNull.Value;
+
+                dataTable.Rows.Add(row);
+            }
+
+            return dataTable;
+        }
+
+        /// <summary>
+        /// Phase 2: Loads newly inserted users and enriches them with metadata (managers, licenses, etc.)
+        /// </summary>
+        private async Task<List<Common.Entities.User>> EnrichInsertedUsersWithMetadata(
+            AnalyticsEntitiesContext db, 
+            List<GraphUser> allGraphUsers, 
+            List<Common.Entities.User> graphMentionedDbUsers,
+            List<string> insertedUserUpns,
+            bool readUserSkus,
+            int batchSize)
+        {
+            var enrichedUsers = new List<Common.Entities.User>();
+
+            // Create dictionary for fast Graph user lookup
+            var graphUsersByUpn = allGraphUsers
+                .Where(g => !string.IsNullOrEmpty(g.UserPrincipalName))
+                .ToDictionary(g => g.UserPrincipalName.ToLower(), g => g, StringComparer.OrdinalIgnoreCase);
+
+            // Load ALL newly inserted users first (without tracking) to build complete lookup dictionary
+            _telemetry.LogInformation($"User import - Loading {insertedUserUpns.Count.ToString("N0")} newly inserted users for lookup dictionary...");
+            var allNewlyInsertedUsers = await db.users
+                .AsNoTracking()
+                .Where(u => insertedUserUpns.Contains(u.UserPrincipalName.ToLower()))
+                .ToListAsync();
+
+            // Create dictionary combining both old users AND newly inserted users for manager lookups
+            var dbUsersByAadId = new Dictionary<string, Common.Entities.User>(StringComparer.OrdinalIgnoreCase);
+            
+            // Add existing old users
+            foreach (var user in graphMentionedDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId)))
+            {
+                if (!dbUsersByAadId.ContainsKey(user.AzureAdId))
+                {
+                    dbUsersByAadId[user.AzureAdId] = user;
+                }
+            }
+            
+            // Add newly inserted users (critical for manager relationships!)
+            foreach (var user in allNewlyInsertedUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId)))
+            {
+                if (!dbUsersByAadId.ContainsKey(user.AzureAdId))
+                {
+                    dbUsersByAadId[user.AzureAdId] = user;
+                }
+            }
+
+            _telemetry.LogInformation($"User import - Built lookup dictionary with {dbUsersByAadId.Count.ToString("N0")} users for manager resolution");
+
+            // Combine old and new users for complete allDbUsers list (needed for manager resolution fallback)
+            var allDbUsersForMetadata = new List<Common.Entities.User>(graphMentionedDbUsers);
+            allDbUsersForMetadata.AddRange(allNewlyInsertedUsers);
+
+            // Process in batches
+            for (int batchStart = 0; batchStart < insertedUserUpns.Count; batchStart += batchSize)
+            {
+                var batchUpns = insertedUserUpns.Skip(batchStart).Take(batchSize).ToList();
+
+                // Load batch of newly inserted users from database WITH TRACKING for updates
+                var batchUsers = await db.users
+                    .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLower()))
+                    .Include(u => u.LicenseLookups)
+                    .ToListAsync();
+
+                // CRITICAL: Update dbUsersByAadId with TRACKED entities from this batch
+                // This ensures manager resolution finds tracked entities, not detached ones
+                foreach (var trackedUser in batchUsers)
+                {
+                    if (!string.IsNullOrEmpty(trackedUser.AzureAdId))
+                    {
+                        dbUsersByAadId[trackedUser.AzureAdId] = trackedUser; // Replace detached with tracked
+                    }
+                }
+
+                // Pre-populate cache with tracked entities from this batch to prevent duplicate inserts
+                // This must be done BEFORE processing metadata, using tracked entities
+                foreach (var trackedUser in batchUsers)
+                {
+                    var upnLower = trackedUser.UserPrincipalName?.ToLower();
+                    if (!string.IsNullOrEmpty(upnLower))
+                    {
+                        // Add tracked entity to cache - this prevents cache from trying to insert
+                        await _userMetaCache.UserCache.GetOrCreateNewResource(upnLower, trackedUser);
+                    }
+                }
+
+                // Update metadata for each user
+                foreach (var dbUser in batchUsers)
+                {
+                    var upnLower = dbUser.UserPrincipalName?.ToLower();
+                    if (!string.IsNullOrEmpty(upnLower) && graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
+                    {
+                        // Pass combined list of old + new users to prevent cache from trying to insert newly inserted managers
+                        await UpdateDbUserWithGraphData(db, graphUser, allGraphUsers, allDbUsersForMetadata, dbUser, readUserSkus, dbUsersByAadId);
+                    }
+                }
+
+                // Save batch
+                db.ChangeTracker.DetectChanges();
+                await db.SaveChangesAsync();
+
+                enrichedUsers.AddRange(batchUsers);
+                _telemetry.LogInformation($"User import - Enriched metadata for {enrichedUsers.Count.ToString("N0")}/{insertedUserUpns.Count.ToString("N0")} users");
+
+                // Clear change tracker to free memory after each batch
+                _batchProcessor.DetachAllEntitiesExceptLookups(db);
+            }
+
+            // Cleanup
             graphUsersByUpn.Clear();
             dbUsersByAadId.Clear();
-            usersToInsert.Clear();
+            allNewlyInsertedUsers.Clear();
+            allDbUsersForMetadata.Clear();
 
-            _telemetry.LogInformation($"User import - Completed inserting {usersInserted.Count.ToString("N0")} new users");
-
-            return usersInserted;
+            return enrichedUsers;
         }
 
         /// <summary>
