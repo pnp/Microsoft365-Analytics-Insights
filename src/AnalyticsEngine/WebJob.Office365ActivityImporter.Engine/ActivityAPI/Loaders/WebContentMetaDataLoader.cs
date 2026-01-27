@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Engine.Entities;
 
@@ -30,7 +31,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         public int MetadataDownloadErrorCount => _metadataDownloadErrors;
 
         /// <summary>
-        /// Recursively get all metadata for an event query URL
+        /// Get all metadata for an event query URL
         /// </summary>
         /// <returns>List of events</returns>
         protected override async Task<List<ActivityReportInfo>> LoadAllActivityReports(string auditContentType, TimePeriod chunk, int batchId)
@@ -58,88 +59,85 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         /// </summary>
         public async Task<List<ActivityReportInfo>> DownloadMetadata(string changeReportUri, int batchId)
         {
-            List<ActivityReportInfo> responseMeta = null;
-
-            // Try and download metadata content
-
-            string nextPageUri = null;
+            var allResults = new List<ActivityReportInfo>();
+            string currentUri = changeReportUri;
             const string NEXT_PAGE_PARAM = "NextPageUri";
 
-            // Get this batch
-            var response = await _httpClient.GetAsyncWithThrottleRetries(changeReportUri, _telemetry);
-
-            // Read the content.  
-            var responseFromServer = await response.Content.ReadAsStringAsync();
-            try
+            while (!string.IsNullOrEmpty(currentUri))
             {
-                response.EnsureSuccessStatusCode();
+                string nextPageUri = null;
 
-                // More data to get for events?
-                if (response.Headers.Contains(NEXT_PAGE_PARAM))
+                // Get this batch
+                using (var response = await _httpClient.GetAsyncWithThrottleRetries(currentUri, _telemetry))
                 {
-                    nextPageUri = response.Headers.GetValues(NEXT_PAGE_PARAM).First();
-                }
-                else nextPageUri = string.Empty;
-            }
-            catch (HttpRequestException ex)
-            {
-                _metadataDownloadErrors++;
-                _telemetry.LogError(ex, $"Error downloading metadata {changeReportUri} with error '{ex.Message}'. " +
-                    $"If this happens every time, this may be an issue. Ignoring for now.");
+                    // Read the content.  
+                    var responseFromServer = await response.Content.ReadAsStringAsync();
+                    try
+                    {
+                        response.EnsureSuccessStatusCode();
+
+                        // More data to get for events?
+                        if (response.Headers.Contains(NEXT_PAGE_PARAM))
+                        {
+                            nextPageUri = response.Headers.GetValues(NEXT_PAGE_PARAM).First();
+                        }
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        _metadataDownloadErrors++;
+                        _telemetry.LogError(ex, $"Error downloading metadata {currentUri} with error '{ex.Message}'. " +
+                            $"If this happens every time, this may be an issue. Ignoring for now.");
 #if DEBUG
-                _telemetry.LogInformation("DEBUG: Response body was:\n" + responseFromServer);
+                        _telemetry.LogInformation("DEBUG: Response body was:\n" + responseFromServer);
 #endif
+                        break; // Exit the loop on error
+                    }
+
+                    // Process the response for this URL
+                    if (!string.IsNullOrEmpty(responseFromServer))
+                    {
+                        // Deserialise the results from the HTTP response
+                        try
+                        {
+                            var responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
+
+                            if (responseMeta != null && responseMeta.Count > 0)
+                            {
+                                // Add our own batch ID variable to each response
+                                foreach (var metaData in responseMeta)
+                                {
+                                    metaData.BatchID = batchId;
+                                }
+
+                                allResults.AddRange(responseMeta);
+                            }
+                        }
+                        catch (JsonSerializationException)
+                        {
+                            _telemetry.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
+                        }
+                    }
+                }
+
+                // Prepare next iteration
+                if (!string.IsNullOrEmpty(nextPageUri))
+                {
+                    currentUri = $"{nextPageUri}&PublisherIdentifier={_settings.TenantGUID}";
+                }
+                else
+                {
+                    currentUri = null;
+                }
             }
 
-            // Do something with the response for this URL & the nextpage URL if needed
-            if (!string.IsNullOrEmpty(responseFromServer))
-            {
-                // Deserialise the results from the HTTP response
-                try
-                {
-                    responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
-                }
-                catch (JsonSerializationException)
-                {
-                    _telemetry.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
-                    responseMeta = new List<ActivityReportInfo>();
-                }
-
-                // Add our own batch ID variable to each response
-                foreach (var metaData in responseMeta)
-                {
-                    metaData.BatchID = batchId;
-                }
-
-                // More data?
-                if (!String.IsNullOrEmpty(nextPageUri))
-                {
-                    // Add publisher to URL
-                    var nextPageURLWithPublisher = $"{nextPageUri}&PublisherIdentifier={_settings.TenantGUID}";
-
-                    // Get next page
-                    var nextPage = await DownloadMetadata(nextPageURLWithPublisher, batchId);
-
-                    // Recursive call
-                    responseMeta.AddRange(nextPage);
-                }
-
-                return responseMeta;
-            }
-            else
-            {
-                responseMeta = new List<ActivityReportInfo>();
-            }
-
-            return responseMeta;
+            return allResults;
         }
 
         private string FormatDate(DateTime d)
         {
             // Activity API format: YYYY-MM-DDTHH:MM:SS
-            string date = d.ToUniversalTime().ToString("yyyy-MM-dd");
-            string time = d.ToUniversalTime().ToString("HH:mm:ss");
-            return $"{date}T{time}";
+            var utc = d.ToUniversalTime();
+            return utc.ToString("yyyy-MM-ddTHH:mm:ss");
         }
     }
 
