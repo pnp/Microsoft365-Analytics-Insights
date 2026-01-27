@@ -18,15 +18,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         #region Constructor & Privates
 
-        private readonly OfficeLicenseNameResolver _officeLicenseNameResolver;
         private UserMetadataCache _userMetaCache;
         private readonly IUserMetadataLoader _userLoader;
+        private UserBatchProcessor _batchProcessor;
+        private UserLicenseProcessor _licenseProcessor;
+        private UserDataMapper _dataMapper;
 
         public UserMetadataUpdater(AnalyticsLogger telemetry, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient)
             : base(telemetry, settings)
         {
-            this._officeLicenseNameResolver = new OfficeLicenseNameResolver();
-
             IDeltaValueProvider deltaProvider = null;
             if (!string.IsNullOrEmpty(settings.ConnectionStrings.RedisConnectionString))
             {
@@ -43,6 +43,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             graphServiceClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
 
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _telemetry, graphServiceClient);
+            InitializeHelpers();
         }
 
         /// <summary>
@@ -51,8 +52,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public UserMetadataUpdater(AnalyticsLogger telemetry, AppConfig settings, IUserMetadataLoader userLoader)
             : base(telemetry, settings)
         {
-            this._officeLicenseNameResolver = new OfficeLicenseNameResolver();
             _userLoader = userLoader;
+            InitializeHelpers();
+        }
+
+        private void InitializeHelpers()
+        {
+            _batchProcessor = new UserBatchProcessor(_telemetry);
         }
 
         public IUserMetadataLoader UserLoader => _userLoader;
@@ -64,11 +70,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public async Task InsertAndUpdateDatabaseFromExternalUsers()
         {
+            const int BATCH_SIZE = 500;
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
 
                 _userMetaCache = new UserMetadataCache(db);
+                _licenseProcessor = new UserLicenseProcessor(_telemetry, _userLoader, _userMetaCache);
+                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
 
                 _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - start");
 
@@ -81,11 +91,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
+                _telemetry.LogInformation($"User import - loaded {allActiveGraphUsers.Count.ToString("N0")} users from Graph");
 
                 // Get SKUs from tenant
                 var skus = await _userLoader.LoadTenantSkus();
 
-                var allDbUsers = await db.users.Include(u => u.LicenseLookups).ToListAsync();
+                // Load only essential DB user data without tracking
+                var allDbUsers = await db.users.AsNoTracking().Include(u => u.LicenseLookups).ToListAsync();
+                _telemetry.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
 
                 // Create lookup dictionaries for performance
                 var dbUsersByUpn = allDbUsers
@@ -97,246 +110,81 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     .GroupBy(u => u.AzureAdId)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-                var graphMentionedExistingDbUsers = GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
+                var graphMentionedExistingDbUsers = _dataMapper.GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
 
                 // Insert any user we've not seen so far
                 var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null);
-                var notInserted = allActiveGraphUsers.Where(
-                    u => !string.IsNullOrEmpty(u.UserPrincipalName) &&
-                        !insertedDbUsers.Where(i => i.UserPrincipalName.ToLower() == u.UserPrincipalName.ToLower()).Any()).ToList();
+                
+                // Identify users that need updating
+                var notInsertedUpns = new HashSet<string>(
+                    allActiveGraphUsers
+                        .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName) && 
+                                    !insertedDbUsers.Any(i => i.UserPrincipalName.Equals(u.UserPrincipalName, StringComparison.OrdinalIgnoreCase)))
+                        .Select(u => u.UserPrincipalName.ToLower()),
+                    StringComparer.OrdinalIgnoreCase);
 
+                // Clear the large list to free memory
+                allDbUsers.Clear();
+                allDbUsers = null;
 
-                // Check existing users again Graph updates
-                _telemetry.LogInformation($"User import - updating {notInserted.Count.ToString("N0")} existing users...");
-                foreach (var existingGraphUser in notInserted)
-                {
-                    var upn = existingGraphUser.UserPrincipalName?.ToLower();
-                    if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
-                    {
-                        await UpdateDbUserWithGraphData(db, existingGraphUser, allActiveGraphUsers, allDbUsers, dbUser, skus == null, dbUsersByAadId);
-                    }
-                }
+                // Process existing users in batches using batch processor
+                await _batchProcessor.ProcessExistingUsersInBatches(
+                    db,
+                    allActiveGraphUsers,
+                    notInsertedUpns,
+                    dbUsersByUpn,
+                    dbUsersByAadId,
+                    async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, skus == null, dbUsersByAadId),
+                    BATCH_SIZE);
 
-                // Combine inserted & modified db users
+                // Combine inserted & modified db users for SKU processing
                 var allProcessedDbUsers = new List<Common.Entities.User>(insertedDbUsers);
-                var notInsertDbUsers = GetDbUsersFromGraphUsers(notInserted, graphMentionedExistingDbUsers);
+                var notInsertDbUsers = allActiveGraphUsers
+                    .Where(g => !string.IsNullOrEmpty(g.UserPrincipalName) && dbUsersByUpn.ContainsKey(g.UserPrincipalName.ToLower()))
+                    .Select(g => dbUsersByUpn[g.UserPrincipalName.ToLower()])
+                    .ToList();
                 allProcessedDbUsers.AddRange(notInsertDbUsers);
 
                 // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
                 if (skus != null)
                 {
-                    await ProcessSKUsForAllUsers(skus, allProcessedDbUsers, db);
+                    // Re-attach users to the context to ensure they're tracked properly
+                    foreach (var user in allProcessedDbUsers)
+                    {
+                        if (db.Entry(user).State == EntityState.Detached)
+                        {
+                            db.users.Attach(user);
+                        }
+                        // Reload license lookups from database to get current state
+                        db.Entry(user).Collection(u => u.LicenseLookups).Load();
+                    }
+                    
+                    await _licenseProcessor.ProcessSKUsForAllUsers(skus, allProcessedDbUsers, db);
                     _telemetry.LogInformation($"User import - updated user license information from {skus.Count.ToString("N0")} tenant SKUs");
+                    
+                    db.ChangeTracker.DetectChanges();
+                    await db.SaveChangesAsync();
                 }
 
-                db.ChangeTracker.DetectChanges();
-                await db.SaveChangesAsync();
-                _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - inserted {insertedDbUsers.Count.ToString("N0")} new users and updated {notInserted.Count.ToString("N0")} from Graph API");
+                // Final cleanup
+                dbUsersByUpn.Clear();
+                dbUsersByAadId.Clear();
+                allActiveGraphUsers.Clear();
+                allProcessedDbUsers.Clear();
+
+                _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - inserted {insertedDbUsers.Count.ToString("N0")} new users and updated {notInsertedUpns.Count.ToString("N0")} from Graph API");
             }
-        }
-
-        private async Task ProcessSKUsForAllUsers(IGraphServiceSubscribedSkusCollectionPage skus, List<Common.Entities.User> graphFoundDbUsers, AnalyticsEntitiesContext db)
-        {
-            // Remove all license info from all users 1st
-            db.UserLicenseTypeLookups.RemoveRange(graphFoundDbUsers.SelectMany(u => u.LicenseLookups));
-
-            foreach (var sku in skus)
-            {
-                // Load users with this SKU
-                var allUsersWithSku = await _userLoader.LoadUsersBySku(sku.SkuId.Value);
-
-                // Update all
-                await AddSkuForUsers(graphFoundDbUsers, allUsersWithSku, sku, db);
-            }
-
-        }
-
-        private async Task AddSkuForUsers(List<Common.Entities.User> graphFoundDbUsers, List<Microsoft.Graph.User> usersWithSku, SubscribedSku sku, AnalyticsEntitiesContext db)
-        {
-            // Create dictionary for O(1) lookup of DB users by UPN
-            var dbUsersByUpn = graphFoundDbUsers
-                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
-                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
-
-            var relevantDbUsers = new List<Common.Entities.User>();
-            foreach (var graphUser in usersWithSku)
-            {
-                if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) &&
-                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName.ToLower(), out var dbUser))
-                {
-                    relevantDbUsers.Add(dbUser);
-                }
-            }
-
-            _telemetry.LogInformation($"User import - Found {relevantDbUsers.Count.ToString("N0")} users in SQL for SKU Part Number '{sku.SkuPartNumber}' from {usersWithSku.Count.ToString("N0")} Graph users.");
-
-            var list = new List<UserLicenseTypeLookup>();
-            int i = 0;
-            foreach (var dbUser in relevantDbUsers)
-            {
-                var licence = await GetLicenseType(sku.SkuPartNumber);
-                list.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
-
-                i++;
-                if (i > 0 && i % 1000 == 0)
-                {
-                    Console.WriteLine($"User {i.ToString("N0")} / {relevantDbUsers.Count.ToString("N0")} processed for licenses.");
-                }
-            }
-            db.UserLicenseTypeLookups.AddRange(list);
         }
 
         private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null)
         {
-            UpdateDbUserFromGraphUser(dbUser, graphUser);
-
-            var nameMaxLengthDepartment = StringUtils.EnsureMaxLength(graphUser.Department?.Trim(), 100);
-            dbUser.Department = !string.IsNullOrEmpty(nameMaxLengthDepartment) ?
-                await _userMetaCache.DepartmentCache.GetOrCreateNewResource(nameMaxLengthDepartment,
-                    new UserDepartment { Name = nameMaxLengthDepartment }) : null;
-
-            var nameMaxLengthJobTitle = StringUtils.EnsureMaxLength(graphUser.JobTitle?.Trim(), 100);
-            dbUser.JobTitle = !string.IsNullOrEmpty(nameMaxLengthJobTitle) ?
-                await _userMetaCache.JobTitleCache.GetOrCreateNewResource(nameMaxLengthJobTitle,
-                    new UserJobTitle { Name = nameMaxLengthJobTitle }) : null;
-
-            var nameMaxLengthOfficeLocation = StringUtils.EnsureMaxLength(graphUser.OfficeLocation?.Trim(), 100);
-            dbUser.OfficeLocation = !string.IsNullOrEmpty(nameMaxLengthOfficeLocation) ?
-                await _userMetaCache.OfficeLocationCache.GetOrCreateNewResource(nameMaxLengthOfficeLocation,
-                    new UserOfficeLocation { Name = nameMaxLengthOfficeLocation }) : null;
-
-            var nameMaxLengthUsageLocation = StringUtils.EnsureMaxLength(graphUser.UsageLocation?.Trim(), 100);
-            dbUser.UsageLocation = !string.IsNullOrEmpty(nameMaxLengthUsageLocation) ?
-                await _userMetaCache.UseageLocationCache.GetOrCreateNewResource(nameMaxLengthUsageLocation,
-                    new UserUsageLocation { Name = nameMaxLengthUsageLocation }) : null;
-
-            var nameMaxLengthCountry = StringUtils.EnsureMaxLength(graphUser.Country?.Trim(), 100);
-            dbUser.UserCountry = !string.IsNullOrEmpty(nameMaxLengthCountry) ?
-                await _userMetaCache.CountryOrRegionCache.GetOrCreateNewResource(nameMaxLengthCountry,
-                    new CountryOrRegion { Name = nameMaxLengthCountry }) : null;
-
-            var nameMaxLengthState = StringUtils.EnsureMaxLength(graphUser.State?.Trim(), 100);
-            dbUser.StateOrProvince = !string.IsNullOrEmpty(nameMaxLengthState) ?
-                await _userMetaCache.StateOrProvinceCache.GetOrCreateNewResource(nameMaxLengthState,
-                    new StateOrProvince { Name = nameMaxLengthState }) : null;
-
-            var nameMaxLengthCompany = StringUtils.EnsureMaxLength(graphUser.CompanyName?.Trim(), 100);
-            dbUser.CompanyName = !string.IsNullOrEmpty(nameMaxLengthCompany) ?
-                await _userMetaCache.CompanyNameCache.GetOrCreateNewResource(nameMaxLengthCompany,
-                    new CompanyName { Name = nameMaxLengthCompany }) : null;
-
-            if (graphUser.DefaultManagerInfo?.Id != null)
-            {
-                // Try getting manager from DB using dictionary lookup if available
-                Common.Entities.User dbManager = null;
-                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out dbManager))
-                {
-                    // Found manager using fast dictionary lookup
-                }
-                else
-                {
-                    // Fallback to LINQ query if dictionary not provided (for backwards compatibility)
-                    dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) && new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
-                }
-
-                if (dbManager == null)
-                {
-                    var graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == graphUser.DefaultManagerInfo?.Id);
-
-                    if (graphManagerUser != null)
-                    {
-                        // Got user from Graph cache; get DB user by UPN
-                        var managerUpn = graphManagerUser.UserPrincipalName?.ToLower();
-
-                        dbUser.Manager = !string.IsNullOrEmpty(managerUpn) ?
-                            await _userMetaCache.UserCache.GetOrCreateNewResource(managerUpn,
-                                new Common.Entities.User { UserPrincipalName = managerUpn }, true) : null;
-
-                    }
-
-                    else
-                    {
-                        _telemetry.LogWarning($"Couldn't find manager with AAD ID {graphUser.DefaultManagerInfo?.Id} in Graph cache or DB");
-                    }
-                }
-                else
-                {
-                    dbUser.Manager = dbManager;
-                }
-            }
-            dbUser.LastUpdated = DateTime.Now;
+            await _dataMapper.UpdateUserMetadata(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
 
             // This is only done per user if can't be done at tenant level (due to extra permission)
             if (readUserSkus)
             {
-                // Get user service-plan from Graph
-                // Service plan names - https://docs.microsoft.com/en-us/azure/active-directory/enterprise-users/licensing-service-plan-reference
-                var userServicePlans = await _userLoader.LoadUserLicenseDetails(graphUser.Id);
-
-                if (userServicePlans != null)
-                {
-                    // Batch load all license types first to reduce repeated awaits
-                    var skuPartNumbers = userServicePlans.Select(p => p.SkuPartNumber).Distinct().ToList();
-                    var licenseTypesDict = new Dictionary<string, LicenseType>();
-                    foreach (var skuPartNumber in skuPartNumbers)
-                    {
-                        var licenseType = await GetLicenseType(skuPartNumber);
-                        licenseTypesDict[skuPartNumber] = licenseType;
-                    }
-
-                    // Remove old lookups (simpler) & re-add
-                    db.UserLicenseTypeLookups.RemoveRange(dbUser.LicenseLookups.Where(l => l.IsSavedToDB));
-                    foreach (var userPlan in userServicePlans)
-                    {
-                        if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence))
-                        {
-                            dbUser.LicenseLookups.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
-                        }
-                    }
-                }
+                await _licenseProcessor.ProcessUserLicenses(db, graphUser, dbUser);
             }
-        }
-
-        private async Task<LicenseType> GetLicenseType(string skuPartNumber)
-        {
-            var productName = _officeLicenseNameResolver.GetDisplayNameFor(skuPartNumber);
-            if (string.IsNullOrEmpty(productName))
-            {
-                _telemetry.LogWarning($"User import - unexpected SKU part-number '{skuPartNumber}'. Couldn't find a corresponding display-name.");
-
-                // Set display name as SKU ID
-                productName = skuPartNumber;
-            }
-
-            var thisLicense = await _userMetaCache.LicenseTypeCache.GetOrCreateNewResource(productName,
-                new LicenseType
-                {
-                    Name = productName,
-                    SKUID = skuPartNumber
-                });
-            return thisLicense;
-        }
-
-
-        internal List<Common.Entities.User> GetDbUsersFromGraphUsers(List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers)
-        {
-            // Create dictionary for O(1) lookup of DB users by UPN
-            var dbUsersByUpn = allDbUsers
-                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
-                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
-
-            var users = new List<Common.Entities.User>();
-
-            foreach (var graphUser in allGraphUsers)
-            {
-                var upn = graphUser.UserPrincipalName?.ToLower();
-                if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
-                {
-                    users.Add(dbUser);
-                }
-            }
-
-            return users;
         }
 
         /// <summary>
@@ -344,10 +192,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus)
         {
-            // Ensure cache is initialized (for direct method calls from tests)
+            const int BATCH_SIZE = 500;
+
+            // Ensure cache and helpers are initialized (for direct method calls from tests)
             if (_userMetaCache == null)
             {
                 _userMetaCache = new UserMetadataCache(db);
+            }
+            if (_dataMapper == null)
+            {
+                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
+            }
+            if (_licenseProcessor == null)
+            {
+                _licenseProcessor = new UserLicenseProcessor(_telemetry, _userLoader, _userMetaCache);
             }
 
             _telemetry.LogInformation($"User import - Inserting missing users...");
@@ -370,53 +228,130 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
             // Build list of users to insert - optimized with HashSet lookup
+            var usersToInsert = new List<GraphUser>();
             foreach (var graphUser in allGraphUsers)
             {
                 var upn = graphUser.UserPrincipalName?.ToLower();
                 if (!string.IsNullOrEmpty(upn) && !existingUpns.Contains(upn))
                 {
+                    usersToInsert.Add(graphUser);
+                }
+            }
+
+            _telemetry.LogInformation($"User import - Found {usersToInsert.Count.ToString("N0")} new users to insert");
+
+            // Process in batches to reduce memory pressure
+            for (int batchStart = 0; batchStart < usersToInsert.Count; batchStart += BATCH_SIZE)
+            {
+                var batch = usersToInsert.Skip(batchStart).Take(BATCH_SIZE).ToList();
+                var batchInserted = new List<Common.Entities.User>();
+
+                foreach (var graphUser in batch)
+                {
+                    var upn = graphUser.UserPrincipalName?.ToLower();
                     // Lookup manager will just add to cache but not to context
                     var dbUser = await _userMetaCache.UserCache.GetOrCreateNewResource(
                         upn,
-                        UpdateDbUserFromGraphUser(new Common.Entities.User { UserPrincipalName = upn }, graphUser));
-                    usersInserted.Add(dbUser);
+                        _dataMapper.UpdateDbUserFromGraphUser(new Common.Entities.User { UserPrincipalName = upn }, graphUser));
+                    batchInserted.Add(dbUser);
                 }
-            }
 
-            // Update metadata for each user using dictionary lookup
-            _telemetry.LogInformation($"User import - Loading metadata for {usersInserted.Count.ToString("N0")} new users...");
-
-            for (int i = 0; i < usersInserted.Count; i++)
-            {
-                var newDbUser = usersInserted[i];
-                var upnLower = newDbUser.UserPrincipalName.ToLower();
-
-                // Fast dictionary lookup instead of LINQ Where/FirstOrDefault
-                if (graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
+                // Update metadata for each user in batch
+                for (int i = 0; i < batchInserted.Count; i++)
                 {
-                    await UpdateDbUserWithGraphData(db, graphUser, allGraphUsers, graphMentionedDbUsers, newDbUser, readUserSkus, dbUsersByAadId);
+                    var newDbUser = batchInserted[i];
+                    var upnLower = newDbUser.UserPrincipalName.ToLower();
 
-                    if (i > 0 && i % 1000 == 0)
+                    if (graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
                     {
-                        _telemetry.LogInformation($"New user {i.ToString("N0")}/{usersInserted.Count.ToString("N0")} processed for lookups.");
+                        await UpdateDbUserWithGraphData(db, graphUser, allGraphUsers, graphMentionedDbUsers, newDbUser, readUserSkus, dbUsersByAadId);
                     }
                 }
+
+                // Save batch
+                db.ChangeTracker.DetectChanges();
+                await db.SaveChangesAsync();
+                
+                usersInserted.AddRange(batchInserted);
+                _telemetry.LogInformation($"User import - Saved batch {usersInserted.Count.ToString("N0")}/{usersToInsert.Count.ToString("N0")} new users to SQL");
+
+                // Clear change tracker to free memory after each batch
+                _batchProcessor.DetachAllEntities(db);
+SqlException: Cannot insert duplicate key row in object 'dbo.user_office_locations' with unique index 'IX_name'. The duplicate key value is (Princesa 47 Seguros).
+                batchInserted.Clear();
             }
 
-            _telemetry.LogInformation($"User import - Saving {usersInserted.Count.ToString("N0")} new users to SQL...");
-            await db.SaveChangesAsync();
+            // Cleanup
+            existingUpns.Clear();
+            graphUsersByUpn.Clear();
+            dbUsersByAadId.Clear();
+            usersToInsert.Clear();
+
+            _telemetry.LogInformation($"User import - Completed inserting {usersInserted.Count.ToString("N0")} new users");
 
             return usersInserted;
         }
 
+        /// <summary>
+        /// Get database users that match Graph users by UPN (public wrapper for testing)
+        /// </summary>
+        public List<Common.Entities.User> GetDbUsersFromGraphUsers(List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers)
+        {
+            // Ensure mapper is initialized
+            if (_dataMapper == null && _userMetaCache != null)
+            {
+                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
+            }
+
+            if (_dataMapper != null)
+            {
+                return _dataMapper.GetDbUsersFromGraphUsers(allGraphUsers, allDbUsers);
+            }
+            else
+            {
+                // Fallback implementation
+                var dbUsersByUpn = allDbUsers
+                    .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
+                    .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
+
+                var users = new List<Common.Entities.User>();
+                foreach (var graphUser in allGraphUsers)
+                {
+                    var upn = graphUser.UserPrincipalName?.ToLower();
+                    if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
+                    {
+                        users.Add(dbUser);
+                    }
+                }
+                return users;
+            }
+        }
+
+        /// <summary>
+        /// Update basic user properties from Graph user (internal method for backward compatibility)
+        /// </summary>
         internal Common.Entities.User UpdateDbUserFromGraphUser(Common.Entities.User dbUser, GraphUser graphUser)
         {
-            dbUser.AccountEnabled = graphUser.AccountEnabled;
-            dbUser.PostalCode = graphUser.PostalCode;
-            dbUser.AzureAdId = graphUser.Id;
-            dbUser.Mail = graphUser.Mail;
+            // Ensure mapper is initialized
+            if (_dataMapper == null && _userMetaCache != null)
+            {
+                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
+            }
 
-            return dbUser;
+            // If mapper is available, use it; otherwise do direct mapping
+            if (_dataMapper != null)
+            {
+                return _dataMapper.UpdateDbUserFromGraphUser(dbUser, graphUser);
+            }
+            else
+            {
+                // Fallback for edge cases where mapper isn't initialized
+                dbUser.AccountEnabled = graphUser.AccountEnabled;
+                dbUser.PostalCode = graphUser.PostalCode;
+                dbUser.AzureAdId = graphUser.Id;
+                dbUser.Mail = graphUser.Mail;
+                return dbUser;
+            }
         }
     }
 }
