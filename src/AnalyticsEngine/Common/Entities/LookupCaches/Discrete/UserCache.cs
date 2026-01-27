@@ -1,4 +1,5 @@
 ﻿using System.Data.Entity;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace Common.Entities.LookupCaches
@@ -16,7 +17,9 @@ namespace Common.Entities.LookupCaches
 
         public async override Task<User> Load(string upn)
         {
-            return await EntityStore.SingleOrDefaultAsync(t => t.UserPrincipalName == upn);
+            // Use FirstOrDefaultAsync instead of SingleOrDefaultAsync to handle existing duplicate records gracefully
+            // Order by ID to ensure consistent results if duplicates exist
+            return await EntityStore.Where(t => t.UserPrincipalName == upn).OrderBy(t => t.ID).FirstOrDefaultAsync();
         }
     }
 }
