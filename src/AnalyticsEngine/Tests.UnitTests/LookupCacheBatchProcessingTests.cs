@@ -293,9 +293,10 @@ namespace Tests.UnitTests
                 Assert.AreEqual(commonLocations.Length, locationCount,
                     $"Should have exactly {commonLocations.Length} locations, not one per user");
 
-                // Cleanup - Remove test users
+                // Cleanup - Remove test users - evaluate search string before LINQ query
+                var searchPrefix = $"largetest_{testRun}_";
                 var testUsers = await db.users
-                    .Where(u => u.UserPrincipalName.StartsWith($"largetest_{testRun}_"))
+                    .Where(u => u.UserPrincipalName.StartsWith(searchPrefix))
                     .ToListAsync();
                 db.users.RemoveRange(testUsers);
                 await db.SaveChangesAsync();
