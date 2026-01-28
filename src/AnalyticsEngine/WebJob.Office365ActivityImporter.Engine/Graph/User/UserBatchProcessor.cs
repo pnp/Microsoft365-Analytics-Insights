@@ -58,14 +58,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
                 
+                
                 // Attach any detached users that will be referenced in this batch
                 foreach (var aadId in referencedUserIds)
                 {
                     if (dbUsersByAadId.TryGetValue(aadId, out var referencedUser))
                     {
-                        if (db.Entry(referencedUser).State == EntityState.Detached)
+                        var trackedUser = GetOrAttachUser(db, referencedUser);
+                        // Update dictionary with tracked entity
+                        if (trackedUser != referencedUser)
                         {
-                            db.users.Attach(referencedUser);
+                            dbUsersByAadId[aadId] = trackedUser;
                         }
                     }
                 }
@@ -75,12 +78,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     var upn = existingGraphUser.UserPrincipalName?.ToLower();
                     if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
                     {
-                        // Attach the user to context for tracking (or get already tracked version)
-                        if (db.Entry(dbUser).State == EntityState.Detached)
+                        // Get tracked version of the user (or attach if not tracked)
+                        var trackedUser = GetOrAttachUser(db, dbUser);
+                        
+                        // Update dictionary with tracked entity
+                        if (trackedUser != dbUser)
                         {
-                            dbUser = db.users.Attach(dbUser);
+                            dbUsersByUpn[upn] = trackedUser;
+                            if (!string.IsNullOrEmpty(trackedUser.AzureAdId))
+                            {
+                                dbUsersByAadId[trackedUser.AzureAdId] = trackedUser;
+                            }
                         }
-                        await updateAction(existingGraphUser, dbUser);
+                        
+                        await updateAction(existingGraphUser, trackedUser);
                     }
                 }
 
@@ -96,6 +107,70 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             return processedCount;
+        }
+
+        /// <summary>
+        /// Gets a tracked version of the user entity. If the entity is detached, checks if another
+        /// entity with the same ID is already tracked and returns that. Otherwise attaches the entity.
+        /// This prevents "Attaching an entity failed because another entity of the same type already 
+        /// has the same primary key value" errors.
+        /// </summary>
+        private Common.Entities.User GetOrAttachUser(AnalyticsEntitiesContext db, Common.Entities.User user)
+        {
+            if (user == null)
+            {
+                return null;
+            }
+
+            var entry = db.Entry(user);
+            
+            // If already tracked, return as-is
+            if (entry.State != EntityState.Detached)
+            {
+                return user;
+            }
+
+            // Check if another entity with the same ID is already tracked
+            if (user.ID > 0)
+            {
+                var alreadyTracked = db.ChangeTracker.Entries<Common.Entities.User>()
+                    .FirstOrDefault(e => e.Entity.ID == user.ID && e.State != EntityState.Detached);
+                
+                if (alreadyTracked != null)
+                {
+                    return alreadyTracked.Entity;
+                }
+            }
+
+            // No tracked entity found - safe to attach
+            try
+            {
+                return db.users.Attach(user);
+            }
+            catch (InvalidOperationException)
+            {
+                // Another entity with same key was added between our check and attach
+                // Try to find it again
+                var tracked = db.ChangeTracker.Entries<Common.Entities.User>()
+                    .FirstOrDefault(e => e.Entity.ID == user.ID && e.State != EntityState.Detached);
+                
+                if (tracked != null)
+                {
+                    return tracked.Entity;
+                }
+                
+                // If still can't find, try Find() as last resort
+                if (user.ID > 0)
+                {
+                    var found = db.users.Find(user.ID);
+                    if (found != null)
+                    {
+                        return found;
+                    }
+                }
+                
+                throw; // Re-throw if we truly can't resolve
+            }
         }
 
         /// <summary>

@@ -2,6 +2,7 @@ using Common.Entities;
 using DataUtils;
 using System;
 using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -90,7 +91,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     new CompanyName { Name = nameMaxLengthCompany }) : null;
 
             // Update manager
-            await UpdateUserManager(graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            await UpdateUserManager(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
 
             dbUser.LastUpdated = DateTime.Now;
         }
@@ -99,6 +100,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Update user's manager relationship
         /// </summary>
         private async Task UpdateUserManager(
+            AnalyticsEntitiesContext db,
             GraphUser graphUser,
             List<GraphUser> allGraphUsers,
             Common.Entities.User dbUser,
@@ -112,12 +114,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out dbManager))
                 {
                     // Found manager using fast dictionary lookup
+                    // CRITICAL: Ensure manager is tracked by EF before assignment
+                    // If we assign a detached entity to a tracked entity's navigation property,
+                    // EF will try to INSERT it, causing duplicate key errors
+                    dbManager = EnsureUserIsTracked(db, dbManager, dbUsersByAadId);
                 }
                 else if (allDbUsers != null)
                 {
                     // Fallback to LINQ query if dictionary not provided (for backwards compatibility)
                     dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) &&
                         new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
+                    
+                    if (dbManager != null)
+                    {
+                        dbManager = EnsureUserIsTracked(db, dbManager, dbUsersByAadId);
+                    }
                 }
 
                 if (dbManager == null)
@@ -129,9 +140,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         // Got user from Graph cache; get DB user by UPN
                         var managerUpn = graphManagerUser.UserPrincipalName?.ToLower();
 
-                        dbUser.Manager = !string.IsNullOrEmpty(managerUpn) ?
-                            await _userMetaCache.UserCache.GetOrCreateNewResource(managerUpn,
-                                new Common.Entities.User { UserPrincipalName = managerUpn }, true) : null;
+                        if (!string.IsNullOrEmpty(managerUpn))
+                        {
+                            // CRITICAL FIX: First try to find the manager in the database by UPN
+                            // The AAD ID lookup might have failed due to mismatched/null AAD IDs,
+                            // but the user might still exist in the database
+                            dbManager = await db.users
+                                .FirstOrDefaultAsync(u => u.UserPrincipalName.ToLower() == managerUpn);
+                            
+                            if (dbManager != null)
+                            {
+                                // Manager exists in DB - use it (already tracked from FirstOrDefaultAsync)
+                                // Update dictionary for future lookups if AAD ID is available
+                                if (!string.IsNullOrEmpty(dbManager.AzureAdId) && dbUsersByAadId != null)
+                                {
+                                    dbUsersByAadId[dbManager.AzureAdId] = dbManager;
+                                }
+                                dbUser.Manager = dbManager;
+                            }
+                            else
+                            {
+                                // Manager truly doesn't exist in DB - use cache to create
+                                dbUser.Manager = await _userMetaCache.UserCache.GetOrCreateNewResource(managerUpn,
+                                    new Common.Entities.User { UserPrincipalName = graphManagerUser.UserPrincipalName }, true);
+                            }
+                        }
                     }
                     else
                     {
@@ -142,6 +175,97 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     dbUser.Manager = dbManager;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Ensures a user entity is tracked by EF. If the entity is detached, either retrieves
+        /// an already-tracked version from the context or uses Find() to get a tracked version.
+        /// This prevents "Cannot insert duplicate key" errors when assigning navigation properties.
+        /// </summary>
+        private Common.Entities.User EnsureUserIsTracked(
+            AnalyticsEntitiesContext db, 
+            Common.Entities.User user,
+            Dictionary<string, Common.Entities.User> dbUsersByAadId)
+        {
+            if (user == null)
+            {
+                return user;
+            }
+
+            // If the entity has no ID, try to find it by UPN in the database
+            // This can happen if the entity was created from a template but actually exists in DB
+            if (user.ID == 0 && !string.IsNullOrEmpty(user.UserPrincipalName))
+            {
+                var upnLower = user.UserPrincipalName.ToLower();
+                var existingUser = db.users.FirstOrDefault(u => u.UserPrincipalName.ToLower() == upnLower);
+                if (existingUser != null)
+                {
+                    // Found the user in DB - use the tracked version
+                    if (!string.IsNullOrEmpty(existingUser.AzureAdId) && dbUsersByAadId != null)
+                    {
+                        dbUsersByAadId[existingUser.AzureAdId] = existingUser;
+                    }
+                    return existingUser;
+                }
+                // User doesn't exist in DB - return as-is (will be inserted)
+                return user;
+            }
+
+            if (user.ID == 0)
+            {
+                // No ID and no UPN - can't resolve, return as-is
+                return user;
+            }
+
+            var entry = db.Entry(user);
+            
+            // If already tracked (Added, Modified, Unchanged), return as-is
+            if (entry.State != EntityState.Detached)
+            {
+                return user;
+            }
+
+            // Check if there's already a tracked entity with the same ID in the context
+            var trackedUser = db.ChangeTracker.Entries<Common.Entities.User>()
+                .FirstOrDefault(e => e.Entity.ID == user.ID && e.State != EntityState.Detached)?.Entity;
+
+            if (trackedUser != null)
+            {
+                // Update dictionary with tracked entity for future lookups
+                if (!string.IsNullOrEmpty(trackedUser.AzureAdId) && dbUsersByAadId != null)
+                {
+                    dbUsersByAadId[trackedUser.AzureAdId] = trackedUser;
+                }
+                return trackedUser;
+            }
+
+            // No tracked entity found - use Find() which will return tracked entity from DB
+            // This is more reliable than Attach() as it handles cases where the entity
+            // might have been modified in the database since it was loaded
+            var foundUser = db.users.Find(user.ID);
+            
+            if (foundUser != null)
+            {
+                // Update dictionary with tracked entity for future lookups
+                if (!string.IsNullOrEmpty(foundUser.AzureAdId) && dbUsersByAadId != null)
+                {
+                    dbUsersByAadId[foundUser.AzureAdId] = foundUser;
+                }
+                return foundUser;
+            }
+
+            // Fallback: try to attach the original entity
+            // This should rarely happen, but handles edge cases
+            try
+            {
+                db.users.Attach(user);
+                return user;
+            }
+            catch
+            {
+                // If attach fails, return original (will likely fail later, but with clearer error)
+                return user;
             }
         }
 
