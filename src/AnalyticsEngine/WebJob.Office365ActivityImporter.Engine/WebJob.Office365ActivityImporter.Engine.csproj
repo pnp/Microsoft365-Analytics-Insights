@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -161,8 +161,11 @@
     <Compile Include="Graph\User\UserApps\GraphAndSqlUserAppLoader.cs" />
     <Compile Include="Graph\User\UserApps\Models.cs" />
     <Compile Include="Graph\User\UserApps\UserAppLogUpdater.cs" />
+    <Compile Include="Graph\User\UserBatchProcessor.cs" />
+    <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
     <Compile Include="Graph\User\UserGroupsCache.cs" />
+    <Compile Include="Graph\User\UserLicenseProcessor.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
     <Compile Include="Graph\User\UserTeamApp.cs" />
@@ -212,6 +215,7 @@
   <ItemGroup>
     <None Include="App.config" />
     <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
+    <None Include="Graph\User\REFACTORING_SUMMARY.md" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Azure.AI.TextAnalytics">
