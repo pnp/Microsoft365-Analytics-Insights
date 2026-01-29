@@ -22,8 +22,9 @@ namespace Tests.UnitTests
         public async Task BatchProcessing_WithRepeatedLookups_NoFKViolations()
         {
             // Arrange - Simulate processing users in batches with repeated department names
-            string sharedDeptName = $"Engineering_{DateTime.Now.Ticks}";
-            string sharedLocationName = $"Seattle Office_{DateTime.Now.Ticks}";
+            var testRunId = DateTime.Now.Ticks;
+            string sharedDeptName = $"Engineering_{testRunId}";
+            string sharedLocationName = $"Seattle Office_{testRunId}";
             int batchSize = 50;
             int totalUsers = 200; // Simulate 4 batches
 
@@ -47,7 +48,7 @@ namespace Tests.UnitTests
                     {
                         var user = new User
                         {
-                            UserPrincipalName = $"user{batchStart + i}_{DateTime.Now.Ticks}@test.com",
+                            UserPrincipalName = $"user{batchStart + i}_{testRunId}@test.com",
                             AccountEnabled = true
                         };
 
@@ -96,9 +97,10 @@ namespace Tests.UnitTests
                 Assert.AreEqual(1, locationCount, "Should only have one location record");
 
                 // Verify all users reference the same lookups
+                var userSearchPattern = $"_{testRunId}@test.com";
                 var usersWithDept = await db.users
                     .Include(u => u.Department)
-                    .Where(u => u.UserPrincipalName.Contains($"user{DateTime.Now.Ticks}"))
+                    .Where(u => u.UserPrincipalName.Contains(userSearchPattern))
                     .ToListAsync();
 
                 var uniqueDeptIds = usersWithDept
