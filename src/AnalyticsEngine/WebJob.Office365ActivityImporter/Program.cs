@@ -237,25 +237,6 @@ namespace WebJob.Office365ActivityImporter
                 // Output cycle stats
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
 
-                // Upload latest stats if not done recently
-                using (var db = new AnalyticsEntitiesContext())
-                {
-                    var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
-                    if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
-                    {
-                        var redisDatesAdaptor = new RedisStatsDatesLoader(configuredSettings);
-
-                        using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
-                        {
-                            var stats = new UsageStatsManager(sqlUsageBuilder, redisDatesAdaptor, statsUploader, telemetry);
-                            await stats.ProcessAndFailSilently();
-                        }
-                    }
-                    else
-                    {
-                        telemetry.LogWarning("No Redis connection string found - skipping stats upload.");
-                    }
-                }
 
                 if (runAgain)
                 {

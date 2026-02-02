@@ -8,6 +8,7 @@ using UsageReporting;
 
 namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 {
+    [Obsolete("Stats uploading is deprecated.")]
     public class WebApiStatsUploader : IStatsUploader, IDisposable
     {
         private readonly HttpClient _httpClient;
