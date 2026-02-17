@@ -45,7 +45,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             for (int i = 0; i < graphFoundDbUsers.Count; i += DEFAULT_BATCH_SIZE)
             {
-                var batch = graphFoundDbUsers.Skip(i).Take(DEFAULT_BATCH_SIZE).ToList();
+                var batchCount = Math.Min(DEFAULT_BATCH_SIZE, graphFoundDbUsers.Count - i);
+                var batch = graphFoundDbUsers.GetRange(i, batchCount);
                 var licenseLookupsToRemove = batch.SelectMany(u => u.LicenseLookups.Where(l => l.IsSavedToDB)).ToList();
 
                 if (licenseLookupsToRemove.Any())
@@ -108,7 +109,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Process in batches
             for (int i = 0; i < relevantDbUsers.Count; i += SKU_BATCH_SIZE)
             {
-                var batch = relevantDbUsers.Skip(i).Take(SKU_BATCH_SIZE).ToList();
+                var batchCount = Math.Min(SKU_BATCH_SIZE, relevantDbUsers.Count - i);
+                var batch = relevantDbUsers.GetRange(i, batchCount);
                 var list = new List<UserLicenseTypeLookup>(batch.Count);
 
                 foreach (var dbUser in batch)
