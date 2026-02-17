@@ -15,11 +15,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         private readonly AnalyticsLogger _telemetry;
         private readonly UserMetadataCache _userMetaCache;
+        private Dictionary<string, GraphUser> _graphUsersByAadId;
 
         public UserDataMapper(AnalyticsLogger telemetry, UserMetadataCache userMetaCache)
         {
             _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
             _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
+        }
+
+        /// <summary>
+        /// Pre-builds a dictionary for O(1) graph user lookups by AAD ID.
+        /// Call once before processing batches to avoid O(n) linear scans per user.
+        /// </summary>
+        public void SetGraphUserLookup(List<GraphUser> allGraphUsers)
+        {
+            _graphUsersByAadId = new Dictionary<string, GraphUser>(allGraphUsers.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var graphUser in allGraphUsers)
+            {
+                if (!string.IsNullOrEmpty(graphUser.Id))
+                {
+                    _graphUsersByAadId[graphUser.Id] = graphUser;
+                }
+            }
         }
 
         /// <summary>
@@ -49,46 +66,99 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             UpdateDbUserFromGraphUser(dbUser, graphUser);
 
             // Update department
+            // Note: Both navigation property AND FK must be set explicitly.
+            // When entities are loaded with AsNoTracking() and later attached, navigation properties
+            // are null (not loaded via Include), so setting them to null is a no-op. The FK column
+            // retains its original DB value. Explicitly setting the FK to null ensures EF detects the change.
             var nameMaxLengthDepartment = StringUtils.EnsureMaxLength(graphUser.Department?.Trim(), 100);
-            dbUser.Department = !string.IsNullOrEmpty(nameMaxLengthDepartment) ?
-                await _userMetaCache.DepartmentCache.GetOrCreateNewResource(nameMaxLengthDepartment,
-                    new UserDepartment { Name = nameMaxLengthDepartment }) : null;
+            if (!string.IsNullOrEmpty(nameMaxLengthDepartment))
+            {
+                dbUser.Department = await _userMetaCache.DepartmentCache.GetOrCreateNewResource(nameMaxLengthDepartment,
+                    new UserDepartment { Name = nameMaxLengthDepartment });
+            }
+            else
+            {
+                dbUser.Department = null;
+                dbUser.DepartmentId = null;
+            }
 
             // Update job title
             var nameMaxLengthJobTitle = StringUtils.EnsureMaxLength(graphUser.JobTitle?.Trim(), 100);
-            dbUser.JobTitle = !string.IsNullOrEmpty(nameMaxLengthJobTitle) ?
-                await _userMetaCache.JobTitleCache.GetOrCreateNewResource(nameMaxLengthJobTitle,
-                    new UserJobTitle { Name = nameMaxLengthJobTitle }) : null;
+            if (!string.IsNullOrEmpty(nameMaxLengthJobTitle))
+            {
+                dbUser.JobTitle = await _userMetaCache.JobTitleCache.GetOrCreateNewResource(nameMaxLengthJobTitle,
+                    new UserJobTitle { Name = nameMaxLengthJobTitle });
+            }
+            else
+            {
+                dbUser.JobTitle = null;
+                dbUser.JobTitleId = null;
+            }
 
             // Update office location
             var nameMaxLengthOfficeLocation = StringUtils.EnsureMaxLength(graphUser.OfficeLocation?.Trim(), 100);
-            dbUser.OfficeLocation = !string.IsNullOrEmpty(nameMaxLengthOfficeLocation) ?
-                await _userMetaCache.OfficeLocationCache.GetOrCreateNewResource(nameMaxLengthOfficeLocation,
-                    new UserOfficeLocation { Name = nameMaxLengthOfficeLocation }) : null;
+            if (!string.IsNullOrEmpty(nameMaxLengthOfficeLocation))
+            {
+                dbUser.OfficeLocation = await _userMetaCache.OfficeLocationCache.GetOrCreateNewResource(nameMaxLengthOfficeLocation,
+                    new UserOfficeLocation { Name = nameMaxLengthOfficeLocation });
+            }
+            else
+            {
+                dbUser.OfficeLocation = null;
+                dbUser.OfficeLocationId = null;
+            }
 
             // Update usage location
             var nameMaxLengthUsageLocation = StringUtils.EnsureMaxLength(graphUser.UsageLocation?.Trim(), 100);
-            dbUser.UsageLocation = !string.IsNullOrEmpty(nameMaxLengthUsageLocation) ?
-                await _userMetaCache.UseageLocationCache.GetOrCreateNewResource(nameMaxLengthUsageLocation,
-                    new UserUsageLocation { Name = nameMaxLengthUsageLocation }) : null;
+            if (!string.IsNullOrEmpty(nameMaxLengthUsageLocation))
+            {
+                dbUser.UsageLocation = await _userMetaCache.UseageLocationCache.GetOrCreateNewResource(nameMaxLengthUsageLocation,
+                    new UserUsageLocation { Name = nameMaxLengthUsageLocation });
+            }
+            else
+            {
+                dbUser.UsageLocation = null;
+                dbUser.UsageLocationId = null;
+            }
 
             // Update country
             var nameMaxLengthCountry = StringUtils.EnsureMaxLength(graphUser.Country?.Trim(), 100);
-            dbUser.UserCountry = !string.IsNullOrEmpty(nameMaxLengthCountry) ?
-                await _userMetaCache.CountryOrRegionCache.GetOrCreateNewResource(nameMaxLengthCountry,
-                    new CountryOrRegion { Name = nameMaxLengthCountry }) : null;
+            if (!string.IsNullOrEmpty(nameMaxLengthCountry))
+            {
+                dbUser.UserCountry = await _userMetaCache.CountryOrRegionCache.GetOrCreateNewResource(nameMaxLengthCountry,
+                    new CountryOrRegion { Name = nameMaxLengthCountry });
+            }
+            else
+            {
+                dbUser.UserCountry = null;
+                dbUser.UserCountryId = null;
+            }
 
             // Update state
             var nameMaxLengthState = StringUtils.EnsureMaxLength(graphUser.State?.Trim(), 100);
-            dbUser.StateOrProvince = !string.IsNullOrEmpty(nameMaxLengthState) ?
-                await _userMetaCache.StateOrProvinceCache.GetOrCreateNewResource(nameMaxLengthState,
-                    new StateOrProvince { Name = nameMaxLengthState }) : null;
+            if (!string.IsNullOrEmpty(nameMaxLengthState))
+            {
+                dbUser.StateOrProvince = await _userMetaCache.StateOrProvinceCache.GetOrCreateNewResource(nameMaxLengthState,
+                    new StateOrProvince { Name = nameMaxLengthState });
+            }
+            else
+            {
+                dbUser.StateOrProvince = null;
+                dbUser.StateOrProvinceId = null;
+            }
 
             // Update company
             var nameMaxLengthCompany = StringUtils.EnsureMaxLength(graphUser.CompanyName?.Trim(), 100);
-            dbUser.CompanyName = !string.IsNullOrEmpty(nameMaxLengthCompany) ?
-                await _userMetaCache.CompanyNameCache.GetOrCreateNewResource(nameMaxLengthCompany,
-                    new CompanyName { Name = nameMaxLengthCompany }) : null;
+            if (!string.IsNullOrEmpty(nameMaxLengthCompany))
+            {
+                dbUser.CompanyName = await _userMetaCache.CompanyNameCache.GetOrCreateNewResource(nameMaxLengthCompany,
+                    new CompanyName { Name = nameMaxLengthCompany });
+            }
+            else
+            {
+                dbUser.CompanyName = null;
+                dbUser.CompanyNameId = null;
+            }
 
             // Update manager
             await UpdateUserManager(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
@@ -117,23 +187,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // CRITICAL: Ensure manager is tracked by EF before assignment
                     // If we assign a detached entity to a tracked entity's navigation property,
                     // EF will try to INSERT it, causing duplicate key errors
-                    dbManager = EnsureUserIsTracked(db, dbManager, dbUsersByAadId);
+                    dbManager = await EnsureUserIsTrackedAsync(db, dbManager, dbUsersByAadId);
                 }
                 else if (allDbUsers != null)
                 {
                     // Fallback to LINQ query if dictionary not provided (for backwards compatibility)
                     dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) &&
                         new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
-                    
+
                     if (dbManager != null)
                     {
-                        dbManager = EnsureUserIsTracked(db, dbManager, dbUsersByAadId);
+                        dbManager = await EnsureUserIsTrackedAsync(db, dbManager, dbUsersByAadId);
                     }
                 }
 
                 if (dbManager == null)
                 {
-                    var graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == graphUser.DefaultManagerInfo?.Id);
+                    // Use pre-built dictionary for O(1) lookup instead of O(n) list scan
+                    GraphUser graphManagerUser = null;
+                    if (_graphUsersByAadId != null)
+                    {
+                        _graphUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out graphManagerUser);
+                    }
+                    else
+                    {
+                        graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == graphUser.DefaultManagerInfo?.Id);
+                    }
 
                     if (graphManagerUser != null)
                     {
@@ -176,6 +255,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     dbUser.Manager = dbManager;
                 }
             }
+            else
+            {
+                // No manager info from Graph - clear the manager relationship
+                dbUser.Manager = null;
+                dbUser.ManagerId = null;
+            }
         }
 
         /// <summary>
@@ -183,7 +268,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// an already-tracked version from the context or uses Find() to get a tracked version.
         /// This prevents "Cannot insert duplicate key" errors when assigning navigation properties.
         /// </summary>
-        private Common.Entities.User EnsureUserIsTracked(
+        private async Task<Common.Entities.User> EnsureUserIsTrackedAsync(
             AnalyticsEntitiesContext db, 
             Common.Entities.User user,
             Dictionary<string, Common.Entities.User> dbUsersByAadId)
@@ -198,7 +283,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (user.ID == 0 && !string.IsNullOrEmpty(user.UserPrincipalName))
             {
                 var upnLower = user.UserPrincipalName.ToLower();
-                var existingUser = db.users.FirstOrDefault(u => u.UserPrincipalName.ToLower() == upnLower);
+                var existingUser = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName.ToLower() == upnLower);
                 if (existingUser != null)
                 {
                     // Found the user in DB - use the tracked version

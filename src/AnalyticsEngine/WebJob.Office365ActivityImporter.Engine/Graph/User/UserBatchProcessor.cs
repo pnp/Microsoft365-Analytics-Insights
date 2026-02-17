@@ -42,7 +42,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             for (int i = 0; i < batchedGraphUsers.Count; i += batchSize)
             {
-                var batch = batchedGraphUsers.Skip(i).Take(batchSize).ToList();
+                var batchCount = Math.Min(batchSize, batchedGraphUsers.Count - i);
+                var batch = batchedGraphUsers.GetRange(i, batchCount);
 
                 // CRITICAL: Ensure all entities in the dictionaries that might be referenced
                 // by this batch are properly attached BEFORE processing
