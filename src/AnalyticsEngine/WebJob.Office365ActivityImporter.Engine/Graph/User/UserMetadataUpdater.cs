@@ -223,15 +223,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
                 if (skus != null)
                 {
-                    // Re-attach users to the context to ensure they're tracked properly
+                    // Re-attach users to the context to ensure they're tracked properly.
+                    // License lookups are NOT loaded here because ProcessSKUsForAllUsers
+                    // deletes them via direct SQL (no EF tracking needed for removal).
                     foreach (var user in allProcessedDbUsers)
                     {
                         if (db.Entry(user).State == EntityState.Detached)
                         {
                             db.users.Attach(user);
                         }
-                        // Reload license lookups from database to get current state
-                        db.Entry(user).Collection(u => u.LicenseLookups).Load();
                     }
                     
                     await _licenseProcessor.ProcessSKUsForAllUsers(skus, allProcessedDbUsers, db);
