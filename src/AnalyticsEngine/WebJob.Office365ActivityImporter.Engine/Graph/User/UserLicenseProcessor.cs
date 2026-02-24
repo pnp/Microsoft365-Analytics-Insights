@@ -40,22 +40,37 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             List<Common.Entities.User> graphFoundDbUsers,
             AnalyticsEntitiesContext db)
         {
-            // Process license removals in batches to reduce memory pressure
+            // Remove all existing license lookups for these users via direct SQL for performance.
+            // EF RemoveRange generates individual DELETE statements per entity which is extremely
+            // slow for large user counts (10+ hours for ~187K users). A single SQL DELETE is instant.
             _telemetry.LogInformation($"User import - removing old license lookups for {graphFoundDbUsers.Count.ToString("N0")} users");
 
-            for (int i = 0; i < graphFoundDbUsers.Count; i += DEFAULT_BATCH_SIZE)
+            // Detach all tracked license lookups from EF before the SQL delete so the
+            // change-tracker doesn't try to re-process rows that no longer exist.
+            foreach (var entry in db.ChangeTracker.Entries<UserLicenseTypeLookup>().ToList())
             {
-                var batchCount = Math.Min(DEFAULT_BATCH_SIZE, graphFoundDbUsers.Count - i);
-                var batch = graphFoundDbUsers.GetRange(i, batchCount);
-                var licenseLookupsToRemove = batch.SelectMany(u => u.LicenseLookups.Where(l => l.IsSavedToDB)).ToList();
+                entry.State = EntityState.Detached;
+            }
 
-                if (licenseLookupsToRemove.Any())
+            var userIds = graphFoundDbUsers.Where(u => u.IsSavedToDB).Select(u => u.ID).ToList();
+
+            if (userIds.Count > 0)
+            {
+                const int SQL_BATCH_SIZE = 10000;
+                for (int i = 0; i < userIds.Count; i += SQL_BATCH_SIZE)
                 {
-                    db.UserLicenseTypeLookups.RemoveRange(licenseLookupsToRemove);
+                    var batchIds = userIds.Skip(i).Take(SQL_BATCH_SIZE).ToList();
+                    var idList = string.Join(",", batchIds);
+                    await db.Database.ExecuteSqlCommandAsync(
+                        $"DELETE FROM dbo.user_license_type_lookups WHERE user_id IN ({idList})");
                 }
             }
 
-            await db.SaveChangesAsync();
+            // Clear in-memory license collections so new lookups are added cleanly
+            foreach (var user in graphFoundDbUsers)
+            {
+                user.LicenseLookups.Clear();
+            }
 
             foreach (var sku in skus)
             {
