@@ -101,8 +101,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Get SKUs from tenant
                 var skus = await _userLoader.LoadTenantSkus();
 
-                // Load DB user data without tracking
-                var allDbUsers = await db.users.AsNoTracking().Include(u => u.LicenseLookups).ToListAsync();
+                // Load DB user data without tracking.
+                // Only include license lookups when we'll need per-user license processing
+                // (i.e. tenant-level SKUs unavailable). Including them unconditionally loads
+                // hundreds of thousands of extra entities that are never read in the common
+                // path and can cause an out-of-memory crash before the existing-user metadata
+                // update runs.
+                var allDbUsers = skus == null
+                    ? await db.users.AsNoTracking().Include(u => u.LicenseLookups).ToListAsync()
+                    : await db.users.AsNoTracking().ToListAsync();
                 _telemetry.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
 
                 // Create lookup dictionaries for performance - pre-allocate capacity
@@ -126,7 +133,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Insert any user we've not seen so far
                 var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null);
-                
+                _telemetry.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
+
                 // Reload newly inserted users WITH TRACKING and update dictionaries
                 // This ensures they're properly tracked when used as managers in ProcessExistingUsersInBatches
                 if (insertedDbUsers.Count > 0)
@@ -199,27 +207,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // path (no per-user Graph calls needed for licenses).
                 // When SKUs are NOT available we must fall back to the EF-per-entity
                 // path because each user needs individual Graph license queries.
-                if (skus != null)
+                _telemetry.LogInformation($"User import - Starting metadata update for {notInsertedUpns.Count.ToString("N0")} existing users...");
+                int existingUsersUpdated = 0;
+                try
                 {
-                    await _batchProcessor.BulkUpdateExistingUsers(
-                        db,
-                        allActiveGraphUsers,
-                        notInsertedUpns,
-                        dbUsersByUpn,
-                        dbUsersByAadId,
-                        _dataMapper.GraphUsersByAadId,
-                        _userMetaCache);
+                    if (skus != null)
+                    {
+                        existingUsersUpdated = await _batchProcessor.BulkUpdateExistingUsers(
+                            db,
+                            allActiveGraphUsers,
+                            notInsertedUpns,
+                            dbUsersByUpn,
+                            dbUsersByAadId,
+                            _dataMapper.GraphUsersByAadId,
+                            _userMetaCache);
+                    }
+                    else
+                    {
+                        existingUsersUpdated = await _batchProcessor.ProcessExistingUsersInBatches(
+                            db,
+                            allActiveGraphUsers,
+                            notInsertedUpns,
+                            dbUsersByUpn,
+                            dbUsersByAadId,
+                            async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId),
+                            BATCH_SIZE);
+                    }
+                    _telemetry.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
                 }
-                else
+                catch (Exception ex)
                 {
-                    await _batchProcessor.ProcessExistingUsersInBatches(
-                        db,
-                        allActiveGraphUsers,
-                        notInsertedUpns,
-                        dbUsersByUpn,
-                        dbUsersByAadId,
-                        async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId),
-                        BATCH_SIZE);
+                    _telemetry.LogError($"User import - ERROR updating existing users: {ex.Message}");
+                    throw;
                 }
 
                 // Combine inserted & modified db users for SKU processing
@@ -251,13 +270,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     await db.SaveChangesAsync();
                 }
 
+                _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
+
                 // Final cleanup
                 dbUsersByUpn.Clear();
                 dbUsersByAadId.Clear();
                 allActiveGraphUsers.Clear();
                 allProcessedDbUsers.Clear();
-
-                _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - inserted {insertedDbUsers.Count.ToString("N0")} new users and updated {notInsertedUpns.Count.ToString("N0")} from Graph API");
             }
         }
 
