@@ -165,6 +165,7 @@
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
     <Compile Include="Graph\User\UserGroupsCache.cs" />
+    <Compile Include="Graph\User\UserInsertProcessor.cs" />
     <Compile Include="Graph\User\UserLicenseProcessor.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
