@@ -69,7 +69,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Clear in-memory license collections so new lookups are added cleanly
             foreach (var user in graphFoundDbUsers)
             {
-                user.LicenseLookups.Clear();
+                if (user.LicenseLookups != null)
+                    user.LicenseLookups.Clear();
             }
 
             foreach (var sku in skus)
