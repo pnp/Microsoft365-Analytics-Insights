@@ -35,6 +35,7 @@
     <Compile Include="UserMetadataUpdaterLicenseTests.cs" />
     <Compile Include="UserMetadataUpdaterManagerTests.cs" />
     <Compile Include="UserMetadataUpdaterMetadataTests.cs" />
+    <Compile Include="UserMetadataUpdaterPerformanceTests.cs" />
     <Content Include="Generated\**" />
   </ItemGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">

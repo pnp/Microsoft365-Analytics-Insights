@@ -24,6 +24,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
+        /// The pre-built dictionary for O(1) graph user lookups by AAD ID.
+        /// </summary>
+        public Dictionary<string, GraphUser> GraphUsersByAadId => _graphUsersByAadId;
+
+        /// <summary>
         /// Pre-builds a dictionary for O(1) graph user lookups by AAD ID.
         /// Call once before processing batches to avoid O(n) linear scans per user.
         /// </summary>

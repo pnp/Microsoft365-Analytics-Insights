@@ -130,7 +130,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 foreach (var dbUser in batch)
                 {
-                    list.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
+                    // Use FK ID directly so the User entity does not need to be
+                    // tracked by EF, avoiding the costly re-attach loop for large
+                    // user counts.  The License navigation property is kept because
+                    // the LicenseType may have just been created (ID == 0) and EF
+                    // must resolve its ID at save time.
+                    list.Add(new UserLicenseTypeLookup { License = licence, UserId = dbUser.ID });
                 }
 
                 db.UserLicenseTypeLookups.AddRange(list);

@@ -194,15 +194,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 allDbUsers.Clear();
                 allDbUsers = null;
 
-                // Process existing users in batches using batch processor
-                await _batchProcessor.ProcessExistingUsersInBatches(
-                    db,
-                    allActiveGraphUsers,
-                    notInsertedUpns,
-                    dbUsersByUpn,
-                    dbUsersByAadId,
-                    async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, skus == null, dbUsersByAadId),
-                    BATCH_SIZE);
+                // Update existing users.
+                // When tenant-level SKUs are available we can use the fast bulk-SQL
+                // path (no per-user Graph calls needed for licenses).
+                // When SKUs are NOT available we must fall back to the EF-per-entity
+                // path because each user needs individual Graph license queries.
+                if (skus != null)
+                {
+                    await _batchProcessor.BulkUpdateExistingUsers(
+                        db,
+                        allActiveGraphUsers,
+                        notInsertedUpns,
+                        dbUsersByUpn,
+                        dbUsersByAadId,
+                        _dataMapper.GraphUsersByAadId,
+                        _userMetaCache);
+                }
+                else
+                {
+                    await _batchProcessor.ProcessExistingUsersInBatches(
+                        db,
+                        allActiveGraphUsers,
+                        notInsertedUpns,
+                        dbUsersByUpn,
+                        dbUsersByAadId,
+                        async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId),
+                        BATCH_SIZE);
+                }
 
                 // Combine inserted & modified db users for SKU processing
                 var allProcessedDbUsers = new List<Common.Entities.User>(insertedDbUsers.Count + notInsertedUpns.Count);
@@ -223,20 +241,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
                 if (skus != null)
                 {
-                    // Re-attach users to the context to ensure they're tracked properly.
-                    // License lookups are NOT loaded here because ProcessSKUsForAllUsers
-                    // deletes them via direct SQL (no EF tracking needed for removal).
-                    foreach (var user in allProcessedDbUsers)
-                    {
-                        if (db.Entry(user).State == EntityState.Detached)
-                        {
-                            db.users.Attach(user);
-                        }
-                    }
-                    
+                    // No re-attach loop needed: AddSkuForUsers now uses FK IDs (UserId)
+                    // instead of the User navigation property, so the entities do not
+                    // need to be tracked by EF.
                     await _licenseProcessor.ProcessSKUsForAllUsers(skus, allProcessedDbUsers, db);
                     _telemetry.LogInformation($"User import - updated user license information from {skus.Count.ToString("N0")} tenant SKUs");
-                    
+
                     db.ChangeTracker.DetectChanges();
                     await db.SaveChangesAsync();
                 }

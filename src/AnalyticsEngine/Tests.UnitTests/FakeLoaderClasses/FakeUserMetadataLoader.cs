@@ -34,7 +34,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public Task<List<GraphUser>> LoadAllActiveUsers()
         {
-            return Task.FromResult(_fakeUsers);
+            // Return a defensive copy so callers that Clear() the result
+            // do not wipe the original list (InsertAndUpdateDatabaseFromExternalUsers does this).
+            return Task.FromResult(new List<GraphUser>(_fakeUsers));
         }
 
         public Task<IGraphServiceSubscribedSkusCollectionPage> LoadTenantSkus()
