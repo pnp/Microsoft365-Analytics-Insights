@@ -67,6 +67,18 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Using existing App Service '{webApp.Data.DefaultHostName}'.");
             }
 
+            // Enable basic publishing credentials for SCM and FTP
+            var publishingCredentialsPolicyData = new CsmPublishingCredentialsPoliciesEntityData()
+            {
+                Allow = true,
+            };
+
+            _logger.LogInformation($"Enabling basic publishing credentials (SCM & FTP) for '{_config.ResourceName}'...");
+            await webApp.GetScmSiteBasicPublishingCredentialsPolicy().CreateOrUpdateAsync(
+                WaitUntil.Completed, publishingCredentialsPolicyData);
+            await webApp.GetWebSiteFtpPublishingCredentialsPolicy().CreateOrUpdateAsync(
+                WaitUntil.Completed, publishingCredentialsPolicyData);
+
             return webApp;
 
         }
