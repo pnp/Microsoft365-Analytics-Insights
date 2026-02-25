@@ -27,7 +27,7 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>
         /// Creates a new App Insights API client that authenticates using Entra ID credentials.
         /// </summary>
-        /// <param name="appInsightsConnectionString">The Application Insights connection string. The InstrumentationKey is parsed from it for use in the query URL.</param>
+        /// <param name="appInsightsConnectionString">The Application Insights connection string. The ApplicationId is parsed from it for use in the query URL.</param>
         /// <param name="credential">A TokenCredential (e.g. ClientSecretCredential) for Entra ID authentication.</param>
         /// <param name="debugTracer">Logger instance.</param>
         public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger debugTracer)
@@ -39,10 +39,10 @@ namespace WebJob.AppInsightsImporter.Engine
 
             _credential = credential ?? throw new ArgumentNullException(nameof(credential));
 
-            _appInsightsId = ParseInstrumentationKey(appInsightsConnectionString);
+            _appInsightsId = ParseConnectionStringValue(appInsightsConnectionString, "ApplicationId");
             if (string.IsNullOrEmpty(_appInsightsId))
             {
-                throw new ArgumentException("Could not parse InstrumentationKey from the provided connection string.", nameof(appInsightsConnectionString));
+                throw new ArgumentException("Could not parse ApplicationId from the provided connection string.", nameof(appInsightsConnectionString));
             }
 
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -60,9 +60,9 @@ namespace WebJob.AppInsightsImporter.Engine
         #endregion
 
         /// <summary>
-        /// Parses the InstrumentationKey value from an App Insights connection string.
+        /// Parses a named value from an App Insights connection string.
         /// </summary>
-        public static string ParseInstrumentationKey(string connectionString)
+        public static string ParseConnectionStringValue(string connectionString, string keyName)
         {
             if (string.IsNullOrEmpty(connectionString)) return null;
             foreach (var part in connectionString.Split(';'))
@@ -72,7 +72,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     var key = part.Substring(0, separatorIndex).Trim();
                     var value = part.Substring(separatorIndex + 1).Trim();
-                    if (key.Equals("InstrumentationKey", StringComparison.OrdinalIgnoreCase))
+                    if (key.Equals(keyName, StringComparison.OrdinalIgnoreCase))
                         return value;
                 }
             }
@@ -81,6 +81,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
         private async Task SetBearerToken()
         {
+            // https://learn.microsoft.com/en-us/azure/azure-monitor/app/azure-ad-authentication?tabs=net
             var tokenRequestContext = new TokenRequestContext(AppInsightsScope);
             var token = await _credential.GetTokenAsync(tokenRequestContext, CancellationToken.None);
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);

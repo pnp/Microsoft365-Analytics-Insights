@@ -75,30 +75,30 @@ namespace Tests.UnitTests
         /// Verify InstrumentationKey is correctly parsed from a standard connection string.
         /// </summary>
         [TestMethod]
-        public void ParseInstrumentationKey_ValidConnectionString()
+        public void ParseConnectionStringValue_ValidConnectionString()
         {
             var connStr = "InstrumentationKey=00000000-0000-0000-0000-000000000001;IngestionEndpoint=https://eastus-0.in.applicationinsights.azure.com/;LiveEndpoint=https://eastus.livediagnostics.monitor.azure.com/";
-            Assert.AreEqual("00000000-0000-0000-0000-000000000001", AppInsightsAPIClient.ParseInstrumentationKey(connStr));
+            Assert.AreEqual("00000000-0000-0000-0000-000000000001", AppInsightsAPIClient.ParseConnectionStringValue(connStr, "InstrumentationKey"));
         }
 
         /// <summary>
-        /// Verify ParseInstrumentationKey returns null when connection string is empty.
+        /// Verify ParseConnectionStringValue returns null when connection string is empty.
         /// </summary>
         [TestMethod]
-        public void ParseInstrumentationKey_NullOrEmpty_ReturnsNull()
+        public void ParseConnectionStringValue_NullOrEmpty_ReturnsNull()
         {
-            Assert.IsNull(AppInsightsAPIClient.ParseInstrumentationKey(null));
-            Assert.IsNull(AppInsightsAPIClient.ParseInstrumentationKey(string.Empty));
+            Assert.IsNull(AppInsightsAPIClient.ParseConnectionStringValue(null, "InstrumentationKey"));
+            Assert.IsNull(AppInsightsAPIClient.ParseConnectionStringValue(string.Empty, "InstrumentationKey"));
         }
 
         /// <summary>
-        /// Verify ParseInstrumentationKey returns null when key is missing from connection string.
+        /// Verify ParseConnectionStringValue returns null when key is missing from connection string.
         /// </summary>
         [TestMethod]
-        public void ParseInstrumentationKey_MissingKey_ReturnsNull()
+        public void ParseConnectionStringValue_MissingKey_ReturnsNull()
         {
             var connStr = "IngestionEndpoint=https://eastus-0.in.applicationinsights.azure.com/;LiveEndpoint=https://eastus.livediagnostics.monitor.azure.com/";
-            Assert.IsNull(AppInsightsAPIClient.ParseInstrumentationKey(connStr));
+            Assert.IsNull(AppInsightsAPIClient.ParseConnectionStringValue(connStr, "InstrumentationKey"));
         }
 
         /// <summary>
