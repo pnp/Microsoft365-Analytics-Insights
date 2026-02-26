@@ -5,7 +5,7 @@ import { IAiTrackerModernApplicationCustomizerProperties, SitesTrackedByExtensio
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.54";
+const AITRACKER_MODERN_VERSION: string = "1.0.1.56";
 const LOG_SOURCE: string = "SPOInsights ModernUI";
 const NAV_EVENT_DELAY_MS: number = 2000;
 
@@ -55,7 +55,7 @@ export default class AiTrackerModernApplicationCustomizer
     if (this.properties.appInsightsConnectionStringHash) {
       try {
         atob(this.properties.appInsightsConnectionStringHash); // Validate base64 encoding
-      } catch (e) {
+      } catch {
         Log.error(LOG_SOURCE, new Error(`[${this.runtimeId}]: appInsightsConnectionStringHash is not valid base64. Aborting init.`));
         return;
       }
