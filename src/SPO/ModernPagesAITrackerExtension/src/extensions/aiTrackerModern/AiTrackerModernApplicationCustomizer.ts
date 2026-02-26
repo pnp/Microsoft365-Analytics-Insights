@@ -1,5 +1,6 @@
 import { BaseApplicationCustomizer } from '@microsoft/sp-application-base';
 import { Guid, Log, SPEventArgs } from '@microsoft/sp-core-library';
+import { SPComponentLoader } from '@microsoft/sp-loader';
 import { IAiTrackerModernApplicationCustomizerProperties, SitesTrackedByExtension, SpPageContextInfo } from './definitions';
 
 // AITracker.js function. That's where we drive the AppInsights telemetry.
@@ -67,30 +68,26 @@ export default class AiTrackerModernApplicationCustomizer
         aiTrackerUrl += `?ver=${encodeURIComponent(this.properties.cacheToken)}`;
       }
 
-      // Add AppInsights key to doc header (sanitize to prevent script injection)
-      this.appendInlineScript(`var appInsightsConnectionStringHash = '${AiTrackerModernApplicationCustomizer.escapeForJs(this.properties.appInsightsConnectionStringHash)}';`);
+      // Set AppInsights key as a window global (avoids CSP inline-script violation)
+      (window as unknown as Record<string, unknown>).appInsightsConnectionStringHash = this.properties.appInsightsConnectionStringHash;
 
-      // Add root web key to doc header, if there is one
+      // Set root web key as a window global, if there is one
       if (this.properties.insightsWebRootUrlHash) {
         Log.verbose(LOG_SOURCE, `[${this.runtimeId}]: We have an insightsWebRootUrlHash.`);
-        this.appendInlineScript(`var insightsWebRootUrlHash = '${AiTrackerModernApplicationCustomizer.escapeForJs(this.properties.insightsWebRootUrlHash)}';`);
+        (window as unknown as Record<string, unknown>).insightsWebRootUrlHash = this.properties.insightsWebRootUrlHash;
       }
       else {
         Log.verbose(LOG_SOURCE, `[${this.runtimeId}]: No insightsWebRootUrlHash found.`);
       }
 
-      // Add AITracker script to doc header
-      const aiTrackerScriptTag: HTMLScriptElement = document.createElement("script");
-      aiTrackerScriptTag.src = aiTrackerUrl;
-      aiTrackerScriptTag.type = "text/javascript";
-      aiTrackerScriptTag.onload = (): void => {
+      // Load AITracker script via SPComponentLoader (CSP-safe)
+      try {
+        await SPComponentLoader.loadScript(aiTrackerUrl, { globalExportsName: 'modernPageNav' });
         this.aiTrackerLoaded = true;
         Log.verbose(LOG_SOURCE, `[${this.runtimeId}]: AITracker.js loaded successfully.`);
-      };
-      aiTrackerScriptTag.onerror = (): void => {
-        Log.error(LOG_SOURCE, new Error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}`));
-      };
-      document.head.appendChild(aiTrackerScriptTag);
+      } catch (e) {
+        Log.error(LOG_SOURCE, new Error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`));
+      }
 
       // Wire-up page-changed SPFx event
       this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
@@ -167,23 +164,6 @@ export default class AiTrackerModernApplicationCustomizer
     const w = (window as Window);
     w._spPageContextInfo = this.context.pageContext.legacyPageContext;
     Log.verbose(LOG_SOURCE, `[${this.runtimeId}]: Updated '_spPageContextInfo' variable.`);
-  }
-
-  /** Creates an inline <script> tag with the given text and appends it to <head>. */
-  private appendInlineScript(scriptText: string): void {
-    const tag: HTMLScriptElement = document.createElement("script");
-    tag.type = "text/javascript";
-    tag.text = scriptText;
-    document.head.appendChild(tag);
-  }
-
-  /** Escapes a value for safe inclusion inside a JS single-quoted string literal. */
-  private static escapeForJs(value: string): string {
-    return value
-      .replace(/\\/g, "\\\\")
-      .replace(/'/g, "\\'")
-      .replace(/</g, "\\u003c")
-      .replace(/>/g, "\\u003e");
   }
 
   // Clean-up
