@@ -1,7 +1,7 @@
 import { AppInsightsWrapper } from "./AppInsightsWrapper";
 import { ClearLastPageStatsVal, GetLastPageStatsVal, GetLastTrackedPageVal, SetLastPageStatsVal } from "./Cookies";
 import { getSPRequestDuration } from "./DataFunctions";
-import { debug, error, log } from "./Logger";
+import { debug, error, log, warn } from "./Logger";
 import TimeMe from 'timeme.js'
 import { PagePropertyManager } from "./PageProps/PagePropertyManager";
 import { spPageContextInfo } from "./Definitions";
@@ -46,6 +46,10 @@ export class PageViewTracker {
         if (lastPageStats !== null && lastPageStats.secondsOnPage !== null && lastPageStats.pageRequestId !== null && lastPageStats.url !== null) {
             var pageUrl = decodeURI(lastPageStats.url);
             this._ai.trackTimingEvent(pageUrl, lastPageStats.secondsOnPage);
+        } else if (lastPageStats !== null) {
+            warn("Last page stats cookie found but missing required properties (secondsOnPage, pageRequestId, or url)");
+        } else {
+            debug("No previous page stats to track");
         }
 
         // Clear cookie
@@ -91,6 +95,8 @@ export class PageViewTracker {
     trackCurrentPageView(pageLoadDuration: number | undefined,
         webUrl: string, siteUrl: string, webTitle: string, url: string, listTitle?: string, listItemId?: number): void {
 
+        debug(`Tracking page view for URL: ${url}, listTitle: ${listTitle || 'none'}, listItemId: ${listItemId ?? 'none'}`);
+
         // If needed, log page metadata
         this._pagePropLoader.handleNewPage(listItemId ?? -1, url, listTitle);
 
@@ -106,7 +112,7 @@ export class PageViewTracker {
             // Get time on page
             var secondsOnPage = this.getTimeOnPageAndResetLastTotalTime();
             if (!secondsOnPage) {
-                error("Invalid time on page");
+                warn("Invalid time on page - skipping cookie save");
                 return;
             }
 

@@ -18,10 +18,15 @@ export function callApiReturnString(url: string, method : string): Promise<strin
         },
         method: method
     })
+    .catch((err) => {
+        const networkError = `Network error ${method}ing from API '${url}': ${err}`;
+        error(networkError);
+        return Promise.reject(networkError);
+    })
     .then(async response => {
         if (response.ok) {
             const dataText: string = await response.text();
-            console.log(`Success ${method}ing from API '${url}'`);
+            debug(`Success ${method}ing from API '${url}'`);
             return Promise.resolve(dataText);
         }
         else {
@@ -33,7 +38,6 @@ export function callApiReturnString(url: string, method : string): Promise<strin
             else
                 errorText = errorTitle;
 
-            console.warn(errorText);
             error(errorText);
 
             return Promise.reject(dataText);

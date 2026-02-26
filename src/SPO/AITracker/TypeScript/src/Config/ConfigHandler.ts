@@ -18,7 +18,11 @@ export class ConfigHandler {
         if (this._localStorageWorking) {
             const configString = localStorage.getItem(cacheName);
             if (configString) {
-                config = JSON.parse(configString);
+                try {
+                    config = JSON.parse(configString);
+                } catch (e) {
+                    debug("Failed to parse config from local storage cache, will reload from API");
+                }
             }
         }
         if (config && AITrackerConfig.isValid(config)) {
@@ -44,10 +48,8 @@ export class ConfigHandler {
         if (this._localStorageWorking) {
             const configString = localStorage.getItem(cacheName);
             if (configString) {
-                if (configString) {
-                    const config : AITrackerConfig = JSON.parse(configString);
-                    console.log(config);
-                    
+                try {
+                    const config: AITrackerConfig = JSON.parse(configString);
                     if (config) {
                         log("Config found in cache");
                         return AITrackerConfig.isValid(config);
@@ -56,6 +58,9 @@ export class ConfigHandler {
                         log("Config found in cache but not valid");
                         return false;
                     }
+                } catch (e) {
+                    debug("Failed to parse cached config");
+                    return false;
                 }
             }
         }

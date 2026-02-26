@@ -1,6 +1,6 @@
 
 import { SpoPerfJson } from "./Definitions";
-import { warn } from "./Logger";
+import { debug, warn } from "./Logger";
 
 // RFC4122 version 4 compliant GUID generator.
 // From https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
@@ -10,21 +10,21 @@ export function uuidv4() : string {
 }
 
 // Gets SPRequestDuration from a string if it can find it.
-export function getSPRequestDuration(source) : number | null {
+export function getSPRequestDuration(source: string) : number | null {
 
     // Find:
     //      "perf":{ .... }
     // This in reality is an unsupported way of measuring the performance. If it stops working it could be these stats are packaged in a different way.
     const PERF_BLOCK_START = `"perf":{"`, PERF_BLOCK_END = "},";
 
-    var perfJsonStart = source.search(PERF_BLOCK_START);
+    var perfJsonStart = source.indexOf(PERF_BLOCK_START);
     if (perfJsonStart > -1) {
         var sourceSliceOuter = source.substring(perfJsonStart, source.length);
-        var perfJsonEnd = sourceSliceOuter.search(PERF_BLOCK_END);
+        var perfJsonEnd = sourceSliceOuter.indexOf(PERF_BLOCK_END);
 
         if (perfJsonEnd > -1) {
             var perfJsonWithPropName = sourceSliceOuter.substring(0, perfJsonEnd + PERF_BLOCK_END.length);
-            var perfJson = perfJsonWithPropName.substring(PERF_BLOCK_START.length - 1, perfJsonWithPropName.length);
+            var perfJson = perfJsonWithPropName.substring(PERF_BLOCK_START.length - 2, perfJsonWithPropName.length);
 
             // Cleam trailing coma if there is one
             if (perfJson.endsWith(",")) perfJson = perfJson.substring(0, perfJson.length - 1);
@@ -42,6 +42,7 @@ export function getSPRequestDuration(source) : number | null {
 
             // Output
             if (perfJsonBlock) {
+                debug(`Extracted spRequestDuration: ${perfJsonBlock.spRequestDuration}`);
                 return perfJsonBlock.spRequestDuration;
             }
 
