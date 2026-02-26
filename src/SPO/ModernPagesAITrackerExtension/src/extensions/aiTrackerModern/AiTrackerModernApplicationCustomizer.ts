@@ -19,7 +19,7 @@ export default class AiTrackerModernApplicationCustomizer
   extends BaseApplicationCustomizer<IAiTrackerModernApplicationCustomizerProperties> {
 
   // Remeber URL to avoid tracking initial page, as AITracker will do that automatically
-  private lastSite: string;
+  private lastSite: string | undefined = undefined;
   private runtimeId: Guid = Guid.newGuid(); // A way to indentify what instance is running
   private lastTrackedUrlFromSpfx: string = "";
 
