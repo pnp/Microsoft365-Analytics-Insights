@@ -47,14 +47,14 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Verify AppInsightsAPIClient rejects a connection string without an InstrumentationKey.
+        /// Verify AppInsightsAPIClient rejects a connection string without an ApplicationId.
         /// </summary>
         [TestMethod]
         [ExpectedException(typeof(ArgumentException))]
-        public void AppInsightsAPIClient_ConnectionStringWithoutIKey_Throws()
+        public void AppInsightsAPIClient_ConnectionStringWithoutApplicationId_Throws()
         {
             var credential = new ClientSecretCredential("tenant-id", "client-id", "secret");
-            new AppInsightsAPIClient("IngestionEndpoint=https://test.in.applicationinsights.azure.com/", credential, AnalyticsLogger.ConsoleOnlyTracer());
+            new AppInsightsAPIClient("InstrumentationKey=00000000-0000-0000-0000-000000000001;IngestionEndpoint=https://test.in.applicationinsights.azure.com/", credential, AnalyticsLogger.ConsoleOnlyTracer());
         }
 
         /// <summary>
@@ -64,7 +64,7 @@ namespace Tests.UnitTests
         public void AppInsightsAPIClient_ValidConnectionString_Constructs()
         {
             var credential = new ClientSecretCredential("tenant-id", "client-id", "secret");
-            var connStr = "InstrumentationKey=00000000-0000-0000-0000-000000000001;IngestionEndpoint=https://test.in.applicationinsights.azure.com/;LiveEndpoint=https://test.livediagnostics.monitor.azure.com/";
+            var connStr = "InstrumentationKey=00000000-0000-0000-0000-000000000001;IngestionEndpoint=https://test.in.applicationinsights.azure.com/;LiveEndpoint=https://test.livediagnostics.monitor.azure.com/;ApplicationId=00000000-0000-0000-0000-000000000002";
             using (var client = new AppInsightsAPIClient(connStr, credential, AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.IsNotNull(client);
