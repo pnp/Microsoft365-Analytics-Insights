@@ -85,25 +85,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Ensure all msgs have stats for them
             var cognitiveConfig = new AppConfig();
 
+            // Save msg stats for channel, including previous days too
+            var msgDates = allChannelMsgs.ToList().GetUniqueDates();
+
+            if (!cognitiveConfig.IsValidCognitiveConfig)
+            {
+                telemetry.LogWarning($"Cognitive config not valid. Cannot load cognitive stats for channel {parentChannel.DisplayName} ({parentChannel.Id}). Adding basic stats with no cognitive insights.");
+                // No cognitive available. Add basic stats for all dates
+                foreach (var uniqueMsgDate in msgDates)
+                {
+                    var msgsForDate = allChannelMsgs.GetByDate(uniqueMsgDate);
+                    allStatsAllDays.Add(new MessageCognitiveStats(parentChannel, uniqueMsgDate) { ChatsCount = msgsForDate.Count });
+                }
+                return allStatsAllDays;
+            }
+
             var credentials = new AzureKeyCredential(cognitiveConfig.CognitiveKey);
             var client = new TextAnalyticsClient(new Uri(cognitiveConfig.CognitiveEndpoint), credentials);
 
-            // Save msg stats for channel, including previous days too
-            var msgDates = allChannelMsgs.ToList().GetUniqueDates();
             foreach (var uniqueMsgDate in msgDates)
             {
                 // No log - generate new stats
                 var msgsForDate = allChannelMsgs.GetByDate(uniqueMsgDate);
-                if (cognitiveConfig.IsValidCognitiveConfig)
-                {
-                    var dateStats = await msgsForDate.LoadSameDayCognitiveDataStats(client, telemetry, parentChannel);
-                    allStatsAllDays.Add(dateStats);
-                }
-                else
-                {
-                    // No cognitive available. Add basic stats
-                    allStatsAllDays.Add(new MessageCognitiveStats(parentChannel, uniqueMsgDate) { ChatsCount = msgsForDate.Count });
-                }
+                var dateStats = await msgsForDate.LoadSameDayCognitiveDataStats(client, telemetry, parentChannel);
+                allStatsAllDays.Add(dateStats);
             }
 
             return allStatsAllDays;
