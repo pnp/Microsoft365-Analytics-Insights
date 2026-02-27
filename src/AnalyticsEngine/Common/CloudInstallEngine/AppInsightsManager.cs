@@ -162,13 +162,6 @@ namespace CloudInstallEngine
 
         public class AppInsightsInstanceProperties
         {
-            [JsonProperty("InstrumentationKey")]
-            public string InstrumentationKey { get; set; }
-
-
-            [JsonProperty("AppId")]
-            public string AppId { get; set; }
-
             [JsonProperty("ConnectionString")]
             public string ConnectionString { get; set; }
         }

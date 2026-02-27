@@ -1,8 +1,11 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Azure.Core;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -10,35 +13,42 @@ using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 namespace WebJob.AppInsightsImporter.Engine
 {
     /// <summary>
-    /// HTTP client for App Insights calls
+    /// HTTP client for App Insights calls, authenticated via Entra ID (OAuth).
     /// </summary>
     public class AppInsightsAPIClient : IDisposable
     {
         private readonly ILogger _logger;
+        private readonly string _appInsightsId;
+        private readonly TokenCredential _credential;
+        private static readonly string[] AppInsightsScope = new[] { "https://api.applicationinsights.io/.default" };
 
         #region Constructors
 
-        public AppInsightsAPIClient(string appid, string apikey, ILogger debugTracer)
+        /// <summary>
+        /// Creates a new App Insights API client that authenticates using Entra ID credentials.
+        /// </summary>
+        /// <param name="appInsightsConnectionString">The Application Insights connection string. The ApplicationId is parsed from it for use in the query URL.</param>
+        /// <param name="credential">A TokenCredential (e.g. ClientSecretCredential) for Entra ID authentication.</param>
+        /// <param name="debugTracer">Logger instance.</param>
+        public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger debugTracer)
         {
-            if (string.IsNullOrEmpty(appid))
+            if (string.IsNullOrEmpty(appInsightsConnectionString))
             {
-                throw new ArgumentException($"'{nameof(appid)}' cannot be null or empty.", nameof(appid));
+                throw new ArgumentException($"'{nameof(appInsightsConnectionString)}' cannot be null or empty.", nameof(appInsightsConnectionString));
             }
 
-            if (string.IsNullOrEmpty(apikey))
+            _credential = credential ?? throw new ArgumentNullException(nameof(credential));
+
+            _appInsightsId = ParseConnectionStringValue(appInsightsConnectionString, "ApplicationId");
+            if (string.IsNullOrEmpty(_appInsightsId))
             {
-                throw new ArgumentException($"'{nameof(apikey)}' cannot be null or empty.", nameof(apikey));
+                throw new ArgumentException("Could not parse ApplicationId from the provided connection string.", nameof(appInsightsConnectionString));
             }
 
-            // Add auth headers to HTTP client
-            client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
-            client.DefaultRequestHeaders.Add("x-api-key", apikey);
-
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             client.Timeout = TimeSpan.FromMinutes(10);
 
-            this.ApiKey = apikey;
             _logger = debugTracer;
-            this.AppId = appid;
         }
 
         #endregion
@@ -47,22 +57,49 @@ namespace WebJob.AppInsightsImporter.Engine
 
         private HttpClient client = new HttpClient();
 
-        public string AppId { get; set; }
-        public string ApiKey { get; set; }
-
         #endregion
+
+        /// <summary>
+        /// Parses a named value from an App Insights connection string.
+        /// </summary>
+        public static string ParseConnectionStringValue(string connectionString, string keyName)
+        {
+            if (string.IsNullOrEmpty(connectionString)) return null;
+            foreach (var part in connectionString.Split(';'))
+            {
+                var separatorIndex = part.IndexOf('=');
+                if (separatorIndex > 0)
+                {
+                    var key = part.Substring(0, separatorIndex).Trim();
+                    var value = part.Substring(separatorIndex + 1).Trim();
+                    if (key.Equals(keyName, StringComparison.OrdinalIgnoreCase))
+                        return value;
+                }
+            }
+            return null;
+        }
+
+        private async Task SetBearerToken()
+        {
+            // https://learn.microsoft.com/en-us/azure/azure-monitor/app/azure-ad-authentication?tabs=net
+            var tokenRequestContext = new TokenRequestContext(AppInsightsScope);
+            var token = await _credential.GetTokenAsync(tokenRequestContext, CancellationToken.None);
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+        }
 
         /// <summary>
         /// Load page-views
         /// </summary>
         public async Task<PageViewCollection> GetPageViewsFromAppInsights(DateTime forDate, bool saveRestResponses)
         {
+            await SetBearerToken();
+
             // Only from the last hit timestamp
             var adxQuery = $"pageViews | where " + GetWhereString(forDate) +
                 $" | order by timestamp asc";
 
             // API Doc: https://docs.microsoft.com/en-us/rest/api/application-insights/query/get
-            var req = $"https://api.applicationinsights.io/v1/apps/{AppId}/query?query={adxQuery}";
+            var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={adxQuery}";
             var response = await client.GetAsync(req);
 
             var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "pageview");
@@ -75,11 +112,13 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         public async Task<CustomEventsResultCollection> GetCustomEventsFromAppInsights(DateTime forDate, bool saveRestResponses)
         {
+            await SetBearerToken();
+
             // Only from the last hit timestamp
             var adxQuery = $"customEvents | where " + GetWhereString(forDate) + " | order by timestamp asc";
 
             // Doc: https://dev.applicationinsights.io/reference/get-events
-            var req = $"https://api.applicationinsights.io/v1/apps/{AppId}/query?query={adxQuery}";
+            var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={adxQuery}";
 
             var resultsResponse = await client.GetAsync(req);
 

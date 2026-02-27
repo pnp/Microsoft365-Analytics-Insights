@@ -4,7 +4,7 @@ import { error } from './Logger';
 
 export function GetSessionCookieVal() : string
 {
-    return Cookies.get("SPOInsightsSessionID");
+    return Cookies.get("SPOInsightsSessionID") ?? '';
 }
 export function SetSessionCookieVal(sessionId: string)
 {
@@ -14,7 +14,7 @@ export function SetSessionCookieVal(sessionId: string)
 // Remember last page URL in a cookie. Used so previous URL stats can be uploaded in next page nav
 export function GetLastTrackedPageVal() : string
 {
-    return Cookies.get("SPOInsightsLastTrackedUrl");
+    return Cookies.get("SPOInsightsLastTrackedUrl") ?? '';
 }
 export function SetLastTrackedPageVal(url: string)
 {
@@ -23,20 +23,18 @@ export function SetLastTrackedPageVal(url: string)
 
 export function GetLastPageStatsVal() : PageStats | null
 {
-    var s = Cookies.get("SPOInsightsLastPageStats");
+    const s = Cookies.get("SPOInsightsLastPageStats");
     if (s)
     {
-        // Convert string to JSon
+        // Convert string to JSON
         try {
-            var lastPageStats : PageStats = JSON.parse(s);
+            const lastPageStats: PageStats = JSON.parse(s);
+            return lastPageStats;
         } catch (e) {
-            error("Got an error turning 'SPOInsightsLastPageStats' contents in JSon.");
-            // JSon format error?
-            console.error(e);
-
+            error("Got an error turning 'SPOInsightsLastPageStats' contents into JSON.");
+            error(e);
             return null;
         }
-        return lastPageStats;
     }
     else
         return null;

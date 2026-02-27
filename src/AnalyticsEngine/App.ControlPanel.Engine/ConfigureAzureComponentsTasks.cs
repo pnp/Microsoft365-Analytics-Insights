@@ -38,7 +38,7 @@ namespace App.ControlPanel.Engine
         /// Install configure & software on App Service, update target DB. 
         /// </summary>
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
-            AppInsightsInfoWithApiAccess appInsights,
+            AppInsightsInfo appInsights,
             RedisResource redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription)
         {
@@ -130,7 +130,7 @@ namespace App.ControlPanel.Engine
             StorageAccountResource storage,
             RedisResource redis,
             CognitiveServicesInfo cognitiveServicesInfo,
-            AppInsightsInfoWithApiAccess appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
+            AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
         {
             // App settings
             var url = $"https://{webApp.Data.HostNames.First()}/";
@@ -147,14 +147,6 @@ namespace App.ControlPanel.Engine
             if (!string.IsNullOrEmpty(appInsights?.ConnectionString))
             {
                 appSettings.Properties.Add("AppInsightsConnectionString", appInsights.ConnectionString);
-            }
-            if (!string.IsNullOrEmpty(appInsights?.ApiKey))
-            {
-                appSettings.Properties.Add("AppInsightsApiKey", appInsights.ApiKey);
-            }
-            if (!string.IsNullOrEmpty(appInsights?.AppId))
-            {
-                appSettings.Properties.Add("AppInsightsAppId", appInsights.AppId);
             }
 
             if (this.Config.CognitiveServicesEnabled)

@@ -20,9 +20,11 @@ export class PageProps {
         Object.keys(propsAll).forEach(key => {
             const keyVal = propsAll[key];
 
-            // If it's not null, and it's a string below a certain length or a number
-            if (keyVal && (keyVal.length && keyVal.length <= MAX_PROP_VAL) || typeof keyVal === "number") {
-                validProps[key] = keyVal;
+            // If it's not null/undefined, and it's a string below a certain length or a number
+            if (keyVal !== null && keyVal !== undefined) {
+                if ((typeof keyVal === "string" && keyVal.length <= MAX_PROP_VAL) || typeof keyVal === "number") {
+                    validProps[key] = keyVal;
+                }
             }
 
         });

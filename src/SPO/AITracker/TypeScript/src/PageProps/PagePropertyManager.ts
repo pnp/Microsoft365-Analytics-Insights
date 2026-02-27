@@ -1,6 +1,6 @@
 import moment from "moment";
 import { IPageDataService, LikesUserEntity, PageComment } from "../Definitions";
-import { debug, log } from "../Logger";
+import { debug, log, warn } from "../Logger";
 import { PageProps } from "./Models/PageProps";
 import { BasePageStateManager } from "./PageState";
 
@@ -35,14 +35,15 @@ export abstract class PagePropertyManager {
     handleNewPage(pageItemId: number, url: string, listTitle?: string, newPagePropsLoaded?: Function): Promise<boolean> {
 
         if (!listTitle || pageItemId < 1) {
+            debug(`Skipping page properties - listTitle: '${listTitle || ''}', pageItemId: ${pageItemId}`);
             return Promise.resolve(false);
         }
 
         const pageResult = this.stateManager.pageSeen(listTitle, pageItemId);
-        const expiry = moment().add(this.pageUpdateIntervalMinutes, 'minutes');
-        const expiryDate = expiry.toDate();
+        const expiryThreshold = moment().subtract(this.pageUpdateIntervalMinutes, 'minutes');
+        const expiryDate = expiryThreshold.toDate();
 
-        if (!pageResult || pageResult > expiryDate) {
+        if (!pageResult || pageResult < expiryDate) {
             debug("Not read & submitted page properties recently...");
 
             // Load all page props, comments, and likes
@@ -72,6 +73,8 @@ export abstract class PagePropertyManager {
                         // Add totals & details
                         loadedPagePropsAll.pageLikes = likesLoadPromiseResult.value;
                         loadedPagePropsAll.props.PageLikesCount = likesLoadPromiseResult.value.length;
+                    } else {
+                        warn(`Failed to load likes for page id ${pageItemId}: ${(likesLoadPromiseResult as PromiseRejectedResult).reason}`);
                     }
 
                     // Add comments
@@ -81,6 +84,8 @@ export abstract class PagePropertyManager {
                         // Add totals & details
                         loadedPagePropsAll.pageComments = commentsLoadPromiseResult.value;
                         loadedPagePropsAll.props.CommentsCount = commentsLoadPromiseResult.value.length;
+                    } else {
+                        warn(`Failed to load comments for page id ${pageItemId}: ${(commentsLoadPromiseResult as PromiseRejectedResult).reason}`);
                     }
 
                     // Log loaded props with api provider. Split into multiple parts if needed
@@ -92,9 +97,11 @@ export abstract class PagePropertyManager {
 
                     // Don't keep registering page props
                     this.stateManager.registerPageSeen(listTitle, pageItemId);
+                    return Promise.resolve(true);
+                } else {
+                    warn(`Failed to load page properties for page id ${pageItemId} on list ${listTitle}: ${(loadedPagePropsResult as PromiseRejectedResult).reason}`);
+                    return Promise.resolve(false);
                 }
-
-                return Promise.resolve(true);
             });
 
         }
