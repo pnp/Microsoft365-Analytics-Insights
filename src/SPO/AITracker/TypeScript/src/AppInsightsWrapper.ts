@@ -1,6 +1,6 @@
 import { ApplicationInsights, IEventTelemetry, IPageViewTelemetry } from "@microsoft/applicationinsights-web";
 import { SetLastTrackedPageVal } from "./Cookies";
-import { debug, error, log } from "./Logger";
+import { debug, debugObj, error, log } from "./Logger";
 import { PageProps } from "./PageProps/Models/PageProps";
 import { ClickData, ClickEventProps, PageViewDataProperties, SearchEventProperties, TimingEventProperties } from "./Definitions";
 import { AI_TRACKER_VER, EVENT_CLICK, EVENT_METADATA_UPDATE, EVENT_PAGE_EXIT } from "./AiTrackerConstants";
@@ -10,9 +10,9 @@ export class AppInsightsWrapper {
 
     _ai: ApplicationInsights;
     _sessionId: string;
-    _lastGeneratedPageRequestId: string;               // Page request GUID to join before & after AI events together on import
-    _pageRequestId: string | null;
-    _lastTrackedUrl: string | null;
+    _lastGeneratedPageRequestId: string = '';            // Page request GUID to join before & after AI events together on import
+    _pageRequestId: string | null = null;
+    _lastTrackedUrl: string | null = null;
 
     constructor(instance: ApplicationInsights, sessionId: string) {
         this._ai = instance;
@@ -23,7 +23,7 @@ export class AppInsightsWrapper {
     trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string, siteUrl: string, webTitle: string) {
 
         if (this._lastTrackedUrl === document.URL) {
-            console.debug("SPOInsights AI Tracker: ignoring duplicate pageview with request Id: " + this._pageRequestId);
+            debug("Ignoring duplicate pageview with request Id: " + this._pageRequestId);
             return;
         }
 
@@ -31,7 +31,7 @@ export class AppInsightsWrapper {
 
         // New page req
         this._pageRequestId = uuidv4();
-        console.debug("SPOInsights AI Tracker: New page request Id: " + this._pageRequestId);
+        debug("New page request Id: " + this._pageRequestId);
 
         // Metadata
         var appInsightsPageViewData: PageViewDataProperties =
@@ -61,23 +61,37 @@ export class AppInsightsWrapper {
 
             this._ai.trackPageView(pv);
             log('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
+            debugObj('Page view telemetry:', pv);
         }
         else {
 
             // https://stackoverflow.com/questions/14341156/calculating-page-load-time-in-javascript
-            // https://developer.mozilla.org/en-US/docs/Web/API/PerformanceTiming
-            const perfData = window.performance.timing;
-            const pageLoadTime = perfData.loadEventEnd - perfData.navigationStart;
+            // Use Navigation Timing Level 2 API if available, fall back to deprecated timing API
+            let pageLoadTime = 0;
+            if (window.performance.getEntriesByType) {
+                const navEntries = window.performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
+                if (navEntries.length > 0 && navEntries[0].loadEventEnd > 0) {
+                    pageLoadTime = navEntries[0].loadEventEnd - navEntries[0].startTime;
+                }
+            }
+            if (pageLoadTime <= 0 && window.performance.timing) {
+                const perfData = window.performance.timing;
+                pageLoadTime = perfData.loadEventEnd - perfData.navigationStart;
+            }
 
-            debug('Page load time is ' + pageLoadTime + ' milliseconds.');
+            if (pageLoadTime > 0) {
+                debug('Page load time is ' + pageLoadTime + ' milliseconds.');
+            } else {
+                debug('Page load time not yet available.');
+            }
 
             // Set page-load with metadata as AppInsights doesn't report on this exactly any more
-            appInsightsPageViewData['pageLoad'] = pageLoadTime;
+            appInsightsPageViewData['pageLoad'] = pageLoadTime > 0 ? pageLoadTime : 0;
 
             this._ai.trackPageView(pv);
             log('Uploaded page-view data for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
+            debugObj('Page view telemetry:', pv);
         }
-        console.debug(pv);
 
         // Remember last tracked page. 
         SetLastTrackedPageVal(document.URL);
@@ -108,7 +122,7 @@ export class AppInsightsWrapper {
             log(`Uploaded page-stats for previous URL ${pageUrl} and pageRequestId ${this._pageRequestId}: seconds on page: ${secondsOnPage}`);
 
             this._ai.trackEvent(e);
-            console.debug(e);
+            debugObj('Timing event telemetry:', e);
         }
         else {
             error(`Can't track ${EVENT_PAGE_EXIT}: no page request ID`);
@@ -117,7 +131,7 @@ export class AppInsightsWrapper {
 
     // Search event receiver
     trackSearch(searchTerm: string) {
-        if (searchTerm !== '' && !searchTerm !== null) {
+        if (searchTerm !== '' && searchTerm !== null) {
             log("Searching for '" + searchTerm + "'");
 
             const searchProps : SearchEventProperties =
@@ -132,8 +146,8 @@ export class AppInsightsWrapper {
             {
                 name: "UserSearch", properties: searchProps
             };
-            console.debug(e);
             this._ai.trackEvent(e);
+            debugObj('Search event telemetry:', e);
         }
         else {
             debug("Ignoring blank search term.");
@@ -164,8 +178,8 @@ export class AppInsightsWrapper {
                 props.classNames = d.classNames;
             }
 
-            console.debug(e);
             this._ai.trackEvent(e);
+            debugObj('Click event telemetry:', e);
         }
         else {
             error(`Can't track ${EVENT_CLICK}: no page request ID`);
@@ -179,7 +193,7 @@ export class AppInsightsWrapper {
         };
 
         this._ai.trackEvent(e);
-        console.debug(e);
+        debugObj('Page metadata event telemetry:', e);
         log("Posted page metadata to Application Insights");
     }
 }

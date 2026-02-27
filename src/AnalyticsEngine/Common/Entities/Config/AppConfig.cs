@@ -17,8 +17,6 @@ namespace Common.Entities.Config
             this.AppInsightsConnectionString = ConfigurationManager.AppSettings.Get(nameof(AppInsightsConnectionString));
 
             this.AppInsightsContainerName = ConfigurationManager.AppSettings["AppInsightsContainerName"];
-            this.AppInsightsApiKey = ConfigurationManager.AppSettings["AppInsightsApiKey"];
-            this.AppInsightsAppId = ConfigurationManager.AppSettings["AppInsightsAppId"];
 
             this.BuildLabel = ConfigurationManager.AppSettings["BuildLabel"];
 
@@ -95,8 +93,6 @@ namespace Common.Entities.Config
 
         public string BuildLabel { get; set; }
         public string AppInsightsContainerName { get; set; }
-        public string AppInsightsApiKey { get; set; }
-        public string AppInsightsAppId { get; set; }
         public string AppInsightsConnectionString { get; set; }
 
         public int MetadataRefreshMinutes { get; set; } = 24 * 60; // 24 hours

@@ -1,6 +1,6 @@
 import { getApiReturnJson } from "../../Api";
 import { CommentsListData, PageLikesListData, ListItemPropsResponse, PageComment, LikesUserEntity } from "../../Definitions";
-import { LOGGING_PREFIX, debug } from "../../Logger";
+import { debug, debugObj } from "../../Logger";
 import { PageProps } from "../Models/PageProps";
 import { PagePropertyManager } from "../PagePropertyManager";
 import { BasePageStateManager } from "../PageState";
@@ -18,8 +18,9 @@ export class SpoPagePropertyManager extends PagePropertyManager {
     loadLikes(listTitle: string, pageItemId: number, url: string): Promise<LikesUserEntity[]> {
         debug(`Loading likes count for page ID ${pageItemId}`);
 
+        const encodedListTitle = encodeURIComponent(listTitle);
         const apiUrlPageLikesUrl = this._webAbsoluteUrl +
-            "/_api/web/lists/getbytitle('" + listTitle + "')/items(" + pageItemId + ")/likedByInformation?$expand=likedby";
+            "/_api/web/lists/getbytitle('" + encodedListTitle + "')/items(" + pageItemId + ")/likedByInformation?$expand=likedby";
 
         return getApiReturnJson<ListItemPropsResponse<PageLikesListData>>(apiUrlPageLikesUrl)
             .then((likesResponse: ListItemPropsResponse<PageLikesListData>) => {
@@ -29,8 +30,8 @@ export class SpoPagePropertyManager extends PagePropertyManager {
                 likesResponse.d.likedBy.results.forEach(l => {
                     likesParsed.push({ creationDate: l.creationDate, email: l.email, id: l.id });
                 });
-                console.debug(LOGGING_PREFIX + "likes response: " + likesResponse.d.likeCount);
-                console.debug(likesParsed);
+                debug("Likes response: " + likesResponse.d.likeCount);
+                debugObj("Likes parsed:", likesParsed);
                 return likesParsed;
             });
     }
@@ -38,13 +39,14 @@ export class SpoPagePropertyManager extends PagePropertyManager {
 
     loadComments(listTitle: string, pageItemId: number, url: string): Promise<PageComment[]> {
         debug(`Loading comments for page ID ${pageItemId}`);
+        const encodedListTitle = encodeURIComponent(listTitle);
         const apiUrlPageComments = this._webAbsoluteUrl +
-            "/_api/web/lists/getbytitle('" + listTitle + "')/items(" + pageItemId + ")/comments?$expand=replies";
+            "/_api/web/lists/getbytitle('" + encodedListTitle + "')/items(" + pageItemId + ")/comments?$expand=replies";
 
         return getApiReturnJson<ListItemPropsResponse<CommentsListData>>(apiUrlPageComments)
             .then((commentsResponse: ListItemPropsResponse<CommentsListData>) => {
-                console.debug(LOGGING_PREFIX + "comments response: " + commentsResponse.d.results.length);
-                console.debug(commentsResponse);
+                debug("Comments response: " + commentsResponse.d.results.length);
+                debugObj("Comments data:", commentsResponse);
 
                 // Build flat comments list
                 const comments: PageComment[] = [];
@@ -62,8 +64,9 @@ export class SpoPagePropertyManager extends PagePropertyManager {
     // Override base. Get page metadata from SP page properties API
     loadPropsRaw(listTitle: string, pageItemId: number, url: string): Promise<PageProps> {
         debug(`Loading properties for page ID ${pageItemId}`);
+        const encodedListTitle = encodeURIComponent(listTitle);
         const apiUrlPageProps = this._webAbsoluteUrl +
-            "/_api/web/lists/getbytitle('" + listTitle + "')/items(" + pageItemId + ")/properties";
+            "/_api/web/lists/getbytitle('" + encodedListTitle + "')/items(" + pageItemId + ")/properties";
 
         return getApiReturnJson<ListItemPropsResponse<any>>(apiUrlPageProps)
             .then((r: any) => this.processPageProps(url, r));
