@@ -78,6 +78,7 @@
     <Compile Include="InstallerTasks\JobTasks\AutomationAccountTask.cs" />
     <Compile Include="ConfigureAzureComponentsTasks.cs" />
     <Compile Include="InstallerTasks\JobTasks\RunbookCreateOrUpdateTasks.cs" />
+    <Compile Include="InstallerTasks\ResourceSecurityInstallJob.cs" />
     <Compile Include="InstallerTasks\RunbooksInstallJob.cs" />
     <Compile Include="Models\AzStorageConnectionInfo.cs" />
     <Compile Include="SolutionUninstaller.cs" />

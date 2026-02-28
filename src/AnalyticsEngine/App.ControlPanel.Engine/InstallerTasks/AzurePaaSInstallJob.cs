@@ -21,6 +21,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class AzurePaaSInstallJob : BaseAnalyticsSolutionInstallJob
     {
+        private readonly GetOrCreateResourceGroupTask _rgCreateTask;
         private readonly AutomationAccountTask _automationAccountTask;
 
         private readonly SqlServerTask _sqlServerTask;
@@ -44,6 +45,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         public AzurePaaSInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
         {
+
+            var tagDic = config.Tags.ToDictionary();
+
+            _rgCreateTask = new GetOrCreateResourceGroupTask(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, Location, tagDic, subscription);
+            this.AddTask(_rgCreateTask);
+
             // Performance levels
             var appPerfTier = AppServicePlanTask.PERF_TIER_BASIC1;
             var sqlPerfTier = SqlDatabaseTask.PERF_TIER_BASIC;
@@ -53,8 +60,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 sqlPerfTier = SqlDatabaseTask.PERF_TIER_S2;
                 appPerfTier = AppServicePlanTask.PERF_TIER_BASIC2;
             }
-
-            var tagDic = config.Tags.ToDictionary();
 
             // Web 
             var appServicePlanConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName).AddSetting(AppServicePlanTask.CONFIG_KEY_PERF_TIER, appPerfTier);

@@ -29,7 +29,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public override async Task<ResourceGroupResource> ExecuteTaskReturnResult(object contextArg)
         {
             var rgTask = new GetOrCreateResourceGroupTask(_config, _logger, _location, _tags, _subscription);
-            var rg = await rgTask.GetOrCreateResourceGroup(true);
+            var rg = await rgTask.GetOrCreateResourceGroup(true, false);
 
             return rg;
         }
@@ -53,10 +53,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         public override async Task<object> ExecuteTask(object contextArg)
         {
-            return await GetOrCreateResourceGroup(true);
+            return await GetOrCreateResourceGroup(true, true);
         }
 
-        public async Task<ResourceGroupResource> GetOrCreateResourceGroup(bool createIfNotExists)
+        public async Task<ResourceGroupResource> GetOrCreateResourceGroup(bool createIfNotExists, bool verboseLogging)
         {
             var resourceGroups = _subscription.GetResourceGroups();
             ResourceGroupResource resourceGroup = null;
@@ -71,7 +71,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (resourceGroup != null)
             {
-                _logger.LogInformation($"Have already resource-group '{_config.ResourceName}'.");
+                if (verboseLogging)
+                {
+                    _logger.LogInformation($"Have already resource-group '{_config.ResourceName}'.");
+                }
                 if (createIfNotExists)
                 {
                     await base.EnsureTagsOnExisting(resourceGroup.Data.Tags, _tags, resourceGroup.GetTagResource());
@@ -82,18 +85,25 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Create
             if (createIfNotExists)
             {
-                Console.WriteLine($"Creating resource-group '{_config.ResourceName}'...");
+                if (verboseLogging)
+                {
+                    Console.WriteLine($"Creating resource-group '{_config.ResourceName}'...");
+                }
 
                 var resourceGroupData = new ResourceGroupData(_location);
                 base.EnsureTagsOnNew(resourceGroupData.Tags, _tags);
                 var operation = await resourceGroups.CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, resourceGroupData);
 
                 _logger.LogInformation($"Created resource-group '{_config.ResourceName}'.");
+
                 return operation.Value;
             }
             else
             {
-                _logger.LogInformation($"Can't find resource-group '{_config.ResourceName}', but no errors in calling Azure APIs.");
+                if (verboseLogging)
+                {
+                    _logger.LogInformation($"Can't find resource-group '{_config.ResourceName}', but no errors in calling Azure APIs.");
+                }
                 return null;
             }
 
