@@ -24,7 +24,7 @@ namespace CloudInstallEngine.Azure
             var t = new GetOrCreateResourceGroupTask(TaskConfig.GetConfigForName(ResourceGroupName), Logger, Location, new Dictionary<string, string>(), _subscription);
 
             // Remember group found
-            _resourceGroupFound = await t.GetOrCreateResourceGroup(false);
+            _resourceGroupFound = await t.GetOrCreateResourceGroup(false, true);
         }
 
         public ResourceGroupResource ResourceGroupFound => _resourceGroupFound;

@@ -48,6 +48,17 @@ namespace App.ControlPanel.Engine
                 var azureBackeEndCreationJob = new AzurePaaSInstallJob(_logger, Config, azureSub);
                 await azureBackeEndCreationJob.Install();
 
+                // Secure resources with RBAC roles
+                try
+                {
+                    var resourceSecurityJob = new ResourceSecurityInstallJob(_logger, Config, azureSub);
+                    await resourceSecurityJob.Install();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"Failed to assign RBAC roles: {ex.Message}. Continuing installation...");
+                }
+
                 // Run stuff now everything in Azure is created
                 var tasks = new ConfigureAzureComponentsTasks(Config, _logger, _ftpConfig, InstalledByUsername, _softwareConfig, _configPassword);
                 await tasks.RunPostCreatePaaSTasks(
