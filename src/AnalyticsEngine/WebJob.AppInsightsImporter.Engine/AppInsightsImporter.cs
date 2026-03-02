@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
+using Azure.Identity;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -62,7 +63,11 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
 
                 // Import page-views first
-                using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsAppId, this._importConfig.AppInsightsApiKey, _telemetry))
+                var credential = new ClientSecretCredential(
+                    this._importConfig.TenantGUID.ToString(),
+                    this._importConfig.ClientID,
+                    this._importConfig.ClientSecret);
+                using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _telemetry))
                 {
 
                     var endDate = DateTime.Now;

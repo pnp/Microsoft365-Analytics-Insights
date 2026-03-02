@@ -10,3 +10,8 @@ The scripts are run after the database schema has been updated with Entity Frame
 
 Note: SQL server doesn't normally support "```GO```" statements in stored procedures ("GO" is a SQL Server Management Studio thing to separate scripts in a single file), so you should avoid using them in your scripts here. 
 You *can* use the "GO" statement and the installer will split each segment by "GO" and then execute each segment (bit of a hack), but you should put the scripts in separate files or remove "GO" from any script here.
+
+## Profiling Extensions
+These scripts setup the SQL Server profiling extensions but are run by PS scripts found in /src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/.
+
+The main logic is in "usp_CompileWeekly" - a stored procedure that compiles weekly profiling data from daily profiling data.

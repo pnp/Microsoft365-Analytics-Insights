@@ -342,7 +342,11 @@ namespace Tests.UnitTests
                 // Check last inserted log data
                 Assert.IsTrue(await db.TeamChannelStats.Where(l => l.Date == testDate).CountAsync() > 0, "Couldn't find any stats by test date");
                 var lastInserted = await db.TeamChannelStats.OrderByDescending(s => s.ID).FirstOrDefaultAsync();
-                Assert.IsTrue(lastInserted.SentimentScore.HasValue, "Last inserted log has no sentiment score");
+
+                if (settings.IsValidCognitiveConfig)
+                    Assert.IsTrue(lastInserted.SentimentScore.HasValue, "Last inserted log has no sentiment score");
+                else
+                    Assert.Inconclusive("No cognitive config provided, can't test sentiment score presence or value");
 
                 // Last inserted log should have msg count for messages on that day only
                 Assert.IsTrue(lastInserted.ChatsCount == channelWithMsgsOnDifferentDays.Messages
@@ -388,7 +392,12 @@ namespace Tests.UnitTests
                 // 4th count should only include the last happy msgs - 1 log as they're all on the same day
                 Assert.IsTrue(thirdPostTestChannelLogCount == 3, "Unexpected channel stats inserted for 2nd save of same data");
                 var lastInsertedHappy = await db.TeamChannelStats.OrderByDescending(s => s.ID).FirstOrDefaultAsync();
-                Assert.IsTrue(lastInsertedHappy.SentimentScore > lastInserted.SentimentScore, "Happier sentiment sentances aren't apparently more happy");
+
+
+                if (settings.IsValidCognitiveConfig)
+                    Assert.IsTrue(lastInsertedHappy.SentimentScore > lastInserted.SentimentScore, "Happier sentiment sentances aren't apparently more happy");
+                else
+                    Assert.Inconclusive("No cognitive config provided, can't test sentiment score presence or value");
             }
         }
 

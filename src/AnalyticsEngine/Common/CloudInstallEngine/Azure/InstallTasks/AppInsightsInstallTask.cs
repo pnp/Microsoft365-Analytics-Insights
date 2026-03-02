@@ -47,11 +47,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (resourceCreateInfo.CreatedNew)
             {
-                _logger.LogInformation($"Created new AppInsights with name {name} and instrumentation key {appProps.InstrumentationKey}");
+                _logger.LogInformation($"Created new AppInsights with name {name}");
             }
             else
             {
-                _logger.LogInformation($"Found existing AppInsights with name {name} and instrumentation key {appProps.InstrumentationKey}");
+                _logger.LogInformation($"Found existing AppInsights with name {name}");
             }
 
             return new AppInsightsInfo(resourceCreateInfo.ResourceId, name, appProps.ConnectionString);

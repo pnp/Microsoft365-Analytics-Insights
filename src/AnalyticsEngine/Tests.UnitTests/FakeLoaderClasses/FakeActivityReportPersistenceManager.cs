@@ -4,7 +4,7 @@ using WebJob.Office365ActivityImporter.Engine.Entities;
 
 namespace Tests.UnitTests.FakeLoaderClasses
 {
-    internal class FakeActivityReportPersistenceManager : IActivityReportPersistenceManager
+    public class FakeActivityReportPersistenceManager : IActivityReportPersistenceManager
     {
         public Task<ImportStat> CommitAll(ActivityReportSet activities)
         {

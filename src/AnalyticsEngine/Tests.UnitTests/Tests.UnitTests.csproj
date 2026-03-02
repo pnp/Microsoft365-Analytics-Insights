@@ -30,6 +30,13 @@
   </Target>
   <ItemGroup>
     <Compile Remove="Generated\**" />
+    <Compile Include="AppInsightsAuthTests.cs" />
+    <Compile Include="UserMetadataUpdaterBasicTests.cs" />
+    <Compile Include="UserMetadataUpdaterInsertTests.cs" />
+    <Compile Include="UserMetadataUpdaterLicenseTests.cs" />
+    <Compile Include="UserMetadataUpdaterManagerTests.cs" />
+    <Compile Include="UserMetadataUpdaterMetadataTests.cs" />
+    <Compile Include="UserMetadataUpdaterPerformanceTests.cs" />
     <Content Include="Generated\**" />
   </ItemGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
@@ -91,6 +98,8 @@
   <ItemGroup>
     <Compile Include="ActivityImporterTests.cs" />
     <Compile Include="CopilotExtendedDataTests.cs" />
+    <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
+    <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
@@ -101,6 +110,7 @@
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
+    <Compile Include="LookupCacheBatchProcessingTests.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
@@ -108,7 +118,7 @@
     <Compile Include="DataUtilsTests.cs" />
     <Compile Include="AuditTests.cs" />
     <Compile Include="EntityTests.cs" />
-    <Compile Include="FakeControllers\FakePageableResultsController - Copy.cs" />
+    <Compile Include="FakeControllers\FakePageableResultsController.cs" />
     <Compile Include="FakeControllers\FakeCallsController.cs" />
     <Compile Include="FakeControllers\Office365FakeController.cs" />
     <Compile Include="FakeEntities\DataGenerators.cs" />
@@ -150,6 +160,11 @@
     <None Include="App.Release.config">
       <DependentUpon>App.Template.config</DependentUpon>
     </None>
+    <None Include="Complete_TestSuite_Summary.md" />
+    <None Include="DBLookupCacheDuplicateKeyErrorTests.md" />
+    <None Include="DBLookupCacheTests.md" />
+    <None Include="DBLookupCache_TestSummary.md" />
+    <None Include="EntityFramework_LINQ_Query_Fix.md" />
     <None Include="Example Data\Azure AD 2.json" />
     <None Include="Example Data\Azure AD Login.json" />
     <None Include="Example Data\Project.json" />

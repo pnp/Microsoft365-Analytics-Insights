@@ -7,7 +7,7 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests.FakeEntities
 {
-    internal class DataGenerators
+    public class DataGenerators
     {
 
         public static ExchangeAuditLogContent GetRandomExchangeLog(int lookupsMax)

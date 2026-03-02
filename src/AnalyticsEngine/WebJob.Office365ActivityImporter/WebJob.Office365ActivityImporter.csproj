@@ -115,6 +115,10 @@
     <None Include="App.Release.config">
       <DependentUpon>App.Template.config</DependentUpon>
     </None>
+    <None Include="AutomationPS\ProfilingJobs\Aggregation_Status.ps1" />
+    <None Include="AutomationPS\ProfilingJobs\Database_Maintenance.ps1" />
+    <None Include="AutomationPS\ProfilingJobs\Weekly.ps1" />
+    <None Include="AutomationPS\readme.md" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">

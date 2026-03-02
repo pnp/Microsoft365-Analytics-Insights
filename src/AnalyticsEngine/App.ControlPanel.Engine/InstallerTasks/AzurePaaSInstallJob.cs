@@ -21,6 +21,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class AzurePaaSInstallJob : BaseAnalyticsSolutionInstallJob
     {
+        private readonly GetOrCreateResourceGroupTask _rgCreateTask;
         private readonly AutomationAccountTask _automationAccountTask;
 
         private readonly SqlServerTask _sqlServerTask;
@@ -37,7 +38,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         private readonly LogAnalyticsInstallTask _logAnalyticsInstallTask;
         private readonly AppInsightsInstallTask _appInsightsInstallTask;
-        private readonly AppInsightsConfigureApiTask _appInsightsConfigureApiTask;
         private readonly TextAnalyticsInstallTask _cognitiveServicesInstallTask;
 
         /// <summary>
@@ -45,6 +45,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         public AzurePaaSInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
         {
+
+            var tagDic = config.Tags.ToDictionary();
+
+            _rgCreateTask = new GetOrCreateResourceGroupTask(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, Location, tagDic, subscription);
+            this.AddTask(_rgCreateTask);
+
             // Performance levels
             var appPerfTier = AppServicePlanTask.PERF_TIER_BASIC1;
             var sqlPerfTier = SqlDatabaseTask.PERF_TIER_BASIC;
@@ -54,8 +60,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 sqlPerfTier = SqlDatabaseTask.PERF_TIER_S2;
                 appPerfTier = AppServicePlanTask.PERF_TIER_BASIC2;
             }
-
-            var tagDic = config.Tags.ToDictionary();
 
             // Web 
             var appServicePlanConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName).AddSetting(AppServicePlanTask.CONFIG_KEY_PERF_TIER, appPerfTier);
@@ -132,8 +136,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var creds = new ClientSecretCredential(config.InstallerAccount.DirectoryId, config.InstallerAccount.ClientId, config.InstallerAccount.Secret);
             var appInsightsConfig = TaskConfig.GetConfigForName(config.AppInsightsName);
             _appInsightsInstallTask = new AppInsightsInstallTask(appInsightsConfig, logger, Location, tagDic, ResourceGroupName, config.Subscription.SubId, creds);
-            _appInsightsConfigureApiTask = new AppInsightsConfigureApiTask(appInsightsConfig, logger, Location, creds, _config.Subscription.SubId, ResourceGroupName);
-            this.AddTask(_logAnalyticsInstallTask, _appInsightsInstallTask, _appInsightsConfigureApiTask);
+            this.AddTask(_logAnalyticsInstallTask, _appInsightsInstallTask);
 
             // Cognitive
             if (config.CognitiveServicesEnabled)
@@ -166,7 +169,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public DatabasePaaSInfo DatabasePaaSInfo => new DatabasePaaSInfo(CreatedSqlServer, CreatedSqlDatabase, _config);
         public RedisResource Redis => GetTaskResult<RedisResource>(_redisTask);
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
-        public AppInsightsInfoWithApiAccess AppInsights => GetTaskResult<AppInsightsInfoWithApiAccess>(_appInsightsConfigureApiTask);
+        public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
         public ServiceBusQueueResourceWithConnectionString SBQueueWithConnectionString => GetTaskResult<ServiceBusQueueResourceWithConnectionString>(_serviceBusQueueWithPolicyInstallTask);
         public KeyVaultResource KeyVault => GetTaskResult<KeyVaultResource>(_keyVaultTask);

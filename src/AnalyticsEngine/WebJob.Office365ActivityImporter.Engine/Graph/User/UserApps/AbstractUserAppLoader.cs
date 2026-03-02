@@ -65,10 +65,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                     var list = new ListBatchProcessor<string>(1000, async chunk => await LoadAndSaveAppsForUsers(chunk, usersEmailsToUpdate.Count));
 
                     // Add all users
-                    list.AddRange(usersEmailsToUpdate);
+                    await list.AddRange(usersEmailsToUpdate);
 
                     // Process any remaining
-                    list.Flush();
+                    await list.Flush();
                 }
             }
             else

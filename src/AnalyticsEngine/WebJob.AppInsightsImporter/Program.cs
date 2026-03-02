@@ -1,4 +1,4 @@
-﻿// All rights reserved.
+// All rights reserved.
 // THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
 // KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
 // IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
@@ -163,9 +163,9 @@ namespace WebJob.AppInsightsImporter
 
             settings.ConnectionStrings.TestSQLSettings(telemetry);
 
-            if (string.IsNullOrEmpty(settings.AppInsightsApiKey))
+            if (string.IsNullOrEmpty(settings.AppInsightsConnectionString))
             {
-                telemetry.LogInformation("Critical: no Application Insights API key found - can't continue. Run the latest installer again to reset configuration.");
+                telemetry.LogInformation("Critical: no Application Insights connection string found - can't continue. Run the latest installer again to reset configuration.");
                 return false;
             }
 

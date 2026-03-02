@@ -30,27 +30,6 @@ namespace CloudInstallEngine.Models
         public string Name { get; internal set; }
     }
 
-    public class AppInsightsInfoWithApiAccess : AppInsightsInfo
-    {
-        public AppInsightsInfoWithApiAccess(string id, string name, string connectionString, string apiKey, string appId) : base(id, name, connectionString)
-        {
-            if (string.IsNullOrEmpty(apiKey))
-            {
-                throw new ArgumentException($"'{nameof(apiKey)}' cannot be null or empty.", nameof(apiKey));
-            }
-
-            if (string.IsNullOrEmpty(appId))
-            {
-                throw new ArgumentException($"'{nameof(appId)}' cannot be null or empty.", nameof(appId));
-            }
-
-            this.ApiKey = apiKey;
-            this.AppId = appId;
-        }
-        public string ApiKey { get; set; }
-        public string AppId { get; set; }
-    }
-
     public class LogWorkspaceInfo
     {
         public string AzureID { get; set; }
