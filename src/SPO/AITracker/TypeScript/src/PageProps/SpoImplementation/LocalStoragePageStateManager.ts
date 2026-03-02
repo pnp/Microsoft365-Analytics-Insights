@@ -43,9 +43,14 @@ export class LocalStoragePageStateManager extends BasePageStateManager {
 
         let newPageConfig: PagesList = { pagesUploadedFor: [] };
         if (storagePagesVal) {
-            const pageConfig = JSON.parse(storagePagesVal);
-            if (pageConfig) {
-                return pageConfig;
+            try {
+                const pageConfig = JSON.parse(storagePagesVal);
+                if (pageConfig && Array.isArray(pageConfig.pagesUploadedFor)) {
+                    return pageConfig;
+                }
+            } catch (e) {
+                error("Failed to parse pages-seen data from local storage");
+                error(e);
             }
         }
         return newPageConfig;

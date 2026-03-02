@@ -9,7 +9,6 @@ using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -109,18 +108,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
             _logger.LogInformation($"Adding Azure AD application with client ID '{clientId}' to key vault {vaultResource.Data.Name} for secret read & list; certificate read");
 
             // Extract object Id by getting a token from the credentials passed
-            var creds = new ClientSecretCredential(tenantId.ToString(), clientId, secret);
-            var credTokenResponse = await creds.GetTokenAsync(new TokenRequestContext(new string[] { "https://management.core.windows.net/.default" }, null));
-            var handler = new JwtSecurityTokenHandler();
-            var jwtSecurityToken = handler.ReadJwtToken(credTokenResponse.Token);
-            var objectId = jwtSecurityToken.Claims.Where(c => c.Type == "oid").FirstOrDefault();
-            if (objectId == null)
-            {
-                throw new InstallException($"No object ID found for client credentials");
-            }
-            _logger.LogInformation($"Detected client ID '{clientId}' has object ID '{objectId.Value}'");
+            var objectIdValue = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(tenantId.ToString(), clientId, secret);
+            _logger.LogInformation($"Detected client ID '{clientId}' has object ID '{objectIdValue}'");
 
-            await AddPolicyForConfiguredAccount(vaultResource, tenantId, objectId.Value, secretPerms, certPerms);
+            await AddPolicyForConfiguredAccount(vaultResource, tenantId, objectIdValue, secretPerms, certPerms);
         }
 
         protected Guid TenantGuidFromConfig()

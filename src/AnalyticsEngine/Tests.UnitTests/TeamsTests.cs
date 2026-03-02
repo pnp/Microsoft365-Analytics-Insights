@@ -19,6 +19,11 @@ namespace Tests.UnitTests
         {
 
             var cognitiveConfig = new AppConfig();
+            if (!cognitiveConfig.IsValidCognitiveConfig)
+            {
+                Assert.Inconclusive("Cognitive config is not set, cannot run test");
+                return;
+            }
 
             var credentials = new AzureKeyCredential(cognitiveConfig.CognitiveKey);
             var client = new TextAnalyticsClient(new Uri(cognitiveConfig.CognitiveEndpoint), credentials);

@@ -1,6 +1,9 @@
 ﻿using DataUtils;
 using System;
 using System.Data.Entity;
+using System.Data.Entity.Infrastructure;
+using System.Data.SqlClient;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace Common.Entities
@@ -50,14 +53,46 @@ namespace Common.Entities
 
             return await base.GetResource(key, async () =>
             {
-                NewObjectCreating?.Invoke(this, newTemplate);
-
-                this.EntityStore.Add(newTemplate);
-                if (commitChangeOnSaveNew)
+                try
                 {
-                    await DB.SaveChangesAsync();
+                    NewObjectCreating?.Invoke(this, newTemplate);
+
+                    this.EntityStore.Add(newTemplate);
+                    if (commitChangeOnSaveNew)
+                    {
+                        await DB.SaveChangesAsync();
+                    }
+                    return newTemplate;
                 }
-                return newTemplate;
+                catch (DbUpdateException ex)
+                {
+                    // Handle duplicate key constraint violations that can occur in batch processing scenarios
+                    // Check if it's a unique constraint/index violation
+                    var sqlException = ex.InnerException?.InnerException as SqlException;
+                    if (sqlException != null && (sqlException.Number == 2601 || sqlException.Number == 2627))
+                    {
+                        // SQL Error 2601: Cannot insert duplicate key row with unique index
+                        // SQL Error 2627: Violation of %ls constraint '%.*ls'. Cannot insert duplicate key
+                        
+                        // Remove the failed entity from context to prevent further issues
+                        DB.Entry(newTemplate).State = EntityState.Detached;
+                        
+                        // Try to reload from database - another batch may have inserted it
+                        var existing = await this.Load(key);
+                        if (existing != null)
+                        {
+                            return existing;
+                        }
+                        
+                        // If still not found, this is an unexpected state - rethrow
+                        throw new InvalidOperationException(
+                            $"Duplicate key constraint violation for lookup '{typeof(T).Name}' with key '{key}', but entity not found in database after reload.", 
+                            ex);
+                    }
+                    
+                    // Not a duplicate key error, rethrow
+                    throw;
+                }
             });
         }
 
@@ -66,4 +101,18 @@ namespace Common.Entities
 
     }
 
+    public abstract class DBLookupCacheForEntityWithName<T> : DBLookupCache<T> where T : AbstractEFEntityWithName
+    {
+        protected DBLookupCacheForEntityWithName(AnalyticsEntitiesContext context) : base(context)
+        {
+        }
+
+
+        public async override Task<T> Load(string searchName)
+        {
+            // Use FirstOrDefaultAsync instead of SingleOrDefaultAsync to handle existing duplicate records gracefully
+            // Order by ID to ensure consistent results if duplicates exist
+            return await EntityStore.Where(t => t.Name == searchName).OrderBy(t => t.ID).FirstOrDefaultAsync();
+        }
+    }
 }

@@ -102,7 +102,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             // Only generate saves in batches of MAX_REPORTS_PER_THREAD. Call
             var listBatchProcessor = new ListBatchProcessor<AbstractAuditLogContent>(_maxSavesPerBatch, async (newChunk) => await newReportsLoadedCallback(newChunk));
 
-            // For each summary chunk, load full reports in parallel
+            // For each summary chunk, load full reports in parallel. Reduced chunk size to 1000 to prevent OOM with large datasets
             var loader = new ParallelListProcessor<SUMMARYTYPE>(1000);
 
             // Load in parallel & call parent func on listBatchProcessor to save
@@ -110,7 +110,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 async (threadListChunk, threadIndex) => await ProcessSummaryChunkAsync(threadListChunk, listBatchProcessor, activityReportLoader),
                     threads => _telemetry.LogInformation($"Audit events import: full-loading activity reports from {reportSummaries.Count.ToString("n0")} links, across {threads.ToString("n0")} thread(s)..."));
 
-            listBatchProcessor.Flush();
+            await listBatchProcessor.Flush();
         }
 
         private async Task ProcessSummaryChunkAsync(List<SUMMARYTYPE> summariesToLoad, ListBatchProcessor<AbstractAuditLogContent> listBatchProcessor, IActivityReportLoader<SUMMARYTYPE> activityReportLoader)
@@ -119,7 +119,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             {
                 var metaReports = await activityReportLoader.Load(job);
 
-                listBatchProcessor.AddRange(metaReports);
+                await listBatchProcessor.AddRange(metaReports);
 
                 // Update reports done stats
                 lock (this)

@@ -1,3 +1,5 @@
+import { error } from "./Logger";
+
 const textEncoder = new TextEncoder();
 
 // This function will split an array into multiple arrays of a maximum byte size
@@ -9,9 +11,9 @@ export function splitIntoJsonArraysOfMaxBytes<T>(d: T[] | undefined, maxBytesSiz
     
             // Is the next item going to push us over the limit?
             if (idx < d.length - 1) {
-                const arraySoFarPlusOne: T[] = [...nextCallbackResults, item];
-                const arraySoFarPlusOneJson = JSON.stringify(arraySoFarPlusOne);
-                if (textEncoder.encode(arraySoFarPlusOneJson).length > maxBytesSize) {
+                const arraySoFarPlusNext: T[] = [...nextCallbackResults, d[idx + 1]];
+                const arraySoFarPlusNextJson = JSON.stringify(arraySoFarPlusNext);
+                if (textEncoder.encode(arraySoFarPlusNextJson).length > maxBytesSize) {
                     callBack(nextCallbackResults);
                     nextCallbackResults = [];
                 }
@@ -19,7 +21,7 @@ export function splitIntoJsonArraysOfMaxBytes<T>(d: T[] | undefined, maxBytesSiz
         });
     }
     else {
-        console.error("splitIntoJsonArraysOfMaxBytes: input array is undefined or not an array");
+        error("splitIntoJsonArraysOfMaxBytes: input array is undefined or not an array");
     }
 
 
