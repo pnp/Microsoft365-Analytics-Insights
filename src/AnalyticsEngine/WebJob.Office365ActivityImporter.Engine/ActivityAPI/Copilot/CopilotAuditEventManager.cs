@@ -77,9 +77,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     }
                     else if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT)
                     {
-                        AddChatOnly(auditRecord, baseOfficeEvent);
-                        eventChats++; _totalChatOnlyCount++;
-                        // continue; chat-only does not block other context types
+                        if (eventChats == 0) // safeguard against multiple chat contexts for the same event
+                        {
+                            AddChatOnly(auditRecord, baseOfficeEvent);
+                            eventChats++; _totalChatOnlyCount++;
+                        }
                     }
                     else
                     {
