@@ -19,8 +19,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string AgentId { get; set; }
 
         /// <summary>
-        /// Indicates whether this is a custom agent (extracted from AppIdentity) or a standard Copilot agent.
-        /// True when AgentName/AgentId were extracted from AppIdentity during deserialization.
+        /// Indicates whether this is a custom engine agent or a declarative agent.
+        /// False when AgentId starts with "CopilotStudio.Declarative." (declarative agent).
+        /// True when an agent is identified but is not declarative (custom engine agent).
+        /// Null when no agent is identified.
         /// </summary>
         public bool? IsCustomAgent { get; set; }
 
@@ -47,12 +49,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             // Parse the event data for structured access (instead of using EventRaw later)
             thisAuditLogReport.ParsedAuditEvent = JsonConvert.DeserializeObject<CopilotAuditEvent>(thisAuditLogReport.EventRaw);
 
-            // If AgentName and AgentId are not set, but AppIdentity has a value, extract from AppIdentity
-            if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
+            // Priority: CopilotEventData.TargetAgentName (custom engine agent) > AgentName (declarative agent) > AppIdentity fallback
+            var targetAgentName = thisAuditLogReport.CopilotEventData?.TargetAgentName;
+            if (!string.IsNullOrEmpty(targetAgentName))
+            {
+                // TargetAgentName indicates a custom engine agent
+                thisAuditLogReport.AgentName = targetAgentName;
+                // If AgentId is not set, use AppIdentity as the identifier
+                if (string.IsNullOrEmpty(thisAuditLogReport.AgentId))
+                {
+                    thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+                }
+            }
+            else if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
                 string.IsNullOrEmpty(thisAuditLogReport.AgentId) &&
                 !string.IsNullOrEmpty(thisAuditLogReport.AppIdentity) &&
                 !string.IsNullOrEmpty(thisAuditLogReport.OrganizationId))
             {
+                // Fallback: extract agent name from AppIdentity when neither TargetAgentName nor AgentName are set
                 // AppIdentity format: "Copilot.Studio.Default-{OrganizationId}-{AgentName}"
                 // Example: "Copilot.Studio.Default-873ca9a3-4805-48f2-b419-fabf868641da-contoso_itAssistant"
                 var orgIdIndex = thisAuditLogReport.AppIdentity.IndexOf(thisAuditLogReport.OrganizationId);
@@ -67,18 +81,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                         if (remainder.StartsWith("-") && remainder.Length > 1)
                         {
                             thisAuditLogReport.AgentName = remainder.Substring(1);
-                            // Only set AgentId if we successfully extracted an AgentName
                             thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
-                            // Mark this as a custom agent since we extracted it from AppIdentity
-                            thisAuditLogReport.IsCustomAgent = true;
                         }
                         else if (!string.IsNullOrEmpty(remainder) && !remainder.Equals("-"))
                         {
                             thisAuditLogReport.AgentName = remainder;
-                            // Only set AgentId if we successfully extracted an AgentName
                             thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
-                            // Mark this as a custom agent since we extracted it from AppIdentity
-                            thisAuditLogReport.IsCustomAgent = true;
                         }
                     }
                 }
@@ -126,6 +134,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// Example: Some examples of supported apps and services include M365 Office(docx, pptx, xlsx), TeamsMeeting, TeamsChannel, and TeamsChat.If Copilot is used in Excel, then context will be the identifier of the Excel Spreadsheet and the file type.
         /// </summary>
         public List<Context> Contexts { get; set; } = new List<Context>();
+
+        /// <summary>
+        /// The name of the target custom engine agent. Present when the interaction involves a custom engine agent.
+        /// </summary>
+        public string TargetAgentName { get; set; }
     }
 
     public class Context

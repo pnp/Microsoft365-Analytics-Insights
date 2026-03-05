@@ -310,6 +310,68 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Tests that when TargetAgentName changes for the same AgentId, the DB is updated with the new name
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerTargetAgentNameUpdateSaveTest()
+        {
+            using (var _db = new AnalyticsEntitiesContext(_config.ConnectionStrings.SQL, true, false))
+            {
+                await ClearEvents(_db);
+
+                var adaptor = new FakeCopilotMetadataLoader();
+
+                // First save with initial TargetAgentName resolved through FromJson
+                var agentId = "TargetAgentTest_" + DateTime.Now.Ticks;
+                var initialTargetName = "InitialCustomEngine_" + DateTime.Now.Ticks;
+                var firstChatEvents = await ExecuteCopilotEventManagerSaveFlow(adaptor, _db, Tuple.Create(agentId, initialTargetName));
+
+                // Verify first events saved with initial agent name
+                foreach (var evt in firstChatEvents)
+                {
+                    var id = evt.Id;
+                    var reloaded = await _db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == id);
+                    Assert.IsNotNull(reloaded, $"CopilotChat not found for initial event {id}");
+                    Assert.IsNotNull(reloaded.Agent, $"Agent navigation null for initial event {id}");
+                    Assert.AreEqual(agentId, reloaded.Agent.AgentID, $"AgentID mismatch for initial event {id}");
+                    Assert.AreEqual(initialTargetName, reloaded.Agent.Name, $"Agent Name mismatch for initial event {id}");
+                }
+
+                // Second save with updated TargetAgentName (same AgentId) - simulates custom engine agent rename
+                var updatedTargetName = "UpdatedCustomEngine_" + DateTime.Now.Ticks;
+                var secondChatEvents = await ExecuteCopilotEventManagerSaveFlow(adaptor, _db, Tuple.Create(agentId, updatedTargetName));
+
+                // Verify ALL second events saved and agent name updated
+                foreach (var evt in secondChatEvents)
+                {
+                    var id = evt.Id;
+                    var reloaded = await _db.CopilotChats.Include(x => x.Agent).FirstOrDefaultAsync(x => x.AuditEvent.Id == id);
+                    if (reloaded?.Agent != null)
+                    {
+                        await _db.Entry(reloaded.Agent).ReloadAsync();
+                    }
+                    Assert.IsNotNull(reloaded, $"CopilotChat not found for second event {id}");
+                    Assert.IsNotNull(reloaded.Agent, $"Agent navigation null for second event {id}");
+                    Assert.AreEqual(agentId, reloaded.Agent.AgentID, $"AgentID mismatch for second event {id}");
+                    Assert.AreEqual(updatedTargetName, reloaded.Agent.Name, $"Updated Agent Name mismatch for second event {id}");
+                }
+
+                // Assert previously created events now reflect updated agent name
+                var previouslyCreatedIds = firstChatEvents.Select(e => e.Id).ToList();
+                var previouslyCreatedChats = await _db.CopilotChats.Include(x => x.Agent)
+                    .Where(x => previouslyCreatedIds.Contains(x.AuditEvent.Id)).ToListAsync();
+                foreach (var chat in previouslyCreatedChats)
+                {
+                    if (chat.Agent != null)
+                    {
+                        await _db.Entry(chat.Agent).ReloadAsync();
+                        Assert.AreEqual(updatedTargetName, chat.Agent.Name, "Existing event did not reflect updated agent name from TargetAgentName");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Tests that AccessedResources are correctly saved to lookup tables and junction table
         /// </summary>
         [TestMethod]
@@ -1137,7 +1199,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(appIdentity, result.AgentId, "AgentId should be set to AppIdentity value");
             Assert.AreEqual(appIdentity, result.AppIdentity, "AppIdentity should be preserved");
             Assert.AreEqual(organizationId, result.OrganizationId, "OrganizationId should be preserved");
-            Assert.IsTrue(result.IsCustomAgent.HasValue && result.IsCustomAgent.Value, "IsCustomAgent should be true when extracted from AppIdentity");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
         }
 
         /// <summary>
@@ -1171,7 +1233,221 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result, "Result should not be null");
             Assert.AreEqual(existingAgentName, result.AgentName, "Existing AgentName should be preserved");
             Assert.AreEqual(existingAgentId, result.AgentId, "Existing AgentId should be preserved");
-            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should remain null when not extracted from AppIdentity");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Tests that declarative agents (AgentId starting with "CopilotStudio.Declarative.") are not marked as custom
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_DeclarativeAgentIsNotCustom()
+        {
+            // Arrange
+            var agentName = "DeclarativeAgent";
+            var agentId = "CopilotStudio.Declarative.T_a83f31f8-c2a2-3418-17dd-c7a5c8b01a45.7c8cc6e4-257e-455b-b557-c6ffa78eda90";
+
+            var json = $@"{{
+                ""AgentName"": ""{agentName}"",
+                ""AgentId"": ""{agentId}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.AreEqual(agentName, result.AgentName, "AgentName should be preserved");
+            Assert.AreEqual(agentId, result.AgentId, "AgentId should be preserved");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Tests that TargetAgentName is used as the agent name and marked as custom agent
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_UsesTargetAgentNameAsCustomAgent()
+        {
+            // Arrange
+            var targetAgentName = "MyCustomEngineAgent";
+            var agentId = "custom-engine-agent-id-123";
+
+            var json = $@"{{
+                ""AgentId"": ""{agentId}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""{targetAgentName}""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result, "Result should not be null");
+            Assert.AreEqual(targetAgentName, result.AgentName, "AgentName should be set from TargetAgentName");
+            Assert.AreEqual(agentId, result.AgentId, "AgentId should be preserved from JSON");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Tests that TargetAgentName takes priority over AgentName when both are present
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNameOverridesAgentName()
+        {
+            // Arrange
+            var targetAgentName = "CustomEngineAgent";
+            var declarativeAgentName = "DeclarativeAgent";
+            var agentId = "agent-id-456";
+
+            var json = $@"{{
+                ""AgentName"": ""{declarativeAgentName}"",
+                ""AgentId"": ""{agentId}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""{targetAgentName}""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual(targetAgentName, result.AgentName, "TargetAgentName should take priority over AgentName");
+            Assert.AreEqual(agentId, result.AgentId, "AgentId should be preserved");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Tests that TargetAgentName takes priority over AppIdentity fallback
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNameSkipsAppIdentityFallback()
+        {
+            // Arrange
+            var organizationId = "873ca9a3-4805-48f2-b419-fabf868641da";
+            var appIdentity = $"Copilot.Studio.Default-{organizationId}-appIdentityAgent";
+            var targetAgentName = "CustomEngineAgentFromTargetField";
+
+            var json = $@"{{
+                ""OrganizationId"": ""{organizationId}"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""{targetAgentName}""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual(targetAgentName, result.AgentName, "TargetAgentName should be used instead of AppIdentity extraction");
+            Assert.AreEqual(appIdentity, result.AgentId, "AgentId should fall back to AppIdentity when not set in JSON");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Tests that TargetAgentName uses AppIdentity as AgentId when AgentId is not set
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNameUsesAppIdentityAsAgentIdFallback()
+        {
+            // Arrange
+            var targetAgentName = "CustomEngineAgent";
+            var appIdentity = "Copilot.Studio.Default-someorg-someagent";
+
+            var json = $@"{{
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""{targetAgentName}""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual(targetAgentName, result.AgentName, "AgentName should be set from TargetAgentName");
+            Assert.AreEqual(appIdentity, result.AgentId, "AgentId should fall back to AppIdentity when not in JSON");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Tests that TargetAgentName preserves existing AgentId when it is set
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNamePreservesExistingAgentId()
+        {
+            // Arrange
+            var targetAgentName = "CustomEngineAgent";
+            var agentId = "explicit-agent-id-789";
+            var appIdentity = "Copilot.Studio.Default-someorg-someagent";
+
+            var json = $@"{{
+                ""AgentId"": ""{agentId}"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""{targetAgentName}""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual(targetAgentName, result.AgentName, "AgentName should be set from TargetAgentName");
+            Assert.AreEqual(agentId, result.AgentId, "AgentId from JSON should be preserved, not overwritten by AppIdentity");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Tests that TargetAgentName triggers Copilot Credit calculation as a custom agent
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNameCalculatesCost()
+        {
+            // Arrange - JSON with TargetAgentName inside CopilotEventData and event data that would incur costs
+            var json = @"{
+                ""AgentId"": ""cost-test-agent-id"",
+                ""CopilotEventData"": {
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [
+                        { ""Type"": ""File"", ""SiteUrl"": ""https://contoso.sharepoint.com/sites/team"" }
+                    ],
+                    ""Contexts"": [],
+                    ""Messages"": [
+                        { ""Id"": ""msg1"", ""isPrompt"": true },
+                        { ""Id"": ""msg2"", ""isPrompt"": false }
+                    ],
+                    ""TargetAgentName"": ""CostTestAgent""
+                }
+            }";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result.Cost, "Cost should be calculated for TargetAgentName (custom agent)");
+            Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+            Assert.AreEqual("CostTestAgent", result.AgentName, "AgentName should be set from TargetAgentName");
         }
 
         /// <summary>
@@ -1326,7 +1602,7 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(result, $"Result should not be null for agent name: {expectedAgentName}");
                 Assert.AreEqual(expectedAgentName, result.AgentName, $"AgentName should be correctly extracted for: {expectedAgentName}");
                 Assert.AreEqual(appIdentity, result.AgentId, $"AgentId should be set to AppIdentity for: {expectedAgentName}");
-                Assert.IsTrue(result.IsCustomAgent.HasValue && result.IsCustomAgent.Value, $"IsCustomAgent should be true for: {expectedAgentName}");
+                Assert.IsNull(result.IsCustomAgent, $"IsCustomAgent should always be null from FromJson for: {expectedAgentName}");
             }
         }
 
