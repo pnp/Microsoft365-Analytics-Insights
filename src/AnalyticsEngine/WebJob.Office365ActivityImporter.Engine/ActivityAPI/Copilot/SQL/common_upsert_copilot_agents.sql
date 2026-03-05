@@ -35,21 +35,27 @@ WHERE EXISTS (
 
 
 -- Insert chat where there is no existing copilot_chats record for the event_id
+-- Uses ROW_NUMBER to deduplicate staging table rows with the same event_id
 INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json)
-SELECT
-    i.event_id,
-    i.app_host,
-    ca.id,
-    i.copilot_credit_estimate_total,
-    i.copilot_credit_estimate_json
-FROM dbo.[${STAGING_TABLE_ACTIVITY}]  AS i
-LEFT JOIN dbo.copilot_agents AS ca
-    ON ca.agent_id = i.agent_id
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM dbo.copilot_chats AS ec
-    WHERE ec.event_id = i.event_id
+SELECT event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json
+FROM (
+    SELECT
+        i.event_id,
+        i.app_host,
+        ca.id AS agent_id,
+        i.copilot_credit_estimate_total,
+        i.copilot_credit_estimate_json,
+        ROW_NUMBER() OVER (PARTITION BY i.event_id ORDER BY (SELECT NULL)) AS rn
+    FROM dbo.[${STAGING_TABLE_ACTIVITY}] AS i
+    LEFT JOIN dbo.copilot_agents AS ca
+        ON ca.agent_id = i.agent_id
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM dbo.copilot_chats AS ec
+        WHERE ec.event_id = i.event_id
     )
+) AS deduped
+WHERE rn = 1
 
 
 -- Update existing chat records with Copilot Credit estimation data if not already present

@@ -1905,6 +1905,69 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Tests that an event with multiple TEAMS_CHAT contexts only produces one copilot_chats row,
+        /// preventing the PK violation that previously occurred when duplicate event_id rows were staged.
+        /// Regression test for: BatchSaveException "Violation of PRIMARY KEY constraint 'PK_dbo.copilot_chats'"
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerMultipleChatContextsDoesNotDuplicate()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "MultiChatCtx Test" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@multichat.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                // Stage an event that has multiple TEAMS_CHAT contexts — previously this
+                // added the same event_id to the staging table once per context, causing a
+                // PK violation on copilot_chats during the merge.
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:chat1@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            },
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:chat2@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            },
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:chat3@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT
+                            }
+                        }
+                    }
+                }, commonEvent);
+
+                // This previously threw BatchSaveException with PK violation on copilot_chats
+                await copilotEventManager.CommitAllChanges();
+
+                // Verify exactly one copilot_chats row was created for the event
+                var chatCount = await db.CopilotChats.CountAsync(c => c.AuditEvent.Id == commonEvent.Id);
+                Assert.AreEqual(1, chatCount, "Multiple TEAMS_CHAT contexts for the same event should produce exactly one copilot_chats row.");
+            }
+        }
+
+        /// <summary>
         /// Tests that when there's no agent information (AgentName is null/empty), Cost is set to NoCost (0 credits).
         /// This verifies the logic in CopilotAuditLogContent.FromJson() that assigns NoCost when AgentName is empty.
         /// </summary>
