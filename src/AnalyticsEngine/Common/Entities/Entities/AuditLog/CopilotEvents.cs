@@ -253,5 +253,65 @@ namespace Common.Entities.Entities.AuditLog
 
     #endregion
 
+    #region Tool Execution Tables
+
+    /// <summary>
+    /// Lookup table for tool names used in Copilot agent tool executions (Operation: AIExecuteTool).
+    /// </summary>
+    [Table("copilot_tool_names")]
+    public class CopilotToolName : AbstractEFEntityWithName
+    {
+    }
+
+    /// <summary>
+    /// Tracks a Copilot agent tool execution event (Operation: AIExecuteTool).
+    /// Links back to a copilot chat message to enable counting tool executions per chat.
+    /// The copilot_chat_id is resolved via the message_id which matches entries in copilot_event_messages.
+    /// </summary>
+    [Table("copilot_tool_executions")]
+    public class CopilotToolExecution : AbstractEFEntity
+    {
+        /// <summary>
+        /// The audit event ID for this AIExecuteTool event.
+        /// </summary>
+        [ForeignKey(nameof(AuditEvent))]
+        [Column("event_id")]
+        public Guid EventId { get; set; }
+        public CommonAuditEvent AuditEvent { get; set; } = null;
+
+        /// <summary>
+        /// FK to the copilot chat that this tool execution relates to.
+        /// Resolved via message_id matching copilot_event_messages at merge time.
+        /// </summary>
+        [ForeignKey(nameof(RelatedChat))]
+        [Column("copilot_chat_id")]
+        public Guid? ChatId { get; set; }
+        public CopilotChat RelatedChat { get; set; } = null;
+
+        /// <summary>
+        /// The message ID from the copilot conversation that triggered this tool execution.
+        /// Links to copilot_event_messages.message_id.
+        /// </summary>
+        [Column("message_id")]
+        [MaxLength(500)]
+        public string MessageId { get; set; } = null;
+
+        /// <summary>
+        /// FK to the tool name lookup table.
+        /// </summary>
+        [ForeignKey(nameof(ToolName))]
+        [Column("tool_name_id")]
+        public int? ToolNameId { get; set; }
+        public CopilotToolName ToolName { get; set; } = null;
+
+        /// <summary>
+        /// The app host where the tool was executed (e.g., Teams, Word).
+        /// </summary>
+        [Column("app_host")]
+        public string AppHost { get; set; } = null;
+    }
+
+    #endregion
+
 }
 

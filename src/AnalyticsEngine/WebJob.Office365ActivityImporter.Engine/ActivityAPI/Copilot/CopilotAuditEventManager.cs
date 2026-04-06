@@ -16,7 +16,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
     /// <summary>
     /// Saves copilot event metadata to SQL (staging tables first, then merged via supplied scripts).
     /// Responsibilities:
-    /// - Adapt raw audit events into staging entities (files / meetings / chat-only)
+    /// - Adapt raw audit events into staging entities (files / meetings / chat-only / tool executions)
     /// - Accumulate batches for high-speed bulk insert
     /// - Provide per-event and batch-level logging
     /// </summary>
@@ -27,12 +27,14 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly InsertBatch<SPCopilotLogTempEntity> _copilotInsertsSP;
         private readonly InsertBatch<TeamsCopilotLogTempEntity> _copilotInsertsTeams;
         private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
+        private readonly InsertBatch<ToolExecutionCopilotLogTempEntity> _copilotInsertsToolExecutions;
         private readonly ProjectResourceReader _rr;
 
         // Batch-level totals (across all processed events since last commit)
         private int _totalMeetingsCount;
         private int _totalFilesCount;
         private int _totalChatOnlyCount;
+        private int _totalToolExecutionsCount;
 
         public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger)
         {
@@ -42,6 +44,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsChatsNoContext = new InsertBatch<ChatOnlyCopilotLogTempEntity>(connectionString, logger);
+            _copilotInsertsToolExecutions = new InsertBatch<ToolExecutionCopilotLogTempEntity>(connectionString, logger);
         }
 
         /// <summary>
@@ -203,6 +206,54 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         }
 
         /// <summary>
+        /// Stages AIExecuteTool audit events for bulk insert. Creates one staging row per tool×message combination.
+        /// </summary>
+        public Task SaveToolExecutionToSqlStaging(AIExecuteToolAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
+        {
+            if (auditRecord == null || baseOfficeEvent == null)
+            {
+                _logger.LogWarning("CopilotAuditEventManager.SaveToolExecutionToSqlStaging received null auditRecord or baseOfficeEvent.");
+                return Task.CompletedTask;
+            }
+
+            var toolNames = auditRecord.GetToolNames();
+            var messageIds = auditRecord.GetResponseMessageIds();
+            var appHost = auditRecord.CopilotEventData?.AppHost;
+
+            if (toolNames.Count == 0)
+            {
+                // No tool names found; still record the event with null tool name
+                toolNames.Add(null);
+            }
+
+            if (messageIds.Count == 0)
+            {
+                // No message IDs found; still record the event with null message ID
+                messageIds.Add(null);
+            }
+
+            int rowsAdded = 0;
+            foreach (var toolName in toolNames)
+            {
+                foreach (var messageId in messageIds)
+                {
+                    _copilotInsertsToolExecutions.Rows.Add(new ToolExecutionCopilotLogTempEntity
+                    {
+                        EventId = baseOfficeEvent.Id,
+                        AppHost = appHost,
+                        ToolName = toolName,
+                        MessageId = messageId
+                    });
+                    rowsAdded++;
+                    _totalToolExecutionsCount++;
+                }
+            }
+
+            _logger.LogInformation($"Event {baseOfficeEvent.Id}: staged {rowsAdded} tool execution(s).");
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Serializes AccessedResources list to JSON for staging table storage
         /// </summary>
         internal string SerializeAccessedResources(IEnumerable<AccessedResource> accessedResources)
@@ -307,20 +358,24 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             var docsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_SP, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql");
             var teamsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql");
             var chatOnlyMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY, null);
+            var toolExecutionsMergeSql = GetToolExecutionsSql(ActivityImportConstants.STAGING_TABLE_COPILOT_TOOL_EXECUTIONS);
 
-            _logger.LogDebug($"Committing batch: {_totalFilesCount} file(s), {_totalMeetingsCount} meeting(s), {_totalChatOnlyCount} chat-only event(s) to SQL.");
+            _logger.LogDebug($"Committing batch: {_totalFilesCount} file(s), {_totalMeetingsCount} meeting(s), {_totalChatOnlyCount} chat-only event(s), {_totalToolExecutionsCount} tool execution(s) to SQL.");
 
             await _copilotInsertsSP.SaveToStagingTable(docsMergeSql);
             await _copilotInsertsTeams.SaveToStagingTable(teamsMergeSql);
             await _copilotInsertsChatsNoContext.SaveToStagingTable(chatOnlyMergeSql);
+            await _copilotInsertsToolExecutions.SaveToStagingTable(toolExecutionsMergeSql);
 
             // Clear lists & counters for next batch
             _copilotInsertsSP.Rows.Clear();
             _copilotInsertsTeams.Rows.Clear();
             _copilotInsertsChatsNoContext.Rows.Clear();
+            _copilotInsertsToolExecutions.Rows.Clear();
             _totalFilesCount = 0;
             _totalMeetingsCount = 0;
             _totalChatOnlyCount = 0;
+            _totalToolExecutionsCount = 0;
         }
 
         private string GetSql(string tempTableName, string workloadSpecificScriptName)
@@ -332,6 +387,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 ? _rr.ReadResourceString(workloadSpecificScriptName).Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName)
                 : string.Empty;
             return commonMergeSql + Environment.NewLine + workloadSpecificSql;
+        }
+
+        private string GetToolExecutionsSql(string tempTableName)
+        {
+            return _rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.upsert_copilot_tool_executions.sql")
+                .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName);
         }
 
         public void Dispose()

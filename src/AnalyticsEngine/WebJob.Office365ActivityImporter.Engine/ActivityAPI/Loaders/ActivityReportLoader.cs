@@ -167,7 +167,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                             {
                                 logJson = reportItem.ToString();
                             }
-                            thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
+
+                            if (logBase.Operation == ActivityImportConstants.OPERATION_AI_EXECUTE_TOOL)
+                            {
+                                thisAuditLogReport = AIExecuteToolAuditLogContent.FromJson(logJson);
+                            }
+                            else
+                            {
+                                thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
+                            }
                         }
                     }
                     catch (JsonReaderException ex)

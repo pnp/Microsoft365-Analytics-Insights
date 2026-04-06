@@ -7,5 +7,6 @@
     {
         public string Workload { get; set; }
 
+        public string Operation { get; set; }
     }
 }

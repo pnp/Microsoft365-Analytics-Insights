@@ -17,6 +17,8 @@
         public static string WORKLOAD_TEAMS { get { return "MicrosoftTeams"; } }
         public static string WORKLOAD_STREAM { get { return "MicrosoftStream"; } }
 
+        public static string OPERATION_AI_EXECUTE_TOOL { get { return "AIExecuteTool"; } }
+
         public static string PARAM_WEBHOOK_OVERRIDE { get { return "--webhook"; } }
         public static string PARAM_CALL_ID { get { return "--callId"; } }
         // New params for tracing audit log imports containing a specific email address
@@ -71,6 +73,12 @@
         public const string STAGING_TABLE_COPILOT_CHATONLY = "debug_import_staging_copilot_chatonly";
 #else
         public const string STAGING_TABLE_COPILOT_CHATONLY = "##debug_import_staging_copilot_teams";
+#endif
+
+#if DEBUG
+        public const string STAGING_TABLE_COPILOT_TOOL_EXECUTIONS = "debug_import_staging_copilot_tool_executions";
+#else
+        public const string STAGING_TABLE_COPILOT_TOOL_EXECUTIONS = "##import_staging_copilot_tool_executions";
 #endif
     }
 }

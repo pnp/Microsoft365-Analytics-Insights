@@ -313,6 +313,10 @@ namespace Common.Entities
         // AI Model transparency
         public DbSet<CopilotAIModel> CopilotAIModels { get; set; }
         public DbSet<CopilotEventAIModel> CopilotEventAIModels { get; set; }
+
+        // Tool executions (AIExecuteTool events)
+        public DbSet<CopilotToolName> CopilotToolNames { get; set; }
+        public DbSet<CopilotToolExecution> CopilotToolExecutions { get; set; }
         #endregion
     }
 

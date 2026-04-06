@@ -80,4 +80,23 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         public string Url { get; set; } = null;
     }
 
+    /// <summary>
+    /// Staging entity for AIExecuteTool events (Copilot agent tool executions)
+    /// </summary>
+    [TempTableName(ActivityImportConstants.STAGING_TABLE_COPILOT_TOOL_EXECUTIONS)]
+    internal class ToolExecutionCopilotLogTempEntity
+    {
+        [Column("event_id")]
+        public Guid EventId { get; set; }
+
+        [Column("app_host", true)]
+        public string AppHost { get; set; } = null;
+
+        [Column("tool_name", true)]
+        public string ToolName { get; set; } = null;
+
+        [Column("message_id", true)]
+        public string MessageId { get; set; } = null;
+    }
+
 }

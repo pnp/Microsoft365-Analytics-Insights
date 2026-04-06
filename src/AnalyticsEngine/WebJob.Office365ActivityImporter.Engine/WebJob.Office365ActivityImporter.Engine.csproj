@@ -81,6 +81,7 @@
     <Compile Include="ActivityImportCache.cs" />
     <Compile Include="Entities\BaseUser.cs" />
     <Compile Include="Entities\ChatReactions.cs" />
+    <Compile Include="Entities\Serialisation\AIExecuteToolAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\BaseSerialisationClasses.cs" />
     <Compile Include="Entities\Serialisation\CallRecord\CallDTOClasses.cs" />
     <Compile Include="Entities\Serialisation\CallRecord\CallRecordDTO.cs" />
@@ -205,6 +206,7 @@
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_teams_copilot_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\common_upsert_copilot_agents.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_activity_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\upsert_copilot_tool_executions.sql" />
     <Content Include="Resources\Insert Activity from Staging Table.sql" />
   </ItemGroup>
   <ItemGroup>
