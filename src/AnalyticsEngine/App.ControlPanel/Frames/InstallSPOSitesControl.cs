@@ -3,7 +3,6 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using DataUtils;
 using System;
-using System.Configuration;
 using System.Windows.Forms;
 using static App.ControlPanel.Frames.InstallWizard.InstallSolutionControl;
 
@@ -303,11 +302,7 @@ namespace App.ControlPanel.Frames
             var config = GetConfigFromGUI();
 
 
-            var urlConfig = ConfigurationManager.AppSettings.Get("SoftwareDownloadURL");
-            var softwareConfig = new SoftwareReleaseConfig
-            {
-                SoftwareDownloadURL = urlConfig
-            };
+            var softwareConfig = new SoftwareReleaseConfig();
 
             if (task == InstallTask.Install)
             {
