@@ -1,5 +1,6 @@
 ﻿using App.ControlPanel.Engine.InstallerTasks.JobTasks;
 using App.ControlPanel.Engine.Models;
+using Azure.Identity;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
@@ -20,13 +21,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
             AutomationAccountResource automationAccount)
             : base(logger, new ResourceGroupContainerLoader(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, subscription, config.AzureLocation, config.Tags.ToDictionary()))
         {
-            // Upload automation PS files to storage account
-            var storageInfo = new AzStorageConnectionInfo(storageAccount);
-            var storageUploadConfig = TaskConfig.GetConfigForPropAndVal(ProfilingScriptsUploadToBlobStorageTask.CFG_CONNECTION_STRING, storageInfo.StorageConnectionString)
+            // Upload automation PS files to storage account using RBAC
+            var runtimeAccount = config.RuntimeAccountOffice365;
+            var credential = new ClientSecretCredential(runtimeAccount.DirectoryId, runtimeAccount.ClientId, runtimeAccount.Secret);
+            var storageAccountUrl = $"https://{storageAccount.Data.Name}.blob.core.windows.net";
+            var storageUploadConfig = TaskConfig.GetConfigForPropAndVal(ProfilingScriptsUploadToBlobStorageTask.CFG_STORAGE_ACCOUNT_URL, storageAccountUrl)
                 .AddSetting(ProfilingScriptsUploadToBlobStorageTask.CFG_STORAGE_NAME, storageAccount.Data.Name);
 
             var tagsDic = config.Tags.ToDictionary();
-            var automationPowerShellScriptsUploader = new ProfilingScriptsUploadToBlobStorageTask(storageUploadConfig, logger, config.AzureLocation, tagsDic);
+            var automationPowerShellScriptsUploader = new ProfilingScriptsUploadToBlobStorageTask(storageUploadConfig, logger, config.AzureLocation, tagsDic, credential, storageAccount);
 
             // Publish the runbooks
             var commonConfig = TaskConfig.GetConfigForPropAndVal(RunbookUploadTask<RunbookFileLocalLocations>.CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME,

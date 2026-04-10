@@ -13,6 +13,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class ResourceSecurityInstallJob : BaseAnalyticsSolutionInstallJob
     {
         private readonly RoleAssignmentTask _appInsightsReaderRoleTask;
+        private readonly RoleAssignmentTask _storageBlobDataContributorRoleTask;
 
         public ResourceSecurityInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
         {
@@ -27,8 +28,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _appInsightsReaderRoleTask = new RoleAssignmentTask(readerRoleConfig, logger, Location, tagDic);
             this.AddTask(_appInsightsReaderRoleTask);
+
+            // Assign Storage Blob Data Contributor role to the runtime account so it can create containers and upload blobs
+            var storageBlobContributorConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Storage Blob Data Contributor")
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_PRINCIPAL_TYPE, "ServicePrincipal");
+
+            _storageBlobDataContributorRoleTask = new RoleAssignmentTask(storageBlobContributorConfig, logger, Location, tagDic);
+            this.AddTask(_storageBlobDataContributorRoleTask);
         }
 
         public RoleAssignmentResource AppInsightsReaderRole => GetTaskResult<RoleAssignmentResource>(_appInsightsReaderRoleTask);
+        public RoleAssignmentResource StorageBlobDataContributorRole => GetTaskResult<RoleAssignmentResource>(_storageBlobDataContributorRoleTask);
     }
 }
