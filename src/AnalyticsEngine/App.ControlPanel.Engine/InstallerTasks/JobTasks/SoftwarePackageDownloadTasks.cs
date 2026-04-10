@@ -46,11 +46,14 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             var json = await response.Content.ReadAsStringAsync();
             var release = JObject.Parse(json);
+            var tagName = release["tag_name"]?.ToString();
             var assets = release["assets"] as JArray;
             if (assets == null || !assets.Any())
             {
                 throw new UnexpectedInstallException("Latest GitHub release has no assets");
             }
+
+            _logger.LogInformation($"Found latest stable release version '{tagName}' from GitHub repo {repoOwner}/{repoName}");
 
             // Map expected file names to software components
             var componentFiles = new Dictionary<SoftwareComponent, string>
