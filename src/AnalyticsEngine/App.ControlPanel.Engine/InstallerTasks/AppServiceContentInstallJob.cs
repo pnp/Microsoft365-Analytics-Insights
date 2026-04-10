@@ -47,12 +47,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // If we have no local source or stable release info, we can't do much
             if (localOverrideSources == null && softwareReleaseConfig == null) throw new ArgumentNullException(nameof(softwareReleaseConfig));
 
-            // Get local or from releases storage account?
+            // Get local or from GitHub releases?
             if (localOverrideSources == null)
             {
-                var downloadLatestStableCfg = TaskConfig.GetConfigForPropAndVal(LatestStableSoftwarePackageDownloadTask.CFG_KEY_ContainerName, softwareReleaseConfig.ContainerName)
-                            .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_AccountBaseUrl, softwareReleaseConfig.AccountBaseUrl)
-                            .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_SAS, softwareReleaseConfig.SAS);
+                var downloadLatestStableCfg = TaskConfig.GetConfigForPropAndVal(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoOwner, SoftwareReleaseConfig.GITHUB_REPO_OWNER)
+                            .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoName, SoftwareReleaseConfig.GITHUB_REPO_NAME);
 
                 _sourceGetTask = new LatestStableSoftwarePackageDownloadTask(downloadLatestStableCfg, logger);
             }

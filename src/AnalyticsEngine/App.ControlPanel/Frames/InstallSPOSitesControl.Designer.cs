@@ -370,7 +370,7 @@
             this.rdbLatest.Size = new System.Drawing.Size(241, 17);
             this.rdbLatest.TabIndex = 0;
             this.rdbLatest.TabStop = true;
-            this.rdbLatest.Text = "Latest stable release (download automatically)";
+            this.rdbLatest.Text = "Latest stable release on GitHub (download automatically)";
             this.rdbLatest.UseVisualStyleBackColor = true;
             this.rdbLatest.CheckedChanged += new System.EventHandler(this.rdbLatest_CheckedChanged);
             // 
