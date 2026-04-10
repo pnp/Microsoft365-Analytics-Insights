@@ -231,21 +231,46 @@ namespace Tests.UnitTests
             Assert.IsTrue(fExtension2.ToString() == "whatever/file.doc");
 
 
-            var valid = new SoftwareReleaseConfig() { SoftwareDownloadURL = "https://spoinsights.blob.core.windows.net/v2downloads?sv=blah" };
-            Assert.IsTrue(valid.ContainerName == "v2downloads");
-            Assert.IsTrue(valid.AccountBaseUrl == "https://spoinsights.blob.core.windows.net");
-            Assert.IsTrue(valid.SAS == "?sv=blah");
-
-
-            var invalid1 = new SoftwareReleaseConfig() { SoftwareDownloadURL = "https://spoinsights.blob.core.windows.net/v2downloads" };
-            Assert.IsTrue(invalid1.ContainerName == string.Empty);
-            Assert.IsTrue(invalid1.SAS == string.Empty);
-            Assert.IsFalse(invalid1.IsValid);
-            var invalid2 = new SoftwareReleaseConfig() { SoftwareDownloadURL = "https://spoinsights" };
-            Assert.IsTrue(invalid2.ContainerName == string.Empty);
-            Assert.IsFalse(invalid2.IsValid);
+            var config = new SoftwareReleaseConfig();
+            Assert.IsTrue(config.RepoOwner == SoftwareReleaseConfig.GITHUB_REPO_OWNER);
+            Assert.IsTrue(config.RepoName == SoftwareReleaseConfig.GITHUB_REPO_NAME);
+            Assert.IsTrue(config.RepoOwner == "pnp");
+            Assert.IsTrue(config.RepoName == "Microsoft365-Analytics-Insights");
         }
 
+
+        [TestMethod]
+        public async Task DownloadLatestReleaseZipsHaveContent()
+        {
+            var cfg = TaskConfig.GetConfigForPropAndVal(
+                    LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoOwner, SoftwareReleaseConfig.GITHUB_REPO_OWNER)
+                .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoName, SoftwareReleaseConfig.GITHUB_REPO_NAME);
+
+            var task = new LatestStableSoftwarePackageDownloadTask(cfg, _logger);
+            var result = await task.ExecuteTaskReturnResult(null);
+
+            Assert.IsNotNull(result);
+            Assert.IsTrue(result.IsValid, "Downloaded release should be valid (5 non-empty .zip files)");
+
+            // Verify each component zip exists and has content
+            var components = new[]
+            {
+                SoftwareComponent.WebJobActivity,
+                SoftwareComponent.WebJobAppInsights,
+                SoftwareComponent.AITracker,
+                SoftwareComponent.ControlPanel,
+                SoftwareComponent.WebSite
+            };
+            foreach (var component in components)
+            {
+                var fileLocation = result.GetSolutionComponentLocation(component).FileLocation;
+                Assert.IsTrue(System.IO.File.Exists(fileLocation), $"{component} zip should exist at {fileLocation}");
+
+                var fileInfo = new System.IO.FileInfo(fileLocation);
+                Assert.IsTrue(fileInfo.Length > 0, $"{component} zip should not be empty");
+                Assert.IsTrue(fileLocation.EndsWith(".zip"), $"{component} should be a .zip file");
+            }
+        }
         /// <summary>
         /// Tests we can chain one lookup to result of another
         /// </summary>
