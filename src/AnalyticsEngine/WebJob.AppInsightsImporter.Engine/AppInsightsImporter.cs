@@ -77,15 +77,22 @@ namespace WebJob.AppInsightsImporter.Engine
                     {
                         _telemetry.LogInformation($"Importing hits for {d.ToString("yyyy-MM-dd")}...");
 
-                        // Read page-views
+                        // Fetch page-views and custom events for the same day in parallel.
+                        // Both are independent read-only API calls with no shared state.
                         PageViewCollection pageViewsResult;
+                        CustomEventsResultCollection events;
                         try
                         {
-                            pageViewsResult = await ai.GetPageViewsFromAppInsights(d, saveRestResponses);
+                            var pageViewsTask = ai.GetPageViewsFromAppInsights(d, saveRestResponses);
+                            var eventsTask = ai.GetCustomEventsFromAppInsights(d, saveRestResponses);
+                            await Task.WhenAll(pageViewsTask, eventsTask);
+
+                            pageViewsResult = pageViewsTask.Result;
+                            events = eventsTask.Result;
                         }
                         catch (Exception ex)
                         {
-                            _telemetry.LogError(ex, $"Got fatal exception downloading page-views from Application Insights REST: {ex.Message}");
+                            _telemetry.LogError(ex, $"Got fatal exception downloading from Application Insights REST: {ex.Message}");
 #if DEBUG
                             throw;
 #else
@@ -101,22 +108,12 @@ namespace WebJob.AppInsightsImporter.Engine
                             var pageViewsNewer = pageViewsResult.Rows.Where(v => v.Timestamp > d);
                             _telemetry.LogInformation($"Hits downloaded - '{pageViewsResult.Rows.Count.ToString("n0")}' in total. " +
                                 $"Earliest: {earliest.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.ff")}, latest: {latest.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.ff")}");
+                        }
 
-                            // Read custom events
-                            CustomEventsResultCollection events;
-                            try
-                            {
-                                events = await ai.GetCustomEventsFromAppInsights(d, saveRestResponses);
-                            }
-                            catch (Exception ex)
-                            {
-                                _telemetry.LogError(ex, $"Got fatal exception downloading custom events from Application Insights REST: {ex.Message}");
-                                return;
-                            }
+                        _telemetry.LogInformation($"Processed {events.Rows.Count} events, and {pageViewsResult.Rows.Count} page-views");
 
-                            _telemetry.LogInformation($"Processed {events.Rows.Count} events, and {pageViewsResult.Rows.Count} page-views");
-
-
+                        if (pageViewsResult.Rows.Count > 0 || events.Rows.Count > 0)
+                        {
                             // Save to DB
                             try
                             {
