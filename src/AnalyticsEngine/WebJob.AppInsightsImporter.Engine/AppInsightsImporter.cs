@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Data.Entity;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
@@ -37,12 +38,16 @@ namespace WebJob.AppInsightsImporter.Engine
                 scanFromDateOverride = DateTime.Now.AddDays(daysBeforeOverride.Value * -1);
             }
 
+            var sw = Stopwatch.StartNew();
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Delete duplicate hits 1st. It also creates the page-request-ID index
                 await ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID(db);
+                _telemetry.LogInformation($"Startup: duplicate-hit cleanup completed in {sw.Elapsed.TotalSeconds:N1}s");
 
+                sw.Restart();
                 var filterUrls = await SiteFilterLoader.Load(db);
+                _telemetry.LogInformation($"Startup: loaded {filterUrls.Count} URL filters in {sw.Elapsed.TotalSeconds:N1}s");
 
                 var newestHit = await db.hits.OrderByDescending(h => h.hit_timestamp).Take(1).FirstOrDefaultAsync();
 
@@ -73,9 +78,14 @@ namespace WebJob.AppInsightsImporter.Engine
                     var endDate = DateTime.Now;
                     var daysToRead = startDate.EachDay(endDate);
                     _telemetry.LogInformation($"Importing hits for {daysToRead.Count()} days...");
+                    var totalDays = 0;
+                    var totalPageViews = 0;
+                    var totalEvents = 0;
                     foreach (var d in daysToRead)
                     {
-                        _telemetry.LogInformation($"Importing hits for {d.ToString("yyyy-MM-dd")}...");
+                        totalDays++;
+                        var dayTimer = Stopwatch.StartNew();
+                        _telemetry.LogInformation($"Importing day {totalDays}/{daysToRead.Count()}: {d.ToString("yyyy-MM-dd")}...");
 
                         // Fetch page-views and custom events for the same day in parallel.
                         // Both are independent read-only API calls with no shared state.
@@ -83,12 +93,14 @@ namespace WebJob.AppInsightsImporter.Engine
                         CustomEventsResultCollection events;
                         try
                         {
+                            sw.Restart();
                             var pageViewsTask = ai.GetPageViewsFromAppInsights(d, saveRestResponses);
                             var eventsTask = ai.GetCustomEventsFromAppInsights(d, saveRestResponses);
                             await Task.WhenAll(pageViewsTask, eventsTask);
 
                             pageViewsResult = pageViewsTask.Result;
                             events = eventsTask.Result;
+                            _telemetry.LogInformation($"API fetch completed in {sw.Elapsed.TotalSeconds:N1}s - {pageViewsResult.Rows.Count:n0} page-views, {events.Rows.Count:n0} events");
                         }
                         catch (Exception ex)
                         {
@@ -104,37 +116,42 @@ namespace WebJob.AppInsightsImporter.Engine
                         {
                             var earliest = pageViewsResult.Rows.OrderBy(v => v.Timestamp).Take(1).First();
                             var latest = pageViewsResult.Rows.OrderByDescending(v => v.Timestamp).Take(1).First();
-
-                            var pageViewsNewer = pageViewsResult.Rows.Where(v => v.Timestamp > d);
-                            _telemetry.LogInformation($"Hits downloaded - '{pageViewsResult.Rows.Count.ToString("n0")}' in total. " +
-                                $"Earliest: {earliest.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.ff")}, latest: {latest.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.ff")}");
+                            _telemetry.LogInformation($"Hits range: {earliest.Timestamp:yyyy-MM-dd HH:mm:ss.ff} to {latest.Timestamp:yyyy-MM-dd HH:mm:ss.ff}");
                         }
-
-                        _telemetry.LogInformation($"Processed {events.Rows.Count} events, and {pageViewsResult.Rows.Count} page-views");
 
                         if (pageViewsResult.Rows.Count > 0 || events.Rows.Count > 0)
                         {
                             // Save to DB
                             try
                             {
+                                sw.Restart();
                                 await pageViewsResult.SaveToSQL(db, _telemetry, filterUrls);
+                                _telemetry.LogInformation($"Page-views SQL save completed in {sw.Elapsed.TotalSeconds:N1}s");
+
+                                sw.Restart();
                                 await events.SaveAllEventTypesToSql(_telemetry, _importConfig);
+                                _telemetry.LogInformation($"Events SQL save completed in {sw.Elapsed.TotalSeconds:N1}s");
                             }
                             catch (SqlException ex)
                             {
                                 _telemetry.LogError(ex, "Got SQL error: " + ex.Message);
-                                if (System.Diagnostics.Debugger.IsAttached)
+                                if (Debugger.IsAttached)
                                 {
                                     throw;
                                 }
                             }
-                            _telemetry.LogInformation($"Saved {events.Rows.Count.ToString("n0")} events, and {pageViewsResult.Rows.Count.ToString("n0")} page-views");
+
+                            totalPageViews += pageViewsResult.Rows.Count;
+                            totalEvents += events.Rows.Count;
+                            _telemetry.LogInformation($"Day {d:yyyy-MM-dd} completed in {dayTimer.Elapsed.TotalSeconds:N1}s - saved {pageViewsResult.Rows.Count:n0} page-views, {events.Rows.Count:n0} events");
                         }
                         else
                         {
-                            _telemetry.LogInformation($"No new hits found.");
+                            _telemetry.LogInformation($"Day {d:yyyy-MM-dd} completed in {dayTimer.Elapsed.TotalSeconds:N1}s - no new data.");
                         }
                     }
+
+                    _telemetry.LogInformation($"Import loop finished: {totalDays} days processed, {totalPageViews:n0} total page-views, {totalEvents:n0} total events");
                 }
 
                 // Track finished event 
