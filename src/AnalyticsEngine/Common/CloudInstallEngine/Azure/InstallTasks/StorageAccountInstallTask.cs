@@ -56,6 +56,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     await storageAccount.UpdateAsync(patch);
                 }
 
+                _logger.LogInformation($"Found existing storage-account '{storageAccount.Data.Name}'.");
                 await EnsureTagsOnExisting(storageAccount.Data.Tags, storageAccount.GetTagResource());
             }
 

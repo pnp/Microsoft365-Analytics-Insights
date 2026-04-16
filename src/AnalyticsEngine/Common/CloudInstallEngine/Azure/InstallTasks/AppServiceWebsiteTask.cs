@@ -80,6 +80,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
 
                 await base.EnsureTagsOnExisting(webApp.Data.Tags, webApp.GetTagResource());     // Add configured tags
+
+                _logger.LogInformation($"Using existing App Service '{webApp.Data.DefaultHostName}'.");
             }
 
             // Enable basic publishing credentials for SCM and FTP
