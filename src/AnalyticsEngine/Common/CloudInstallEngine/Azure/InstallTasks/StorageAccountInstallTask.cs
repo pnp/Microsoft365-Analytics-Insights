@@ -33,7 +33,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (storageAccount == null)
             {
-                var newAccountInfo = new StorageAccountCreateOrUpdateContent(new StorageSku("Standard_LRS"), StorageKind.StorageV2, AzureLocation);
+                var newAccountInfo = new StorageAccountCreateOrUpdateContent(new StorageSku("Standard_LRS"), StorageKind.StorageV2, AzureLocation)
+                {
+                    MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2
+                };
                 EnsureTagsOnNew(newAccountInfo.Tags);
                 var storageAccountReq = await Container.GetStorageAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, newAccountInfo);
                 storageAccount = storageAccountReq.Value;
