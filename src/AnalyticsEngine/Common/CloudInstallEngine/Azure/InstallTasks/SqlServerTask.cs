@@ -49,7 +49,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                _logger.LogInformation($"Found existing SQL Server '{sqlServer.Data.FullyQualifiedDomainName}'.");
+                // Ensure minimum TLS version is 1.2
+                if (sqlServer.Data.MinimalTlsVersion == null || string.Compare(sqlServer.Data.MinimalTlsVersion, "1.2") < 0)
+                {
+                    _logger.LogInformation($"Updating SQL Server '{serverName}' to enforce TLS 1.2...");
+                    var updateData = new SqlServerData(AzureLocation)
+                    {
+                        MinimalTlsVersion = "1.2"
+                    };
+                    await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, updateData);
+                }
+
                 await base.EnsureTagsOnExisting(sqlServer.Data.Tags, sqlServer.GetTagResource());
             }
             return sqlServer;

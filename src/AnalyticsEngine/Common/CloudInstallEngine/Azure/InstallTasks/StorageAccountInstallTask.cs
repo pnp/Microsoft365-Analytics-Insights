@@ -45,7 +45,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                _logger.LogInformation($"Found existing storage-account '{storageAccount.Data.Name}'.");
+                // Ensure minimum TLS version is 1.2
+                if (storageAccount.Data.MinimumTlsVersion == null || !storageAccount.Data.MinimumTlsVersion.Value.ToString().Equals(StorageMinimumTlsVersion.Tls1_2.ToString()))
+                {
+                    _logger.LogInformation($"Updating storage account '{name}' to enforce TLS 1.2...");
+                    var patch = new StorageAccountPatch
+                    {
+                        MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2
+                    };
+                    await storageAccount.UpdateAsync(patch);
+                }
+
                 await EnsureTagsOnExisting(storageAccount.Data.Tags, storageAccount.GetTagResource());
             }
 

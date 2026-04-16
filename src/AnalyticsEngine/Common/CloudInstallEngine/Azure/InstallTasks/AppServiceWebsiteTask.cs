@@ -49,23 +49,37 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                var needsUpdate = false;
+                var webAppUpdateInfo = new WebSiteData(base.AzureLocation);
+
                 // Ensure app has system assigned identity
                 if (webApp.HasData && webApp.Data.Identity == null)
                 {
-                    webApp.Data.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
+                    webAppUpdateInfo.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
                     _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to use System Assigned identity...");
+                    needsUpdate = true;
+                }
 
-                    var webAppUpdateInfo = new WebSiteData(base.AzureLocation)
+                // Ensure minimum TLS version is 1.2
+                var webAppData = (await webApp.GetAsync()).Value.Data;
+                var currentTlsVersion = webAppData.SiteConfig?.MinTlsVersion;
+                if (currentTlsVersion == null || !currentTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString()))
+                {
+                    webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
-                        Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
                     };
-                    base.EnsureTagsOnNew(webAppUpdateInfo.Tags);     // Add configured tags
-                    var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo);
+                    _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
+                    needsUpdate = true;
+                }
+
+                if (needsUpdate)
+                {
+                    base.EnsureTagsOnNew(webAppUpdateInfo.Tags);
+                    await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo);
                 }
 
                 await base.EnsureTagsOnExisting(webApp.Data.Tags, webApp.GetTagResource());     // Add configured tags
-
-                _logger.LogInformation($"Using existing App Service '{webApp.Data.DefaultHostName}'.");
             }
 
             // Enable basic publishing credentials for SCM and FTP
