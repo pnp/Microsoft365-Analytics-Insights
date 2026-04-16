@@ -61,9 +61,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
 
                 // Ensure minimum TLS version is 1.2
-                var webAppData = (await webApp.GetAsync()).Value.Data;
-                var currentTlsVersion = webAppData.SiteConfig?.MinTlsVersion;
-                if (currentTlsVersion == null || !currentTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString()))
+                var siteConfig = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data;
+                if (siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString()))
                 {
                     webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
