@@ -36,7 +36,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     SiteConfig = new SiteConfigProperties
                     {
                         IsAlwaysOn = true,
-                        FtpsState = AppServiceFtpsState.FtpsOnly
+                        FtpsState = AppServiceFtpsState.FtpsOnly,
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
                     },
                     Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
                 };
