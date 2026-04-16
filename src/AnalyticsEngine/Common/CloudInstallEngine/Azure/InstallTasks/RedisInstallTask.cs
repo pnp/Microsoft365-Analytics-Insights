@@ -28,7 +28,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 _logger.LogInformation($"Creating new redis cache '{name}' at basic SKU. This may take several minutes...");
 
-                var newResourceData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(RedisSkuName.Basic, RedisSkuFamily.BasicOrStandard, 0));
+                var newResourceData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(RedisSkuName.Basic, RedisSkuFamily.BasicOrStandard, 0))
+                {
+                    MinimumTlsVersion = RedisTlsVersion.Tls1_2
+                };
                 base.EnsureTagsOnNew(newResourceData.Tags);
                 var operation = await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, newResourceData);
                 _logger.LogInformation($"Created redis cache '{operation.Value.Data.Name}'.");
