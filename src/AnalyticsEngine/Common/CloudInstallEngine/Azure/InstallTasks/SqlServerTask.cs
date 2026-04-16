@@ -39,7 +39,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var sqlServerData = new SqlServerData(AzureLocation)
                 {
                     AdministratorLogin = adminUsername,
-                    AdministratorLoginPassword = adminPassword
+                    AdministratorLoginPassword = adminPassword,
+                    MinimalTlsVersion = "1.2"
                 };
 
                 base.EnsureTagsOnNew(sqlServerData.Tags);
@@ -48,6 +49,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                // Ensure minimum TLS version is 1.2
+                if (sqlServer.Data.MinimalTlsVersion == null || string.Compare(sqlServer.Data.MinimalTlsVersion, "1.2") < 0)
+                {
+                    _logger.LogInformation($"Updating SQL Server '{serverName}' to enforce TLS 1.2...");
+                    var updateData = new SqlServerData(AzureLocation)
+                    {
+                        MinimalTlsVersion = "1.2"
+                    };
+                    await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, updateData);
+                }
+
                 _logger.LogInformation($"Found existing SQL Server '{sqlServer.Data.FullyQualifiedDomainName}'.");
                 await base.EnsureTagsOnExisting(sqlServer.Data.Tags, sqlServer.GetTagResource());
             }

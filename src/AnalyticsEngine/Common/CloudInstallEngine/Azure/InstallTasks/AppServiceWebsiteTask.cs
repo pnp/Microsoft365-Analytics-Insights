@@ -36,7 +36,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     SiteConfig = new SiteConfigProperties
                     {
                         IsAlwaysOn = true,
-                        FtpsState = AppServiceFtpsState.FtpsOnly
+                        FtpsState = AppServiceFtpsState.FtpsOnly,
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
                     },
                     Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
                 };
@@ -48,18 +49,33 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                var needsUpdate = false;
+                var webAppUpdateInfo = new WebSiteData(base.AzureLocation);
+
                 // Ensure app has system assigned identity
                 if (webApp.HasData && webApp.Data.Identity == null)
                 {
-                    webApp.Data.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
+                    webAppUpdateInfo.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
                     _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to use System Assigned identity...");
+                    needsUpdate = true;
+                }
 
-                    var webAppUpdateInfo = new WebSiteData(base.AzureLocation)
+                // Ensure minimum TLS version is 1.2
+                var siteConfig = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data;
+                if (siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString()))
+                {
+                    webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
-                        Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
                     };
-                    base.EnsureTagsOnNew(webAppUpdateInfo.Tags);     // Add configured tags
-                    var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo);
+                    _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
+                    needsUpdate = true;
+                }
+
+                if (needsUpdate)
+                {
+                    base.EnsureTagsOnNew(webAppUpdateInfo.Tags);
+                    await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo);
                 }
 
                 await base.EnsureTagsOnExisting(webApp.Data.Tags, webApp.GetTagResource());     // Add configured tags
@@ -67,17 +83,27 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Using existing App Service '{webApp.Data.DefaultHostName}'.");
             }
 
-            // Enable basic publishing credentials for SCM and FTP
+            // Enable basic publishing credentials for SCM and FTP if not already enabled
+            var scmPolicy = await webApp.GetScmSiteBasicPublishingCredentialsPolicy().GetAsync();
+            var ftpPolicy = await webApp.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync();
+
             var publishingCredentialsPolicyData = new CsmPublishingCredentialsPoliciesEntityData()
             {
                 Allow = true,
             };
 
-            _logger.LogInformation($"Enabling basic publishing credentials (SCM & FTP) for '{_config.ResourceName}'...");
-            await webApp.GetScmSiteBasicPublishingCredentialsPolicy().CreateOrUpdateAsync(
-                WaitUntil.Completed, publishingCredentialsPolicyData);
-            await webApp.GetWebSiteFtpPublishingCredentialsPolicy().CreateOrUpdateAsync(
-                WaitUntil.Completed, publishingCredentialsPolicyData);
+            if (scmPolicy.Value.Data.Allow != true)
+            {
+                _logger.LogInformation($"Enabling basic publishing credentials (SCM) for '{_config.ResourceName}'...");
+                await webApp.GetScmSiteBasicPublishingCredentialsPolicy().CreateOrUpdateAsync(
+                    WaitUntil.Completed, publishingCredentialsPolicyData);
+            }
+            if (ftpPolicy.Value.Data.Allow != true)
+            {
+                _logger.LogInformation($"Enabling basic publishing credentials (FTP) for '{_config.ResourceName}'...");
+                await webApp.GetWebSiteFtpPublishingCredentialsPolicy().CreateOrUpdateAsync(
+                    WaitUntil.Completed, publishingCredentialsPolicyData);
+            }
 
             return webApp;
 
