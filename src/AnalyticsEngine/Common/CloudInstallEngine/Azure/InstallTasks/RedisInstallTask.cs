@@ -40,7 +40,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                _logger.LogInformation($"Found existing Redis cache '{redisCache.Data.HostName}'.");
+                // Ensure minimum TLS version is 1.2
+                if (redisCache.Data.MinimumTlsVersion == null || !redisCache.Data.MinimumTlsVersion.Value.ToString().Equals(RedisTlsVersion.Tls1_2.ToString()))
+                {
+                    _logger.LogInformation($"Updating Redis cache '{name}' to enforce TLS 1.2...");
+                    var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(RedisSkuName.Basic, RedisSkuFamily.BasicOrStandard, 0))
+                    {
+                        MinimumTlsVersion = RedisTlsVersion.Tls1_2
+                    };
+                    await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
+                }
+
                 await base.EnsureTagsOnExisting(redisCache.Data.Tags, redisCache.GetTagResource());
             }
 
