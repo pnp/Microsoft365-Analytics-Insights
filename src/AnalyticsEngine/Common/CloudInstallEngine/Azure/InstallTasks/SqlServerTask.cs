@@ -60,6 +60,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, updateData);
                 }
 
+                _logger.LogInformation($"Found existing SQL Server '{sqlServer.Data.FullyQualifiedDomainName}'.");
                 await base.EnsureTagsOnExisting(sqlServer.Data.Tags, sqlServer.GetTagResource());
             }
             return sqlServer;

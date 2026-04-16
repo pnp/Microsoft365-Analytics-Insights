@@ -51,6 +51,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
                 }
 
+                _logger.LogInformation($"Found existing Redis cache '{redisCache.Data.HostName}'.");
                 await base.EnsureTagsOnExisting(redisCache.Data.Tags, redisCache.GetTagResource());
             }
 
