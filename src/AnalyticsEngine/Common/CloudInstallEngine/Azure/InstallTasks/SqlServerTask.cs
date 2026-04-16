@@ -39,7 +39,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var sqlServerData = new SqlServerData(AzureLocation)
                 {
                     AdministratorLogin = adminUsername,
-                    AdministratorLoginPassword = adminPassword
+                    AdministratorLoginPassword = adminPassword,
+                    MinimalTlsVersion = "1.2"
                 };
 
                 base.EnsureTagsOnNew(sqlServerData.Tags);
