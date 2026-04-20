@@ -380,6 +380,11 @@ namespace Tests.UnitTests
                 db.UrlComments.RemoveRange(allComments);
                 await db.SaveChangesAsync();
 
+                // Add test user
+                var testUser = new User { UserPrincipalName = "testuser" + DateTime.Now.Ticks };
+                db.users.Add(testUser);
+                await db.SaveChangesAsync();
+
                 // Add x2 test URLs
                 var url1 = new Url() { FullUrl = "http://whatever/" + DateTime.Now.Ticks };
                 var url2 = new Url() { FullUrl = "http://whatever2/" + DateTime.Now.Ticks };
@@ -395,7 +400,7 @@ namespace Tests.UnitTests
                     int? parentSpId = null;
                     if (i > 0) parentSpId = i;
 
-                    comments.Add(new PageCommentTemp("Url 1 Comment " + i, DateTime.Now, 1, i + 1, url1.ID, parentSpId));
+                    comments.Add(new PageCommentTemp("Url 1 Comment " + i, DateTime.Now, testUser.ID, i + 1, url1.ID, parentSpId));
                 }
 
                 // Insert test URLs for URL 1
@@ -403,7 +408,7 @@ namespace Tests.UnitTests
                 {
                     int? parentSpId = null;
                     if (i > 0) parentSpId = i;
-                    comments.Add(new PageCommentTemp("Url 2 Comment " + i, DateTime.Now, 1, i + 1, url2.ID, parentSpId));
+                    comments.Add(new PageCommentTemp("Url 2 Comment " + i, DateTime.Now, testUser.ID, i + 1, url2.ID, parentSpId));
                 }
 
                 // Save comments
