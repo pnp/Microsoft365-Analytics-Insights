@@ -495,5 +495,281 @@ namespace Tests.UnitTests
                 Assert.AreEqual(2, junctionRecords.Count, "Should have 2 junction records with the shared SiteUrl");
             }
         }
+
+        /// <summary>
+        /// Two events in the SAME batch share lookup values (e.g. same Type/SiteUrl but different Name).
+        /// Verifies that the single-pass temp table approach correctly deduplicates lookup inserts
+        /// within a single commit.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesIntraBatchSharedLookupsTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resources', 'U')").FirstOrDefault().GetValueOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent1 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "IntraBatch1 " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@intrabatch1.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+                var commonEvent2 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "IntraBatch2 " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@intrabatch2.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.AddRange(new[] { commonEvent1, commonEvent2 });
+                await db.SaveChangesAsync();
+
+                var sharedSiteUrl = "https://contoso.sharepoint.com/sites/intrabatch-shared";
+                var sharedType = "Document";
+
+                // Event 1 - shares Type and SiteUrl with Event 2
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "intrabatch-res-1",
+                                Name = "DocA.docx",
+                                Type = sharedType,
+                                SiteUrl = sharedSiteUrl,
+                                SensitivityLabelId = "intrabatch-label-1"
+                            }
+                        }
+                    }
+                }, commonEvent1);
+
+                // Event 2 - same Type and SiteUrl, different Name/Id/Label
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Excel",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "intrabatch-res-2",
+                                Name = "DocB.xlsx",
+                                Type = sharedType,
+                                SiteUrl = sharedSiteUrl,
+                                SensitivityLabelId = "intrabatch-label-2"
+                            }
+                        }
+                    }
+                }, commonEvent2);
+
+                // Both events committed in a single batch
+                await copilotEventManager.CommitAllChanges();
+
+                // Shared lookup values should appear only once
+                var types = await db.CopilotAccessedResourceTypes.Where(t => t.Name == sharedType).ToListAsync();
+                Assert.AreEqual(1, types.Count, "Shared Type should have exactly 1 lookup row");
+
+                var siteUrls = await db.CopilotAccessedResourceSiteUrls.Where(s => s.SiteUrl == sharedSiteUrl).ToListAsync();
+                Assert.AreEqual(1, siteUrls.Count, "Shared SiteUrl should have exactly 1 lookup row");
+
+                // Unique values should each have their own rows
+                var resourceIds = await db.CopilotAccessedResourceIds.ToListAsync();
+                Assert.IsTrue(resourceIds.Any(r => r.ResourceId == "intrabatch-res-1"), "Resource ID 1 should exist");
+                Assert.IsTrue(resourceIds.Any(r => r.ResourceId == "intrabatch-res-2"), "Resource ID 2 should exist");
+
+                var resourceNames = await db.CopilotAccessedResourceNames.ToListAsync();
+                Assert.IsTrue(resourceNames.Any(r => r.Name == "DocA.docx"), "Resource Name 1 should exist");
+                Assert.IsTrue(resourceNames.Any(r => r.Name == "DocB.xlsx"), "Resource Name 2 should exist");
+
+                // Junction table should have 2 records (one per event)
+                var junctions = await db.CopilotEventAccessedResources
+                    .Where(ar => ar.ChatId == commonEvent1.Id || ar.ChatId == commonEvent2.Id)
+                    .ToListAsync();
+                Assert.AreEqual(2, junctions.Count, "Should have 2 junction records (one per event)");
+            }
+        }
+
+        /// <summary>
+        /// Resource with only an ID and all other optional fields NULL.
+        /// Verifies the EXCEPT-based junction dedup handles all-NULL columns correctly.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesAllOptionalFieldsNullTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resources', 'U')").FirstOrDefault().GetValueOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "AllNull " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@allnull.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "allnull-resource-id"
+                                // Name, Type, SiteUrl, SensitivityLabelId all null
+                            }
+                        }
+                    }
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                var junctions = await db.CopilotEventAccessedResources
+                    .Include(ar => ar.ResourceId)
+                    .Include(ar => ar.ResourceName)
+                    .Include(ar => ar.ResourceType)
+                    .Include(ar => ar.ResourceSiteUrl)
+                    .Include(ar => ar.SensitivityLabel)
+                    .Where(ar => ar.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(1, junctions.Count, "Should have 1 junction record");
+
+                var resource = junctions.First();
+                Assert.IsNotNull(resource.ResourceId, "Resource ID should be populated");
+                Assert.AreEqual("allnull-resource-id", resource.ResourceId.ResourceId);
+                Assert.IsNull(resource.ResourceName, "Resource name should be null");
+                Assert.IsNull(resource.ResourceType, "Resource type should be null");
+                Assert.IsNull(resource.ResourceSiteUrl, "Resource site URL should be null");
+                Assert.IsNull(resource.SensitivityLabel, "Sensitivity label should be null");
+
+                // Committing again with the same event should not duplicate the junction record
+                copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource
+                            {
+                                Id = "allnull-resource-id"
+                            }
+                        }
+                    }
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                var junctionsAfterRecommit = await db.CopilotEventAccessedResources
+                    .Where(ar => ar.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(1, junctionsAfterRecommit.Count, "Re-committing same all-null resource should not duplicate junction record");
+            }
+        }
+
+        /// <summary>
+        /// Same resource listed twice in one event's AccessedResources JSON array.
+        /// The EXCEPT-based insert should collapse duplicates within the batch so only
+        /// one junction record is created.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesDuplicateWithinEventTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resources', 'U')").FirstOrDefault().GetValueOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources tables do not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                var commonEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "DupInEvent " + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dupinevent.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.Add(commonEvent);
+                await db.SaveChangesAsync();
+
+                var duplicatedResource = new AccessedResource
+                {
+                    Id = "dup-resource-id",
+                    Name = "SameDoc.docx",
+                    Type = "Document",
+                    SiteUrl = "https://contoso.sharepoint.com/sites/dup",
+                    SensitivityLabelId = "dup-label"
+                };
+
+                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            duplicatedResource,
+                            duplicatedResource  // exact same resource repeated
+                        }
+                    }
+                }, commonEvent);
+
+                await copilotEventManager.CommitAllChanges();
+
+                // Lookup tables should have exactly 1 row each
+                var resourceIds = await db.CopilotAccessedResourceIds.Where(r => r.ResourceId == "dup-resource-id").ToListAsync();
+                Assert.AreEqual(1, resourceIds.Count, "Duplicate resource should produce only 1 resource ID lookup row");
+
+                var resourceNames = await db.CopilotAccessedResourceNames.Where(r => r.Name == "SameDoc.docx").ToListAsync();
+                Assert.AreEqual(1, resourceNames.Count, "Duplicate resource should produce only 1 resource name lookup row");
+
+                // Junction table should have exactly 1 row (EXCEPT deduplicates within the batch)
+                var junctions = await db.CopilotEventAccessedResources
+                    .Where(ar => ar.ChatId == commonEvent.Id)
+                    .ToListAsync();
+
+                Assert.AreEqual(1, junctions.Count, "Duplicate resource within same event should produce only 1 junction record");
+            }
+        }
     }
 }
