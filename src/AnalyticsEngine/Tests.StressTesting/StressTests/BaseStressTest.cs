@@ -10,6 +10,11 @@ namespace Tests.StressTesting.StressTests
     {
         protected MemoryMonitor _memoryMonitor;
 
+        /// <summary>
+        /// Optional SQL connection string passed via command-line argument.
+        /// </summary>
+        public string ConnectionString { get; set; }
+
         public BaseStressTest()
         {
             _memoryMonitor = new MemoryMonitor();
