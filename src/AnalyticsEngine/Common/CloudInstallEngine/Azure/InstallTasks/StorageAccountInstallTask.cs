@@ -33,7 +33,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (storageAccount == null)
             {
-                var newAccountInfo = new StorageAccountCreateOrUpdateContent(new StorageSku("Standard_LRS"), StorageKind.StorageV2, AzureLocation);
+                var newAccountInfo = new StorageAccountCreateOrUpdateContent(new StorageSku("Standard_LRS"), StorageKind.StorageV2, AzureLocation)
+                {
+                    MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2
+                };
                 EnsureTagsOnNew(newAccountInfo.Tags);
                 var storageAccountReq = await Container.GetStorageAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, newAccountInfo);
                 storageAccount = storageAccountReq.Value;
@@ -42,6 +45,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                // Ensure minimum TLS version is 1.2
+                if (storageAccount.Data.MinimumTlsVersion == null || !storageAccount.Data.MinimumTlsVersion.Value.ToString().Equals(StorageMinimumTlsVersion.Tls1_2.ToString()))
+                {
+                    _logger.LogInformation($"Updating storage account '{name}' to enforce TLS 1.2...");
+                    var patch = new StorageAccountPatch
+                    {
+                        MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2
+                    };
+                    await storageAccount.UpdateAsync(patch);
+                }
+
                 _logger.LogInformation($"Found existing storage-account '{storageAccount.Data.Name}'.");
                 await EnsureTagsOnExisting(storageAccount.Data.Tags, storageAccount.GetTagResource());
             }

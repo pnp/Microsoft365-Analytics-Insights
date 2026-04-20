@@ -36,7 +36,7 @@ env:
   CosmosDbTestContainerHistory: history
   CosmosDbTestDatabaseName: UnitTestDevOps
   CosmosDb: ${{ secrets.APP_COSMOSDB }}
-  redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
+  redis: "localhost:6379,abortConnect=False"
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
 
@@ -103,6 +103,15 @@ jobs:
         uses: microsoft/variable-substitution@6287962da9e5b6e68778dc51e840caa03ca84495 # 1.0.0
         with:
           files: '${{ env.Solution_Directory }}\App.Release.config'
+      - name: Start Redis
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip" -OutFile "$env:RUNNER_TEMP\redis.zip"
+          Expand-Archive "$env:RUNNER_TEMP\redis.zip" -DestinationPath "$env:RUNNER_TEMP\redis"
+          Start-Process -FilePath "$env:RUNNER_TEMP\redis\redis-server.exe" -WindowStyle Hidden
+          Start-Sleep -Seconds 3
+          & "$env:RUNNER_TEMP\redis\redis-cli.exe" ping
       - name: Restore the application
         run: msbuild ${{ env.Solution_Directory }} -t:Restore `
           -p:Configuration=${{ env.Configuration }} `

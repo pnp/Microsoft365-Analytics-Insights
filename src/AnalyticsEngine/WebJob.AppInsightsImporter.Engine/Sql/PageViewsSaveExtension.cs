@@ -3,6 +3,7 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
@@ -18,26 +19,27 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// </summary>
         public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger telemetry, List<FilterUrlConfig> filterUrls)
         {
+            var sw = Stopwatch.StartNew();
+
             // Hack to change/ensure correct DB schema. Needs moving to a migration
             await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
-            var pageRequestIdProcessed = new List<Guid>();
+            // HashSet for O(1) duplicate lookups instead of O(n) List.Contains
+            var pageRequestIdProcessed = new HashSet<Guid>();
+            var duplicateCount = 0;
+            var outOfScopeCount = 0;
 
             var logsToInsert = new EFInsertBatch<HitTempEntity>(database, telemetry);
             foreach (var pv in pageViews.Rows.Where(p => p.CustomProperties?.PageRequestId != null))
             {
-                var userName = pv.Username;
-                var hitIsNew = pv.CustomProperties.PageRequestId != Guid.Empty && !pageRequestIdProcessed.Contains(pv.CustomProperties.PageRequestId.Value);
+                var hitIsNew = pv.CustomProperties.PageRequestId != Guid.Empty && pageRequestIdProcessed.Add(pv.CustomProperties.PageRequestId.Value);
 
                 if (hitIsNew)
                 {
-                    // Remember page view ID in case we get duplicates. 
-                    pageRequestIdProcessed.Add(pv.CustomProperties.PageRequestId.Value);
-
                     // Filter URLs based on org_urls table 
                     if (!filterUrls.UrlInScope(pv.CustomProperties.SiteUrl, pv.Url))
                     {
-                        telemetry.LogInformation($"Ignoring out-of-scope URL: {pv.Url}");
+                        outOfScopeCount++;
                     }
                     else
                     {
@@ -47,23 +49,26 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                 }
                 else
                 {
-#if DEBUG
-                    if (pv.CustomProperties.PageRequestId != Guid.Empty)
-                    {
-                        Console.WriteLine("DEBUG: Ignoring duplicate page-request " + pv.CustomProperties.PageRequestId);
-                    }
-                    else
-                    {
-                        Console.WriteLine("DEBUG: Ignoring page-request with empty page-request.");
-                    }
-#endif
+                    duplicateCount++;
                 }
             }
 
+            if (outOfScopeCount > 0)
+            {
+                telemetry.LogInformation($"Filtered {outOfScopeCount} out-of-scope URLs.");
+            }
+            if (duplicateCount > 0)
+            {
+                telemetry.LogInformation($"Skipped {duplicateCount} duplicate page-request IDs.");
+            }
+
+            telemetry.LogInformation($"Staging {logsToInsert.Rows.Count:n0} hits for SQL import (filtered from {pageViews.Rows.Count:n0} raw page-views in {sw.Elapsed.TotalSeconds:N1}s)...");
+
+            sw.Restart();
             const int MAX_HITS_PER_THREAD = 1000;
             await logsToInsert.SaveToStagingTable(MAX_HITS_PER_THREAD, FixScript(Resources.Migrate_Hits_Import_into_Hits));
 
-            telemetry.LogInformation($"Hits batch imported.");
+            telemetry.LogInformation($"Hits batch imported and merged in {sw.Elapsed.TotalSeconds:N1}s.");
         }
 
 
