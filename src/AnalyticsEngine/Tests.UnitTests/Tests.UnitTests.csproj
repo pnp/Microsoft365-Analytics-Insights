@@ -31,6 +31,10 @@
   <ItemGroup>
     <Compile Remove="Generated\**" />
     <Compile Include="AppInsightsAuthTests.cs" />
+    <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
+    <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
+    <Compile Include="CopilotEventManagerSaveTests.cs" />
+    <Compile Include="CopilotTestBase.cs" />
     <Compile Include="UserMetadataUpdaterBasicTests.cs" />
     <Compile Include="UserMetadataUpdaterInsertTests.cs" />
     <Compile Include="UserMetadataUpdaterLicenseTests.cs" />

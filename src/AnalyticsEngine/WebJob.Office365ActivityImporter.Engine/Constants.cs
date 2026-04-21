@@ -70,7 +70,7 @@
 #if DEBUG
         public const string STAGING_TABLE_COPILOT_CHATONLY = "debug_import_staging_copilot_chatonly";
 #else
-        public const string STAGING_TABLE_COPILOT_CHATONLY = "##debug_import_staging_copilot_teams";
+        public const string STAGING_TABLE_COPILOT_CHATONLY = "##debug_import_staging_copilot_chatonly";
 #endif
     }
 }

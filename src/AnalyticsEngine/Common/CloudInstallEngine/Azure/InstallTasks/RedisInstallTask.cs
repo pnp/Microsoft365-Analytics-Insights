@@ -28,7 +28,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 _logger.LogInformation($"Creating new redis cache '{name}' at basic SKU. This may take several minutes...");
 
-                var newResourceData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(RedisSkuName.Basic, RedisSkuFamily.BasicOrStandard, 0));
+                var newResourceData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(RedisSkuName.Basic, RedisSkuFamily.BasicOrStandard, 0))
+                {
+                    MinimumTlsVersion = RedisTlsVersion.Tls1_2
+                };
                 base.EnsureTagsOnNew(newResourceData.Tags);
                 var operation = await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, newResourceData);
                 _logger.LogInformation($"Created redis cache '{operation.Value.Data.Name}'.");
@@ -37,6 +40,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                // Ensure minimum TLS version is 1.2
+                if (redisCache.Data.MinimumTlsVersion == null || !redisCache.Data.MinimumTlsVersion.Value.ToString().Equals(RedisTlsVersion.Tls1_2.ToString()))
+                {
+                    _logger.LogInformation($"Updating Redis cache '{name}' to enforce TLS 1.2...");
+                    var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(RedisSkuName.Basic, RedisSkuFamily.BasicOrStandard, 0))
+                    {
+                        MinimumTlsVersion = RedisTlsVersion.Tls1_2
+                    };
+                    await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
+                }
+
                 _logger.LogInformation($"Found existing Redis cache '{redisCache.Data.HostName}'.");
                 await base.EnsureTagsOnExisting(redisCache.Data.Tags, redisCache.GetTagResource());
             }
