@@ -51,4 +51,23 @@ namespace UnitTests.FakeLoaderClasses
             return Task.FromResult("testId");
         }
     }
+
+    /// <summary>
+    /// Metadata loader that throws on every call — used to verify exception-handling paths.
+    /// </summary>
+    public class ThrowingCopilotMetadataLoader : ICopilotMetadataLoader
+    {
+        public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+        {
+            throw new InvalidOperationException("Simulated meeting info failure");
+        }
+        public Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotId, string eventUpn)
+        {
+            throw new InvalidOperationException("Simulated file info failure");
+        }
+        public Task<string> GetUserIdFromUpn(string userPrincipalName)
+        {
+            throw new InvalidOperationException("Simulated user lookup failure");
+        }
+    }
 }

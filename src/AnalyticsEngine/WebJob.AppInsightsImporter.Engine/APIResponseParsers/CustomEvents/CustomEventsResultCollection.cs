@@ -69,6 +69,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                 var hitUpdatesTimer = new JobTimer(telemetry, "Hit updates");
                 hitUpdatesTimer.Start();
                 var hitUpdatesCount = await this.SaveHitsUpdatesToSQL(telemetry, database);
+                hitUpdatesTimer.PrintElapsed();
                 if (hitUpdatesCount > 0)
                 {
                     hitUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
@@ -77,29 +78,31 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                 var searchesInsertTimer = new JobTimer(telemetry, "Searches");
                 searchesInsertTimer.Start();
                 var searchesInserted = await this.SaveSearchesToSQL(telemetry, database);
+                searchesInsertTimer.PrintElapsed();
                 if (searchesInserted > 0)
                 {
                     searchesInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                    telemetry.LogInformation($"Search batch imported - {searchesInserted.ToString("n0")} new searches inserted");
                 }
 
                 var pageUpdatesTimer = new JobTimer(telemetry, "Page updates");
                 pageUpdatesTimer.Start();
                 var pagesUpdated = await this.SavePageUpdatesToSQL(telemetry, config);
+                pageUpdatesTimer.PrintElapsed();
                 if (pagesUpdated > 0)
                 {
                     pageUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                    telemetry.LogInformation($"Page updates imported - {pagesUpdated.ToString("n0")}");
                 }
 
                 var clicksInsertTimer = new JobTimer(telemetry, "Clicks");
                 clicksInsertTimer.Start();
                 var clicks = await this.SaveClicksToSQL(telemetry, database);
+                clicksInsertTimer.PrintElapsed();
                 if (clicks > 0)
                 {
-                    telemetry.LogInformation($"Clicks batch imported - {clicks} clicks inserted");
                     clicksInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
                 }
+
+                telemetry.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
             }
         }
     }

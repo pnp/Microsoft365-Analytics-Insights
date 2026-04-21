@@ -13,9 +13,25 @@ namespace Tests.StressTesting
             Console.WriteLine("==================================================");
             Console.WriteLine();
 
+            // Parse optional connection string from command-line (same pattern as Tests.FakeDataGen)
+            string connectionString = args.Length > 0 ? string.Join(" ", args) : null;
+            if (!string.IsNullOrEmpty(connectionString))
+            {
+                Console.WriteLine($"Raw args count: {args.Length}");
+                Console.WriteLine($"Connection string: \"{connectionString}\"");
+                DisplayConnectionInfo(connectionString);
+            }
+            else
+            {
+                Console.WriteLine("No SQL connection string provided. Tests requiring DB will run in-memory only.");
+                Console.WriteLine("Usage: Tests.StressTesting.exe \"<SQL Connection String>\"");
+            }
+            Console.WriteLine();
+
             var stressTests = new Dictionary<int, (string Name, Func<BaseStressTest> Factory)>
             {
-                { 1, ("ActivityAPI Import Stress Test", () => new ActivityAPIStressTest()) }
+                { 1, ("ActivityAPI Import Stress Test", () => new ActivityAPIStressTest()) },
+                { 2, ("Copilot Event Import Stress Test", () => new CopilotStressTest()) }
             };
 
             bool running = true;
@@ -48,6 +64,7 @@ namespace Tests.StressTesting
                         try
                         {
                             var stressTest = stressTests[selection].Factory();
+                            stressTest.ConnectionString = connectionString;
                             stressTest.Run();
                         }
                         catch (Exception ex)
@@ -76,6 +93,24 @@ namespace Tests.StressTesting
                 {
                     Console.WriteLine("Invalid input. Please enter a number.");
                 }
+            }
+        }
+
+        static void DisplayConnectionInfo(string connectionString)
+        {
+            try
+            {
+                var builder = new System.Data.SqlClient.SqlConnectionStringBuilder(connectionString);
+                Console.WriteLine("SQL Server Connection Information:");
+                Console.WriteLine("-------------------------------------------");
+                Console.WriteLine($"  Server: {builder.DataSource}");
+                Console.WriteLine($"  Database: {builder.InitialCatalog}");
+                Console.WriteLine($"  Authentication: {(builder.IntegratedSecurity ? "Windows (Integrated Security)" : "SQL Server")}");
+                Console.WriteLine("-------------------------------------------");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not parse connection string details: {ex.Message}");
             }
         }
     }
