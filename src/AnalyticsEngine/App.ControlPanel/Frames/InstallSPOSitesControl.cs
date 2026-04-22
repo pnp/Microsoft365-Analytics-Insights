@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
+using Common.Entities.Installer;
 using DataUtils;
 using System;
 using System.Windows.Forms;
@@ -17,6 +18,17 @@ namespace App.ControlPanel.Frames
             InitializeComponent();
             _logger = new InstallSPOSitesControlLogger(this);
             azureBaseConfigControl1.OnNeedAppRegistrationCredentials = () => GetConfigFromGUI().InstallerAccount;
+            networkingConfigControl1.OnNeedAzureCredentials = () =>
+            {
+                var config = GetConfigFromGUI();
+                return (
+                    config.InstallerAccount?.DirectoryId,
+                    config.InstallerAccount?.ClientId,
+                    config.InstallerAccount?.Secret,
+                    config.Subscription?.SubId,
+                    config.ResourceGroupName
+                );
+            };
         }
 
         #region Props
@@ -99,7 +111,18 @@ namespace App.ControlPanel.Frames
                 Subscription = azureBaseConfigControl1.AzureSubscription,
                 AzureLocationName = azureBaseConfigControl1.AzureLocationString,
                 EnvironmentType = azureBaseConfigControl1.EnvironmentType,
-                Tags = azureBaseConfigControl1.Tags
+                Tags = azureBaseConfigControl1.Tags,
+                NetworkConfig = new VNetConfig
+                {
+                    Enabled = networkingConfigControl1.VNetEnabled,
+                    VNetName = networkingConfigControl1.VNetName,
+                    SubnetName = networkingConfigControl1.SubnetName,
+                    AddressPrefix = networkingConfigControl1.AddressPrefix,
+                    SubnetAddressPrefix = networkingConfigControl1.SubnetAddressPrefix,
+                    DeployDnsZones = networkingConfigControl1.DeployDnsZones,
+                    CustomEndpointNames = networkingConfigControl1.GetEndpointNames(),
+                    HybridWorkerVmResourceId = networkingConfigControl1.HybridWorkerVmResourceId
+                }
             };
 
             // Accounts
@@ -164,6 +187,19 @@ namespace App.ControlPanel.Frames
             azurePaaSConfigControl1.AppInsightsWorkspaceName = config.AppInsightsWorkspaceName;
             azurePaaSConfigControl1.KeyVaultName = config.KeyVaultName;
             azurePaaSConfigControl1.AutomationAccountName = config.AutomationAccountName;
+
+            // Networking
+            if (config.NetworkConfig != null)
+            {
+                networkingConfigControl1.VNetEnabled = config.NetworkConfig.Enabled;
+                networkingConfigControl1.VNetName = config.NetworkConfig.VNetName;
+                networkingConfigControl1.SubnetName = config.NetworkConfig.SubnetName;
+                networkingConfigControl1.AddressPrefix = config.NetworkConfig.AddressPrefix;
+                networkingConfigControl1.SubnetAddressPrefix = config.NetworkConfig.SubnetAddressPrefix;
+                networkingConfigControl1.DeployDnsZones = config.NetworkConfig.DeployDnsZones;
+                networkingConfigControl1.SetEndpointNames(config.NetworkConfig.CustomEndpointNames);
+                networkingConfigControl1.HybridWorkerVmResourceId = config.NetworkConfig.HybridWorkerVmResourceId;
+            }
 
             // Sources
             rdpSpecificLocation.Checked = !config.DownloadLatestStable;
