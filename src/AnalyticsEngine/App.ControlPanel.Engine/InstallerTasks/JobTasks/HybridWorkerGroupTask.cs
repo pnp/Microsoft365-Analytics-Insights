@@ -62,8 +62,18 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 {
                     Name = groupName
                 };
-                var operation = await automationAccount.GetHybridRunbookWorkerGroups().CreateOrUpdateAsync(WaitUntil.Completed, groupName, createContent);
-                group = operation.Value;
+                try
+                {
+                    var operation = await automationAccount.GetHybridRunbookWorkerGroups().CreateOrUpdateAsync(WaitUntil.Completed, groupName, createContent);
+                    group = operation.Value;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 201)
+                {
+                    // Azure SDK bug: 201 Created is a valid success response but the SDK throws.
+                    // Retrieve the newly created group instead.
+                    var response = await automationAccount.GetHybridRunbookWorkerGroupAsync(groupName);
+                    group = response.Value;
+                }
                 _logger.LogInformation($"Created hybrid worker group '{group.Data.Name}'.");
             }
             else
