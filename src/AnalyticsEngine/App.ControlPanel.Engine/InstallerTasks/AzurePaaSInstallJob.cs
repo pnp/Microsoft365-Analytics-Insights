@@ -197,7 +197,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     var hwgConfig = TaskConfig.GetConfigForName(_hybridWorkerGroupName)
                         .AddSetting(HybridWorkerGroupTask.CONFIG_KEY_AUTOMATION_ACCOUNT_NAME, config.AutomationAccountName)
                         .AddSetting(HybridWorkerGroupTask.CONFIG_KEY_VM_RESOURCE_ID, config.NetworkConfig.HybridWorkerVmResourceId);
-                    _hybridWorkerGroupTask = new HybridWorkerGroupTask(hwgConfig, logger, Location, tagDic);
+                    _hybridWorkerGroupTask = new HybridWorkerGroupTask(hwgConfig, logger, Location, tagDic, creds);
                     this.AddTask(_hybridWorkerGroupTask);
                 }
             }
