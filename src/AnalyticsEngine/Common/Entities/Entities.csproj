@@ -83,6 +83,8 @@
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
+    <Compile Include="Entities\Email\EmailAddress.cs" />
+    <Compile Include="Entities\Email\SentEmail.cs" />
     <Compile Include="Entities\OnlineMeeting.cs" />
     <Compile Include="Entities\UsageReports\AppPlatformUserActivityLog.cs" />
     <Compile Include="Entities\UsageReports\SharePointSitesFileWeeklyStats.cs" />
@@ -95,6 +97,7 @@
     <Compile Include="LookupCaches\Discrete\CompanyNameCache.cs" />
     <Compile Include="LookupCaches\Discrete\CountryOrRegionCache.cs" />
     <Compile Include="LookupCaches\Discrete\DBLookupCache.cs" />
+    <Compile Include="LookupCaches\Discrete\EmailAddressCache.cs" />
     <Compile Include="LookupCaches\Discrete\KeywordCache.cs" />
     <Compile Include="LookupCaches\Discrete\LanguageCache.cs" />
     <Compile Include="LookupCaches\Discrete\LicenseTypeCache.cs" />

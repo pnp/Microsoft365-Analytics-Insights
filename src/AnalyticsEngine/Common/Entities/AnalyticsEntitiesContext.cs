@@ -3,6 +3,7 @@ using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Entities.UsageReports;
+using Common.Entities.Entities.Email;
 using Common.Entities.Entities.WebTraffic;
 using Common.Entities.Teams;
 using Microsoft.Extensions.Logging;
@@ -176,6 +177,14 @@ namespace Common.Entities
              .HasIndex(t => new { t.UrlId, t.FieldId })
              .IsUnique();
 
+            modelBuilder.Entity<EmailAddress>()
+             .HasIndex(t => new { t.Address })
+             .IsUnique();
+
+            modelBuilder.Entity<SentEmail>()
+             .HasIndex(t => new { t.GraphMessageId })
+             .IsUnique();
+
             base.OnModelCreating(modelBuilder);
         }
 
@@ -313,6 +322,10 @@ namespace Common.Entities
         // AI Model transparency
         public DbSet<CopilotAIModel> CopilotAIModels { get; set; }
         public DbSet<CopilotEventAIModel> CopilotEventAIModels { get; set; }
+
+        // Email tracking
+        public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
+        public virtual DbSet<SentEmail> SentEmails { get; set; }
         #endregion
     }
 

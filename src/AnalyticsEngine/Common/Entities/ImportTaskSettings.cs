@@ -76,6 +76,12 @@ namespace Common.Entities
         [ImportProp]
         public bool WebTraffic { get; set; } = true;
 
+        /// <summary>
+        /// Import sent emails from mailboxes via Graph
+        /// </summary>
+        [ImportProp]
+        public bool SentEmails { get; set; } = false;
+
         IEnumerable<PropertyInfo> GetImportProps()
         {
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));
