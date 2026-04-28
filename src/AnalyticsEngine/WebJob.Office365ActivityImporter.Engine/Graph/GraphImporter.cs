@@ -10,6 +10,7 @@ using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.Teams;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
@@ -112,6 +113,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 else
                     _telemetry.LogInformation("Skipping Teams import", graphUserGroupsCache);
+
+                if (settings.ImportJobSettings.SentEmails)
+                {
+                    var sentEmailsTimer = new JobTimer(_telemetry, "Sent emails import");
+                    sentEmailsTimer.Start();
+
+                    IDeltaTokenStore deltaTokenStore;
+                    if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
+                    {
+                        deltaTokenStore = new RedisDeltaTokenStore(_settings.ConnectionStrings.RedisConnectionString);
+                    }
+                    else
+                    {
+                        deltaTokenStore = new InMemoryDeltaTokenStore();
+                    }
+
+                    var sentEmailImporter = new SentEmailImporter(_telemetry, _settings, httpClient, deltaTokenStore);
+                    await sentEmailImporter.ImportSentEmails();
+
+                    sentEmailsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                }
+                else
+                    _telemetry.LogInformation("Skipping sent emails import", graphUserGroupsCache);
 
             }
         }
