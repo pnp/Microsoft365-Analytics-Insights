@@ -14,7 +14,9 @@ namespace Tests.UnitTests.InstallTests
     /// Integration tests for VNet deployment. These tests deploy real Azure resources using the installer config file.
     /// Run manually - not included in CI/CD as they require Azure credentials and create billable resources.
     /// </summary>
+#if DEBUG
     [TestClass]
+#endif
     public class VNetIntegrationTests
     {
         private const string CONFIG_PASSWORD = "Corp123!";
