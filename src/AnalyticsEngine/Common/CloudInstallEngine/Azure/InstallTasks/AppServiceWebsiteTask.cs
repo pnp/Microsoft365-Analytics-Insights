@@ -37,7 +37,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     {
                         IsAlwaysOn = true,
                         FtpsState = AppServiceFtpsState.FtpsOnly,
-                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
+                        PublicNetworkAccess = "Enabled"  // Explicit: adding a PE later auto-disables this otherwise
                     },
                     Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
                 };

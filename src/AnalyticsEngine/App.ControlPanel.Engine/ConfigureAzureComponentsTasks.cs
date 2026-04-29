@@ -162,6 +162,15 @@ namespace App.ControlPanel.Engine
 
             appSettings.Properties.Add("ImportJobSettings", this.Config.SolutionConfig.ImportTaskSettings.ToSettingsString());
 
+            // When private VNet is enabled, ensure the app service routes all outbound traffic through
+            // the VNet so that private DNS zones resolve Azure PaaS hostnames to private endpoint IPs.
+            if (this.Config.NetworkConfig?.Enabled == true)
+            {
+                appSettings.Properties.Add("WEBSITE_VNET_ROUTE_ALL", "1");
+                appSettings.Properties.Add("WEBSITE_DNS_SERVER", "168.63.129.16"); // Azure DNS for private DNS zone resolution
+                _logger.LogInformation("Private VNet enabled: app service will route all traffic through VNet for private endpoint DNS resolution.");
+            }
+
             // Connection strings
             var redisKeys = redis.GetKeys();
             var redisConnectionString = $"{redis.Data.HostName}:{redis.Data.SslPort},password={redisKeys.Value.PrimaryKey},ssl=True,abortConnect=False";

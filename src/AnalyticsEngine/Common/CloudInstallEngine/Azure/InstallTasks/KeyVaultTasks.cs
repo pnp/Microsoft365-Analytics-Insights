@@ -218,7 +218,19 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             var kvUri = "https://" + vault.Data.Name + ".vault.azure.net";
             var client = new SecretClient(new Uri(kvUri), new ClientSecretCredential(credTenantId, credClientId, credSecret));
-            await client.SetSecretAsync(new KeyVaultSecret(name, val));
+
+            try
+            {
+                await client.SetSecretAsync(new KeyVaultSecret(name, val));
+            }
+            catch (RequestFailedException ex) when (ex.Status == 403 && ex.ErrorCode == "Forbidden")
+            {
+                _logger.LogError($"Could not add secret '{name}' to key vault '{vault.Data.Name}': public network access is disabled. " +
+                    $"Please enable public network access on the key vault (or connect via an approved private link) and re-run the installer to update app registration secrets. " +
+                    $"Continuing installation...");
+                return vault;
+            }
+
             return vault;
         }
     }
