@@ -93,9 +93,18 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 // The extension requires the JRDS hybrid service URL (not the ARM resource ID).
                 // The SDK's AutomationHybridServiceUri is often null, so fetch via REST API.
                 var automationAccountUrl = await GetAutomationHybridServiceUrl(automationAccount);
-                await EnsureHybridWorkerExtensionInstalled(vmResourceId, automationAccountUrl);
+                if (string.IsNullOrEmpty(automationAccountUrl))
+                {
+                    _logger.LogError($"Could not determine Automation Hybrid Service URL for account '{automationAccountName}'. " +
+                        "The Hybrid Worker extension cannot be installed without a valid JRDS URL. " +
+                        "Skipping extension installation and worker registration.");
+                    return group;
+                }
 
-                // Register VM as hybrid worker in the group (if not already registered)
+                // Register VM as hybrid worker in the group BEFORE installing the extension.
+                // The extension contacts the automation account on startup and expects the VM
+                // to already be associated. If we install the extension first, it fails with:
+                // "Specified machineId is not associated with automation account"
                 var existingWorkers = group.GetHybridRunbookWorkers();
                 bool vmAlreadyRegistered = false;
                 foreach (var worker in existingWorkers)
@@ -132,7 +141,15 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                     catch (RequestFailedException ex)
                     {
                         _logger.LogError($"Failed to register VM as hybrid worker: {ex.Message}");
+                        return group;
                     }
+                }
+
+                // Now install the extension — the VM is already associated with the automation account
+                var extensionInstalled = await EnsureHybridWorkerExtensionInstalled(vmResourceId, automationAccountUrl);
+                if (!extensionInstalled)
+                {
+                    _logger.LogError("Hybrid Worker extension was not installed successfully.");
                 }
 
                 return group;
@@ -144,7 +161,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             }
         }
 
-        private async System.Threading.Tasks.Task EnsureHybridWorkerExtensionInstalled(string vmResourceId, string automationAccountResourceId)
+        private async Task<bool> EnsureHybridWorkerExtensionInstalled(string vmResourceId, string automationAccountResourceId)
         {
             const string EXTENSION_NAME = "HybridWorkerForWindows";
             const string EXTENSION_PUBLISHER = "Microsoft.Azure.Automation.HybridWorker";
@@ -153,7 +170,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             if (string.IsNullOrEmpty(automationAccountResourceId))
             {
                 _logger.LogError("Automation account resource ID is empty. Cannot install Hybrid Worker extension with registration.");
-                return;
+                return false;
             }
 
             var client = new ArmClient(_credential);
@@ -166,13 +183,84 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             catch (RequestFailedException ex)
             {
                 _logger.LogError($"Cannot access VM '{vmResourceId}': {ex.Message}");
-                return;
+                return false;
             }
 
             // Always create/update the extension with the Automation Account resource ID so it
             // registers with the automation account. This matches the portal's "Add > Azure VM"
             // flow in the Hybrid Worker Group blade.
-            _logger.LogInformation($"Installing/updating Hybrid Worker extension on VM '{vmResourceId}' with Automation Account registration...");
+            // First, remove any existing extension to ensure a clean install. A stale/partial
+            // extension (e.g. from a previous failed run) can leave the HybridWorkerPackage directory
+            // without a working HybridWorkerService, causing "Cannot find any service" errors.
+            try
+            {
+                var existingExtension = await vmResource.GetVirtualMachineExtensionAsync(EXTENSION_NAME);
+                if (existingExtension?.Value != null)
+                {
+                    _logger.LogInformation($"Removing existing Hybrid Worker extension from VM to ensure clean install...");
+                    await existingExtension.Value.DeleteAsync(WaitUntil.Completed);
+                    _logger.LogInformation($"Existing extension removed.");
+                }
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                // Extension doesn't exist yet — nothing to remove
+            }
+
+            // Clean up stale hybrid worker registry keys on the VM. Previous failed installs can
+            // leave behind HKLM:\SOFTWARE\Microsoft\HybridRunbookWorkerV2 entries that trick the
+            // extension into thinking the machine is already registered. It then tries to stop a
+            // HybridWorkerService that was never created, and fails.
+            _logger.LogInformation("Cleaning stale hybrid worker registry and service on VM...");
+            try
+            {
+                var cleanupScript = @"
+                    # Remove stale hybrid worker registry entries
+                    $regPath = 'HKLM:\SOFTWARE\Microsoft\HybridRunbookWorkerV2'
+                    if (Test-Path $regPath) {
+                        Remove-Item -Path $regPath -Recurse -Force
+                        Write-Output 'Removed stale HybridRunbookWorkerV2 registry key.'
+                    }
+                    # Also remove stale extension status registry
+                    $extRegPath = 'HKLM:\SOFTWARE\Microsoft\Azure\HybridWorker'
+                    if (Test-Path $extRegPath) {
+                        Remove-Item -Path $extRegPath -Recurse -Force
+                        Write-Output 'Removed stale HybridWorker extension registry key.'
+                    }
+                    # Stop and remove the service if it exists in a broken state
+                    $svc = Get-Service -Name 'HybridWorkerService' -ErrorAction SilentlyContinue
+                    if ($svc) {
+                        Stop-Service -Name 'HybridWorkerService' -Force -ErrorAction SilentlyContinue
+                        sc.exe delete 'HybridWorkerService' | Out-Null
+                        Write-Output 'Removed stale HybridWorkerService.'
+                    }
+                    Write-Output 'Cleanup complete.'
+                ";
+
+                var runCommandInput = new RunCommandInput("RunPowerShellScript");
+                runCommandInput.Script.Add(cleanupScript);
+                await vmResource.RunCommandAsync(WaitUntil.Completed, runCommandInput);
+                _logger.LogInformation("VM cleanup script completed.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"VM cleanup script failed (will attempt extension install anyway): {ex.Message}");
+            }
+
+            // Restart the VM to release any file locks held by leftover processes from previous
+            // extension installs (e.g. Orchestrator ETW manifest DLLs).
+            _logger.LogInformation("Restarting VM to ensure clean state before extension install...");
+            try
+            {
+                await vmResource.RestartAsync(WaitUntil.Completed);
+                _logger.LogInformation("VM restarted successfully.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"VM restart failed (will attempt extension install anyway): {ex.Message}");
+            }
+
+            _logger.LogInformation($"Installing Hybrid Worker extension on VM '{vmResourceId}' with Automation Account registration...");
 
             var extensionData = new VirtualMachineExtensionData(AzureLocation)
             {
@@ -180,6 +268,9 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 ExtensionType = EXTENSION_TYPE,
                 TypeHandlerVersion = "1.1",
                 AutoUpgradeMinorVersion = true,
+                // ForceUpdateTag forces the extension to re-run even if settings haven't changed.
+                // Without this, the extension sees the same sequence number and skips execution.
+                ForceUpdateTag = Guid.NewGuid().ToString(),
                 Settings = BinaryData.FromObjectAsJson(new
                 {
                     AutomationAccountURL = automationAccountResourceId
@@ -190,10 +281,12 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             {
                 await vmResource.GetVirtualMachineExtensions().CreateOrUpdateAsync(WaitUntil.Completed, EXTENSION_NAME, extensionData);
                 _logger.LogInformation($"Hybrid Worker extension installed/updated successfully on VM '{vmResourceId}'.");
+                return true;
             }
             catch (RequestFailedException ex)
             {
                 _logger.LogError($"Failed to install Hybrid Worker extension on VM: {ex.Message}");
+                return false;
             }
         }
 
