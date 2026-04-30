@@ -40,6 +40,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 users = await db.users.Where(u => u.Mail != null && u.Mail != "").ToListAsync();
             }
 
+            if (users == null || users.Count == 0)
+            {
+                _telemetry.LogWarning("No users found with email addresses to scan for sent items.");
+                return;
+            }
+
             _telemetry.LogInformation($"Found {users.Count} users with email addresses to scan for sent items.");
 
             TextAnalyticsClient cognitiveClient = null;
@@ -174,109 +180,110 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             return text.Trim();
         }
     }
+}
 
-    #region Graph DTO classes
+#region Graph DTO classes
 
-    public class GraphSentMessage
+public class GraphSentMessage
+{
+    [JsonProperty("id")]
+    public string Id { get; set; }
+
+    [JsonProperty("subject")]
+    public string Subject { get; set; }
+
+    [JsonProperty("sentDateTime")]
+    public DateTime? SentDateTime { get; set; }
+
+    [JsonProperty("from")]
+    public GraphEmailRecipient From { get; set; }
+
+    [JsonProperty("toRecipients")]
+    public List<GraphEmailRecipient> ToRecipients { get; set; }
+
+    [JsonProperty("body")]
+    public GraphEmailBody Body { get; set; }
+}
+
+public class GraphEmailRecipient
+{
+    [JsonProperty("emailAddress")]
+    public GraphEmailAddress EmailAddress { get; set; }
+}
+
+public class GraphEmailAddress
+{
+    [JsonProperty("name")]
+    public string Name { get; set; }
+
+    [JsonProperty("address")]
+    public string Address { get; set; }
+}
+
+public class GraphEmailBody
+{
+    [JsonProperty("contentType")]
+    public string ContentType { get; set; }
+
+    [JsonProperty("content")]
+    public string Content { get; set; }
+}
+
+#endregion
+
+#region Delta Token Store
+
+/// <summary>
+/// Interface for per-user delta token storage
+/// </summary>
+public interface IDeltaTokenStore
+{
+    Task<string> GetDeltaToken(string key);
+    Task SetDeltaToken(string key, string deltaToken);
+}
+
+/// <summary>
+/// In-memory delta token store
+/// </summary>
+public class InMemoryDeltaTokenStore : IDeltaTokenStore
+{
+    private readonly Dictionary<string, string> _tokens = new Dictionary<string, string>();
+
+    public Task<string> GetDeltaToken(string key)
     {
-        [JsonProperty("id")]
-        public string Id { get; set; }
-
-        [JsonProperty("subject")]
-        public string Subject { get; set; }
-
-        [JsonProperty("sentDateTime")]
-        public DateTime? SentDateTime { get; set; }
-
-        [JsonProperty("from")]
-        public GraphEmailRecipient From { get; set; }
-
-        [JsonProperty("toRecipients")]
-        public List<GraphEmailRecipient> ToRecipients { get; set; }
-
-        [JsonProperty("body")]
-        public GraphEmailBody Body { get; set; }
+        _tokens.TryGetValue(key, out var token);
+        return Task.FromResult(token);
     }
 
-    public class GraphEmailRecipient
+    public Task SetDeltaToken(string key, string deltaToken)
     {
-        [JsonProperty("emailAddress")]
-        public GraphEmailAddress EmailAddress { get; set; }
+        _tokens[key] = deltaToken;
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Redis-based delta token store for per-user keys
+/// </summary>
+public class RedisDeltaTokenStore : IDeltaTokenStore
+{
+    private readonly Common.Entities.Redis.CacheConnectionManager _cacheConnectionManager;
+
+    public RedisDeltaTokenStore(string redisConnectionString)
+    {
+        _cacheConnectionManager = Common.Entities.Redis.CacheConnectionManager.GetConnectionManager(redisConnectionString);
     }
 
-    public class GraphEmailAddress
+    public async Task<string> GetDeltaToken(string key)
     {
-        [JsonProperty("name")]
-        public string Name { get; set; }
-
-        [JsonProperty("address")]
-        public string Address { get; set; }
+        return await _cacheConnectionManager.GetString(key);
     }
 
-    public class GraphEmailBody
+    public async Task SetDeltaToken(string key, string deltaToken)
     {
-        [JsonProperty("contentType")]
-        public string ContentType { get; set; }
-
-        [JsonProperty("content")]
-        public string Content { get; set; }
+        await _cacheConnectionManager.SetString(key, deltaToken);
     }
-
-    #endregion
-
-    #region Delta Token Store
-
-    /// <summary>
-    /// Interface for per-user delta token storage
-    /// </summary>
-    public interface IDeltaTokenStore
-    {
-        Task<string> GetDeltaToken(string key);
-        Task SetDeltaToken(string key, string deltaToken);
-    }
-
-    /// <summary>
-    /// In-memory delta token store
-    /// </summary>
-    public class InMemoryDeltaTokenStore : IDeltaTokenStore
-    {
-        private readonly Dictionary<string, string> _tokens = new Dictionary<string, string>();
-
-        public Task<string> GetDeltaToken(string key)
-        {
-            _tokens.TryGetValue(key, out var token);
-            return Task.FromResult(token);
-        }
-
-        public Task SetDeltaToken(string key, string deltaToken)
-        {
-            _tokens[key] = deltaToken;
-            return Task.CompletedTask;
-        }
-    }
-
-    /// <summary>
-    /// Redis-based delta token store for per-user keys
-    /// </summary>
-    public class RedisDeltaTokenStore : IDeltaTokenStore
-    {
-        private readonly Common.Entities.Redis.CacheConnectionManager _cacheConnectionManager;
-
-        public RedisDeltaTokenStore(string redisConnectionString)
-        {
-            _cacheConnectionManager = Common.Entities.Redis.CacheConnectionManager.GetConnectionManager(redisConnectionString);
-        }
-
-        public async Task<string> GetDeltaToken(string key)
-        {
-            return await _cacheConnectionManager.GetString(key);
-        }
-
-        public async Task SetDeltaToken(string key, string deltaToken)
-        {
-            await _cacheConnectionManager.SetString(key, deltaToken);
-        }
-    }
+}
 
     #endregion
 }
