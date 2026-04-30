@@ -185,6 +185,18 @@ namespace Common.Entities
              .HasIndex(t => new { t.GraphMessageId })
              .IsUnique();
 
+            modelBuilder.Entity<SentEmail>()
+             .HasRequired(s => s.FromAddress)
+             .WithMany()
+             .HasForeignKey(s => s.FromAddressID)
+             .WillCascadeOnDelete(false);
+
+            modelBuilder.Entity<SentEmail>()
+             .HasRequired(s => s.ToAddress)
+             .WithMany()
+             .HasForeignKey(s => s.ToAddressID)
+             .WillCascadeOnDelete(false);
+
             base.OnModelCreating(modelBuilder);
         }
 
