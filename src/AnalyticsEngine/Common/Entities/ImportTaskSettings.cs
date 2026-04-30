@@ -40,6 +40,7 @@ namespace Common.Entities
 
         private void Parse(PropertyInfo propertyInfo, string token)
         {
+            // Assumes that all properties are "true" by default, so only need to parse "false" values from the string
             if (token.ToLower().Contains($"{propertyInfo.Name.ToLower()}=false"))
             {
                 propertyInfo.SetValue(this, false);
@@ -80,7 +81,7 @@ namespace Common.Entities
         /// Import sent emails from mailboxes via Graph
         /// </summary>
         [ImportProp]
-        public bool SentEmails { get; set; } = false;
+        public bool SentEmails { get; set; } = true;
 
         IEnumerable<PropertyInfo> GetImportProps()
         {
