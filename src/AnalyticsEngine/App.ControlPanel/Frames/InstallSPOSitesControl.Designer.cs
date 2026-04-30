@@ -40,6 +40,8 @@
             this.azurePaaSConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzurePaaSConfigControl();
             this.tabAzureStorage = new System.Windows.Forms.TabPage();
             this.azureStorageConfigControl1 = new App.ControlPanel.Frames.InstallWizard.AzureStorageConfigControl();
+            this.tabNetworking = new System.Windows.Forms.TabPage();
+            this.networkingConfigControl1 = new App.ControlPanel.Frames.InstallWizard.NetworkingConfigControl();
             this.tabSharePoint = new System.Windows.Forms.TabPage();
             this.sharePointConfigControl1 = new App.ControlPanel.Frames.InstallWizard.SharePointConfigControl();
             this.tabSources = new System.Windows.Forms.TabPage();
@@ -64,6 +66,7 @@
             this.tabPageAzureConfig.SuspendLayout();
             this.tabAzureResources.SuspendLayout();
             this.tabAzureStorage.SuspendLayout();
+            this.tabNetworking.SuspendLayout();
             this.tabSharePoint.SuspendLayout();
             this.tabSources.SuspendLayout();
             this.grpLocalSources.SuspendLayout();
@@ -81,6 +84,7 @@
             this.tabs.Controls.Add(this.tabPageAzureConfig);
             this.tabs.Controls.Add(this.tabAzureResources);
             this.tabs.Controls.Add(this.tabAzureStorage);
+            this.tabs.Controls.Add(this.tabNetworking);
             this.tabs.Controls.Add(this.tabSharePoint);
             this.tabs.Controls.Add(this.tabSources);
             this.tabs.Controls.Add(this.tabInstall);
@@ -210,6 +214,27 @@
             this.azureStorageConfigControl1.SQLServerUsername = "";
             this.azureStorageConfigControl1.StorageAccount = "";
             this.azureStorageConfigControl1.TabIndex = 1;
+            // 
+            // tabNetworking
+            // 
+            this.tabNetworking.Controls.Add(this.networkingConfigControl1);
+            this.tabNetworking.Location = new System.Drawing.Point(4, 22);
+            this.tabNetworking.Name = "tabNetworking";
+            this.tabNetworking.Padding = new System.Windows.Forms.Padding(3);
+            this.tabNetworking.Size = new System.Drawing.Size(638, 543);
+            this.tabNetworking.TabIndex = 10;
+            this.tabNetworking.Text = "Networking";
+            this.tabNetworking.UseVisualStyleBackColor = true;
+            // 
+            // networkingConfigControl1
+            // 
+            this.networkingConfigControl1.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.networkingConfigControl1.Location = new System.Drawing.Point(3, 3);
+            this.networkingConfigControl1.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
+            this.networkingConfigControl1.Name = "networkingConfigControl1";
+            this.networkingConfigControl1.Size = new System.Drawing.Size(632, 537);
+            this.networkingConfigControl1.TabIndex = 0;
+            this.networkingConfigControl1.VNetEnabled = false;
             // 
             // tabSharePoint
             // 
@@ -431,6 +456,7 @@
             this.tabPageAzureConfig.ResumeLayout(false);
             this.tabAzureResources.ResumeLayout(false);
             this.tabAzureStorage.ResumeLayout(false);
+            this.tabNetworking.ResumeLayout(false);
             this.tabSharePoint.ResumeLayout(false);
             this.tabSources.ResumeLayout(false);
             this.tabSources.PerformLayout();
@@ -463,12 +489,14 @@
         private Controls.FileSelection fileSelectionWebsite;
         private System.Windows.Forms.TabPage tabAzureResources;
         private System.Windows.Forms.TabPage tabAzureStorage;
+        private System.Windows.Forms.TabPage tabNetworking;
         private System.Windows.Forms.TabPage tabTargets;
         private Controls.TargetSolutionConfigControl importJobSettingsSelection;
         private InstallWizard.SharePointConfigControl sharePointConfigControl1;
         private InstallWizard.InstallSolutionControl installSolutionControl1;
         private InstallWizard.AzurePaaSConfigControl azurePaaSConfigControl1;
         private InstallWizard.AzureStorageConfigControl azureStorageConfigControl1;
+        private InstallWizard.NetworkingConfigControl networkingConfigControl1;
         private InstallWizard.SystemCredentialsControl systemCredentialsControl1;
         private InstallWizardPages.AzureBaseConfigControl azureBaseConfigControl1;
     }
