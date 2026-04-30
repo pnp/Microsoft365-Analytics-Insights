@@ -48,7 +48,7 @@ jobs:
       code_changed: ${{ steps.changes.outputs.code == 'true' }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
       - name: Check if the code has been modified so tests must be run
         id: changes
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # 3.0.2
@@ -63,7 +63,7 @@ jobs:
     if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
     steps:
       - name: Checkout source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
       - name: Run AI Tracker tests
         run: |
           cd src/SPO/AITracker/TypeScript
@@ -87,7 +87,7 @@ jobs:
         configuration: [Release] # [Debug, Release]
     steps:
       - name: Checkout source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # 2.0.0
       - name: Cache NuGet Packages
