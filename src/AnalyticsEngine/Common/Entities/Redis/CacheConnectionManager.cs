@@ -1,4 +1,6 @@
-﻿using Newtonsoft.Json;
+﻿using Azure.Identity;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using StackExchange.Redis;
 using System;
 using System.Threading.Tasks;
@@ -6,7 +8,7 @@ using System.Threading.Tasks;
 namespace Common.Entities.Redis
 {
     /// <summary>
-    /// Wrapper class for redis connection
+    /// Wrapper class for redis connection. Tries key-based auth first, falls back to RBAC (Entra ID) if keys are disabled.
     /// </summary>
     public class CacheConnectionManager
     {
@@ -14,21 +16,111 @@ namespace Common.Entities.Redis
 
         readonly ConnectionMultiplexer _muxer = null;
         readonly IDatabase _conn = null;
-        private CacheConnectionManager(string connectionString)
+        private CacheConnectionManager(ConnectionMultiplexer muxer)
         {
-            _muxer = ConnectionMultiplexer.Connect(connectionString);
+            _muxer = muxer;
             _conn = _muxer.GetDatabase();
         }
 
         private static CacheConnectionManager _connectionManager = null;
-        public static CacheConnectionManager GetConnectionManager(string connectionString)
+        private static readonly object _lock = new object();
+
+        /// <summary>
+        /// Gets or creates a singleton connection manager. Tries key-based connection string first;
+        /// if that fails (e.g. keys disabled by policy), falls back to RBAC/Entra ID token auth.
+        /// </summary>
+        public static CacheConnectionManager GetConnectionManager(string connectionString, ILogger logger = null)
         {
             if (_connectionManager == null)
             {
-                _connectionManager = new CacheConnectionManager(connectionString);
+                lock (_lock)
+                {
+                    if (_connectionManager == null)
+                    {
+                        _connectionManager = CreateConnectionManager(connectionString, logger);
+                    }
+                }
             }
 
             return _connectionManager;
+        }
+
+        private static CacheConnectionManager CreateConnectionManager(string connectionString, ILogger logger)
+        {
+            // Try key-based auth first
+            try
+            {
+                var muxer = ConnectionMultiplexer.Connect(connectionString);
+                // Test the connection with a ping
+                var db = muxer.GetDatabase();
+                db.Ping();
+                logger?.LogInformation("Redis connected using key-based authentication.");
+                return new CacheConnectionManager(muxer);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"Redis key-based auth failed ({ex.Message}). Attempting RBAC/Entra ID auth...");
+            }
+
+            // Fall back to RBAC (Entra ID) token auth
+            try
+            {
+                var hostname = ExtractHostname(connectionString);
+                var muxer = ConnectWithRbac(hostname);
+                var db = muxer.GetDatabase();
+                db.Ping();
+                logger?.LogInformation("Redis connected using RBAC/Entra ID authentication.");
+                return new CacheConnectionManager(muxer);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to connect to Redis with both key-based and RBAC auth. RBAC error: {ex.Message}", ex);
+            }
+        }
+
+        private static string ExtractHostname(string connectionString)
+        {
+            // Connection string format: "host:port,password=...,ssl=True,abortConnect=False"
+            // or just "host:port"
+            if (string.IsNullOrEmpty(connectionString))
+                throw new ArgumentException("Redis connection string is null or empty.");
+
+            var parts = connectionString.Split(',');
+            var hostPort = parts[0].Trim();
+            // Remove port if present
+            var colonIdx = hostPort.IndexOf(':');
+            return colonIdx > 0 ? hostPort.Substring(0, colonIdx) : hostPort;
+        }
+
+        private static ConnectionMultiplexer ConnectWithRbac(string hostname)
+        {
+            var credential = new DefaultAzureCredential();
+            var token = credential.GetToken(
+                new Azure.Core.TokenRequestContext(new[] { "https://redis.azure.com/.default" }));
+
+            var options = new ConfigurationOptions
+            {
+                EndPoints = { { hostname, 6380 } },
+                Ssl = true,
+                AbortOnConnectFail = false,
+                Password = token.Token,
+                User = null // SE.Redis 2.x uses the token as password with default user
+            };
+
+            return ConnectionMultiplexer.Connect(options);
+        }
+
+        /// <summary>
+        /// Resets the singleton so the next call to GetConnectionManager will create a new connection.
+        /// </summary>
+        public static void Reset()
+        {
+            lock (_lock)
+            {
+                _connectionManager?._muxer?.Dispose();
+                _connectionManager = null;
+            }
         }
         #endregion
 

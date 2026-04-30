@@ -256,6 +256,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         "account", subnetId, logger, tagDic);
                     if (deployDns) AddPrivateDnsZoneTask("privatelink.cognitiveservices.azure.com", vnetId, cognitivePeName, logger, tagDic);
                 }
+
+                // Automation Account
+                if (config.SolutionConfig.ImportTaskSettings.GraphUsageReports && !string.IsNullOrWhiteSpace(config.AutomationAccountName))
+                {
+                    var automationPeName = peNames.GetNameOrDefault(peNames.AutomationAccount, $"pe-{config.AutomationAccountName}-automation");
+                    AddPrivateEndpointTask(automationPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Automation/automationAccounts/{config.AutomationAccountName}",
+                        "DSCAndHybridWorker", subnetId, logger, tagDic);
+                    if (deployDns) AddPrivateDnsZoneTask("privatelink.azure-automation.net", vnetId, automationPeName, logger, tagDic);
+                }
             }
         }
 
