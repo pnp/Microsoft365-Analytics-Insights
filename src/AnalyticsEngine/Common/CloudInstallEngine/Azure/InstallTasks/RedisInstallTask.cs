@@ -46,14 +46,32 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                bool needsUpdate = false;
+                var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(skuName, skuFamily, 0))
+                {
+                    MinimumTlsVersion = RedisTlsVersion.Tls1_2
+                };
+
                 // Ensure minimum TLS version is 1.2
                 if (redisCache.Data.MinimumTlsVersion == null || !redisCache.Data.MinimumTlsVersion.Value.ToString().Equals(RedisTlsVersion.Tls1_2.ToString()))
                 {
                     _logger.LogInformation($"Updating Redis cache '{name}' to enforce TLS 1.2...");
-                    var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(skuName, skuFamily, 0))
+                    needsUpdate = true;
+                }
+
+                // Only enable public network access when not using VNet/private endpoints
+                if (!_requireStandardSku)
+                {
+                    if (redisCache.Data.PublicNetworkAccess == null || redisCache.Data.PublicNetworkAccess.Value != RedisPublicNetworkAccess.Enabled)
                     {
-                        MinimumTlsVersion = RedisTlsVersion.Tls1_2
-                    };
+                        _logger.LogInformation($"Enabling public network access on Redis cache '{name}' so firewall rules apply...");
+                        updateData.PublicNetworkAccess = RedisPublicNetworkAccess.Enabled;
+                        needsUpdate = true;
+                    }
+                }
+
+                if (needsUpdate)
+                {
                     await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
                 }
 

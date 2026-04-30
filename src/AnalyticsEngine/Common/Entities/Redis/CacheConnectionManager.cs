@@ -27,9 +27,9 @@ namespace Common.Entities.Redis
 
         /// <summary>
         /// Gets or creates a singleton connection manager. Tries key-based connection string first;
-        /// if that fails (e.g. keys disabled by policy), falls back to RBAC/Entra ID token auth.
+        /// if that fails (e.g. keys disabled by policy), falls back to RBAC/Entra ID token auth using the runtime account.
         /// </summary>
-        public static CacheConnectionManager GetConnectionManager(string connectionString, ILogger logger = null)
+        public static CacheConnectionManager GetConnectionManager(string connectionString, ILogger logger = null, string tenantId = null, string clientId = null, string clientSecret = null)
         {
             if (_connectionManager == null)
             {
@@ -37,7 +37,7 @@ namespace Common.Entities.Redis
                 {
                     if (_connectionManager == null)
                     {
-                        _connectionManager = CreateConnectionManager(connectionString, logger);
+                        _connectionManager = CreateConnectionManager(connectionString, logger, tenantId, clientId, clientSecret);
                     }
                 }
             }
@@ -45,7 +45,7 @@ namespace Common.Entities.Redis
             return _connectionManager;
         }
 
-        private static CacheConnectionManager CreateConnectionManager(string connectionString, ILogger logger)
+        private static CacheConnectionManager CreateConnectionManager(string connectionString, ILogger logger, string tenantId, string clientId, string clientSecret)
         {
             // Try key-based auth first
             try
@@ -62,14 +62,20 @@ namespace Common.Entities.Redis
                 logger?.LogWarning($"Redis key-based auth failed ({ex.Message}). Attempting RBAC/Entra ID auth...");
             }
 
-            // Fall back to RBAC (Entra ID) token auth
+            // Fall back to RBAC (Entra ID) token auth using the runtime account
+            if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
+            {
+                throw new InvalidOperationException(
+                    "Redis key-based auth failed and RBAC fallback cannot proceed: runtime account credentials (tenantId, clientId, clientSecret) are not configured.");
+            }
+
             try
             {
                 var hostname = ExtractHostname(connectionString);
-                var muxer = ConnectWithRbac(hostname);
+                var muxer = ConnectWithRbac(hostname, tenantId, clientId, clientSecret);
                 var db = muxer.GetDatabase();
                 db.Ping();
-                logger?.LogInformation("Redis connected using RBAC/Entra ID authentication.");
+                logger?.LogInformation("Redis connected using RBAC/Entra ID authentication with runtime account.");
                 return new CacheConnectionManager(muxer);
             }
             catch (Exception ex)
@@ -93,11 +99,32 @@ namespace Common.Entities.Redis
             return colonIdx > 0 ? hostPort.Substring(0, colonIdx) : hostPort;
         }
 
-        private static ConnectionMultiplexer ConnectWithRbac(string hostname)
+        private static ConnectionMultiplexer ConnectWithRbac(string hostname, string tenantId, string clientId, string clientSecret)
         {
-            var credential = new DefaultAzureCredential();
+            var credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
             var token = credential.GetToken(
                 new Azure.Core.TokenRequestContext(new[] { "https://redis.azure.com/.default" }));
+
+            // Extract the OID (Object ID) from the token for the username
+            string username = null;
+            var tokenParts = token.Token.Split('.');
+            if (tokenParts.Length >= 2)
+            {
+                try
+                {
+                    var payload = tokenParts[1];
+                    // Pad base64 if needed
+                    payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+                    var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(payload));
+                    var claims = JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, object>>(json);
+                    if (claims.ContainsKey("oid"))
+                        username = claims["oid"].ToString();
+                }
+                catch
+                {
+                    // If token parsing fails, leave username null
+                }
+            }
 
             var options = new ConfigurationOptions
             {
@@ -105,7 +132,7 @@ namespace Common.Entities.Redis
                 Ssl = true,
                 AbortOnConnectFail = false,
                 Password = token.Token,
-                User = null // SE.Redis 2.x uses the token as password with default user
+                User = username
             };
 
             return ConnectionMultiplexer.Connect(options);

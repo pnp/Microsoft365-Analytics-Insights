@@ -13,9 +13,9 @@ namespace WebJob.Office365ActivityImporter.Engine
         private readonly string _key;
         private CacheConnectionManager _cacheConnectionManager = null;
 
-        public RedisSingleDateLoader(string redisConnectionString, string key)
+        public RedisSingleDateLoader(string redisConnectionString, string key, string tenantId = null, string clientId = null, string clientSecret = null)
         {
-            _cacheConnectionManager = CacheConnectionManager.GetConnectionManager(redisConnectionString);
+            _cacheConnectionManager = CacheConnectionManager.GetConnectionManager(redisConnectionString, tenantId: tenantId, clientId: clientId, clientSecret: clientSecret);
             _key = key;
         }
         public async Task<DateTime?> GetLastDT()
