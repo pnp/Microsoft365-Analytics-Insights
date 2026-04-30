@@ -57,6 +57,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtPeServiceBus = new System.Windows.Forms.TextBox();
             this.lblPeCognitive = new System.Windows.Forms.Label();
             this.txtPeCognitive = new System.Windows.Forms.TextBox();
+            this.lblPeAutomation = new System.Windows.Forms.Label();
+            this.txtPeAutomation = new System.Windows.Forms.TextBox();
             this.lblPeHelp = new System.Windows.Forms.Label();
             this.lblHybridWorkerVm = new System.Windows.Forms.Label();
             this.txtHybridWorkerVm = new System.Windows.Forms.TextBox();
@@ -229,6 +231,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpEndpointNames.Controls.Add(this.txtPeServiceBus);
             this.grpEndpointNames.Controls.Add(this.lblPeCognitive);
             this.grpEndpointNames.Controls.Add(this.txtPeCognitive);
+            this.grpEndpointNames.Controls.Add(this.lblPeAutomation);
+            this.grpEndpointNames.Controls.Add(this.txtPeAutomation);
             this.grpEndpointNames.Location = new System.Drawing.Point(15, 118);
             this.grpEndpointNames.Name = "grpEndpointNames";
             this.grpEndpointNames.Size = new System.Drawing.Size(570, 145);
@@ -357,13 +361,29 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtPeCognitive.Size = new System.Drawing.Size(185, 20);
             this.txtPeCognitive.TabIndex = 14;
             // 
+            // lblPeAutomation
+            // 
+            this.lblPeAutomation.AutoSize = true;
+            this.lblPeAutomation.Location = new System.Drawing.Point(285, 121);
+            this.lblPeAutomation.Name = "lblPeAutomation";
+            this.lblPeAutomation.Size = new System.Drawing.Size(68, 13);
+            this.lblPeAutomation.TabIndex = 15;
+            this.lblPeAutomation.Text = "Automation:";
+            // 
+            // txtPeAutomation
+            // 
+            this.txtPeAutomation.Location = new System.Drawing.Point(370, 118);
+            this.txtPeAutomation.Name = "txtPeAutomation";
+            this.txtPeAutomation.Size = new System.Drawing.Size(185, 20);
+            this.txtPeAutomation.TabIndex = 16;
+            // 
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
             this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 275);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
-            this.lblHybridWorkerVm.TabIndex = 11;
+            this.lblHybridWorkerVm.TabIndex = 17;
             this.lblHybridWorkerVm.Text = "Hybrid Worker VM (optional):";
             // 
             // txtHybridWorkerVm
@@ -371,14 +391,14 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 272);
             this.txtHybridWorkerVm.Name = "txtHybridWorkerVm";
             this.txtHybridWorkerVm.Size = new System.Drawing.Size(340, 20);
-            this.txtHybridWorkerVm.TabIndex = 12;
+            this.txtHybridWorkerVm.TabIndex = 18;
             // 
             // btnBrowseVm
             // 
             this.btnBrowseVm.Location = new System.Drawing.Point(506, 270);
             this.btnBrowseVm.Name = "btnBrowseVm";
             this.btnBrowseVm.Size = new System.Drawing.Size(75, 23);
-            this.btnBrowseVm.TabIndex = 13;
+            this.btnBrowseVm.TabIndex = 19;
             this.btnBrowseVm.Text = "Browse...";
             this.btnBrowseVm.UseVisualStyleBackColor = true;
             this.btnBrowseVm.Click += new System.EventHandler(this.btnBrowseVm_Click);
@@ -389,7 +409,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 295);
             this.lblHybridWorkerVmHelp.Name = "lblHybridWorkerVmHelp";
             this.lblHybridWorkerVmHelp.Size = new System.Drawing.Size(430, 42);
-            this.lblHybridWorkerVmHelp.TabIndex = 14;
+            this.lblHybridWorkerVmHelp.TabIndex = 20;
             this.lblHybridWorkerVmHelp.Text = "Azure VM Resource ID. The VM must be connected to the VNet specified above.\r\nThe installer will automatically deploy the Hybrid Worker extension to the VM\r\nand register it so automation runbooks can access private-endpoint resources.";
             // 
             // lblSkuWarning
@@ -398,7 +418,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblSkuWarning.Location = new System.Drawing.Point(15, 345);
             this.lblSkuWarning.Name = "lblSkuWarning";
             this.lblSkuWarning.Size = new System.Drawing.Size(570, 90);
-            this.lblSkuWarning.TabIndex = 15;
+            this.lblSkuWarning.TabIndex = 21;
             this.lblSkuWarning.Text = "Note: Enabling private VNet will automatically upgrade certain resource SKUs to support private endpoints:\r\n" +
                 "  • Redis Cache: Basic → Standard\r\n" +
                 "  • Service Bus: Basic → Premium (private endpoints require Premium)\r\n" +
@@ -456,6 +476,8 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.TextBox txtPeServiceBus;
         private System.Windows.Forms.Label lblPeCognitive;
         private System.Windows.Forms.TextBox txtPeCognitive;
+        private System.Windows.Forms.Label lblPeAutomation;
+        private System.Windows.Forms.TextBox txtPeAutomation;
         private System.Windows.Forms.Label lblHybridWorkerVm;
         private System.Windows.Forms.TextBox txtHybridWorkerVm;
         private System.Windows.Forms.Button btnBrowseVm;

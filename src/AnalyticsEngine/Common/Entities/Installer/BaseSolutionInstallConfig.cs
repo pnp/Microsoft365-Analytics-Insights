@@ -162,6 +162,7 @@ namespace Common.Entities.Installer
         public string KeyVault { get; set; } = string.Empty;
         public string ServiceBus { get; set; } = string.Empty;
         public string CognitiveServices { get; set; } = string.Empty;
+        public string AutomationAccount { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets the endpoint name, falling back to the default if the custom name is empty.
