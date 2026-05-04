@@ -40,6 +40,10 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtAddressPrefix = new System.Windows.Forms.TextBox();
             this.lblSubnetAddressPrefix = new System.Windows.Forms.Label();
             this.txtSubnetAddressPrefix = new System.Windows.Forms.TextBox();
+            this.lblAppSubnetName = new System.Windows.Forms.Label();
+            this.txtAppSubnetName = new System.Windows.Forms.TextBox();
+            this.lblAppSubnetAddressPrefix = new System.Windows.Forms.Label();
+            this.txtAppSubnetAddressPrefix = new System.Windows.Forms.TextBox();
             this.chkDeployDnsZones = new System.Windows.Forms.CheckBox();
             this.lblDnsZonesHelp = new System.Windows.Forms.Label();
             this.grpEndpointNames = new System.Windows.Forms.GroupBox();
@@ -110,6 +114,10 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpVNetSettings.Controls.Add(this.txtAddressPrefix);
             this.grpVNetSettings.Controls.Add(this.lblSubnetAddressPrefix);
             this.grpVNetSettings.Controls.Add(this.txtSubnetAddressPrefix);
+            this.grpVNetSettings.Controls.Add(this.lblAppSubnetName);
+            this.grpVNetSettings.Controls.Add(this.txtAppSubnetName);
+            this.grpVNetSettings.Controls.Add(this.lblAppSubnetAddressPrefix);
+            this.grpVNetSettings.Controls.Add(this.txtAppSubnetAddressPrefix);
             this.grpVNetSettings.Controls.Add(this.chkDeployDnsZones);
             this.grpVNetSettings.Controls.Add(this.lblDnsZonesHelp);
             this.grpVNetSettings.Controls.Add(this.grpEndpointNames);
@@ -137,15 +145,15 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtVNetName
             // 
-            this.txtVNetName.Location = new System.Drawing.Point(140, 22);
+            this.txtVNetName.Location = new System.Drawing.Point(120, 22);
             this.txtVNetName.Name = "txtVNetName";
-            this.txtVNetName.Size = new System.Drawing.Size(200, 20);
+            this.txtVNetName.Size = new System.Drawing.Size(180, 20);
             this.txtVNetName.TabIndex = 1;
             // 
             // lblSubnetName
             // 
             this.lblSubnetName.AutoSize = true;
-            this.lblSubnetName.Location = new System.Drawing.Point(350, 25);
+            this.lblSubnetName.Location = new System.Drawing.Point(15, 52);
             this.lblSubnetName.Name = "lblSubnetName";
             this.lblSubnetName.Size = new System.Drawing.Size(75, 13);
             this.lblSubnetName.TabIndex = 2;
@@ -153,16 +161,16 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtSubnetName
             // 
-            this.txtSubnetName.Location = new System.Drawing.Point(430, 22);
+            this.txtSubnetName.Location = new System.Drawing.Point(120, 49);
             this.txtSubnetName.Name = "txtSubnetName";
-            this.txtSubnetName.Size = new System.Drawing.Size(155, 20);
+            this.txtSubnetName.Size = new System.Drawing.Size(180, 20);
             this.txtSubnetName.TabIndex = 3;
             this.txtSubnetName.Text = "default";
             // 
             // lblAddressPrefix
             // 
             this.lblAddressPrefix.AutoSize = true;
-            this.lblAddressPrefix.Location = new System.Drawing.Point(15, 52);
+            this.lblAddressPrefix.Location = new System.Drawing.Point(320, 25);
             this.lblAddressPrefix.Name = "lblAddressPrefix";
             this.lblAddressPrefix.Size = new System.Drawing.Size(110, 13);
             this.lblAddressPrefix.TabIndex = 4;
@@ -170,16 +178,16 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtAddressPrefix
             // 
-            this.txtAddressPrefix.Location = new System.Drawing.Point(140, 49);
+            this.txtAddressPrefix.Location = new System.Drawing.Point(450, 22);
             this.txtAddressPrefix.Name = "txtAddressPrefix";
-            this.txtAddressPrefix.Size = new System.Drawing.Size(200, 20);
+            this.txtAddressPrefix.Size = new System.Drawing.Size(130, 20);
             this.txtAddressPrefix.TabIndex = 5;
             this.txtAddressPrefix.Text = "10.0.0.0/16";
             // 
             // lblSubnetAddressPrefix
             // 
             this.lblSubnetAddressPrefix.AutoSize = true;
-            this.lblSubnetAddressPrefix.Location = new System.Drawing.Point(350, 52);
+            this.lblSubnetAddressPrefix.Location = new System.Drawing.Point(320, 52);
             this.lblSubnetAddressPrefix.Name = "lblSubnetAddressPrefix";
             this.lblSubnetAddressPrefix.Size = new System.Drawing.Size(120, 13);
             this.lblSubnetAddressPrefix.TabIndex = 6;
@@ -187,28 +195,62 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtSubnetAddressPrefix
             // 
-            this.txtSubnetAddressPrefix.Location = new System.Drawing.Point(430, 49);
+            this.txtSubnetAddressPrefix.Location = new System.Drawing.Point(450, 49);
             this.txtSubnetAddressPrefix.Name = "txtSubnetAddressPrefix";
-            this.txtSubnetAddressPrefix.Size = new System.Drawing.Size(155, 20);
+            this.txtSubnetAddressPrefix.Size = new System.Drawing.Size(130, 20);
             this.txtSubnetAddressPrefix.TabIndex = 7;
             this.txtSubnetAddressPrefix.Text = "10.0.0.0/24";
+            // 
+            // lblAppSubnetName
+            // 
+            this.lblAppSubnetName.AutoSize = true;
+            this.lblAppSubnetName.Location = new System.Drawing.Point(15, 79);
+            this.lblAppSubnetName.Name = "lblAppSubnetName";
+            this.lblAppSubnetName.Size = new System.Drawing.Size(120, 13);
+            this.lblAppSubnetName.TabIndex = 30;
+            this.lblAppSubnetName.Text = "App Subnet Name:";
+            // 
+            // txtAppSubnetName
+            // 
+            this.txtAppSubnetName.Location = new System.Drawing.Point(120, 76);
+            this.txtAppSubnetName.Name = "txtAppSubnetName";
+            this.txtAppSubnetName.Size = new System.Drawing.Size(180, 20);
+            this.txtAppSubnetName.TabIndex = 31;
+            this.txtAppSubnetName.Text = "app-integration";
+            // 
+            // lblAppSubnetAddressPrefix
+            // 
+            this.lblAppSubnetAddressPrefix.AutoSize = true;
+            this.lblAppSubnetAddressPrefix.Location = new System.Drawing.Point(320, 79);
+            this.lblAppSubnetAddressPrefix.Name = "lblAppSubnetAddressPrefix";
+            this.lblAppSubnetAddressPrefix.Size = new System.Drawing.Size(120, 13);
+            this.lblAppSubnetAddressPrefix.TabIndex = 32;
+            this.lblAppSubnetAddressPrefix.Text = "App Subnet Prefix:";
+            // 
+            // txtAppSubnetAddressPrefix
+            // 
+            this.txtAppSubnetAddressPrefix.Location = new System.Drawing.Point(450, 76);
+            this.txtAppSubnetAddressPrefix.Name = "txtAppSubnetAddressPrefix";
+            this.txtAppSubnetAddressPrefix.Size = new System.Drawing.Size(130, 20);
+            this.txtAppSubnetAddressPrefix.TabIndex = 33;
+            this.txtAppSubnetAddressPrefix.Text = "10.0.2.0/24";
             // 
             // chkDeployDnsZones
             // 
             this.chkDeployDnsZones.AutoSize = true;
             this.chkDeployDnsZones.Checked = true;
             this.chkDeployDnsZones.CheckState = System.Windows.Forms.CheckState.Checked;
-            this.chkDeployDnsZones.Location = new System.Drawing.Point(18, 80);
+            this.chkDeployDnsZones.Location = new System.Drawing.Point(18, 107);
             this.chkDeployDnsZones.Name = "chkDeployDnsZones";
             this.chkDeployDnsZones.Size = new System.Drawing.Size(280, 17);
-            this.chkDeployDnsZones.TabIndex = 8;
+            this.chkDeployDnsZones.TabIndex = 34;
             this.chkDeployDnsZones.Text = "Deploy Azure Private DNS zones for each resource";
             this.chkDeployDnsZones.UseVisualStyleBackColor = true;
             // 
             // lblDnsZonesHelp
             // 
             this.lblDnsZonesHelp.ForeColor = System.Drawing.SystemColors.GrayText;
-            this.lblDnsZonesHelp.Location = new System.Drawing.Point(35, 98);
+            this.lblDnsZonesHelp.Location = new System.Drawing.Point(35, 125);
             this.lblDnsZonesHelp.Name = "lblDnsZonesHelp";
             this.lblDnsZonesHelp.Size = new System.Drawing.Size(550, 14);
             this.lblDnsZonesHelp.TabIndex = 9;
@@ -233,7 +275,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpEndpointNames.Controls.Add(this.txtPeCognitive);
             this.grpEndpointNames.Controls.Add(this.lblPeAutomation);
             this.grpEndpointNames.Controls.Add(this.txtPeAutomation);
-            this.grpEndpointNames.Location = new System.Drawing.Point(15, 118);
+            this.grpEndpointNames.Location = new System.Drawing.Point(15, 145);
             this.grpEndpointNames.Name = "grpEndpointNames";
             this.grpEndpointNames.Size = new System.Drawing.Size(570, 145);
             this.grpEndpointNames.TabIndex = 10;
@@ -380,7 +422,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
-            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 275);
+            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 302);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
             this.lblHybridWorkerVm.TabIndex = 17;
@@ -388,14 +430,14 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtHybridWorkerVm
             // 
-            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 272);
+            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 299);
             this.txtHybridWorkerVm.Name = "txtHybridWorkerVm";
             this.txtHybridWorkerVm.Size = new System.Drawing.Size(340, 20);
             this.txtHybridWorkerVm.TabIndex = 18;
             // 
             // btnBrowseVm
             // 
-            this.btnBrowseVm.Location = new System.Drawing.Point(506, 270);
+            this.btnBrowseVm.Location = new System.Drawing.Point(506, 297);
             this.btnBrowseVm.Name = "btnBrowseVm";
             this.btnBrowseVm.Size = new System.Drawing.Size(75, 23);
             this.btnBrowseVm.TabIndex = 19;
@@ -406,7 +448,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVmHelp
             // 
             this.lblHybridWorkerVmHelp.ForeColor = System.Drawing.SystemColors.GrayText;
-            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 295);
+            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 322);
             this.lblHybridWorkerVmHelp.Name = "lblHybridWorkerVmHelp";
             this.lblHybridWorkerVmHelp.Size = new System.Drawing.Size(430, 42);
             this.lblHybridWorkerVmHelp.TabIndex = 20;
@@ -415,7 +457,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblSkuWarning
             // 
             this.lblSkuWarning.ForeColor = System.Drawing.Color.DarkOrange;
-            this.lblSkuWarning.Location = new System.Drawing.Point(15, 345);
+            this.lblSkuWarning.Location = new System.Drawing.Point(15, 372);
             this.lblSkuWarning.Name = "lblSkuWarning";
             this.lblSkuWarning.Size = new System.Drawing.Size(570, 90);
             this.lblSkuWarning.TabIndex = 21;
@@ -483,5 +525,9 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.Button btnBrowseVm;
         private System.Windows.Forms.Label lblHybridWorkerVmHelp;
         private System.Windows.Forms.Label lblSkuWarning;
+        private System.Windows.Forms.Label lblAppSubnetName;
+        private System.Windows.Forms.TextBox txtAppSubnetName;
+        private System.Windows.Forms.Label lblAppSubnetAddressPrefix;
+        private System.Windows.Forms.TextBox txtAppSubnetAddressPrefix;
     }
 }
