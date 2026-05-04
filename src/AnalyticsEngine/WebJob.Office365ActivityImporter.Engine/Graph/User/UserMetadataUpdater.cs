@@ -249,7 +249,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 foreach (var graphUser in allActiveGraphUsers)
                 {
                     var upn = graphUser.UserPrincipalName;
-                    if (!string.IsNullOrEmpty(upn) && 
+                    if (!string.IsNullOrEmpty(upn) &&
                         dbUsersByUpn.TryGetValue(upn, out var dbUser) &&
                         !insertedUpnSet.Contains(upn.ToLower()))
                     {

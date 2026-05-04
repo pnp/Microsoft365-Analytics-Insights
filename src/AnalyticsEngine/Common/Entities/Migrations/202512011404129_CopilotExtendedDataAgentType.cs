@@ -2,7 +2,7 @@
 {
     using System;
     using System.Data.Entity.Migrations;
-    
+
     public partial class CopilotExtendedDataAgentType : DbMigration
     {
         public override void Up()
@@ -11,7 +11,7 @@
 
             Console.WriteLine("DB SCHEMA: Applied 'Copilot agent type' succesfully.");
         }
-        
+
         public override void Down()
         {
             DropColumn("dbo.copilot_agents", "is_custom_agent");

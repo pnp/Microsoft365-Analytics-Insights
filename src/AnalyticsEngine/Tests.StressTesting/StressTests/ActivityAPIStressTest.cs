@@ -1,4 +1,3 @@
-using Common.Entities.Config;
 using DataUtils;
 using System;
 using System.Diagnostics;
@@ -6,8 +5,6 @@ using System.Threading.Tasks;
 using Tests.StressTesting.FakeLoaders;
 using Tests.StressTesting.Infrastructure;
 using Tests.UnitTests.FakeLoaderClasses;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
-using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.StressTesting.StressTests
 {
@@ -60,7 +57,7 @@ namespace Tests.StressTesting.StressTests
                         }
 
                         var importer = new FakeActivityImporterForStress(
-                            telemetry, 
+                            telemetry,
                             maxSavesPerBatch,
                             reportsPerLoad,
                             reportsPerTimeSlot,

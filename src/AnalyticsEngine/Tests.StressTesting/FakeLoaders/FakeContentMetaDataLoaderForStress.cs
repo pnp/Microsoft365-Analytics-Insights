@@ -1,9 +1,7 @@
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
-using Common.Entities.Config;
-using Microsoft.Extensions.Logging;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Engine.Entities;
 
@@ -17,7 +15,7 @@ namespace Tests.StressTesting.FakeLoaders
         private readonly int _reportsPerTimeSlot;
         private readonly int _timeSlotCount;
 
-        public FakeContentMetaDataLoaderForStress(int reportsPerTimeSlot, int timeSlotCount) 
+        public FakeContentMetaDataLoaderForStress(int reportsPerTimeSlot, int timeSlotCount)
             : base(new FakeLogger(), FakeAppConfigFactory.Create())
         {
             _reportsPerTimeSlot = reportsPerTimeSlot;

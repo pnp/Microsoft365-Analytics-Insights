@@ -1,12 +1,9 @@
 using App.ControlPanel.Engine;
-using App.ControlPanel.Engine.Entities;
-using App.ControlPanel.Engine.InstallerTasks;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.IO;
-using System.Threading.Tasks;
 
 namespace Tests.UnitTests.InstallTests
 {

@@ -2,11 +2,8 @@ using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Models;
 using Common.Entities;
 using Common.Entities.Config;
-using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
-using System.Data.SqlClient;
-using System.Linq;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -29,11 +26,11 @@ namespace Tests.UnitTests
         {
             var config = new AppConfig();
             var connectionString = config.ConnectionStrings.DatabaseConnectionString;
-            
+
             var initInfo = new DatabaseUpgradeInfo { ConnectionString = connectionString };
 
             // Run database upgrade to ensure all schemas, stored procedures, and tables exist
-            DatabaseUpgrader.CheckDbUpgraded(initInfo, (s) => 
+            DatabaseUpgrader.CheckDbUpgraded(initInfo, (s) =>
             {
                 Console.WriteLine($"[DatabaseUpgrader] {s}");
                 context.WriteLine($"[DatabaseUpgrader] {s}");
@@ -384,7 +381,7 @@ namespace Tests.UnitTests
             // First, delete any existing user with this email to avoid unique constraint violations
             // This can happen if a previous test run failed and didn't clean up properly
             var testEmail = $"testuser{userId}@unittest.local";
-            
+
             // Delete related records first to avoid FK constraint violations
             await ExecuteSql(db, $@"
                 -- Clean up activity logs that reference this user
@@ -404,11 +401,11 @@ namespace Tests.UnitTests
                 DELETE FROM profiling.ActivitiesWeekly WHERE user_id = {userId};
                 DELETE FROM profiling.ActivitiesWeeklyColumns WHERE user_id = {userId};
             ");
-            
+
             // Now delete the user
             await ExecuteSql(db, $@"
                 DELETE FROM dbo.users WHERE mail = '{testEmail}';");
-            
+
             // Now insert test user with explicit ID using IDENTITY_INSERT
             await ExecuteSql(db, $@"
                 SET IDENTITY_INSERT dbo.users ON;

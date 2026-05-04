@@ -49,7 +49,7 @@ namespace Tests.FakeDataGen
             while (!exit)
             {
                 ShowMenu();
-                
+
                 var key = Console.ReadKey(true);
                 Console.WriteLine();
 
@@ -107,7 +107,7 @@ namespace Tests.FakeDataGen
             try
             {
                 var builder = new System.Data.SqlClient.SqlConnectionStringBuilder(connectionString);
-                
+
                 Console.WriteLine("SQL Server Connection Information:");
                 Console.WriteLine("-------------------------------------------");
                 Console.WriteLine($"  Server: {builder.DataSource}");
@@ -208,7 +208,7 @@ namespace Tests.FakeDataGen
                         Console.WriteLine("Generating fake data may create duplicate or inconsistent records.");
                         Console.WriteLine();
                         Console.Write("Do you want to continue? (yes/no): ");
-                        
+
                         string response = Console.ReadLine()?.Trim().ToLower();
                         if (response != "yes" && response != "y")
                         {

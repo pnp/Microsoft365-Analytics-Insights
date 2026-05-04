@@ -1,12 +1,8 @@
-using Azure.Core;
 using Azure.Identity;
 using Common.Entities.Config;
 using DataUtils;
-using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
-using System.Threading;
-using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine;
 
 namespace Tests.UnitTests
