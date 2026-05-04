@@ -102,7 +102,7 @@ jobs:
         uses: microsoft/setup-msbuild@v2
       - name: Cache NuGet Packages
         id: nuget-packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         if: false
         env:
           cache-name: nuget-package-cache
@@ -192,7 +192,7 @@ jobs:
 
       # Wrap up
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: ${{ steps.prep.outputs.ZIPS_FOLDER }}
           name: drop_${{ matrix.project.name }}
@@ -221,7 +221,7 @@ jobs:
           zip -r AITrackerInstaller.zip AITracker
       # Wrap up
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: src/SPO/AITrackerInstaller.zip
           name: drop_aitracker
@@ -240,7 +240,7 @@ jobs:
           -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
           -Force -DestinationPath "${{ runner.temp }}\Analytics_Reports.zip"
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: ${{ runner.temp }}/Analytics_Reports.zip
           name: drop_Reports
@@ -283,7 +283,7 @@ jobs:
             --release-branch ${{ github.ref_name }}
           sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         id: artifacts
       - name: Generate release label
         run: |
