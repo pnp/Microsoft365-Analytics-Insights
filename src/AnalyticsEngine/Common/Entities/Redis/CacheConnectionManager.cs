@@ -50,7 +50,11 @@ namespace Common.Entities.Redis
             // Try key-based auth first
             try
             {
-                var muxer = ConnectionMultiplexer.Connect(connectionString);
+                var keyOptions = ConfigurationOptions.Parse(connectionString);
+                keyOptions.ConnectTimeout = 15000;
+                keyOptions.SyncTimeout = 15000;
+                keyOptions.AsyncTimeout = 15000;
+                var muxer = ConnectionMultiplexer.Connect(keyOptions);
                 // Test the connection with a ping
                 var db = muxer.GetDatabase();
                 db.Ping();
@@ -132,7 +136,10 @@ namespace Common.Entities.Redis
                 Ssl = true,
                 AbortOnConnectFail = false,
                 Password = token.Token,
-                User = username
+                User = username,
+                ConnectTimeout = 15000,
+                SyncTimeout = 15000,
+                AsyncTimeout = 15000
             };
 
             return ConnectionMultiplexer.Connect(options);
