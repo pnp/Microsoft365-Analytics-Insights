@@ -125,7 +125,7 @@ jobs:
 
       # Wrap up
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: ${{ env.folder }}
           name: drop_${{ matrix.project.name }}
@@ -155,7 +155,7 @@ jobs:
           zip -r AITrackerInstaller.zip AITracker
       # Wrap up
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: src/SPO/AITrackerInstaller.zip
           name: drop_aitracker
@@ -172,7 +172,7 @@ jobs:
           -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
           -Force -DestinationPath "${{ runner.temp }}\Analytics_Reports.zip"
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: ${{ runner.temp }}/Analytics_Reports.zip
           name: drop_Reports
