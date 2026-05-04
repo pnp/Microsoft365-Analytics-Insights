@@ -47,7 +47,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             else
             {
                 bool needsUpdate = false;
-                var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(skuName, skuFamily, 0))
+                // Use the existing SKU for updates to avoid downgrade errors
+                var existingSku = redisCache.Data.Sku;
+                var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(existingSku.Name, existingSku.Family, existingSku.Capacity))
                 {
                     MinimumTlsVersion = RedisTlsVersion.Tls1_2
                 };
