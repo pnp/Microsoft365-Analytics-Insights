@@ -124,17 +124,28 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             // Redis - enforce Standard SKU for VNet
             _redisTask = new RedisInstallTask(TaskConfig.GetConfigForName(config.RedisName), logger, Location, tagDic, vnetEnabled);
+
+            // Redis access policy assignment for data-plane RBAC access (required when key-based auth is disabled)
+            var redisAccessPolicyConfig = TaskConfig.GetConfigForName(config.RedisName)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_ID, config.InstallerAccount.ClientId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_SECRET, config.InstallerAccount.Secret)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_TENANT_ID, config.InstallerAccount.DirectoryId);
+            var _redisAccessPolicyTask = new RedisAccessPolicyAssignmentTask(redisAccessPolicyConfig, logger, Location, tagDic);
+
             if (!vnetEnabled)
             {
                 // Only add firewall rules when not using private endpoints
                 var redisFirewallConfig = TaskConfig.GetConfigForName(config.RedisName)
                     .AddSetting(RedisFirewallConfigTask.CONFIG_KEY_APP_SERVICE_NAME, config.AppServiceWebAppName);
                 var _redisFirewallTask = new RedisFirewallConfigTask(redisFirewallConfig, logger, Location);
-                this.AddTask(_redisTask, _redisFirewallTask);
+                this.AddTask(_redisTask, _redisAccessPolicyTask, _redisFirewallTask);
             }
             else
             {
-                this.AddTask(_redisTask);
+                this.AddTask(_redisTask, _redisAccessPolicyTask);
             }
 
             // Key vault
