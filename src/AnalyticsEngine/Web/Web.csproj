@@ -56,6 +56,9 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.ClientModel">
+      <Version>1.2.1</Version>
+    </PackageReference>
     <PackageReference Include="Azure.Core">
       <Version>1.44.1</Version>
     </PackageReference>
