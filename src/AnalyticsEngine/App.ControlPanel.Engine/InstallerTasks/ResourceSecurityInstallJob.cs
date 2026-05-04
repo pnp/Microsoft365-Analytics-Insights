@@ -40,8 +40,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _storageBlobDataContributorRoleTask = new RoleAssignmentTask(storageBlobContributorConfig, logger, Location, tagDic);
             this.AddTask(_storageBlobDataContributorRoleTask);
 
-            // Assign Redis Cache Data Contributor role to the runtime account for RBAC-based Redis data access (when keys are disabled)
-            var redisCacheContributorConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Redis Cache Data Contributor")
+            // Assign Redis Cache Contributor role to the runtime account for RBAC-based Redis access (when keys are disabled)
+            var redisCacheContributorConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Redis Cache Contributor")
                 .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
                 .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
                 .AddSetting(RoleAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
