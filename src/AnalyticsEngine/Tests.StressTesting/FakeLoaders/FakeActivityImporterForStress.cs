@@ -1,7 +1,5 @@
-using Common.Entities.Config;
 using DataUtils;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
-using Tests.StressTesting.FakeLoaders;
 
 namespace Tests.StressTesting.FakeLoaders
 {
@@ -15,7 +13,7 @@ namespace Tests.StressTesting.FakeLoaders
         private FakeActivitySubscriptionManagerForStress _activitySubscriptionManager;
 
         public FakeActivityImporterForStress(AnalyticsLogger telemetry, int maxSavesPerBatch,
-            int reportsPerLoad, int reportsPerTimeSlot, int timeSlotCount) 
+            int reportsPerLoad, int reportsPerTimeSlot, int timeSlotCount)
             : base(FakeAppConfigFactory.Create(), telemetry, maxSavesPerBatch)
         {
             _reportLoader = new FakeActivityReportLoaderForStress(reportsPerLoad);

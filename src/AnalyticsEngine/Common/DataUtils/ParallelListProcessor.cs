@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -96,7 +95,7 @@ namespace DataUtils
 
                 // Throttle threads to max
                 await _sem.WaitAsync();
-                
+
                 // Load chunk via delegate and release semaphore when done
                 var newTask = processListChunkDelegate(threadListChunk, threadIndex)
                     .ContinueWith(_ => _sem.Release());

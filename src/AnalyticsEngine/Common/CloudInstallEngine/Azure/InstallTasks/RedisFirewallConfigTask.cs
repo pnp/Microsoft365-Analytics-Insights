@@ -2,8 +2,6 @@ using Azure;
 using Azure.Core;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Redis;
-using Azure.ResourceManager.Redis.Models;
-using Azure.ResourceManager.Resources;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;

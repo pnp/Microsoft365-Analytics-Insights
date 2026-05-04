@@ -2,7 +2,6 @@ using Common.Entities;
 using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using System;
-using System.Collections.Generic;
 using System.Linq;
 
 namespace Tests.FakeDataGen
@@ -78,7 +77,7 @@ namespace Tests.FakeDataGen
                     bool isCustomAgent = shouldHaveAgent && _random.Next(100) < customAgentPercentage;
 
                     var copilotEvent = GenerateSingleCopilotEvent(db, user, copilotOperation, shouldHaveAgent, isCustomAgent);
-                    
+
                     if (shouldHaveAgent)
                     {
                         withAgents++;
@@ -158,7 +157,7 @@ namespace Tests.FakeDataGen
 
             // Randomly decide if this is a file, meeting, or chat-only event
             int eventType = _random.Next(3);
-            
+
             if (eventType == 0 && copilotChat.AppHost == "Teams")
             {
                 // Create meeting event
@@ -182,7 +181,7 @@ namespace Tests.FakeDataGen
             {
                 meeting = db.Set<OnlineMeeting>().FirstOrDefault();
             }
-            
+
             if (meeting == null)
             {
                 meeting = new OnlineMeeting
@@ -249,7 +248,7 @@ namespace Tests.FakeDataGen
             {
                 agent = db.CopilotAgents.FirstOrDefault(a => a.AgentID == agentId);
             }
-            
+
             if (agent == null)
             {
                 agent = new CopilotAgent
@@ -272,7 +271,7 @@ namespace Tests.FakeDataGen
             {
                 fileName = db.event_file_names.FirstOrDefault(f => f.Name == name);
             }
-            
+
             if (fileName == null)
             {
                 fileName = new SPEventFileName { Name = name };
@@ -289,7 +288,7 @@ namespace Tests.FakeDataGen
             {
                 fileExt = db.event_file_ext.FirstOrDefault(f => f.extension_name == ext);
             }
-            
+
             if (fileExt == null)
             {
                 fileExt = new SPEventFileExtension { extension_name = ext };
@@ -306,7 +305,7 @@ namespace Tests.FakeDataGen
             {
                 url = db.urls.FirstOrDefault(u => u.FullUrl == fullUrl);
             }
-            
+
             if (url == null)
             {
                 url = new Url { FullUrl = fullUrl };
@@ -323,7 +322,7 @@ namespace Tests.FakeDataGen
             {
                 site = db.sites.FirstOrDefault(s => s.UrlBase == siteUrl);
             }
-            
+
             if (site == null)
             {
                 site = new Site { UrlBase = siteUrl };

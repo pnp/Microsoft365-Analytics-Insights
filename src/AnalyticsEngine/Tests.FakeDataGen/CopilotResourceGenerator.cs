@@ -101,7 +101,7 @@ namespace Tests.FakeDataGen
             {
                 resource = db.CopilotAccessedResourceIds.FirstOrDefault(r => r.ResourceId == resourceId);
             }
-            
+
             if (resource == null)
             {
                 resource = new CopilotAccessedResourceId { ResourceId = resourceId };
@@ -118,7 +118,7 @@ namespace Tests.FakeDataGen
             {
                 resource = db.CopilotAccessedResourceNames.FirstOrDefault(r => r.Name == name);
             }
-            
+
             if (resource == null)
             {
                 resource = new CopilotAccessedResourceName { Name = name };
@@ -135,7 +135,7 @@ namespace Tests.FakeDataGen
             {
                 resource = db.CopilotAccessedResourceSiteUrls.FirstOrDefault(r => r.SiteUrl == siteUrl);
             }
-            
+
             if (resource == null)
             {
                 resource = new CopilotAccessedResourceSiteUrl { SiteUrl = siteUrl };
@@ -152,7 +152,7 @@ namespace Tests.FakeDataGen
             {
                 resourceType = db.CopilotAccessedResourceTypes.FirstOrDefault(r => r.Name == typeName);
             }
-            
+
             if (resourceType == null)
             {
                 resourceType = new CopilotAccessedResourceType { Name = typeName };
