@@ -238,9 +238,8 @@ namespace Tests.StressTesting.StressTests
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = "INSERT INTO audit_events (id, time_stamp) VALUES (@id, @ts)";
-                    var pId = cmd.Parameters.Add("@id", System.Data.DbType.Guid);
-                    var pTs = cmd.Parameters.Add("@ts", System.Data.DbType.DateTime2);
-                    pTs.Value = DateTime.UtcNow;
+                    var pId = cmd.Parameters.AddWithValue("@id", DBNull.Value);
+                    var pTs = cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow);
 
                     foreach (var id in eventIds)
                     {
