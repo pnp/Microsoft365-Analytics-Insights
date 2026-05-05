@@ -4,6 +4,7 @@ using Azure.Identity;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
+using Azure.ResourceManager.Network;
 using Azure.ResourceManager.Redis;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
@@ -13,6 +14,7 @@ using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
+using System.Collections.Generic;
 
 namespace App.ControlPanel.Engine.InstallerTasks
 {
@@ -40,6 +42,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly AppInsightsInstallTask _appInsightsInstallTask;
         private readonly TextAnalyticsInstallTask _cognitiveServicesInstallTask;
 
+        private readonly VNetInstallTask _vnetInstallTask;
+        private readonly HybridWorkerGroupTask _hybridWorkerGroupTask;
+        private string _hybridWorkerGroupName;
+
         /// <summary>
         /// Add tasks in order for execution, some being chained
         /// </summary>
@@ -47,11 +53,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
         {
 
             var tagDic = config.Tags.ToDictionary();
+            var vnetEnabled = config.NetworkConfig != null && config.NetworkConfig.Enabled;
 
             _rgCreateTask = new GetOrCreateResourceGroupTask(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, Location, tagDic, subscription);
             this.AddTask(_rgCreateTask);
 
-            // Performance levels
+            // Performance levels - enforce higher tiers when VNet/private endpoints are needed
             var appPerfTier = AppServicePlanTask.PERF_TIER_BASIC1;
             var sqlPerfTier = SqlDatabaseTask.PERF_TIER_BASIC;
 
@@ -61,11 +68,43 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 appPerfTier = AppServicePlanTask.PERF_TIER_BASIC2;
             }
 
+            // VNet integration requires certain minimum SKUs:
+            // - Redis: Standard (Basic does not support VNet/PE)
+            // - Service Bus: Premium (private endpoints require Premium SKU)
+            // - SQL: S0+ recommended (Basic works for PE but S0 for production)
+            // - App Service: Basic+ (B1 supports VNet integration)
+            // - Storage: Standard_LRS supports PE at all tiers
+            // - Key Vault: Standard supports PE at all tiers
+            if (vnetEnabled && sqlPerfTier == SqlDatabaseTask.PERF_TIER_BASIC)
+            {
+                // SQL Basic doesn't have issues with PE, but S2 is safer for VNet scenarios
+                sqlPerfTier = SqlDatabaseTask.PERF_TIER_S2;
+            }
+
+            // VNet - create before other resources if enabled
+            if (vnetEnabled)
+            {
+                var vnetConfig = TaskConfig.GetConfigForName(config.NetworkConfig.VNetName)
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_ADDRESS_PREFIX, config.NetworkConfig.AddressPrefix)
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_SUBNET_NAME, config.NetworkConfig.SubnetName)
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_SUBNET_ADDRESS_PREFIX, config.NetworkConfig.SubnetAddressPrefix)
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_APP_INTEGRATION_SUBNET_NAME, config.NetworkConfig.AppServiceIntegrationSubnetName ?? string.Empty)
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_APP_INTEGRATION_SUBNET_ADDRESS_PREFIX, config.NetworkConfig.AppServiceIntegrationSubnetAddressPrefix ?? string.Empty);
+                _vnetInstallTask = new VNetInstallTask(vnetConfig, logger, Location, tagDic);
+                this.AddTask(_vnetInstallTask);
+            }
+
             // Web 
             var appServicePlanConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName).AddSetting(AppServicePlanTask.CONFIG_KEY_PERF_TIER, appPerfTier);
             _appServicePlanTask = new AppServicePlanTask(appServicePlanConfig, logger, Location, tagDic);
 
-            _appServiceWebsiteTask = new AppServiceWebsiteTask(TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, Location, tagDic);
+            var appServiceConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName);
+            if (vnetEnabled && !string.IsNullOrWhiteSpace(config.NetworkConfig.AppServiceIntegrationSubnetName))
+            {
+                var integrationSubnetId = $"/subscriptions/{config.Subscription.SubId}/resourceGroups/{config.ResourceGroupName}/providers/Microsoft.Network/virtualNetworks/{config.NetworkConfig.VNetName}/subnets/{config.NetworkConfig.AppServiceIntegrationSubnetName}";
+                appServiceConfig.AddSetting(AppServiceWebsiteTask.CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID, integrationSubnetId);
+            }
+            _appServiceWebsiteTask = new AppServiceWebsiteTask(appServiceConfig, logger, Location, tagDic);
             this.AddTask(_appServicePlanTask, _appServiceWebsiteTask);
 
             // SQL 
@@ -83,9 +122,31 @@ namespace App.ControlPanel.Engine.InstallerTasks
             this.AddTask(_sqlServerTask, _sqlServerFirewallConfigTask, _sqlDatabaseTask);
 
 
-            // Redis
-            _redisTask = new RedisInstallTask(TaskConfig.GetConfigForName(config.RedisName), logger, Location, tagDic);
-            this.AddTask(_redisTask);
+            // Redis - enforce Standard SKU for VNet
+            _redisTask = new RedisInstallTask(TaskConfig.GetConfigForName(config.RedisName), logger, Location, tagDic, vnetEnabled);
+
+            // Redis access policy assignment for data-plane RBAC access (required when key-based auth is disabled)
+            var redisAccessPolicyConfig = TaskConfig.GetConfigForName(config.RedisName)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_ID, config.InstallerAccount.ClientId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_SECRET, config.InstallerAccount.Secret)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_TENANT_ID, config.InstallerAccount.DirectoryId);
+            var _redisAccessPolicyTask = new RedisAccessPolicyAssignmentTask(redisAccessPolicyConfig, logger, Location, tagDic);
+
+            if (!vnetEnabled)
+            {
+                // Only add firewall rules when not using private endpoints
+                var redisFirewallConfig = TaskConfig.GetConfigForName(config.RedisName)
+                    .AddSetting(RedisFirewallConfigTask.CONFIG_KEY_APP_SERVICE_NAME, config.AppServiceWebAppName);
+                var _redisFirewallTask = new RedisFirewallConfigTask(redisFirewallConfig, logger, Location);
+                this.AddTask(_redisTask, _redisAccessPolicyTask, _redisFirewallTask);
+            }
+            else
+            {
+                this.AddTask(_redisTask, _redisAccessPolicyTask);
+            }
 
             // Key vault
             var kvConfig = TaskConfig.GetConfigForName(config.KeyVaultName).AddSetting(KeyVaultTask.CONFIG_KEY_TENANT_ID, config.InstallerAccount.DirectoryId);
@@ -117,10 +178,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 new KeyVaultAddWebAppPermissionsTask(kvAddInstallerWebAppPermissionsConfig, logger, config.AzureLocation, tagDic),
                 new KeyVaultSecretAddTask(kvSecretAddConfig, logger));
 
-            // ServiceBus
+            // ServiceBus - enforce Premium for VNet (private endpoints require Premium SKU)
             const string QUEUE_NAME = "graphcalls";
             const string RULE_NAME = "ListenAndSendPolicy";
-            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic);
+            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled);
 
             var queueConfig = TaskConfig.GetConfigForName(QUEUE_NAME).AddSetting(ServiceBusQueueWithPolicyInstallTask.CONFIG_KEY_RULE_NAME, RULE_NAME);
             _serviceBusQueueWithPolicyInstallTask = new ServiceBusQueueWithPolicyInstallTask(queueConfig, logger, Location);
@@ -157,7 +218,101 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
                 _automationAccountTask = new AutomationAccountTask(automationAccountConfig, logger, Location, tagDic);
                 this.AddTask(_automationAccountTask);
+
+                // Hybrid Worker Group - when VNet is enabled and a VM resource ID is configured,
+                // create a hybrid worker group so runbooks can run inside the VNet
+                if (vnetEnabled && !string.IsNullOrWhiteSpace(config.NetworkConfig?.HybridWorkerVmResourceId))
+                {
+                    _hybridWorkerGroupName = $"{config.AutomationAccountName}-vnet-workers";
+                    var hwgConfig = TaskConfig.GetConfigForName(_hybridWorkerGroupName)
+                        .AddSetting(HybridWorkerGroupTask.CONFIG_KEY_AUTOMATION_ACCOUNT_NAME, config.AutomationAccountName)
+                        .AddSetting(HybridWorkerGroupTask.CONFIG_KEY_VM_RESOURCE_ID, config.NetworkConfig.HybridWorkerVmResourceId);
+                    _hybridWorkerGroupTask = new HybridWorkerGroupTask(hwgConfig, logger, Location, tagDic, creds);
+                    this.AddTask(_hybridWorkerGroupTask);
+                }
             }
+
+            // Private endpoints and DNS zones for all resources when VNet is enabled
+            if (vnetEnabled)
+            {
+                var subId = config.Subscription.SubId;
+                var rgName = config.ResourceGroupName;
+                var subnetId = $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Network/virtualNetworks/{config.NetworkConfig.VNetName}/subnets/{config.NetworkConfig.SubnetName}";
+                var vnetId = $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Network/virtualNetworks/{config.NetworkConfig.VNetName}";
+                var deployDns = config.NetworkConfig.DeployDnsZones;
+                var peNames = config.NetworkConfig.CustomEndpointNames ?? new PrivateEndpointNames();
+
+                // SQL Server
+                var sqlPeName = peNames.GetNameOrDefault(peNames.SqlServer, $"pe-{config.SQLServerName}-sql");
+                AddPrivateEndpointTask(sqlPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Sql/servers/{config.SQLServerName}",
+                    "sqlServer", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.database.windows.net", vnetId, sqlPeName, logger, tagDic);
+
+                // App Service
+                var appPeName = peNames.GetNameOrDefault(peNames.AppService, $"pe-{config.AppServiceWebAppName}-app");
+                AddPrivateEndpointTask(appPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Web/sites/{config.AppServiceWebAppName}",
+                    "sites", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.azurewebsites.net", vnetId, appPeName, logger, tagDic);
+
+                // Redis
+                var redisPeName = peNames.GetNameOrDefault(peNames.Redis, $"pe-{config.RedisName}-redis");
+                AddPrivateEndpointTask(redisPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Cache/Redis/{config.RedisName}",
+                    "redisCache", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.redis.cache.windows.net", vnetId, redisPeName, logger, tagDic);
+
+                // Storage
+                var storagePeName = peNames.GetNameOrDefault(peNames.Storage, $"pe-{config.StorageAccountName}-blob");
+                AddPrivateEndpointTask(storagePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Storage/storageAccounts/{config.StorageAccountName}",
+                    "blob", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.blob.core.windows.net", vnetId, storagePeName, logger, tagDic);
+
+                // Key Vault
+                var kvPeName = peNames.GetNameOrDefault(peNames.KeyVault, $"pe-{config.KeyVaultName}-vault");
+                AddPrivateEndpointTask(kvPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.KeyVault/vaults/{config.KeyVaultName}",
+                    "vault", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.vaultcore.azure.net", vnetId, kvPeName, logger, tagDic);
+
+                // Service Bus
+                var sbPeName = peNames.GetNameOrDefault(peNames.ServiceBus, $"pe-{config.ServiceBusName}-sb");
+                AddPrivateEndpointTask(sbPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.ServiceBus/namespaces/{config.ServiceBusName}",
+                    "namespace", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.servicebus.windows.net", vnetId, sbPeName, logger, tagDic);
+
+                // Cognitive Services (Language/Text Analytics)
+                if (config.CognitiveServicesEnabled)
+                {
+                    var cognitivePeName = peNames.GetNameOrDefault(peNames.CognitiveServices, $"pe-{config.CognitiveServiceName}-cognitive");
+                    AddPrivateEndpointTask(cognitivePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.CognitiveServices/accounts/{config.CognitiveServiceName}",
+                        "account", subnetId, logger, tagDic);
+                    if (deployDns) AddPrivateDnsZoneTask("privatelink.cognitiveservices.azure.com", vnetId, cognitivePeName, logger, tagDic);
+                }
+
+                // Automation Account
+                if (config.SolutionConfig.ImportTaskSettings.GraphUsageReports && !string.IsNullOrWhiteSpace(config.AutomationAccountName))
+                {
+                    var automationPeName = peNames.GetNameOrDefault(peNames.AutomationAccount, $"pe-{config.AutomationAccountName}-automation");
+                    AddPrivateEndpointTask(automationPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Automation/automationAccounts/{config.AutomationAccountName}",
+                        "DSCAndHybridWorker", subnetId, logger, tagDic);
+                    if (deployDns) AddPrivateDnsZoneTask("privatelink.azure-automation.net", vnetId, automationPeName, logger, tagDic);
+                }
+            }
+        }
+
+        private void AddPrivateEndpointTask(string peName, string targetResourceId, string groupId, string subnetId, ILogger logger, Dictionary<string, string> tags)
+        {
+            var peConfig = TaskConfig.GetConfigForName(peName)
+                .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_TARGET_RESOURCE_ID, targetResourceId)
+                .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_GROUP_ID, groupId)
+                .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_SUBNET_ID, subnetId);
+            this.AddTask(new PrivateEndpointInstallTask(peConfig, logger, Location, tags));
+        }
+
+        private void AddPrivateDnsZoneTask(string zoneName, string vnetId, string peName, ILogger logger, Dictionary<string, string> tags)
+        {
+            var dnsConfig = TaskConfig.GetConfigForName(zoneName)
+                .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID, vnetId)
+                .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME, peName);
+            this.AddTask(new PrivateDnsZoneInstallTask(dnsConfig, logger, Location, tags));
         }
 
         // Task results, typed
@@ -173,5 +328,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
         public ServiceBusQueueResourceWithConnectionString SBQueueWithConnectionString => GetTaskResult<ServiceBusQueueResourceWithConnectionString>(_serviceBusQueueWithPolicyInstallTask);
         public KeyVaultResource KeyVault => GetTaskResult<KeyVaultResource>(_keyVaultTask);
+        public VirtualNetworkResource VNet => _vnetInstallTask != null ? GetTaskResult<VirtualNetworkResource>(_vnetInstallTask) : null;
+        public string HybridWorkerGroupName => _hybridWorkerGroupName;
     }
 }

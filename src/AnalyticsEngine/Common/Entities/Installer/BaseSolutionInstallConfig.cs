@@ -93,6 +93,95 @@ namespace Common.Entities.Installer
         }
 
         public List<AzTag> Tags { get; set; } = new List<AzTag>();
+
+        public VNetConfig NetworkConfig { get; set; } = new VNetConfig();
+    }
+
+    /// <summary>
+    /// Configuration for private VNet integration of Azure PaaS resources.
+    /// </summary>
+    public class VNetConfig : BaseConfig
+    {
+        public bool Enabled { get; set; } = false;
+
+        public string VNetName { get; set; } = string.Empty;
+
+        public string SubnetName { get; set; } = "default";
+
+        public string AddressPrefix { get; set; } = "10.0.0.0/16";
+
+        public string SubnetAddressPrefix { get; set; } = "10.0.0.0/24";
+
+        /// <summary>
+        /// Subnet name for App Service regional VNet integration.
+        /// Must be a dedicated subnet (not shared with private endpoints).
+        /// </summary>
+        public string AppServiceIntegrationSubnetName { get; set; } = "app-integration";
+
+        /// <summary>
+        /// Address prefix for the App Service integration subnet (e.g. 10.0.1.0/24).
+        /// </summary>
+        public string AppServiceIntegrationSubnetAddressPrefix { get; set; } = "10.0.2.0/24";
+
+        /// <summary>
+        /// Whether to deploy Azure Private DNS zones for each private endpoint.
+        /// Set to false if using custom DNS management (e.g. on-premises DNS or Azure DNS Private Resolver).
+        /// </summary>
+        public bool DeployDnsZones { get; set; } = true;
+
+        /// <summary>
+        /// Custom private endpoint names. Leave empty/null to use auto-generated defaults (pe-{resourceName}-{suffix}).
+        /// </summary>
+        public PrivateEndpointNames CustomEndpointNames { get; set; } = new PrivateEndpointNames();
+
+        /// <summary>
+        /// Optional: Azure Resource ID of a VM to use as a Hybrid Runbook Worker for the automation account.
+        /// When set, the installer will create a hybrid worker group, register the VM, and install the Hybrid Worker extension.
+        /// This allows automation runbooks to execute inside the VNet for private endpoint connectivity.
+        /// </summary>
+        public string HybridWorkerVmResourceId { get; set; } = string.Empty;
+
+        public override List<string> ValidatInputAndGetErrors()
+        {
+            var errs = new List<string>();
+            if (!Enabled) return errs;
+
+            if (string.IsNullOrWhiteSpace(VNetName))
+                errs.Add("Provide a VNet name when networking is enabled.");
+            if (string.IsNullOrWhiteSpace(SubnetName))
+                errs.Add("Provide a subnet name when networking is enabled.");
+            if (string.IsNullOrWhiteSpace(AddressPrefix))
+                errs.Add("Provide a VNet address prefix (e.g. 10.0.0.0/16).");
+            if (string.IsNullOrWhiteSpace(SubnetAddressPrefix))
+                errs.Add("Provide a subnet address prefix (e.g. 10.0.0.0/24).");
+            if (!string.IsNullOrWhiteSpace(HybridWorkerVmResourceId) && !HybridWorkerVmResourceId.Contains("/providers/Microsoft.Compute/virtualMachines/"))
+                errs.Add("Hybrid Worker VM Resource ID must be a valid Azure VM resource ID (e.g. /subscriptions/.../providers/Microsoft.Compute/virtualMachines/myVM).");
+
+            return errs;
+        }
+    }
+
+    /// <summary>
+    /// Custom names for private endpoints. Empty or null values will use auto-generated defaults.
+    /// </summary>
+    public class PrivateEndpointNames
+    {
+        public string SqlServer { get; set; } = string.Empty;
+        public string AppService { get; set; } = string.Empty;
+        public string Redis { get; set; } = string.Empty;
+        public string Storage { get; set; } = string.Empty;
+        public string KeyVault { get; set; } = string.Empty;
+        public string ServiceBus { get; set; } = string.Empty;
+        public string CognitiveServices { get; set; } = string.Empty;
+        public string AutomationAccount { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets the endpoint name, falling back to the default if the custom name is empty.
+        /// </summary>
+        public string GetNameOrDefault(string customName, string defaultName)
+        {
+            return string.IsNullOrWhiteSpace(customName) ? defaultName : customName.Trim();
+        }
     }
 
     public class AzTag

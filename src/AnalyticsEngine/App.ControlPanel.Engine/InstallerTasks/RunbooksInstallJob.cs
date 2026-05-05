@@ -1,5 +1,4 @@
 ﻿using App.ControlPanel.Engine.InstallerTasks.JobTasks;
-using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.Resources;

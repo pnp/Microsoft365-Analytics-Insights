@@ -1,5 +1,4 @@
 using Common.Entities;
-using Common.Entities.LookupCaches;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -35,7 +34,7 @@ namespace Tests.UnitTests
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
                 var batchProcessor = new UserBatchProcessor(telemetry);
                 var cache = new UserMetadataCache(db);
-                
+
                 int usersProcessed = 0;
 
                 // Act - Process users in batches
@@ -122,7 +121,7 @@ namespace Tests.UnitTests
 
             // Arrange
             string deptName = $"TestDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
@@ -148,14 +147,14 @@ namespace Tests.UnitTests
                 // Assert - Department is now detached (this was the problem)
                 var entryAfter = db.ChangeTracker.Entries<UserDepartment>()
                     .FirstOrDefault(e => e.Entity.Name == deptName);
-                
+
                 // After DetachAllEntities, entry should either be null or detached
                 if (entryAfter != null)
                 {
-                    Assert.AreEqual(EntityState.Detached, entryAfter.State, 
+                    Assert.AreEqual(EntityState.Detached, entryAfter.State,
                         "Old DetachAllEntities method detached lookups, causing FK violations");
                 }
-                
+
                 // The cache still has the reference, but it's detached from context
                 // This means next batch would try to insert it again -> FK violation
             }
@@ -166,7 +165,7 @@ namespace Tests.UnitTests
         {
             // Arrange - Create one of each lookup type
             string baseName = $"Test_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
@@ -176,22 +175,22 @@ namespace Tests.UnitTests
                 // Create all lookup types
                 var dept = await cache.DepartmentCache.GetOrCreateNewResource(
                     $"Dept_{baseName}", new UserDepartment { Name = $"Dept_{baseName}" });
-                
+
                 var jobTitle = await cache.JobTitleCache.GetOrCreateNewResource(
                     $"Title_{baseName}", new UserJobTitle { Name = $"Title_{baseName}" });
-                
+
                 var officeLocation = await cache.OfficeLocationCache.GetOrCreateNewResource(
                     $"Office_{baseName}", new UserOfficeLocation { Name = $"Office_{baseName}" });
-                
+
                 var usageLocation = await cache.UseageLocationCache.GetOrCreateNewResource(
                     $"Usage_{baseName}", new UserUsageLocation { Name = $"Usage_{baseName}" });
-                
+
                 var state = await cache.StateOrProvinceCache.GetOrCreateNewResource(
                     $"State_{baseName}", new StateOrProvince { Name = $"State_{baseName}" });
-                
+
                 var country = await cache.CountryOrRegionCache.GetOrCreateNewResource(
                     $"Country_{baseName}", new CountryOrRegion { Name = $"Country_{baseName}" });
-                
+
                 var company = await cache.CompanyNameCache.GetOrCreateNewResource(
                     $"Company_{baseName}", new CompanyName { Name = $"Company_{baseName}" });
 
@@ -228,7 +227,7 @@ namespace Tests.UnitTests
         {
             // This test simulates a scaled-down version of the production scenario
             // Production: 200k users, Test: 1000 users (to keep test time reasonable)
-            
+
             // Arrange
             int totalUsers = 1000;
             int batchSize = 100;
@@ -243,7 +242,7 @@ namespace Tests.UnitTests
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
                 var batchProcessor = new UserBatchProcessor(telemetry);
                 var cache = new UserMetadataCache(db);
-                
+
                 var random = new Random();
                 int totalProcessed = 0;
 
@@ -286,7 +285,7 @@ namespace Tests.UnitTests
                 // Verify only 5 departments were created (not 1000)
                 var deptCount = await db.UserDepartments
                     .CountAsync(d => commonDepts.Contains(d.Name));
-                Assert.AreEqual(commonDepts.Length, deptCount, 
+                Assert.AreEqual(commonDepts.Length, deptCount,
                     $"Should have exactly {commonDepts.Length} departments, not one per user");
 
                 // Verify only 5 locations were created
@@ -310,7 +309,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string deptName = $"ConsistencyTest_{DateTime.Now.Ticks}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
@@ -318,7 +317,7 @@ namespace Tests.UnitTests
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
                 var batchProcessor = new UserBatchProcessor(telemetry);
                 var cache = new UserMetadataCache(db);
-                
+
                 // Batch 1
                 var dept1 = await cache.DepartmentCache.GetOrCreateNewResource(
                     deptName, new UserDepartment { Name = deptName });
@@ -330,7 +329,7 @@ namespace Tests.UnitTests
                 // Batch 2 - Should get same department from cache
                 var dept2 = await cache.DepartmentCache.GetOrCreateNewResource(
                     deptName, new UserDepartment { Name = deptName });
-                
+
                 // Assert - Should be same instance (cached)
                 Assert.AreSame(dept1, dept2, "Should return same cached instance across batches");
                 Assert.AreEqual(dept1Id, dept2.ID, "IDs should match");

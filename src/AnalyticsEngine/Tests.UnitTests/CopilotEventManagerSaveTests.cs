@@ -1,7 +1,6 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
 using DataUtils;
-using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;

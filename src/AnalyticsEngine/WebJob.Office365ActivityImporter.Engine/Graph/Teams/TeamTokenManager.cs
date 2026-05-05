@@ -16,7 +16,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             if (!string.IsNullOrEmpty(appConfig.ConnectionStrings.RedisConnectionString))
             {
-                this.CacheConnectionManager = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString);
+                this.CacheConnectionManager = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
             }
             else
             {
