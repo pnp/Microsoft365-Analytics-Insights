@@ -112,7 +112,12 @@
     <Compile Include="Entities\WebActivityReportSet.cs" />
     <Compile Include="ExceptionHandler.cs" />
     <Compile Include="Graph\DeltaValueProvider.cs" />
+    <Compile Include="Graph\Email\DeltaTokenStores.cs" />
+    <Compile Include="Graph\Email\GraphSentEmailSourceLoader.cs" />
+    <Compile Include="Graph\Email\ISentEmailSentimentScorer.cs" />
+    <Compile Include="Graph\Email\ISentEmailSourceLoader.cs" />
     <Compile Include="Graph\Email\SentEmailImporter.cs" />
+    <Compile Include="Graph\Email\SentEmailSentimentScorer.cs" />
     <Compile Include="Graph\PageableGraphLoaderExtensions.cs" />
     <Compile Include="Graph\PageableGraphResponse.cs" />
     <Compile Include="Graph\OfficeLicenseNameResolver.cs" />
@@ -217,6 +222,7 @@
   <ItemGroup>
     <None Include="App.config" />
     <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
+    <None Include="Graph\Email\readme.md" />
     <None Include="Graph\User\REFACTORING_SUMMARY.md" />
   </ItemGroup>
   <ItemGroup>

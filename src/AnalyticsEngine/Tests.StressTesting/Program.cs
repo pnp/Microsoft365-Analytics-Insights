@@ -23,7 +23,7 @@ namespace Tests.StressTesting
             }
             else
             {
-                Console.WriteLine("No SQL connection string provided. Tests requiring DB will run in-memory only.");
+                Console.WriteLine("WARNING: No SQL connection string provided. Tests requiring DB will run in-memory only.");
                 Console.WriteLine("Usage: Tests.StressTesting.exe \"<SQL Connection String>\"");
             }
             Console.WriteLine();
@@ -31,7 +31,8 @@ namespace Tests.StressTesting
             var stressTests = new Dictionary<int, (string Name, Func<BaseStressTest> Factory)>
             {
                 { 1, ("ActivityAPI Import Stress Test", () => new ActivityAPIStressTest()) },
-                { 2, ("Copilot Event Import Stress Test", () => new CopilotStressTest()) }
+                { 2, ("Copilot Event Import Stress Test", () => new CopilotStressTest()) },
+                { 3, ("Sent Email Importer Pipeline Stress Test", () => new SentEmailImporterStressTest()) }
             };
 
             bool running = true;
