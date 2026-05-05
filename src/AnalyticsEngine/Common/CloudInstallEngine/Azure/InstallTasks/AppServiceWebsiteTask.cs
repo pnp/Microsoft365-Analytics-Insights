@@ -63,15 +63,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     needsUpdate = true;
                 }
 
-                // Ensure minimum TLS version is 1.2
+                // Ensure minimum TLS version is 1.2 and Always On is enabled
                 var siteConfig = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data;
-                if (siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString()))
+                var needsTlsUpdate = siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString());
+                var needsAlwaysOnUpdate = siteConfig.IsAlwaysOn != true;
+                if (needsTlsUpdate || needsAlwaysOnUpdate)
                 {
                     webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
-                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
+                        IsAlwaysOn = true
                     };
-                    _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
+                    if (needsTlsUpdate)
+                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
+                    if (needsAlwaysOnUpdate)
+                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enable Always On...");
                     needsUpdate = true;
                 }
 
