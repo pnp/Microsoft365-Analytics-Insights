@@ -1,11 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Common.Entities.Entities.Email
 {
     /// <summary>
-    /// A sent email record from a mailbox
+    /// A sent email record from a mailbox. Recipients (the "To" addresses) live in
+    /// <see cref="SentEmailRecipient"/> so message-level fields are not duplicated when a
+    /// message is sent to several people.
     /// </summary>
     [Table("sent_emails")]
     public class SentEmail : AbstractEFEntity
@@ -35,16 +38,6 @@ namespace Common.Entities.Entities.Email
 
         #endregion
 
-        #region To Address
-
-        [ForeignKey(nameof(ToAddress))]
-        [Column("to_address_id")]
-        public int ToAddressID { get; set; }
-
-        public EmailAddress ToAddress { get; set; }
-
-        #endregion
-
         #region User
 
         [ForeignKey(nameof(User))]
@@ -54,5 +47,12 @@ namespace Common.Entities.Entities.Email
         public User User { get; set; }
 
         #endregion
+
+        /// <summary>
+        /// Recipients for this message. Stored in the <c>sent_email_recipients</c>
+        /// intermediary table so a message with N recipients persists as one
+        /// <c>sent_emails</c> row plus N <c>sent_email_recipients</c> rows.
+        /// </summary>
+        public virtual ICollection<SentEmailRecipient> Recipients { get; set; } = new List<SentEmailRecipient>();
     }
 }

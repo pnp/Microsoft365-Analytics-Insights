@@ -4,16 +4,17 @@ This folder contains the implementation of the **Sent Email Import** feature for
 
 ## Overview
 
-`SentEmailImporter` reads sent items from each user's mailbox via Microsoft Graph and stores per-recipient
-records in the `SentEmails` table. Optional sentiment scoring is performed via Azure AI Language
-(Text Analytics) when a Cognitive Services configuration is present.
+`SentEmailImporter` reads sent items from each user's mailbox via Microsoft Graph and stores one row per
+message in the `SentEmails` table, with each recipient stored as a row in the `SentEmailRecipients`
+join table. Optional sentiment scoring is performed via Azure AI Language (Text Analytics) when a
+Cognitive Services configuration is present.
 
 For each user with an email address in the analytics database, the importer:
 
 1. Loads the user's `sentitems` mail folder using the Graph delta query
    (`/users/{upn}/mailFolders/sentitems/messages/delta`).
 2. Persists the delta token via `IDeltaTokenStore` so subsequent runs only fetch new messages.
-3. Expands each message into one row per recipient (from/to address pair) in `SentEmails`.
+3. Inserts one `SentEmails` row per message and one `SentEmailRecipients` row per distinct recipient.
 4. Optionally calls Azure AI Language to compute a positive sentiment score for the message body.
 
 Mailboxes that cannot be accessed (for example, unlicensed users or mailboxes restricted by
@@ -50,17 +51,34 @@ enabled. Relevant settings:
 
 ## Data model
 
-Each row in `SentEmails` represents a single recipient of a sent message:
+A sent message is normalised across two tables so the message-level fields are stored once,
+regardless of how many recipients the message had.
+
+### `sent_emails` (one row per message)
 
 | Column          | Description                                                  |
 |-----------------|--------------------------------------------------------------|
-| GraphMessageId  | Graph message ID combined with the lowercased recipient.     |
+| GraphMessageId  | Graph message ID (unique).                                   |
 | Subject         | Message subject (truncated to 1000 characters).              |
 | SentDate        | `sentDateTime` from Graph.                                   |
 | FromAddressID   | FK to `EmailAddresses` for the sender.                       |
-| ToAddressID     | FK to `EmailAddresses` for the recipient.                    |
 | UserID          | FK to the sending `User`.                                    |
 | CognitiveScore  | Optional positive-sentiment score (0.0–1.0).                 |
+
+### `sent_email_recipients` (one row per recipient of each message)
+
+| Column             | Description                                          |
+|--------------------|------------------------------------------------------|
+| SentEmailID        | FK to `sent_emails` (cascade delete).                |
+| RecipientAddressID | FK to `EmailAddresses` for the recipient.            |
+
+A unique index on `(sent_email_id, recipient_address_id)` prevents the same recipient from being
+recorded twice for the same message.
+
+### `email_addresses`
+
+Lookup table for sender and recipient email addresses, shared by `from_address_id` on `sent_emails`
+and `recipient_address_id` on `sent_email_recipients`.
 
 ## Operational notes
 

@@ -120,15 +120,17 @@ namespace Tests.StressTesting.StressTests
                 totalSw.Stop();
                 _memoryMonitor.Stop();
 
-                long actualRows = CountStressRows(dbFactory);
+                long actualMessages = CountStressRows(dbFactory);
+                long actualRecipients = CountStressRecipients(dbFactory);
 
-                result.ItemsProcessed = actualRows;
+                result.ItemsProcessed = actualMessages;
                 result.Duration = totalSw.Elapsed;
                 result.InitialMemoryBytes = _memoryMonitor.InitialMemoryBytes;
                 result.PeakMemoryBytes = _memoryMonitor.PeakMemoryBytes;
                 result.FinalMemoryBytes = _memoryMonitor.CurrentMemoryBytes;
                 result.Message =
-                    $"Seeded {seededUsers:N0} users; importer persisted {actualRows:N0} sent_email rows.";
+                    $"Seeded {seededUsers:N0} users; importer persisted {actualMessages:N0} sent_email rows " +
+                    $"(with {actualRecipients:N0} sent_email_recipients rows).";
 
                 _memoryMonitor.PrintReport();
             }
@@ -225,12 +227,26 @@ namespace Tests.StressTesting.StressTests
             }
         }
 
+        private static long CountStressRecipients(Func<AnalyticsEntitiesContext> dbFactory)
+        {
+            using (var db = dbFactory())
+            {
+                return db.SentEmailRecipients
+                    .LongCount(r => r.SentEmail.GraphMessageId.StartsWith("stress-msg-"));
+            }
+        }
+
         private static void DeleteExistingStressData(Func<AnalyticsEntitiesContext> dbFactory)
         {
             Console.WriteLine("Deleting previously-generated stress data...");
             var sw = Stopwatch.StartNew();
             using (var db = dbFactory())
             {
+                // Recipients first because of the FK to sent_emails.
+                db.Database.ExecuteSqlCommand(
+                    "DELETE r FROM sent_email_recipients r " +
+                    "INNER JOIN sent_emails s ON s.id = r.sent_email_id " +
+                    "WHERE s.graph_message_id LIKE 'stress-msg-%'");
                 db.Database.ExecuteSqlCommand("DELETE FROM sent_emails WHERE graph_message_id LIKE 'stress-msg-%'");
                 db.Database.ExecuteSqlCommand("DELETE FROM email_addresses WHERE address LIKE '%@stress.local' OR address LIKE 'recipient-%'");
                 db.Database.ExecuteSqlCommand("DELETE FROM users WHERE user_name LIKE 'stress-user%@stress.local'");
