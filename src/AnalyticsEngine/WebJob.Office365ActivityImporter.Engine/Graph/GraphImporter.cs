@@ -129,7 +129,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         deltaTokenStore = new InMemoryDeltaTokenStore();
                     }
 
-                    var sentEmailImporter = new SentEmailImporter(_telemetry, _settings, httpClient, deltaTokenStore);
+                    var sentEmailImporter = new SentEmailImporter(_telemetry, _settings, httpClient, deltaTokenStore, auth);
                     await sentEmailImporter.ImportSentEmails();
 
                     sentEmailsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
