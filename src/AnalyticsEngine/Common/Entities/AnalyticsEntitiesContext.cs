@@ -191,11 +191,23 @@ namespace Common.Entities
              .HasForeignKey(s => s.FromAddressID)
              .WillCascadeOnDelete(false);
 
-            modelBuilder.Entity<SentEmail>()
-             .HasRequired(s => s.ToAddress)
+            // Recipients live in sent_email_recipients so a message with N recipients
+            // is stored as one sent_emails row plus N join rows.
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasRequired(r => r.SentEmail)
+             .WithMany(s => s.Recipients)
+             .HasForeignKey(r => r.SentEmailID)
+             .WillCascadeOnDelete(true);
+
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasRequired(r => r.RecipientAddress)
              .WithMany()
-             .HasForeignKey(s => s.ToAddressID)
+             .HasForeignKey(r => r.RecipientAddressID)
              .WillCascadeOnDelete(false);
+
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasIndex(t => new { t.SentEmailID, t.RecipientAddressID })
+             .IsUnique();
 
             base.OnModelCreating(modelBuilder);
         }
@@ -338,6 +350,7 @@ namespace Common.Entities
         // Email tracking
         public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
         public virtual DbSet<SentEmail> SentEmails { get; set; }
+        public virtual DbSet<SentEmailRecipient> SentEmailRecipients { get; set; }
         #endregion
     }
 

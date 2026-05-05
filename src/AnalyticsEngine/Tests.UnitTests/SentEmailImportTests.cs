@@ -205,17 +205,35 @@ namespace Tests.UnitTests
                 GraphMessageId = "msg123",
                 CognitiveScore = 0.85,
                 FromAddressID = 1,
-                ToAddressID = 2,
                 UserID = 3
             };
+
+            sentEmail.Recipients.Add(new SentEmailRecipient { RecipientAddressID = 2 });
+            sentEmail.Recipients.Add(new SentEmailRecipient { RecipientAddressID = 4 });
 
             Assert.AreEqual("Test", sentEmail.Subject);
             Assert.AreEqual(new DateTime(2024, 1, 15), sentEmail.SentDate);
             Assert.AreEqual("msg123", sentEmail.GraphMessageId);
             Assert.AreEqual(0.85, sentEmail.CognitiveScore);
             Assert.AreEqual(1, sentEmail.FromAddressID);
-            Assert.AreEqual(2, sentEmail.ToAddressID);
             Assert.AreEqual(3, sentEmail.UserID);
+            Assert.AreEqual(2, sentEmail.Recipients.Count);
+            CollectionAssert.AreEquivalent(
+                new[] { 2, 4 },
+                sentEmail.Recipients.Select(r => r.RecipientAddressID).ToArray());
+        }
+
+        [TestMethod]
+        public void SentEmailRecipient_Properties()
+        {
+            var recipient = new SentEmailRecipient
+            {
+                SentEmailID = 10,
+                RecipientAddressID = 20
+            };
+
+            Assert.AreEqual(10, recipient.SentEmailID);
+            Assert.AreEqual(20, recipient.RecipientAddressID);
         }
 
         [TestMethod]
