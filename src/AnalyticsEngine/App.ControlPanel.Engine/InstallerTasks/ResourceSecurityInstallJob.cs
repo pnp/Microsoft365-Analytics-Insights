@@ -14,6 +14,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         private readonly RoleAssignmentTask _appInsightsReaderRoleTask;
         private readonly RoleAssignmentTask _storageBlobDataContributorRoleTask;
+        private readonly RoleAssignmentTask _redisCacheContributorRoleTask;
 
         public ResourceSecurityInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
         {
@@ -38,9 +39,20 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _storageBlobDataContributorRoleTask = new RoleAssignmentTask(storageBlobContributorConfig, logger, Location, tagDic);
             this.AddTask(_storageBlobDataContributorRoleTask);
+
+            // Assign Redis Cache Contributor role to the runtime account for RBAC-based Redis access (when keys are disabled)
+            var redisCacheContributorConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Redis Cache Contributor")
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_PRINCIPAL_TYPE, "ServicePrincipal");
+
+            _redisCacheContributorRoleTask = new RoleAssignmentTask(redisCacheContributorConfig, logger, Location, tagDic);
+            this.AddTask(_redisCacheContributorRoleTask);
         }
 
         public RoleAssignmentResource AppInsightsReaderRole => GetTaskResult<RoleAssignmentResource>(_appInsightsReaderRoleTask);
         public RoleAssignmentResource StorageBlobDataContributorRole => GetTaskResult<RoleAssignmentResource>(_storageBlobDataContributorRoleTask);
+        public RoleAssignmentResource RedisCacheContributorRole => GetTaskResult<RoleAssignmentResource>(_redisCacheContributorRoleTask);
     }
 }

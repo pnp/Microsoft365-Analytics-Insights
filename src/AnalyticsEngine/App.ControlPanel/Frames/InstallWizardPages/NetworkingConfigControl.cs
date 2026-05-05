@@ -31,6 +31,8 @@ namespace App.ControlPanel.Frames.InstallWizard
         public string SubnetName { get { return txtSubnetName.Text; } set { txtSubnetName.Text = value; } }
         public string AddressPrefix { get { return txtAddressPrefix.Text; } set { txtAddressPrefix.Text = value; } }
         public string SubnetAddressPrefix { get { return txtSubnetAddressPrefix.Text; } set { txtSubnetAddressPrefix.Text = value; } }
+        public string AppServiceSubnetName { get { return txtAppSubnetName.Text; } set { txtAppSubnetName.Text = value; } }
+        public string AppServiceSubnetAddressPrefix { get { return txtAppSubnetAddressPrefix.Text; } set { txtAppSubnetAddressPrefix.Text = value; } }
         public bool DeployDnsZones { get { return chkDeployDnsZones.Checked; } set { chkDeployDnsZones.Checked = value; } }
         public string HybridWorkerVmResourceId { get { return txtHybridWorkerVm.Text; } set { txtHybridWorkerVm.Text = value; } }
 
@@ -44,7 +46,8 @@ namespace App.ControlPanel.Frames.InstallWizard
                 Storage = txtPeStorage.Text.Trim(),
                 KeyVault = txtPeKeyVault.Text.Trim(),
                 ServiceBus = txtPeServiceBus.Text.Trim(),
-                CognitiveServices = txtPeCognitive.Text.Trim()
+                CognitiveServices = txtPeCognitive.Text.Trim(),
+                AutomationAccount = txtPeAutomation.Text.Trim()
             };
         }
 
@@ -58,6 +61,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             txtPeKeyVault.Text = names.KeyVault ?? string.Empty;
             txtPeServiceBus.Text = names.ServiceBus ?? string.Empty;
             txtPeCognitive.Text = names.CognitiveServices ?? string.Empty;
+            txtPeAutomation.Text = names.AutomationAccount ?? string.Empty;
         }
 
         private void UpdateResponsiveUIControls()

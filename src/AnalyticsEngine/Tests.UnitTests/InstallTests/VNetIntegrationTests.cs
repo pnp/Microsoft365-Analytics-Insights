@@ -1,5 +1,4 @@
 using App.ControlPanel.Engine;
-using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;

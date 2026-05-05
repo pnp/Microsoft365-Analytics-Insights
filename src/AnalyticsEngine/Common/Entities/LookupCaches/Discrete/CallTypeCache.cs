@@ -1,6 +1,5 @@
 ﻿using Common.Entities.Entities.Teams;
 using System.Data.Entity;
-using System.Threading.Tasks;
 
 namespace Common.Entities.LookupCaches
 {

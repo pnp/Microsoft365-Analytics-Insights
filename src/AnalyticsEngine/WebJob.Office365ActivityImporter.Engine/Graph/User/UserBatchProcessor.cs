@@ -51,7 +51,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // by this batch are properly attached BEFORE processing
                 // This prevents "Cannot insert duplicate key" errors when assigning navigation properties
                 var referencedUserIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                
+
                 foreach (var graphUser in batch)
                 {
                     // Collect all Azure AD IDs that might be referenced (managers, etc.)
@@ -60,8 +60,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         referencedUserIds.Add(graphUser.DefaultManagerInfo.Id);
                     }
                 }
-                
-                
+
+
                 // Attach any detached users that will be referenced in this batch
                 foreach (var aadId in referencedUserIds)
                 {
@@ -83,7 +83,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         // Get tracked version of the user (or attach if not tracked)
                         var trackedUser = GetOrAttachUser(db, dbUser);
-                        
+
                         // Update dictionary with tracked entity
                         if (trackedUser != dbUser)
                         {
@@ -93,7 +93,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                                 dbUsersByAadId[trackedUser.AzureAdId] = trackedUser;
                             }
                         }
-                        
+
                         await updateAction(existingGraphUser, trackedUser);
                     }
                 }
@@ -126,7 +126,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             var entry = db.Entry(user);
-            
+
             // If already tracked, return as-is
             if (entry.State != EntityState.Detached)
             {
@@ -138,7 +138,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 var alreadyTracked = db.ChangeTracker.Entries<Common.Entities.User>()
                     .FirstOrDefault(e => e.Entity.ID == user.ID && e.State != EntityState.Detached);
-                
+
                 if (alreadyTracked != null)
                 {
                     return alreadyTracked.Entity;
@@ -156,12 +156,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Try to find it again
                 var tracked = db.ChangeTracker.Entries<Common.Entities.User>()
                     .FirstOrDefault(e => e.Entity.ID == user.ID && e.State != EntityState.Detached);
-                
+
                 if (tracked != null)
                 {
                     return tracked.Entity;
                 }
-                
+
                 // If still can't find, try Find() as last resort
                 if (user.ID > 0)
                 {
@@ -171,7 +171,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         return found;
                     }
                 }
-                
+
                 throw; // Re-throw if we truly can't resolve
             }
         }

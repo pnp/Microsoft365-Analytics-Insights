@@ -66,7 +66,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public RedisProcessDeltaValueProvider(AppConfig appConfig, DataUtils.AnalyticsLogger telemetry)
         {
-            _cacheConnectionManager = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString);
+            _cacheConnectionManager = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
             _appConfig = appConfig;
             _telemetry = telemetry;
         }

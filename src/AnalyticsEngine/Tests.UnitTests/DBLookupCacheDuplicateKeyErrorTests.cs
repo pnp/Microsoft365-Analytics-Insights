@@ -4,8 +4,6 @@ using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data.Entity;
-using System.Data.Entity.Infrastructure;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph;

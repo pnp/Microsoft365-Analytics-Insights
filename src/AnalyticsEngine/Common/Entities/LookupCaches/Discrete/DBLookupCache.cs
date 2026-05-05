@@ -73,23 +73,23 @@ namespace Common.Entities
                     {
                         // SQL Error 2601: Cannot insert duplicate key row with unique index
                         // SQL Error 2627: Violation of %ls constraint '%.*ls'. Cannot insert duplicate key
-                        
+
                         // Remove the failed entity from context to prevent further issues
                         DB.Entry(newTemplate).State = EntityState.Detached;
-                        
+
                         // Try to reload from database - another batch may have inserted it
                         var existing = await this.Load(key);
                         if (existing != null)
                         {
                             return existing;
                         }
-                        
+
                         // If still not found, this is an unexpected state - rethrow
                         throw new InvalidOperationException(
-                            $"Duplicate key constraint violation for lookup '{typeof(T).Name}' with key '{key}', but entity not found in database after reload.", 
+                            $"Duplicate key constraint violation for lookup '{typeof(T).Name}' with key '{key}', but entity not found in database after reload.",
                             ex);
                     }
-                    
+
                     // Not a duplicate key error, rethrow
                     throw;
                 }

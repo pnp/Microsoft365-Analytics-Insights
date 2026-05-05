@@ -3,7 +3,6 @@ using Azure.Core;
 using Azure.ResourceManager.Network;
 using Azure.ResourceManager.Network.Models;
 using Azure.ResourceManager.PrivateDns;
-using Azure.ResourceManager.PrivateDns.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Threading.Tasks;

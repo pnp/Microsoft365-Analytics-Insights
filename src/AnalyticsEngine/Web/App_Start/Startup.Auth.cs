@@ -15,7 +15,9 @@ namespace Web.AnalyticsWeb
         public void ConfigureAuth(IAppBuilder app)
         {
             var config = new AppConfig();
-            var redisConManager = CacheConnectionManager.GetConnectionManager(config.ConnectionStrings.RedisConnectionString);
+            var redisConManager = CacheConnectionManager.GetConnectionManager(
+                config.ConnectionStrings.RedisConnectionString, logger: null,
+                tenantId: config.TenantGUID.ToString(), clientId: config.ClientID, clientSecret: config.ClientSecret);
             app.SetDefaultSignInAsAuthenticationType(CookieAuthenticationDefaults.AuthenticationType);
 
             app.UseCookieAuthentication(new CookieAuthenticationOptions());

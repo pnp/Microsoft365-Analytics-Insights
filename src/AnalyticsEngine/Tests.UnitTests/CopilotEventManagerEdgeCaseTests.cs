@@ -4,11 +4,9 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
-using System.Linq;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
