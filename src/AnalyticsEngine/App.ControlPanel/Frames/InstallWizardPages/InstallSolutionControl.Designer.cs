@@ -128,7 +128,7 @@
             this.chkInstallOptionWebJobs.Name = "chkInstallOptionWebJobs";
             this.chkInstallOptionWebJobs.Size = new System.Drawing.Size(206, 17);
             this.chkInstallOptionWebJobs.TabIndex = 1;
-            this.chkInstallOptionWebJobs.Text = "Update app-service with latest release";
+            this.chkInstallOptionWebJobs.Text = "Update solution with latest release";
             this.chkInstallOptionWebJobs.UseVisualStyleBackColor = true;
             // 
             // lblGUIInstallDesc
