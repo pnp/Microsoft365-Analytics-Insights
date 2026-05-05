@@ -45,7 +45,7 @@
 #if DEBUG
         public const string STAGING_TABLE_ACTIVITY_SP = "debug_import_staging_events_sp";
 #else
-    public const string STAGING_TABLE_ACTIVITY_SP = "##import_staging_event_lookups";
+        public const string STAGING_TABLE_ACTIVITY_SP = "##import_staging_event_lookups";
 #endif
 
 

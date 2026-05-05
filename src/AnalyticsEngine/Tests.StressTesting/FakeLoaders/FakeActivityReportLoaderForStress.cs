@@ -1,10 +1,7 @@
-using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeEntities;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Entities;
-using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.StressTesting.FakeLoaders
 {

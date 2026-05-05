@@ -1,6 +1,6 @@
-﻿using Common.Entities;
+﻿using Azure.Identity;
+using Common.Entities;
 using Common.Entities.Config;
-using Azure.Identity;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -108,7 +108,7 @@ namespace WebJob.AppInsightsImporter.Engine
 #if DEBUG
                             throw;
 #else
-                        return;
+                            return;
 #endif
                         }
 

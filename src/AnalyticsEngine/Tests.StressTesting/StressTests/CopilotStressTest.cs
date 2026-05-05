@@ -1,6 +1,5 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
-using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -8,7 +7,6 @@ using System.Data.SqlClient;
 using System.Diagnostics;
 using Tests.StressTesting.Infrastructure;
 using UnitTests.FakeLoaderClasses;
-using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.StressTesting.StressTests
@@ -179,7 +177,7 @@ namespace Tests.StressTesting.StressTests
             // Use a fake connection string for staging-only mode; real one for SQL commits
             var effectiveConnectionString = commitToSql ? connectionString : "Server=fake;Database=fake;";
             var quietLogger = new LoggerFactory().CreateLogger("CopilotStress");
-            var manager = new CopilotAuditEventManager(effectiveConnectionString, new FakeCopilotMetadataLoader(), 
+            var manager = new CopilotAuditEventManager(effectiveConnectionString, new FakeCopilotMetadataLoader(),
                 quietLogger);
 
             // Build all events first, tracking their IDs for prerequisite inserts
@@ -238,9 +236,8 @@ namespace Tests.StressTesting.StressTests
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = "INSERT INTO audit_events (id, time_stamp) VALUES (@id, @ts)";
-                    var pId = cmd.Parameters.Add("@id", System.Data.DbType.Guid);
-                    var pTs = cmd.Parameters.Add("@ts", System.Data.DbType.DateTime2);
-                    pTs.Value = DateTime.UtcNow;
+                    var pId = cmd.Parameters.AddWithValue("@id", DBNull.Value);
+                    var pTs = cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow);
 
                     foreach (var id in eventIds)
                     {

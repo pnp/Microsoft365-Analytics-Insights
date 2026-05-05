@@ -4,8 +4,6 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data.Entity;
 using System.Data.Entity.Infrastructure;
-using System.Data.SqlClient;
-using System.Linq;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -21,7 +19,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string randomDeptName = $"TestDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UserDepartmentCache(db);
@@ -49,7 +47,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string randomDeptName = $"TestDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UserDepartmentCache(db);
@@ -81,7 +79,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string randomLocationName = $"TestLocation_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new OfficeLocationCache(db);
@@ -104,7 +102,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string randomJobTitle = $"TestJobTitle_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UserJobTitleCache(db);
@@ -127,7 +125,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string randomLocation = $"TestUsageLocation_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UsageLocationCache(db);
@@ -150,20 +148,20 @@ namespace Tests.UnitTests
         {
             // Arrange - Create duplicates directly in database
             string duplicateName = $"DuplicateDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Manually insert duplicates (bypassing cache to simulate existing issue)
                 var dept1 = new UserDepartment { Name = duplicateName };
                 var dept2 = new UserDepartment { Name = duplicateName };
-                
+
                 db.UserDepartments.Add(dept1);
                 db.SaveChanges();
-                
+
                 // For this test, we need to handle the unique constraint
                 // In real scenarios, duplicates might exist from before the constraint was enforced
                 // or from race conditions. We'll test the Load method's resilience.
-                
+
                 var cache = new UserDepartmentCache(db);
 
                 try
@@ -194,7 +192,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string nonExistentName = $"NonExistent_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UserDepartmentCache(db);
@@ -213,7 +211,7 @@ namespace Tests.UnitTests
             // Arrange
             string baseName = $"TestDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
             string nameWithSpaces = $"  {baseName}  ";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UserDepartmentCache(db);
@@ -272,7 +270,7 @@ namespace Tests.UnitTests
             // Arrange
             string deptName = $"SharedDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
             string locationName = $"SharedLocation_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var deptCache = new UserDepartmentCache(db);
@@ -293,11 +291,11 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(dept);
                 Assert.IsNotNull(location);
                 Assert.AreNotEqual(dept.ID, location.ID);
-                
+
                 // Verify both saved to database
                 var savedDept = await db.UserDepartments.FindAsync(dept.ID);
                 var savedLocation = await db.UserOfficeLocations.FindAsync(location.ID);
-                
+
                 Assert.IsNotNull(savedDept);
                 Assert.IsNotNull(savedLocation);
             }
@@ -308,7 +306,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string baseName = $"Test_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Act & Assert - Test all lookup cache types
@@ -368,7 +366,7 @@ namespace Tests.UnitTests
         {
             // Arrange
             string deptName = $"UncommittedDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UserDepartmentCache(db);
@@ -395,7 +393,7 @@ namespace Tests.UnitTests
             // This test simulates concurrent access by creating entries with the same name
             // through the cache mechanism
             string sharedName = $"ConcurrentDept_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache1 = new UserDepartmentCache(db);
@@ -415,7 +413,7 @@ namespace Tests.UnitTests
                 // Assert - Second should get from cache or database, not create duplicate
                 Assert.IsNotNull(dept1);
                 Assert.IsNotNull(dept2);
-                
+
                 // Count in database should be exactly 1
                 var count = await db.UserDepartments.CountAsync(d => d.Name == sharedName);
                 Assert.AreEqual(1, count, "Should not create duplicate entries");
@@ -427,11 +425,11 @@ namespace Tests.UnitTests
         {
             // Arrange
             string testName = $"OrderTest_{DateTime.Now.Ticks}_{Guid.NewGuid()}";
-            
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var cache = new UserDepartmentCache(db);
-                
+
                 // Create an entry
                 var dept = await cache.GetOrCreateNewResource(
                     testName,

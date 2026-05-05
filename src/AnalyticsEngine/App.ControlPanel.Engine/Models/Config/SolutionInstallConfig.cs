@@ -110,6 +110,7 @@ namespace App.ControlPanel.Engine
             c.TasksConfig.InstallLatestSolutionContent = true;
             c.TasksConfig.UpgradeSchema = true;
             c.Tags = new List<AzTag>();
+            c.NetworkConfig = new VNetConfig();
 
             var sharePointInstallConfig = SharePointInstallConfig.Empty();
             c.SharePointConfig = sharePointInstallConfig;
@@ -445,6 +446,12 @@ namespace App.ControlPanel.Engine
             if (string.IsNullOrWhiteSpace(this.AppServicePlanName))
             {
                 errs.Add("Provide an App Service plan name");
+            }
+
+            // VNet
+            if (this.NetworkConfig != null && this.NetworkConfig.Enabled)
+            {
+                errs.AddRange(this.NetworkConfig.ValidatInputAndGetErrors());
             }
 
             return errs;

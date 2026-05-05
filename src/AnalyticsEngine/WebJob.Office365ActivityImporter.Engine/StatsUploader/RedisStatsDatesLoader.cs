@@ -8,7 +8,7 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     {
         const string REDIS_KEY = "statsLastUploaded";
 
-        public RedisStatsDatesLoader(AppConfig config) : base(config.ConnectionStrings.RedisConnectionString, REDIS_KEY)
+        public RedisStatsDatesLoader(AppConfig config) : base(config.ConnectionStrings.RedisConnectionString, REDIS_KEY, config.TenantGUID.ToString(), config.ClientID, config.ClientSecret)
         {
         }
 

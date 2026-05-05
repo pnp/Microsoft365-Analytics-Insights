@@ -30,7 +30,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             var fromCache = false;
 
             // Have we cached this language lookup in redis?
-            var redis = CacheConnectionManager.GetConnectionManager(new AppConfig().ConnectionStrings.RedisConnectionString);
+            var appConfig = new AppConfig();
+            var redis = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
 
             var redisKey = languageBatchInput.Select(i => i.Id + i.Text).Aggregate((a, b) => a + b);
             var cachedResultsJson = await redis.GetStringCache(redisKey);

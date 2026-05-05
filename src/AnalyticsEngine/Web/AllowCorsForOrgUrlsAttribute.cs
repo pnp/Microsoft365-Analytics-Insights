@@ -1,12 +1,12 @@
-﻿using System;
+﻿using Common.Entities;
+using System;
+using System.Collections.Generic;
+using System.Data.Entity;
 using System.Net.Http;
-using System.Threading.Tasks;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Cors;
 using System.Web.Http.Cors;
-using Common.Entities;
-using System.Data.Entity;
-using System.Collections.Generic;
 
 namespace Web.AnalyticsWeb
 {
