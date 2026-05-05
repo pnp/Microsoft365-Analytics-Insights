@@ -1,5 +1,3 @@
-using System;
-
 namespace Tests.FakeDataGen
 {
     /// <summary>
@@ -21,9 +19,9 @@ namespace Tests.FakeDataGen
 
         // Sample accessed resource data for custom agents
         public static readonly string[] ResourceDocumentNames = { "VacationPolicies.docx", "EmployeeHandbook.pdf", "Q4Report.xlsx", "ProjectProposal.pptx", "Invoices.pdf", "BudgetForecast.xlsx", "ContractTemplate.docx", "SalesPresentation.pptx" };
-        
+
         public static readonly string[] ResourceSiteUrls = { "https://contoso.sharepoint.com/sites/HR", "https://contoso.sharepoint.com/sites/Finance", "https://contoso.sharepoint.com/sites/Sales", "https://www.accuweather.com/pt/st/sao-tome/295304/february-weather/295304", "https://outlook.office365.com/owa" };
-        
+
         public static readonly string[] ResourceTypes = { "File", "Email", "WebPage", "ListItem", "Message" };
 
         // File extensions for document generation

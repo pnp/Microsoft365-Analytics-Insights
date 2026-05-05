@@ -47,13 +47,13 @@ namespace Tests.UnitTests
                 db.CopilotEventAccessedResources.RemoveRange(db.CopilotEventAccessedResources);
                 db.CopilotAccessedResourceIds.RemoveRange(db.CopilotAccessedResourceIds);
                 db.CopilotAccessedResourceNames.RemoveRange(db.CopilotAccessedResourceNames);
-                
+
                 // Clear SiteUrls if table exists
                 if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resource_site_urls', 'U')").FirstOrDefault().GetValueOrDefault() != 0)
                 {
                     db.CopilotAccessedResourceSiteUrls.RemoveRange(db.CopilotAccessedResourceSiteUrls);
                 }
-                
+
                 db.CopilotAccessedResourceTypes.RemoveRange(db.CopilotAccessedResourceTypes);
                 db.SensitivityLabels.RemoveRange(db.SensitivityLabels);
                 await db.SaveChangesAsync();
@@ -1782,7 +1782,7 @@ namespace Tests.UnitTests
             // Assert - standard agent should NOT be charged for deep reasoning
             Assert.AreEqual(0, standardAgentCost.DeepReasoningActions, "Standard agent should have 0 deep reasoning actions counted");
             Assert.AreEqual(0, standardAgentCost.TotalCredits, "Standard agent should have 0 credits");
-            
+
             // Verify model is still tracked for analytics even though not charged
             Assert.IsTrue(standardAgentCost.ModelsUsed.Contains("DEEP_LEO"), "DEEP_LEO model should still be tracked for analytics");
         }
@@ -1868,7 +1868,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, standardAgentCost.DeepReasoningActions, "No actions counted for standard agent");
             Assert.AreEqual(0, standardAgentCost.TotalCredits, "Standard M365 Copilot has 0 credits");
             Assert.AreEqual(0, standardAgentCost.CreditBreakdown.Count, "No credit breakdown for standard agent");
-            
+
             // Analytics data still captured
             Assert.AreEqual(3, standardAgentCost.ResourceTypeBreakdown.Count, "Resource analytics still captured");
             Assert.IsTrue(standardAgentCost.ModelsUsed.Contains("DEEP_LEO"), "Model analytics still captured");

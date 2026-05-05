@@ -113,6 +113,17 @@ namespace Common.Entities.Installer
         public string SubnetAddressPrefix { get; set; } = "10.0.0.0/24";
 
         /// <summary>
+        /// Subnet name for App Service regional VNet integration.
+        /// Must be a dedicated subnet (not shared with private endpoints).
+        /// </summary>
+        public string AppServiceIntegrationSubnetName { get; set; } = "app-integration";
+
+        /// <summary>
+        /// Address prefix for the App Service integration subnet (e.g. 10.0.1.0/24).
+        /// </summary>
+        public string AppServiceIntegrationSubnetAddressPrefix { get; set; } = "10.0.2.0/24";
+
+        /// <summary>
         /// Whether to deploy Azure Private DNS zones for each private endpoint.
         /// Set to false if using custom DNS management (e.g. on-premises DNS or Azure DNS Private Resolver).
         /// </summary>
@@ -162,6 +173,7 @@ namespace Common.Entities.Installer
         public string KeyVault { get; set; } = string.Empty;
         public string ServiceBus { get; set; } = string.Empty;
         public string CognitiveServices { get; set; } = string.Empty;
+        public string AutomationAccount { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets the endpoint name, falling back to the default if the custom name is empty.

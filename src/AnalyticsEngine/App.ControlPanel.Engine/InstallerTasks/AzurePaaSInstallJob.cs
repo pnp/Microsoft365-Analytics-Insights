@@ -87,7 +87,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var vnetConfig = TaskConfig.GetConfigForName(config.NetworkConfig.VNetName)
                     .AddSetting(VNetInstallTask.CONFIG_KEY_ADDRESS_PREFIX, config.NetworkConfig.AddressPrefix)
                     .AddSetting(VNetInstallTask.CONFIG_KEY_SUBNET_NAME, config.NetworkConfig.SubnetName)
-                    .AddSetting(VNetInstallTask.CONFIG_KEY_SUBNET_ADDRESS_PREFIX, config.NetworkConfig.SubnetAddressPrefix);
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_SUBNET_ADDRESS_PREFIX, config.NetworkConfig.SubnetAddressPrefix)
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_APP_INTEGRATION_SUBNET_NAME, config.NetworkConfig.AppServiceIntegrationSubnetName ?? string.Empty)
+                    .AddSetting(VNetInstallTask.CONFIG_KEY_APP_INTEGRATION_SUBNET_ADDRESS_PREFIX, config.NetworkConfig.AppServiceIntegrationSubnetAddressPrefix ?? string.Empty);
                 _vnetInstallTask = new VNetInstallTask(vnetConfig, logger, Location, tagDic);
                 this.AddTask(_vnetInstallTask);
             }
@@ -96,7 +98,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var appServicePlanConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName).AddSetting(AppServicePlanTask.CONFIG_KEY_PERF_TIER, appPerfTier);
             _appServicePlanTask = new AppServicePlanTask(appServicePlanConfig, logger, Location, tagDic);
 
-            _appServiceWebsiteTask = new AppServiceWebsiteTask(TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, Location, tagDic);
+            var appServiceConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName);
+            if (vnetEnabled && !string.IsNullOrWhiteSpace(config.NetworkConfig.AppServiceIntegrationSubnetName))
+            {
+                var integrationSubnetId = $"/subscriptions/{config.Subscription.SubId}/resourceGroups/{config.ResourceGroupName}/providers/Microsoft.Network/virtualNetworks/{config.NetworkConfig.VNetName}/subnets/{config.NetworkConfig.AppServiceIntegrationSubnetName}";
+                appServiceConfig.AddSetting(AppServiceWebsiteTask.CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID, integrationSubnetId);
+            }
+            _appServiceWebsiteTask = new AppServiceWebsiteTask(appServiceConfig, logger, Location, tagDic);
             this.AddTask(_appServicePlanTask, _appServiceWebsiteTask);
 
             // SQL 
@@ -116,7 +124,29 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             // Redis - enforce Standard SKU for VNet
             _redisTask = new RedisInstallTask(TaskConfig.GetConfigForName(config.RedisName), logger, Location, tagDic, vnetEnabled);
-            this.AddTask(_redisTask);
+
+            // Redis access policy assignment for data-plane RBAC access (required when key-based auth is disabled)
+            var redisAccessPolicyConfig = TaskConfig.GetConfigForName(config.RedisName)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_ID, config.InstallerAccount.ClientId)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_CLIENT_SECRET, config.InstallerAccount.Secret)
+                .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_TENANT_ID, config.InstallerAccount.DirectoryId);
+            var _redisAccessPolicyTask = new RedisAccessPolicyAssignmentTask(redisAccessPolicyConfig, logger, Location, tagDic);
+
+            if (!vnetEnabled)
+            {
+                // Only add firewall rules when not using private endpoints
+                var redisFirewallConfig = TaskConfig.GetConfigForName(config.RedisName)
+                    .AddSetting(RedisFirewallConfigTask.CONFIG_KEY_APP_SERVICE_NAME, config.AppServiceWebAppName);
+                var _redisFirewallTask = new RedisFirewallConfigTask(redisFirewallConfig, logger, Location);
+                this.AddTask(_redisTask, _redisAccessPolicyTask, _redisFirewallTask);
+            }
+            else
+            {
+                this.AddTask(_redisTask, _redisAccessPolicyTask);
+            }
 
             // Key vault
             var kvConfig = TaskConfig.GetConfigForName(config.KeyVaultName).AddSetting(KeyVaultTask.CONFIG_KEY_TENANT_ID, config.InstallerAccount.DirectoryId);
@@ -255,6 +285,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     AddPrivateEndpointTask(cognitivePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.CognitiveServices/accounts/{config.CognitiveServiceName}",
                         "account", subnetId, logger, tagDic);
                     if (deployDns) AddPrivateDnsZoneTask("privatelink.cognitiveservices.azure.com", vnetId, cognitivePeName, logger, tagDic);
+                }
+
+                // Automation Account
+                if (config.SolutionConfig.ImportTaskSettings.GraphUsageReports && !string.IsNullOrWhiteSpace(config.AutomationAccountName))
+                {
+                    var automationPeName = peNames.GetNameOrDefault(peNames.AutomationAccount, $"pe-{config.AutomationAccountName}-automation");
+                    AddPrivateEndpointTask(automationPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Automation/automationAccounts/{config.AutomationAccountName}",
+                        "DSCAndHybridWorker", subnetId, logger, tagDic);
+                    if (deployDns) AddPrivateDnsZoneTask("privatelink.azure-automation.net", vnetId, automationPeName, logger, tagDic);
                 }
             }
         }

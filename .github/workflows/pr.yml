@@ -74,7 +74,7 @@ jobs:
           Zips_Folder: ${{ runner.temp }}/zips/
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
@@ -125,7 +125,7 @@ jobs:
 
       # Wrap up
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: ${{ env.folder }}
           name: drop_${{ matrix.project.name }}
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Build AITracker
         run: |
           cd src/SPO/AITracker/TypeScript
@@ -155,7 +155,7 @@ jobs:
           zip -r AITrackerInstaller.zip AITracker
       # Wrap up
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: src/SPO/AITrackerInstaller.zip
           name: drop_aitracker
@@ -165,14 +165,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Archive Reports
         run: |
           Get-ChildItem '.\reports\Usage Analytics\*' `
           -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
           -Force -DestinationPath "${{ runner.temp }}\Analytics_Reports.zip"
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           path: ${{ runner.temp }}/Analytics_Reports.zip
           name: drop_Reports

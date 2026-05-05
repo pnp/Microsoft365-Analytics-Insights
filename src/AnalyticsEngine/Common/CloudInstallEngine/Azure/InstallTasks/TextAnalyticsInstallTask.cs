@@ -30,7 +30,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var creationParams = new CognitiveServicesAccountData(AzureLocation)
                 {
                     Sku = new CognitiveServicesSku("S"),
-                    Kind = "TextAnalytics"
+                    Kind = "TextAnalytics",
+                    Properties = new CognitiveServicesAccountProperties
+                    {
+                        CustomSubDomainName = name
+                    }
                 };
                 base.EnsureTagsOnNew(creationParams.Tags);
 
@@ -48,6 +52,23 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                // Ensure custom subdomain is set (required for private endpoints)
+                if (string.IsNullOrEmpty(analytics.Data.Properties?.CustomSubDomainName))
+                {
+                    var updateParams = new CognitiveServicesAccountData(AzureLocation)
+                    {
+                        Sku = analytics.Data.Sku,
+                        Kind = analytics.Data.Kind,
+                        Properties = new CognitiveServicesAccountProperties
+                        {
+                            CustomSubDomainName = name
+                        }
+                    };
+                    var result = await Container.GetCognitiveServicesAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, updateParams);
+                    analytics = result.Value;
+                    _logger.LogInformation($"Set custom subdomain '{name}' on existing Cognitive Service '{name}'.");
+                }
+
                 logMsg = $"Found existing Cognitive Service '{name}'";
                 await base.EnsureTagsOnExisting(analytics.Data.Tags, analytics.GetTagResource());
             }

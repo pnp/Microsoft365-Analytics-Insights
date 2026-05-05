@@ -12,6 +12,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
 {
     public class AppServiceWebsiteTask : InstallTaskInAzResourceGroup<WebSiteResource>
     {
+        public const string CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID = "vnetIntegrationSubnetId";
+
         public AppServiceWebsiteTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
         {
         }
@@ -61,15 +63,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     needsUpdate = true;
                 }
 
-                // Ensure minimum TLS version is 1.2
+                // Ensure minimum TLS version is 1.2 and Always On is enabled
                 var siteConfig = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data;
-                if (siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString()))
+                var needsTlsUpdate = siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString());
+                var needsAlwaysOnUpdate = siteConfig.IsAlwaysOn != true;
+                if (needsTlsUpdate || needsAlwaysOnUpdate)
                 {
                     webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
-                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
+                        IsAlwaysOn = true
                     };
-                    _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
+                    if (needsTlsUpdate)
+                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
+                    if (needsAlwaysOnUpdate)
+                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enable Always On...");
                     needsUpdate = true;
                 }
 
@@ -104,6 +112,40 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Enabling basic publishing credentials (FTP) for '{_config.ResourceName}'...");
                 await webApp.GetWebSiteFtpPublishingCredentialsPolicy().CreateOrUpdateAsync(
                     WaitUntil.Completed, publishingCredentialsPolicyData);
+            }
+
+            // Configure VNet integration if a subnet ID is provided
+            var vnetSubnetId = _config.ContainsKey(CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID) ? _config.GetConfigValue(CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID) : null;
+            if (!string.IsNullOrWhiteSpace(vnetSubnetId))
+            {
+                var currentSubnetId = webApp.Data.VirtualNetworkSubnetId?.ToString();
+                if (string.IsNullOrWhiteSpace(currentSubnetId) || !currentSubnetId.Equals(vnetSubnetId, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        _logger.LogInformation($"Configuring VNet integration for App Service '{_config.ResourceName}'...");
+                        var vnetUpdateData = new WebSiteData(base.AzureLocation)
+                        {
+                            VirtualNetworkSubnetId = new global::Azure.Core.ResourceIdentifier(vnetSubnetId),
+                            SiteConfig = new SiteConfigProperties
+                            {
+                                IsVnetRouteAllEnabled = true
+                            }
+                        };
+                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, vnetUpdateData);
+                        _logger.LogInformation($"VNet integration configured for App Service '{_config.ResourceName}' with route-all enabled.");
+                    }
+                    catch (RequestFailedException ex)
+                    {
+                        _logger.LogWarning($"Failed to configure VNet integration for App Service: {ex.Message}. " +
+                            $"Ensure the integration subnet '{vnetSubnetId}' exists and is delegated to Microsoft.Web/serverFarms. " +
+                            $"Without VNet integration, the App Service will use public outbound IPs and Redis must allow public access with firewall rules.");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation($"App Service '{_config.ResourceName}' already has VNet integration configured.");
+                }
             }
 
             return webApp;

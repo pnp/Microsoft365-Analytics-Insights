@@ -149,7 +149,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             UserActivityLastImportedRedisSingleDateLoader lastImportedDateLoader = null;
             if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
             {
-                lastImportedDateLoader = new UserActivityLastImportedRedisSingleDateLoader(_settings.ConnectionStrings.RedisConnectionString);
+                lastImportedDateLoader = new UserActivityLastImportedRedisSingleDateLoader(_settings.ConnectionStrings.RedisConnectionString, _settings.TenantGUID.ToString(), _settings.ClientID, _settings.ClientSecret);
 
                 // Clear "last imported" date in redis if no data in DB
                 using (var db = new AnalyticsEntitiesContext())

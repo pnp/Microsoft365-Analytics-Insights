@@ -231,7 +231,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             // but the user might still exist in the database
                             dbManager = await db.users
                                 .FirstOrDefaultAsync(u => u.UserPrincipalName.ToLower() == managerUpn);
-                            
+
                             if (dbManager != null)
                             {
                                 // Manager exists in DB - use it (already tracked from FirstOrDefaultAsync)
@@ -274,7 +274,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// This prevents "Cannot insert duplicate key" errors when assigning navigation properties.
         /// </summary>
         private async Task<Common.Entities.User> EnsureUserIsTrackedAsync(
-            AnalyticsEntitiesContext db, 
+            AnalyticsEntitiesContext db,
             Common.Entities.User user,
             Dictionary<string, Common.Entities.User> dbUsersByAadId)
         {
@@ -309,7 +309,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             var entry = db.Entry(user);
-            
+
             // If already tracked (Added, Modified, Unchanged), return as-is
             if (entry.State != EntityState.Detached)
             {
@@ -334,7 +334,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // This is more reliable than Attach() as it handles cases where the entity
             // might have been modified in the database since it was loaded
             var foundUser = db.users.Find(user.ID);
-            
+
             if (foundUser != null)
             {
                 // Update dictionary with tracked entity for future lookups
