@@ -10,6 +10,7 @@ using Microsoft.Graph;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
@@ -35,12 +36,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public ServiceBusClient ServiceBusClient => _sbClient;
         public static CallQueueProcessor _singleton = null;
+        private static readonly SemaphoreSlim _singletonInitLock = new SemaphoreSlim(1, 1);
         public static async Task<CallQueueProcessor> GetCallQueueProcessor(AppConfig config, string thisTenantId, ManualGraphCallClient graphCallClient)
         {
-            if (_singleton == null)
+            if (_singleton != null)
             {
-                _singleton = new CallQueueProcessor(config, thisTenantId);
-                await _singleton.Init(graphCallClient);
+                return _singleton;
+            }
+
+            await _singletonInitLock.WaitAsync();
+            try
+            {
+                if (_singleton == null)
+                {
+                    var instance = new CallQueueProcessor(config, thisTenantId);
+                    await instance.Init(graphCallClient);
+                    _singleton = instance;
+                }
+            }
+            finally
+            {
+                _singletonInitLock.Release();
             }
 
             return _singleton;
