@@ -46,6 +46,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtAppSubnetAddressPrefix = new System.Windows.Forms.TextBox();
             this.chkDeployDnsZones = new System.Windows.Forms.CheckBox();
             this.lblDnsZonesHelp = new System.Windows.Forms.Label();
+            this.chkAllowPublicAccess = new System.Windows.Forms.CheckBox();
+            this.lblAllowPublicAccessHelp = new System.Windows.Forms.Label();
             this.grpEndpointNames = new System.Windows.Forms.GroupBox();
             this.lblPeSql = new System.Windows.Forms.Label();
             this.txtPeSql = new System.Windows.Forms.TextBox();
@@ -120,6 +122,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpVNetSettings.Controls.Add(this.txtAppSubnetAddressPrefix);
             this.grpVNetSettings.Controls.Add(this.chkDeployDnsZones);
             this.grpVNetSettings.Controls.Add(this.lblDnsZonesHelp);
+            this.grpVNetSettings.Controls.Add(this.chkAllowPublicAccess);
+            this.grpVNetSettings.Controls.Add(this.lblAllowPublicAccessHelp);
             this.grpVNetSettings.Controls.Add(this.grpEndpointNames);
             this.grpVNetSettings.Controls.Add(this.lblHybridWorkerVm);
             this.grpVNetSettings.Controls.Add(this.txtHybridWorkerVm);
@@ -256,6 +260,27 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblDnsZonesHelp.TabIndex = 9;
             this.lblDnsZonesHelp.Text = "Uncheck if you manage DNS externally (e.g. on-premises DNS, Azure DNS Private Resolver, or custom forwarding).";
             // 
+            // chkAllowPublicAccess
+            // 
+            this.chkAllowPublicAccess.AutoSize = true;
+            this.chkAllowPublicAccess.Checked = true;
+            this.chkAllowPublicAccess.CheckState = System.Windows.Forms.CheckState.Checked;
+            this.chkAllowPublicAccess.Location = new System.Drawing.Point(18, 144);
+            this.chkAllowPublicAccess.Name = "chkAllowPublicAccess";
+            this.chkAllowPublicAccess.Size = new System.Drawing.Size(280, 17);
+            this.chkAllowPublicAccess.TabIndex = 35;
+            this.chkAllowPublicAccess.Text = "Allow public network access on Azure PaaS resources";
+            this.chkAllowPublicAccess.UseVisualStyleBackColor = true;
+            // 
+            // lblAllowPublicAccessHelp
+            // 
+            this.lblAllowPublicAccessHelp.ForeColor = System.Drawing.SystemColors.GrayText;
+            this.lblAllowPublicAccessHelp.Location = new System.Drawing.Point(35, 162);
+            this.lblAllowPublicAccessHelp.Name = "lblAllowPublicAccessHelp";
+            this.lblAllowPublicAccessHelp.Size = new System.Drawing.Size(550, 42);
+            this.lblAllowPublicAccessHelp.TabIndex = 36;
+            this.lblAllowPublicAccessHelp.Text = "Uncheck to disable public access on SQL, Storage, Key Vault, Redis, Service Bus, App Service,\r\nAutomation, and Cognitive Services. Log Analytics and Application Insights always stay public —\r\nconfigure Azure Monitor Private Link Scope (AMPLS) manually if private access is required.";
+            // 
             // grpEndpointNames
             // 
             this.grpEndpointNames.Controls.Add(this.lblPeHelp);
@@ -275,7 +300,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpEndpointNames.Controls.Add(this.txtPeCognitive);
             this.grpEndpointNames.Controls.Add(this.lblPeAutomation);
             this.grpEndpointNames.Controls.Add(this.txtPeAutomation);
-            this.grpEndpointNames.Location = new System.Drawing.Point(15, 145);
+            this.grpEndpointNames.Location = new System.Drawing.Point(15, 210);
             this.grpEndpointNames.Name = "grpEndpointNames";
             this.grpEndpointNames.Size = new System.Drawing.Size(570, 145);
             this.grpEndpointNames.TabIndex = 10;
@@ -422,7 +447,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
-            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 302);
+            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 417);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
             this.lblHybridWorkerVm.TabIndex = 17;
@@ -430,14 +455,14 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtHybridWorkerVm
             // 
-            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 299);
+            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 364);
             this.txtHybridWorkerVm.Name = "txtHybridWorkerVm";
             this.txtHybridWorkerVm.Size = new System.Drawing.Size(340, 20);
             this.txtHybridWorkerVm.TabIndex = 18;
             // 
             // btnBrowseVm
             // 
-            this.btnBrowseVm.Location = new System.Drawing.Point(506, 297);
+            this.btnBrowseVm.Location = new System.Drawing.Point(506, 362);
             this.btnBrowseVm.Name = "btnBrowseVm";
             this.btnBrowseVm.Size = new System.Drawing.Size(75, 23);
             this.btnBrowseVm.TabIndex = 19;
@@ -448,7 +473,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVmHelp
             // 
             this.lblHybridWorkerVmHelp.ForeColor = System.Drawing.SystemColors.GrayText;
-            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 322);
+            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 387);
             this.lblHybridWorkerVmHelp.Name = "lblHybridWorkerVmHelp";
             this.lblHybridWorkerVmHelp.Size = new System.Drawing.Size(430, 42);
             this.lblHybridWorkerVmHelp.TabIndex = 20;
@@ -457,7 +482,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblSkuWarning
             // 
             this.lblSkuWarning.ForeColor = System.Drawing.Color.DarkOrange;
-            this.lblSkuWarning.Location = new System.Drawing.Point(15, 372);
+            this.lblSkuWarning.Location = new System.Drawing.Point(15, 437);
             this.lblSkuWarning.Name = "lblSkuWarning";
             this.lblSkuWarning.Size = new System.Drawing.Size(570, 90);
             this.lblSkuWarning.TabIndex = 21;
@@ -502,6 +527,8 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.TextBox txtSubnetAddressPrefix;
         private System.Windows.Forms.CheckBox chkDeployDnsZones;
         private System.Windows.Forms.Label lblDnsZonesHelp;
+        private System.Windows.Forms.CheckBox chkAllowPublicAccess;
+        private System.Windows.Forms.Label lblAllowPublicAccessHelp;
         private System.Windows.Forms.GroupBox grpEndpointNames;
         private System.Windows.Forms.Label lblPeHelp;
         private System.Windows.Forms.Label lblPeSql;

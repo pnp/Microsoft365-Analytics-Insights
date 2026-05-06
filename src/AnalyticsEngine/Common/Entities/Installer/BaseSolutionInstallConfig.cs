@@ -130,6 +130,15 @@ namespace Common.Entities.Installer
         public bool DeployDnsZones { get; set; } = true;
 
         /// <summary>
+        /// Whether to allow public network access on Azure PaaS resources created/updated by the installer.
+        /// Only honoured when <see cref="Enabled"/> is true (VNet integration enabled). When VNet is disabled,
+        /// resources are always created with public access enabled (legacy/default behaviour).
+        /// Some customers' Azure policies disallow creation of PaaS resources with public access, so this can
+        /// be turned off to require all data-plane access to flow over private endpoints.
+        /// </summary>
+        public bool AllowPublicAccess { get; set; } = true;
+
+        /// <summary>
         /// Custom private endpoint names. Leave empty/null to use auto-generated defaults (pe-{resourceName}-{suffix}).
         /// </summary>
         public PrivateEndpointNames CustomEndpointNames { get; set; } = new PrivateEndpointNames();

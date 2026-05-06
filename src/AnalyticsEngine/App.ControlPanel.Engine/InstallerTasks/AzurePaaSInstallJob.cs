@@ -54,6 +54,18 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             var tagDic = config.Tags.ToDictionary();
             var vnetEnabled = config.NetworkConfig != null && config.NetworkConfig.Enabled;
+            // When VNet is disabled we always allow public access (legacy/default behaviour).
+            // When VNet is enabled, honour the AllowPublicAccess flag (some customer Azure policies
+            // disallow public access on PaaS resources).
+            var allowPublicAccess = !vnetEnabled || (config.NetworkConfig != null && config.NetworkConfig.AllowPublicAccess);
+
+            if (!allowPublicAccess)
+            {
+                logger.LogWarning("Public network access will be disabled on Azure PaaS resources (SQL, Storage, Key Vault, Redis, Service Bus, App Service, Automation, Cognitive Services). " +
+                    "If this installer is NOT running on a machine connected to the private network (VNet, peered network, VPN/ExpressRoute, or Azure Bastion-attached host), the following steps will fail: " +
+                    "Key Vault secret upload (appsecret), SQL connectivity test and database initialization, and the App Service warm-up request. " +
+                    "These failures are non-fatal — the resources are still created and configured — but you must re-run the installer from inside the private network (or temporarily re-enable public access on Key Vault and SQL) to complete those steps.");
+            }
 
             _rgCreateTask = new GetOrCreateResourceGroupTask(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, Location, tagDic, subscription);
             this.AddTask(_rgCreateTask);
@@ -104,7 +116,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var integrationSubnetId = $"/subscriptions/{config.Subscription.SubId}/resourceGroups/{config.ResourceGroupName}/providers/Microsoft.Network/virtualNetworks/{config.NetworkConfig.VNetName}/subnets/{config.NetworkConfig.AppServiceIntegrationSubnetName}";
                 appServiceConfig.AddSetting(AppServiceWebsiteTask.CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID, integrationSubnetId);
             }
-            _appServiceWebsiteTask = new AppServiceWebsiteTask(appServiceConfig, logger, Location, tagDic);
+            _appServiceWebsiteTask = new AppServiceWebsiteTask(appServiceConfig, logger, Location, tagDic, allowPublicAccess);
             this.AddTask(_appServicePlanTask, _appServiceWebsiteTask);
 
             // SQL 
@@ -113,7 +125,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 .AddSetting(SqlServerTask.CONFIG_KEY_PASSWORD, config.SQLServerAdminPassword);
             const string FIREWALL_RULE_NAME = "O365 Adv Analytics Setup Rule";
 
-            _sqlServerTask = new SqlServerTask(sqlServerConfig, logger, Location, tagDic);
+            _sqlServerTask = new SqlServerTask(sqlServerConfig, logger, Location, tagDic, allowPublicAccess);
             _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location);
 
             var sqlDbConfig = TaskConfig.GetConfigForName(config.SQLServerDatabaseName).AddSetting(SqlDatabaseTask.CONFIG_KEY_PERF_TIER, sqlPerfTier);
@@ -123,7 +135,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
 
             // Redis - enforce Standard SKU for VNet
-            _redisTask = new RedisInstallTask(TaskConfig.GetConfigForName(config.RedisName), logger, Location, tagDic, vnetEnabled);
+            _redisTask = new RedisInstallTask(TaskConfig.GetConfigForName(config.RedisName), logger, Location, tagDic, vnetEnabled, allowPublicAccess);
 
             // Redis access policy assignment for data-plane RBAC access (required when key-based auth is disabled)
             var redisAccessPolicyConfig = TaskConfig.GetConfigForName(config.RedisName)
@@ -150,7 +162,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             // Key vault
             var kvConfig = TaskConfig.GetConfigForName(config.KeyVaultName).AddSetting(KeyVaultTask.CONFIG_KEY_TENANT_ID, config.InstallerAccount.DirectoryId);
-            _keyVaultTask = new KeyVaultTask(kvConfig, logger, Location, tagDic);
+            _keyVaultTask = new KeyVaultTask(kvConfig, logger, Location, tagDic, allowPublicAccess);
 
             // Allow installer account all permissions
             var kvAddRuntimeAccountSecretReadPolicyConfig = TaskConfig.GetConfigForPropAndVal(BaseKeyVaultAddPolicyTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
@@ -181,17 +193,29 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // ServiceBus - enforce Premium for VNet (private endpoints require Premium SKU)
             const string QUEUE_NAME = "graphcalls";
             const string RULE_NAME = "ListenAndSendPolicy";
-            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled);
+            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled, allowPublicAccess: allowPublicAccess);
 
             var queueConfig = TaskConfig.GetConfigForName(QUEUE_NAME).AddSetting(ServiceBusQueueWithPolicyInstallTask.CONFIG_KEY_RULE_NAME, RULE_NAME);
             _serviceBusQueueWithPolicyInstallTask = new ServiceBusQueueWithPolicyInstallTask(queueConfig, logger, Location);
             this.AddTask(_serviceBusNamespaceInstallTask, _serviceBusQueueWithPolicyInstallTask);
 
             // Storage
-            _storageAccountInstallTask = new StorageAccountInstallTask(TaskConfig.GetConfigForName(config.StorageAccountName), logger, Location, tagDic);
+            _storageAccountInstallTask = new StorageAccountInstallTask(TaskConfig.GetConfigForName(config.StorageAccountName), logger, Location, tagDic, allowPublicAccess);
             this.AddTask(_storageAccountInstallTask);
 
             // AppInsights
+            // Note: Log Analytics and Application Insights are intentionally always created with public
+            // network access enabled, even when the user has selected "no public access". Making these
+            // private requires an Azure Monitor Private Link Scope (AMPLS) plus the Azure Monitor private
+            // DNS zones, which can affect Azure Monitor connectivity for every VNet that resolves those
+            // zones (potentially across unrelated workloads/subscriptions). Customers that need these
+            // resources to be private must configure AMPLS manually after install.
+            if (!allowPublicAccess)
+            {
+                logger.LogWarning("Log Analytics and Application Insights will be created with public network access enabled. " +
+                    "To make them private, configure an Azure Monitor Private Link Scope (AMPLS) manually after install. " +
+                    "See https://learn.microsoft.com/azure/azure-monitor/logs/private-link-security for details.");
+            }
             _logAnalyticsInstallTask = new LogAnalyticsInstallTask(TaskConfig.GetConfigForName(config.AppInsightsWorkspaceName), logger, Location, tagDic);
 
             var creds = new ClientSecretCredential(config.InstallerAccount.DirectoryId, config.InstallerAccount.ClientId, config.InstallerAccount.Secret);
@@ -202,7 +226,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // Cognitive
             if (config.CognitiveServicesEnabled)
             {
-                _cognitiveServicesInstallTask = new TextAnalyticsInstallTask(TaskConfig.GetConfigForName(config.CognitiveServiceName), logger, Location, tagDic);
+                _cognitiveServicesInstallTask = new TextAnalyticsInstallTask(TaskConfig.GetConfigForName(config.CognitiveServiceName), logger, Location, tagDic, allowPublicAccess);
                 this.AddTask(_cognitiveServicesInstallTask);
             }
 
@@ -216,7 +240,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_SQL_PASSWORD, config.SQLServerAdminPassword)
                     ;
 
-                _automationAccountTask = new AutomationAccountTask(automationAccountConfig, logger, Location, tagDic);
+                _automationAccountTask = new AutomationAccountTask(automationAccountConfig, logger, Location, tagDic, allowPublicAccess);
                 this.AddTask(_automationAccountTask);
 
                 // Hybrid Worker Group - when VNet is enabled and a VM resource ID is configured,
