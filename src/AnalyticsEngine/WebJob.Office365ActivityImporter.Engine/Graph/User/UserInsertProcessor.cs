@@ -45,14 +45,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             // Create HashSet for O(1) lookup of existing DB users
             var existingUpns = new HashSet<string>(
-                graphMentionedDbUsers.Select(u => u.UserPrincipalName?.ToLower()).Where(upn => !string.IsNullOrEmpty(upn)),
+                graphMentionedDbUsers.Select(u => u.UserPrincipalName?.ToLowerInvariant()).Where(upn => !string.IsNullOrEmpty(upn)),
                 StringComparer.OrdinalIgnoreCase);
 
             // Build list of users to insert - optimized with HashSet lookup
             var usersToInsert = new List<GraphUser>();
             foreach (var graphUser in allGraphUsers)
             {
-                var upn = graphUser.UserPrincipalName?.ToLower();
+                var upn = graphUser.UserPrincipalName?.ToLowerInvariant();
                 if (!string.IsNullOrEmpty(upn) && !existingUpns.Contains(upn))
                 {
                     usersToInsert.Add(graphUser);
@@ -74,7 +74,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             // PHASE 2: Load inserted users and enrich with metadata
             _telemetry.LogInformation($"User import - Phase 2: Starting metadata enrichment for {usersToInsert.Count.ToString("N0")} new users (existing users will be updated separately)...");
-            var insertedUserUpns = usersToInsert.Select(u => u.UserPrincipalName.ToLower()).ToList();
+            var insertedUserUpns = usersToInsert.Select(u => u.UserPrincipalName.ToLowerInvariant()).ToList();
             var insertedDbUsers = await EnrichInsertedUsersWithMetadata(
                 db,
                 allGraphUsers,
@@ -213,7 +213,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Load batch of newly inserted users from database WITH TRACKING for updates
                 var batchUsers = await db.users
-                    .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLower()))
+                    .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLowerInvariant()))
                     .Include(u => u.LicenseLookups)
                     .ToListAsync();
 
@@ -229,7 +229,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Pre-populate cache with tracked entities from this batch to prevent duplicate inserts
                 foreach (var trackedUser in batchUsers)
                 {
-                    var upnLower = trackedUser.UserPrincipalName?.ToLower();
+                    var upnLower = trackedUser.UserPrincipalName?.ToLowerInvariant();
                     if (!string.IsNullOrEmpty(upnLower))
                     {
                         await userMetaCache.UserCache.GetOrCreateNewResource(upnLower, trackedUser);
@@ -239,7 +239,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Update metadata for each user
                 foreach (var dbUser in batchUsers)
                 {
-                    var upnLower = dbUser.UserPrincipalName?.ToLower();
+                    var upnLower = dbUser.UserPrincipalName?.ToLowerInvariant();
                     if (!string.IsNullOrEmpty(upnLower) && graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
                     {
                         await updateAction(db, graphUser, allGraphUsers, new List<Common.Entities.User>(), dbUser, readUserSkus, dbUsersByAadId);
