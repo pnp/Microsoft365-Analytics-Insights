@@ -40,8 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public async Task GetAndSaveAllGraphData(AppConfig settings)
         {
-            var auth = new GraphAppIndentityOAuthContext(_telemetry, _settings.ClientID, _settings.TenantGUID.ToString(), _settings.ClientSecret, _settings.KeyVaultUrl, _settings.UseClientCertificate);
-            var httpClient = new ManualGraphCallClient(auth, _telemetry);
+            var httpClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _telemetry);
             var userGroupsFilter = new UserGroupsFilterModel(_settings.UserGroupsFilter);
 
             var graphUserGroupsCache = new GraphUserGroupsCache(httpClient, _telemetry);
