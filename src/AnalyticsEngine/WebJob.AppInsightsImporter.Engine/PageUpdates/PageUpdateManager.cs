@@ -224,7 +224,7 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 if (!string.IsNullOrEmpty(eventVal.Email) && eventVal.SharePointId.HasValue)
                 {
-                    var email = eventVal.Email.ToLower();
+                    var email = eventVal.Email.ToLowerInvariant();
 
                     // Hack: should be an index here preventing multiple records with the same SPID for URL, but apparently it's possible to have mulitple likes/comments from the same user on the same URL
                     var existingDbRecord = dbValues.Where(c => c.SpID == eventVal.SharePointId).FirstOrDefault();
