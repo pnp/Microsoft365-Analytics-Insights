@@ -53,7 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                         }
 
                         // Need to wait a few seconds before a new one can be accessed
-                        System.Threading.Thread.Sleep(5000);
+                        await Task.Delay(5000);
                         Console.WriteLine($"Subscription for '{configuredContentType}' has been created.");
                     }
                     catch (HttpRequestException ex)
