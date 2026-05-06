@@ -5,6 +5,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
 using WebJob.Office365ActivityImporter.Engine.Entities;
@@ -52,7 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             }
             catch (HttpRequestException ex)
             {
-                _reportDownloadErrors++;
+                Interlocked.Increment(ref _reportDownloadErrors);
                 _telemetry.LogError(ex, $"Got error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
                 return new WebActivityReportSet();
             }
@@ -75,13 +76,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 }
                 catch (OutOfMemoryException)
                 {
-                    _reportDownloadErrors++;
+                    Interlocked.Increment(ref _reportDownloadErrors);
                     _telemetry.LogError($"Out of memory reading response from {metadata.ContentUri}. Response too large. Will try again on next cycle.");
                     return new WebActivityReportSet();
                 }
                 catch (JsonReaderException ex)
                 {
-                    _reportDownloadErrors++;
+                    Interlocked.Increment(ref _reportDownloadErrors);
                     _telemetry.LogWarning($"Invalid JSON response for URL '{newUri}': {ex.Message}. Ignoring");
                     return new WebActivityReportSet();
                 }

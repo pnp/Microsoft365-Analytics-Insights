@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Engine.Entities;
 
@@ -83,7 +84,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                     }
                     catch (HttpRequestException ex)
                     {
-                        _metadataDownloadErrors++;
+                        Interlocked.Increment(ref _metadataDownloadErrors);
                         _telemetry.LogError(ex, $"Error downloading metadata {currentUri} with error '{ex.Message}'. " +
                             $"If this happens every time, this may be an issue. Ignoring for now.");
 #if DEBUG
