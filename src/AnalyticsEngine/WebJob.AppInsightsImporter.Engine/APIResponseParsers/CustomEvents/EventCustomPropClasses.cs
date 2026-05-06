@@ -237,7 +237,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                                         if (c[0].GetType() == typeof(JValue))
                                         {
                                             var val = (JValue)c[0];
-                                            _propsDic.Add(prop.Name, val.Value.ToString());
+                                            _propsDic.Add(prop.Name, val.Value?.ToString() ?? string.Empty);
                                         }
                                         else
                                         {
