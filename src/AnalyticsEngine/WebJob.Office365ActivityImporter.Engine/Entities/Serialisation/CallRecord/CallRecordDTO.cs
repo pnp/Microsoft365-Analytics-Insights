@@ -37,6 +37,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             var callDTO = await manualClient.GetAsyncWithThrottleRetries<CallRecordDTO>($"https://graph.microsoft.com/v1.0/communications/callRecords/{callId}?$expand=sessions($expand=segments)",
                 jsonStringAction: s => callJsonText = s);
 
+            if (callDTO == null)
+            {
+                telemetry.LogWarning($"Got null/unparseable response loading call record '{callId}'. Skipping.");
+                return null;
+            }
+
             callDTO.JsonText = callJsonText;
 
             // Find email addresses for user IDs
