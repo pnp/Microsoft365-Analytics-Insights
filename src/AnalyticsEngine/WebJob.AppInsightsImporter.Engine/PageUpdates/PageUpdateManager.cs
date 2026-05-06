@@ -44,10 +44,10 @@ namespace WebJob.AppInsightsImporter.Engine
             }
 
             // Do we have cognitive services configured?
-            var cognitiveConfig = new AppConfig();
             // Single wrapper for the lifetime of this manager: uses key auth when CognitiveKey
             // is set and auto-falls back to RBAC (ClientSecretCredential) on 403
             // AuthenticationTypeDisabled so we still work when key auth is disabled on the resource.
+            var cognitiveConfig = _config ?? new AppConfig();
             _cognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(debugTracer);
         }
 
