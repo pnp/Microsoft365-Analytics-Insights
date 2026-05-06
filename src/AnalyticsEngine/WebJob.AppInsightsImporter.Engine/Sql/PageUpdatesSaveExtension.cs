@@ -40,7 +40,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
         public override async Task<FileMetadataFieldName> Load(string id)
         {
-            return await _context.FileMetadataFields.Where(e => e.Name == id.ToLower()).FirstOrDefaultAsync();
+            return await _context.FileMetadataFields.Where(e => e.Name == id.ToLowerInvariant()).FirstOrDefaultAsync();
         }
     }
 
