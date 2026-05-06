@@ -19,14 +19,6 @@
     },
     "workspaceResourceId": {
       "type": "string"
-    },
-    "publicNetworkAccessForIngestion": {
-      "type": "string",
-      "defaultValue": "Enabled"
-    },
-    "publicNetworkAccessForQuery": {
-      "type": "string",
-      "defaultValue": "Enabled"
     }
   },
   "resources": [
