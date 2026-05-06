@@ -99,6 +99,15 @@ namespace Common.Entities.Config
                     this.UseRBACForServiceBus = parsed;
                 }
             }
+
+            // Optional flag to bypass the "recently imported" gate for usage reports (default false).
+            // Replaces a #if DEBUG override so it can be toggled in any build.
+            var forceUsageReportsImport = ConfigurationManager.AppSettings.Get("ForceUsageReportsImport");
+            if (!string.IsNullOrEmpty(forceUsageReportsImport)
+                && bool.TryParse(forceUsageReportsImport, out var forceUsageReportsImportBool))
+            {
+                this.ForceUsageReportsImport = forceUsageReportsImportBool;
+            }
         }
 
         public string BuildLabel { get; set; }
@@ -183,5 +192,11 @@ namespace Common.Entities.Config
         /// Default false.
         /// </summary>
         public bool UseRBACForServiceBus { get; set; } = false;
+
+        /// <summary>
+        /// When true, bypasses the "recently imported" gate for Graph usage reports and runs every invocation.
+        /// Intended for development/manual reruns. Default false.
+        /// </summary>
+        public bool ForceUsageReportsImport { get; set; } = false;
     }
 }
