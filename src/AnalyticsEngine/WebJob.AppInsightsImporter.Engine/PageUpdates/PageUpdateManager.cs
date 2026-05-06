@@ -44,11 +44,10 @@ namespace WebJob.AppInsightsImporter.Engine
             }
 
             // Do we have cognitive services configured?
-            var cognitiveConfig = new AppConfig();
-            if (!string.IsNullOrEmpty(cognitiveConfig.CognitiveEndpoint) && !string.IsNullOrEmpty(cognitiveConfig.CognitiveKey))
+            if (_config != null && !string.IsNullOrEmpty(_config.CognitiveEndpoint) && !string.IsNullOrEmpty(_config.CognitiveKey))
             {
-                var credentials = new AzureKeyCredential(cognitiveConfig.CognitiveKey);
-                _textAnalyticsClient = new TextAnalyticsClient(new Uri(cognitiveConfig.CognitiveEndpoint), credentials);
+                var credentials = new AzureKeyCredential(_config.CognitiveKey);
+                _textAnalyticsClient = new TextAnalyticsClient(new Uri(_config.CognitiveEndpoint), credentials);
             }
         }
 
