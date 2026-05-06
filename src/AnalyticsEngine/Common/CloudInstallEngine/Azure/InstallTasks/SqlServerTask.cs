@@ -1,6 +1,7 @@
 ﻿using Azure;
 using Azure.Core;
 using Azure.ResourceManager.Sql;
+using Azure.ResourceManager.Sql.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -11,8 +12,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
     {
         public const string CONFIG_KEY_USERNAME = "username";
         public const string CONFIG_KEY_PASSWORD = "password";
-        public SqlServerTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
+        private readonly bool _allowPublicAccess;
+
+        public SqlServerTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create SQL Server";
@@ -22,6 +26,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var serverName = base._config.GetNameConfigValue();
             var adminUsername = base._config.GetConfigValue(CONFIG_KEY_USERNAME);
             var adminPassword = base._config.GetConfigValue(CONFIG_KEY_PASSWORD);
+            var desiredAccess = _allowPublicAccess ? ServerNetworkAccessFlag.Enabled : ServerNetworkAccessFlag.Disabled;
 
             SqlServerResource sqlServer = null;
             foreach (var server in Container.GetSqlServers())
@@ -34,13 +39,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             if (sqlServer == null)
             {
-                _logger.LogInformation($"Creating new SQL Server '{serverName}'...");
+                _logger.LogInformation($"Creating new SQL Server '{serverName}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")})...");
 
                 var sqlServerData = new SqlServerData(AzureLocation)
                 {
                     AdministratorLogin = adminUsername,
                     AdministratorLoginPassword = adminPassword,
-                    MinimalTlsVersion = "1.2"
+                    MinimalTlsVersion = "1.2",
+                    PublicNetworkAccess = desiredAccess
                 };
 
                 base.EnsureTagsOnNew(sqlServerData.Tags);
@@ -49,14 +55,26 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                var needsUpdate = false;
+                var updateData = new SqlServerData(AzureLocation);
+
                 // Ensure minimum TLS version is 1.2
                 if (sqlServer.Data.MinimalTlsVersion == null || string.Compare(sqlServer.Data.MinimalTlsVersion, "1.2") < 0)
                 {
                     _logger.LogInformation($"Updating SQL Server '{serverName}' to enforce TLS 1.2...");
-                    var updateData = new SqlServerData(AzureLocation)
-                    {
-                        MinimalTlsVersion = "1.2"
-                    };
+                    updateData.MinimalTlsVersion = "1.2";
+                    needsUpdate = true;
+                }
+
+                if (sqlServer.Data.PublicNetworkAccess == null || sqlServer.Data.PublicNetworkAccess.Value != desiredAccess)
+                {
+                    _logger.LogInformation($"Updating SQL Server '{serverName}' public network access to '{desiredAccess}'...");
+                    updateData.PublicNetworkAccess = desiredAccess;
+                    needsUpdate = true;
+                }
+
+                if (needsUpdate)
+                {
                     await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, updateData);
                 }
 

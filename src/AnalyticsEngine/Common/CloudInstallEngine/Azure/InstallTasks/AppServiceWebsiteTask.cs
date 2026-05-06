@@ -13,9 +13,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
     public class AppServiceWebsiteTask : InstallTaskInAzResourceGroup<WebSiteResource>
     {
         public const string CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID = "vnetIntegrationSubnetId";
+        private readonly bool _allowPublicAccess;
 
-        public AppServiceWebsiteTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
+        public AppServiceWebsiteTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create App Service website";
@@ -26,6 +28,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             base.EnsureContextArgType<AppServicePlanResource>(contextArg);
 
             var appServicePlan = (AppServicePlanResource)contextArg;
+            var desiredAccess = _allowPublicAccess ? "Enabled" : "Disabled";
 
             // Get/create app-service with plan
             var webApp = Container.GetWebSites().Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
@@ -40,13 +43,13 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         IsAlwaysOn = true,
                         FtpsState = AppServiceFtpsState.FtpsOnly,
                         MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
-                        PublicNetworkAccess = "Enabled"  // Explicit: adding a PE later auto-disables this otherwise
+                        PublicNetworkAccess = desiredAccess
                     },
                     Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
                 };
 
                 base.EnsureTagsOnNew(newWebAppInfo.Tags);     // Add configured tags
-                _logger.LogInformation($"Creating App Service '{_config.ResourceName}' on plan '{appServicePlan.Data.Name}'...");
+                _logger.LogInformation($"Creating App Service '{_config.ResourceName}' on plan '{appServicePlan.Data.Name}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")})...");
                 var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newWebAppInfo);
                 webApp = newWebAppReq.Value;
             }
@@ -67,17 +70,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var siteConfig = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data;
                 var needsTlsUpdate = siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString());
                 var needsAlwaysOnUpdate = siteConfig.IsAlwaysOn != true;
-                if (needsTlsUpdate || needsAlwaysOnUpdate)
+                var needsPublicAccessUpdate = !string.Equals(siteConfig.PublicNetworkAccess, desiredAccess, System.StringComparison.OrdinalIgnoreCase);
+                if (needsTlsUpdate || needsAlwaysOnUpdate || needsPublicAccessUpdate)
                 {
                     webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
                         MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
-                        IsAlwaysOn = true
+                        IsAlwaysOn = true,
+                        PublicNetworkAccess = desiredAccess
                     };
                     if (needsTlsUpdate)
                         _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
                     if (needsAlwaysOnUpdate)
                         _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enable Always On...");
+                    if (needsPublicAccessUpdate)
+                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' public network access to '{desiredAccess}'...");
                     needsUpdate = true;
                 }
 

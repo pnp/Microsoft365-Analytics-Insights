@@ -120,6 +120,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpVNetSettings.Controls.Add(this.txtAppSubnetAddressPrefix);
             this.grpVNetSettings.Controls.Add(this.chkDeployDnsZones);
             this.grpVNetSettings.Controls.Add(this.lblDnsZonesHelp);
+            this.grpVNetSettings.Controls.Add(this.chkAllowPublicAccess);
+            this.grpVNetSettings.Controls.Add(this.lblAllowPublicAccessHelp);
             this.grpVNetSettings.Controls.Add(this.grpEndpointNames);
             this.grpVNetSettings.Controls.Add(this.lblHybridWorkerVm);
             this.grpVNetSettings.Controls.Add(this.txtHybridWorkerVm);
@@ -422,7 +424,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
-            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 302);
+            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 352);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
             this.lblHybridWorkerVm.TabIndex = 17;
@@ -502,6 +504,8 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.TextBox txtSubnetAddressPrefix;
         private System.Windows.Forms.CheckBox chkDeployDnsZones;
         private System.Windows.Forms.Label lblDnsZonesHelp;
+        private System.Windows.Forms.CheckBox chkAllowPublicAccess;
+        private System.Windows.Forms.Label lblAllowPublicAccessHelp;
         private System.Windows.Forms.GroupBox grpEndpointNames;
         private System.Windows.Forms.Label lblPeHelp;
         private System.Windows.Forms.Label lblPeSql;
