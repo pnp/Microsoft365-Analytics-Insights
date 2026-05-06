@@ -42,14 +42,16 @@ namespace Common.Entities.Config
             }
             this.WebAppURL = ConfigurationManager.AppSettings.Get("WebAppURL");
 
-            var ts = TimeSpan.FromDays(1);     // default
-            TimeSpan.TryParse(ConfigurationManager.AppSettings.Get("ChunkSize"), out ts);
-            this.ChunkSize = ts;
+            // Preserve default if the config value is missing or invalid (TryParse would otherwise overwrite with TimeSpan.Zero)
+            this.ChunkSize = TimeSpan.TryParse(ConfigurationManager.AppSettings.Get("ChunkSize"), out var ts)
+                ? ts
+                : TimeSpan.FromDays(1);
             this.ContentTypesString = ConfigurationManager.AppSettings.Get("ContentTypesListAsString") ?? "Audit.SharePoint";
 
-            int daysBeforeNowToDownload = 6;
-            int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out daysBeforeNowToDownload);
-            this.DaysBeforeNowToDownload = daysBeforeNowToDownload;
+            // Preserve default of 6 if config value is missing or invalid
+            this.DaysBeforeNowToDownload = int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out var daysBeforeNowToDownload)
+                ? daysBeforeNowToDownload
+                : 6;
 
             // Optional: how many days before today to start reading hits from App Insights.
             // Can be overridden via the -readHitsDaysBeforeToday command line argument.
@@ -63,10 +65,11 @@ namespace Common.Entities.Config
                 }
             }
 
-            // Time chunk overlap in minutes to prevent missing events at boundaries
-            int timeChunkOverlapMinutes = 5;
-            int.TryParse(ConfigurationManager.AppSettings.Get("TimeChunkOverlapMinutes"), out timeChunkOverlapMinutes);
-            this.TimeChunkOverlapMinutes = timeChunkOverlapMinutes;
+            // Time chunk overlap in minutes to prevent missing events at boundaries.
+            // Preserve default of 5 if config value is missing or invalid.
+            this.TimeChunkOverlapMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("TimeChunkOverlapMinutes"), out var timeChunkOverlapMinutes)
+                ? timeChunkOverlapMinutes
+                : 5;
 
 
             this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
@@ -80,14 +83,11 @@ namespace Common.Entities.Config
             this.StatsApiUrl = ConfigurationManager.AppSettings.Get("StatsApiUrl");
 
             var metadataRefreshMinutes = ConfigurationManager.AppSettings.Get("MetadataRefreshMinutes");
-            if (!string.IsNullOrEmpty(metadataRefreshMinutes))
+            if (!string.IsNullOrEmpty(metadataRefreshMinutes)
+                && int.TryParse(metadataRefreshMinutes, out var metadataRefreshMinutesInt)
+                && metadataRefreshMinutesInt >= 0)
             {
-                int metadataRefreshMinutesInt = 24 * 60; // 24 hours
-                int.TryParse(metadataRefreshMinutes, out metadataRefreshMinutesInt);
-                if (metadataRefreshMinutesInt < -1)
-                {
-                    this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
-                }
+                this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
             }
 
             // New optional flag: UseRBACForServiceBus (default false)
