@@ -261,9 +261,9 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 responseDebug = Newtonsoft.Json.Linq.JObject.Parse(responseBody);
             }
-            catch (FormatException)
+            catch (JsonReaderException)
             {
-                // Don't care
+                // Body wasn't valid JSON; fall back to raw string output below
             }
 
             if (responseDebug == null)
