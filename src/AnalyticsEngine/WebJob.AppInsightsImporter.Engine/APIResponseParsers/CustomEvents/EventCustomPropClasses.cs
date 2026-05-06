@@ -114,11 +114,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                             _taxProps = JsonConvert.DeserializeObject<List<TaxonomoyProperty>>(this.TaxonomyPropsString);
                             success = true;
                         }
-                        catch (FormatException)
-                        {
-                            // Ignore
-                        }
-                        catch (JsonSerializationException)
+                        catch (JsonException)
                         {
                             // Ignore
                         }
@@ -151,11 +147,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                             _pageComments = JsonConvert.DeserializeObject<List<PageCommentEvent>>(this.CommentsString);
                             success = true;
                         }
-                        catch (FormatException)
-                        {
-                            // Ignore
-                        }
-                        catch (JsonSerializationException)
+                        catch (JsonException)
                         {
                             // Ignore
                         }
@@ -188,11 +180,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                             _likes = JsonConvert.DeserializeObject<List<UserBasedCustomAIEvent>>(this.LikesString);
                             success = true;
                         }
-                        catch (FormatException)
-                        {
-                            // Ignore
-                        }
-                        catch (JsonSerializationException)
+                        catch (JsonException)
                         {
                             // Ignore
                         }
