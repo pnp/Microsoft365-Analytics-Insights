@@ -31,6 +31,12 @@ namespace WebJob.Office365ActivityImporter.Engine
         private string _defaultConnectionString = null;
         private UserGroupsFilterModel _userGroupsFilter = null;
 
+        /// <summary>
+        /// Process-wide gate that serializes writes to the staging tables. Intentionally <c>static</c> so that
+        /// multiple <see cref="ActivityReportSqlPersistenceManager"/> instances (e.g. one per content type or
+        /// per parallel batch) cannot interleave SQL inserts/merges into the shared staging schema.
+        /// Single-permit; held only for the duration of <c>CommitAll</c>'s SQL phase.
+        /// </summary>
         private static SemaphoreSlim _sqlSaveSemaphore = new SemaphoreSlim(1);      // Make sure we're only saving one thread at a time
 
         public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger telemetry, AppConfig appConfig)
