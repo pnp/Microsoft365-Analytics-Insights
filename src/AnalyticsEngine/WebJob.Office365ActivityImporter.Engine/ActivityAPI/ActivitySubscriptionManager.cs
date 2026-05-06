@@ -40,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                         var responseBody = string.Empty;
                         if (response.Content != null)
                         {
-                            responseBody = await response.Content?.ReadAsStringAsync();
+                            responseBody = await response.Content.ReadAsStringAsync();
                         }
                         try
                         {
