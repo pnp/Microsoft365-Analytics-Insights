@@ -12,10 +12,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
     public class ServiceBusNamespaceInstallTask : InstallTaskInAzResourceGroup<ServiceBusNamespaceResource>
     {
         private readonly bool _requirePremiumSku;
+        private readonly bool _allowPublicAccess;
 
-        public ServiceBusNamespaceInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool requirePremiumSku = false) : base(config, logger, azureLocation, tags)
+        public ServiceBusNamespaceInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool requirePremiumSku = false, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
             _requirePremiumSku = requirePremiumSku;
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create Service-bus namespace";
@@ -24,16 +26,18 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
             var allNSs = Container.GetServiceBusNamespaces();
             var name = base._config.GetNameConfigValue();
+            var desiredAccess = _allowPublicAccess ? ServiceBusPublicNetworkAccess.Enabled : ServiceBusPublicNetworkAccess.Disabled;
 
             var sbNS = allNSs.Where(ns => ns.Data.Name.ToLower() == name.ToLower()).SingleOrDefault();
 
             if (sbNS == null)
             {
                 var skuLabel = _requirePremiumSku ? "premium" : "basic";
-                _logger.LogInformation($"Creating new service-bus namespace '{name}' at {skuLabel} SKU. This may take several minutes...");
+                _logger.LogInformation($"Creating new service-bus namespace '{name}' at {skuLabel} SKU (public access: {(_allowPublicAccess ? "enabled" : "disabled")}). This may take several minutes...");
 
                 var newResourceData = new ServiceBusNamespaceData(AzureLocation);
                 newResourceData.MinimumTlsVersion = ServiceBusMinimumTlsVersion.Tls1_2;
+                newResourceData.PublicNetworkAccess = desiredAccess;
                 if (_requirePremiumSku)
                 {
                     newResourceData.Sku = new ServiceBusSku(ServiceBusSkuName.Premium);
@@ -51,17 +55,32 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Found existing service-bus namespace '{sbNS.Data.Name}'.");
                 await base.EnsureTagsOnExisting(sbNS.Data.Tags, sbNS.GetTagResource());
 
+                bool needsUpdate = false;
+                var updateData = new ServiceBusNamespaceData(sbNS.Data.Location);
+                if (sbNS.Data.Sku != null)
+                    updateData.Sku = sbNS.Data.Sku;
+                updateData.MinimumTlsVersion = sbNS.Data.MinimumTlsVersion;
+                updateData.PublicNetworkAccess = sbNS.Data.PublicNetworkAccess;
+
                 // Enforce TLS 1.2 minimum
                 if (sbNS.Data.MinimumTlsVersion == null || sbNS.Data.MinimumTlsVersion != ServiceBusMinimumTlsVersion.Tls1_2)
                 {
                     _logger.LogInformation($"Updating service-bus namespace '{sbNS.Data.Name}' to enforce TLS 1.2 minimum...");
-                    var updateData = new ServiceBusNamespaceData(sbNS.Data.Location);
                     updateData.MinimumTlsVersion = ServiceBusMinimumTlsVersion.Tls1_2;
-                    if (sbNS.Data.Sku != null)
-                        updateData.Sku = sbNS.Data.Sku;
+                    needsUpdate = true;
+                }
+
+                if (sbNS.Data.PublicNetworkAccess == null || sbNS.Data.PublicNetworkAccess != desiredAccess)
+                {
+                    _logger.LogInformation($"Updating service-bus namespace '{sbNS.Data.Name}' public network access to '{desiredAccess}'...");
+                    updateData.PublicNetworkAccess = desiredAccess;
+                    needsUpdate = true;
+                }
+
+                if (needsUpdate)
+                {
                     var operation = await allNSs.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
                     sbNS = operation.Value;
-                    _logger.LogInformation($"Updated service-bus namespace '{sbNS.Data.Name}' to TLS 1.2.");
                 }
 
                 // Upgrade to Premium if required for private endpoints and not already Premium

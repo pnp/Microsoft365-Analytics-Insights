@@ -54,6 +54,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             var tagDic = config.Tags.ToDictionary();
             var vnetEnabled = config.NetworkConfig != null && config.NetworkConfig.Enabled;
+            // When VNet is disabled we always allow public access (legacy/default behaviour).
+            // When VNet is enabled, honour the AllowPublicAccess flag (some customer Azure policies
+            // disallow public access on PaaS resources).
+            var allowPublicAccess = !vnetEnabled || (config.NetworkConfig != null && config.NetworkConfig.AllowPublicAccess);
 
             _rgCreateTask = new GetOrCreateResourceGroupTask(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, Location, tagDic, subscription);
             this.AddTask(_rgCreateTask);
@@ -104,7 +108,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var integrationSubnetId = $"/subscriptions/{config.Subscription.SubId}/resourceGroups/{config.ResourceGroupName}/providers/Microsoft.Network/virtualNetworks/{config.NetworkConfig.VNetName}/subnets/{config.NetworkConfig.AppServiceIntegrationSubnetName}";
                 appServiceConfig.AddSetting(AppServiceWebsiteTask.CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID, integrationSubnetId);
             }
-            _appServiceWebsiteTask = new AppServiceWebsiteTask(appServiceConfig, logger, Location, tagDic);
+            _appServiceWebsiteTask = new AppServiceWebsiteTask(appServiceConfig, logger, Location, tagDic, allowPublicAccess);
             this.AddTask(_appServicePlanTask, _appServiceWebsiteTask);
 
             // SQL 
@@ -181,7 +185,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // ServiceBus - enforce Premium for VNet (private endpoints require Premium SKU)
             const string QUEUE_NAME = "graphcalls";
             const string RULE_NAME = "ListenAndSendPolicy";
-            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled);
+            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled, allowPublicAccess: allowPublicAccess);
 
             var queueConfig = TaskConfig.GetConfigForName(QUEUE_NAME).AddSetting(ServiceBusQueueWithPolicyInstallTask.CONFIG_KEY_RULE_NAME, RULE_NAME);
             _serviceBusQueueWithPolicyInstallTask = new ServiceBusQueueWithPolicyInstallTask(queueConfig, logger, Location);

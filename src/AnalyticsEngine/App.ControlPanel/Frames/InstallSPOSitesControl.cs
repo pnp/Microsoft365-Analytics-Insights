@@ -122,6 +122,7 @@ namespace App.ControlPanel.Frames
                     AppServiceIntegrationSubnetName = networkingConfigControl1.AppServiceSubnetName,
                     AppServiceIntegrationSubnetAddressPrefix = networkingConfigControl1.AppServiceSubnetAddressPrefix,
                     DeployDnsZones = networkingConfigControl1.DeployDnsZones,
+                    AllowPublicAccess = networkingConfigControl1.AllowPublicAccess,
                     CustomEndpointNames = networkingConfigControl1.GetEndpointNames(),
                     HybridWorkerVmResourceId = networkingConfigControl1.HybridWorkerVmResourceId
                 }
@@ -201,6 +202,7 @@ namespace App.ControlPanel.Frames
                 networkingConfigControl1.AppServiceSubnetName = config.NetworkConfig.AppServiceIntegrationSubnetName;
                 networkingConfigControl1.AppServiceSubnetAddressPrefix = config.NetworkConfig.AppServiceIntegrationSubnetAddressPrefix;
                 networkingConfigControl1.DeployDnsZones = config.NetworkConfig.DeployDnsZones;
+                networkingConfigControl1.AllowPublicAccess = config.NetworkConfig.AllowPublicAccess;
                 networkingConfigControl1.SetEndpointNames(config.NetworkConfig.CustomEndpointNames);
                 networkingConfigControl1.HybridWorkerVmResourceId = config.NetworkConfig.HybridWorkerVmResourceId;
             }

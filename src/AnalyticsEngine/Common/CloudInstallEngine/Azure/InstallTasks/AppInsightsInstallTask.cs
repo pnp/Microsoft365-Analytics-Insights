@@ -10,10 +10,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
     {
         const string APP_INSIGHTS_RESOURCE_TYPE = "microsoft.insights/components";
 
+        private readonly bool _allowPublicAccess;
 
-        public AppInsightsInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, string resourceGroupName, string subscriptionId, TokenCredential credential)
+        public AppInsightsInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, string resourceGroupName, string subscriptionId, TokenCredential credential, bool allowPublicAccess = true)
                     : base(config, logger, azureLocation, tags, resourceGroupName, subscriptionId, credential)
         {
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create Application Insights";
@@ -24,6 +26,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             base.EnsureContextArgType<LogWorkspaceInfo>(contextArg);
             var name = _config.GetNameConfigValue();
             var workspaceInfo = (LogWorkspaceInfo)contextArg;
+            var accessFlag = _allowPublicAccess ? "Enabled" : "Disabled";
 
             // Get or create from ARM template
             var createOrUpdateAppInsightsInfo = new
@@ -36,7 +39,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 {
                     value = workspaceInfo.AzureID
                 },
-                tagsArray = new { value = Tags }
+                tagsArray = new { value = Tags },
+                publicNetworkAccessForIngestion = new { value = accessFlag },
+                publicNetworkAccessForQuery = new { value = accessFlag }
             };
             var resourceCreateInfo = await base.GetOrCreateGenericAzResource(name, APP_INSIGHTS_RESOURCE_TYPE,
                 createOrUpdateAppInsightsInfo, Properties.Resources.AppInsightsArmTemplate);
