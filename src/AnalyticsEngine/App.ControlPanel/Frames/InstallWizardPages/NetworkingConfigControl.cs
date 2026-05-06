@@ -34,6 +34,7 @@ namespace App.ControlPanel.Frames.InstallWizard
         public string AppServiceSubnetName { get { return txtAppSubnetName.Text; } set { txtAppSubnetName.Text = value; } }
         public string AppServiceSubnetAddressPrefix { get { return txtAppSubnetAddressPrefix.Text; } set { txtAppSubnetAddressPrefix.Text = value; } }
         public bool DeployDnsZones { get { return chkDeployDnsZones.Checked; } set { chkDeployDnsZones.Checked = value; } }
+        public bool AllowPublicAccess { get { return chkAllowPublicAccess.Checked; } set { chkAllowPublicAccess.Checked = value; } }
         public string HybridWorkerVmResourceId { get { return txtHybridWorkerVm.Text; } set { txtHybridWorkerVm.Text = value; } }
 
         public PrivateEndpointNames GetEndpointNames()

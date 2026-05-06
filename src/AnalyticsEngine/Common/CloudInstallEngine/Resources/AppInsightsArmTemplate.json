@@ -34,7 +34,9 @@
         "Application_Type": "[parameters('type')]",
         "Flow_Type": "Redfield",
         "Request_Source": "[parameters('requestSource')]",
-        "WorkspaceResourceId": "[parameters('workspaceResourceId')]"
+        "WorkspaceResourceId": "[parameters('workspaceResourceId')]",
+        "publicNetworkAccessForIngestion": "[parameters('publicNetworkAccessForIngestion')]",
+        "publicNetworkAccessForQuery": "[parameters('publicNetworkAccessForQuery')]"
       }
     }
   ]
