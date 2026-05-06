@@ -222,7 +222,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     if (graphManagerUser != null)
                     {
                         // Got user from Graph cache; get DB user by UPN
-                        var managerUpn = graphManagerUser.UserPrincipalName?.ToLower();
+                        var managerUpn = graphManagerUser.UserPrincipalName?.ToLowerInvariant();
 
                         if (!string.IsNullOrEmpty(managerUpn))
                         {
@@ -230,7 +230,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             // The AAD ID lookup might have failed due to mismatched/null AAD IDs,
                             // but the user might still exist in the database
                             dbManager = await db.users
-                                .FirstOrDefaultAsync(u => u.UserPrincipalName.ToLower() == managerUpn);
+                                .FirstOrDefaultAsync(u => u.UserPrincipalName.ToLowerInvariant() == managerUpn);
 
                             if (dbManager != null)
                             {
@@ -287,8 +287,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // This can happen if the entity was created from a template but actually exists in DB
             if (user.ID == 0 && !string.IsNullOrEmpty(user.UserPrincipalName))
             {
-                var upnLower = user.UserPrincipalName.ToLower();
-                var existingUser = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName.ToLower() == upnLower);
+                var upnLower = user.UserPrincipalName.ToLowerInvariant();
+                var existingUser = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName.ToLowerInvariant() == upnLower);
                 if (existingUser != null)
                 {
                     // Found the user in DB - use the tracked version
@@ -369,13 +369,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Create dictionary for O(1) lookup of DB users by UPN
             var dbUsersByUpn = allDbUsers
                 .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
-                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(u => u.UserPrincipalName.ToLowerInvariant(), u => u, StringComparer.OrdinalIgnoreCase);
 
             var users = new List<Common.Entities.User>();
 
             foreach (var graphUser in allGraphUsers)
             {
-                var upn = graphUser.UserPrincipalName?.ToLower();
+                var upn = graphUser.UserPrincipalName?.ToLowerInvariant();
                 if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
                 {
                     users.Add(dbUser);

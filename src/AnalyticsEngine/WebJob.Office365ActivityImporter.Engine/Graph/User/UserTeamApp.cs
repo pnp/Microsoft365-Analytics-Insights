@@ -1,4 +1,4 @@
-﻿using Microsoft.Graph;
+using Microsoft.Graph;
 using Newtonsoft.Json;
 using System.Collections.Generic;
 

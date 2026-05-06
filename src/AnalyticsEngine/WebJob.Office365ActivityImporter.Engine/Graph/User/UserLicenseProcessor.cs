@@ -115,13 +115,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Create dictionary for O(1) lookup of DB users by UPN
             var dbUsersByUpn = graphFoundDbUsers
                 .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
-                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(u => u.UserPrincipalName.ToLowerInvariant(), u => u, StringComparer.OrdinalIgnoreCase);
 
             var relevantDbUsers = new List<Common.Entities.User>();
             foreach (var graphUser in usersWithSku)
             {
                 if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) &&
-                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName.ToLower(), out var dbUser))
+                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName.ToLowerInvariant(), out var dbUser))
                 {
                     relevantDbUsers.Add(dbUser);
                 }
