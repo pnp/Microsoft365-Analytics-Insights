@@ -61,6 +61,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             var contexts = auditRecord.CopilotEventData?.Contexts;
             if (contexts != null && contexts.Count > 0)
             {
+                // TODO: confirm intended semantics with the Copilot data-model owner.
+                // Today the loop stops after the first meeting OR first file context, but additional chat
+                // contexts that appear AFTER a meeting/file context are silently dropped. If a Copilot event
+                // can legitimately carry e.g. a meeting + a chat in the same record and both are meaningful,
+                // this loop should not break out of chat staging. Behaviour preserved as-is for now.
                 foreach (var context in contexts)
                 {
                     // Only one meeting OR file per event is relevant; chat contexts are additive.
