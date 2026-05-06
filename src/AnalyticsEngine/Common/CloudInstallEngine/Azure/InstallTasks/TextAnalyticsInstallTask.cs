@@ -12,8 +12,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
 {
     public class TextAnalyticsInstallTask : InstallTaskInAzResourceGroup<CognitiveServicesInfo>
     {
-        public TextAnalyticsInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
+        private readonly bool _allowPublicAccess;
+
+        public TextAnalyticsInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create Cognitive Services (text analytics)";
@@ -21,6 +24,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public async override Task<CognitiveServicesInfo> ExecuteTaskReturnResult(object contextArg)
         {
             var name = _config.GetNameConfigValue();
+            var desiredAccess = _allowPublicAccess ? ServiceAccountPublicNetworkAccess.Enabled : ServiceAccountPublicNetworkAccess.Disabled;
 
             var analytics = Container.GetCognitiveServicesAccounts().Where(s => s.Data.Name == name).SingleOrDefault();
 
@@ -33,7 +37,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     Kind = "TextAnalytics",
                     Properties = new CognitiveServicesAccountProperties
                     {
-                        CustomSubDomainName = name
+                        CustomSubDomainName = name,
+                        PublicNetworkAccess = desiredAccess
                     }
                 };
                 base.EnsureTagsOnNew(creationParams.Tags);
@@ -48,25 +53,41 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     throw new InstallException(ex.Message);
                 }
 
-                logMsg = $"Created new Cognitive Service application '{analytics.Data.Name}' at 'Standard' SKU.";
+                logMsg = $"Created new Cognitive Service application '{analytics.Data.Name}' at 'Standard' SKU (public access: {(_allowPublicAccess ? "enabled" : "disabled")}).";
             }
             else
             {
+                var needsUpdate = false;
+                var updateProps = new CognitiveServicesAccountProperties
+                {
+                    CustomSubDomainName = analytics.Data.Properties?.CustomSubDomainName ?? name,
+                    PublicNetworkAccess = analytics.Data.Properties?.PublicNetworkAccess
+                };
+
                 // Ensure custom subdomain is set (required for private endpoints)
                 if (string.IsNullOrEmpty(analytics.Data.Properties?.CustomSubDomainName))
+                {
+                    updateProps.CustomSubDomainName = name;
+                    needsUpdate = true;
+                }
+
+                if (analytics.Data.Properties?.PublicNetworkAccess == null || analytics.Data.Properties.PublicNetworkAccess.Value != desiredAccess)
+                {
+                    _logger.LogInformation($"Updating Cognitive Service '{name}' public network access to '{desiredAccess}'...");
+                    updateProps.PublicNetworkAccess = desiredAccess;
+                    needsUpdate = true;
+                }
+
+                if (needsUpdate)
                 {
                     var updateParams = new CognitiveServicesAccountData(AzureLocation)
                     {
                         Sku = analytics.Data.Sku,
                         Kind = analytics.Data.Kind,
-                        Properties = new CognitiveServicesAccountProperties
-                        {
-                            CustomSubDomainName = name
-                        }
+                        Properties = updateProps
                     };
                     var result = await Container.GetCognitiveServicesAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, updateParams);
                     analytics = result.Value;
-                    _logger.LogInformation($"Set custom subdomain '{name}' on existing Cognitive Service '{name}'.");
                 }
 
                 logMsg = $"Found existing Cognitive Service '{name}'";

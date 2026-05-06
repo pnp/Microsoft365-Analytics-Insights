@@ -12,10 +12,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
     public class RedisInstallTask : InstallTaskInAzResourceGroup<RedisResource>
     {
         private readonly bool _requireStandardSku;
+        private readonly bool _allowPublicAccess;
 
-        public RedisInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool requireStandardSku = false) : base(config, logger, azureLocation, tags)
+        public RedisInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool requireStandardSku = false, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
             _requireStandardSku = requireStandardSku;
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create redis cache";
@@ -25,6 +27,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var name = base._config.GetNameConfigValue();
             var skuName = _requireStandardSku ? RedisSkuName.Standard : RedisSkuName.Basic;
             var skuFamily = RedisSkuFamily.BasicOrStandard;
+            var desiredAccess = _allowPublicAccess ? RedisPublicNetworkAccess.Enabled : RedisPublicNetworkAccess.Disabled;
 
             var allRedis = base.Container.GetAllRedis();
             RedisResource redisCache = allRedis.Where(c => c.Data.Name.ToLower() == name.ToLower()).SingleOrDefault();
@@ -32,11 +35,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
             if (redisCache == null)
             {
                 var skuLabel = _requireStandardSku ? "standard" : "basic";
-                _logger.LogInformation($"Creating new redis cache '{name}' at {skuLabel} SKU. This may take several minutes...");
+                _logger.LogInformation($"Creating new redis cache '{name}' at {skuLabel} SKU (public access: {(_allowPublicAccess ? "enabled" : "disabled")}). This may take several minutes...");
 
                 var newResourceData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(skuName, skuFamily, 0))
                 {
-                    MinimumTlsVersion = RedisTlsVersion.Tls1_2
+                    MinimumTlsVersion = RedisTlsVersion.Tls1_2,
+                    PublicNetworkAccess = desiredAccess
                 };
                 base.EnsureTagsOnNew(newResourceData.Tags);
                 var operation = await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, newResourceData);
@@ -61,15 +65,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     needsUpdate = true;
                 }
 
-                // Only enable public network access when not using VNet/private endpoints
-                if (!_requireStandardSku)
+                if (redisCache.Data.PublicNetworkAccess == null || redisCache.Data.PublicNetworkAccess.Value != desiredAccess)
                 {
-                    if (redisCache.Data.PublicNetworkAccess == null || redisCache.Data.PublicNetworkAccess.Value != RedisPublicNetworkAccess.Enabled)
-                    {
-                        _logger.LogInformation($"Enabling public network access on Redis cache '{name}' so firewall rules apply...");
-                        updateData.PublicNetworkAccess = RedisPublicNetworkAccess.Enabled;
-                        needsUpdate = true;
-                    }
+                    _logger.LogInformation($"Updating Redis cache '{name}' public network access to '{desiredAccess}'...");
+                    updateData.PublicNetworkAccess = desiredAccess;
+                    needsUpdate = true;
                 }
 
                 if (needsUpdate)

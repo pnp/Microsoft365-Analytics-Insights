@@ -10,7 +10,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
     {
         const string APP_INSIGHTS_RESOURCE_TYPE = "microsoft.insights/components";
 
-
+        // Note: Application Insights public network access is intentionally not toggled by the installer.
+        // Disabling public access on an App Insights component requires an Azure Monitor Private Link
+        // Scope (AMPLS) plus the corresponding private DNS zones, which can affect Azure Monitor
+        // connectivity for every VNet that resolves those zones. Customers that need a private
+        // App Insights component must configure AMPLS manually after install.
         public AppInsightsInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, string resourceGroupName, string subscriptionId, TokenCredential credential)
                     : base(config, logger, azureLocation, tags, resourceGroupName, subscriptionId, credential)
         {
