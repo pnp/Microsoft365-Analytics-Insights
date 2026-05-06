@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Engine.Entities;
 
@@ -67,24 +68,44 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 int batchId = 0;
                 var downloadListThreads = new List<Task<List<SUMMARYTYPE>>>();
 
-                // For every valid content type in the configuration
-                foreach (var auditContentType in active)
+                // Cap simultaneous fetches to avoid burst-throttling when contentTypes × timeChunks is large.
+                var concurrencyLimit = _settings.MaxSummaryFetchConcurrency > 0 ? _settings.MaxSummaryFetchConcurrency : 8;
+                using (var fetchGate = new SemaphoreSlim(concurrencyLimit, concurrencyLimit))
                 {
-                    // For every time chunk we need
-                    foreach (var chunk in timeChunks)
+                    // For every valid content type in the configuration
+                    foreach (var auditContentType in active)
                     {
-                        batchId++;
+                        // For every time chunk we need
+                        foreach (var chunk in timeChunks)
+                        {
+                            batchId++;
 
-                        // Create new downloader async
-                        var loaderThread = LoadAllActivityReports(auditContentType, chunk, batchId);
+                            var capturedContentType = auditContentType;
+                            var capturedChunk = chunk;
+                            var capturedBatchId = batchId;
 
-                        // Add task to list to wait for
-                        downloadListThreads.Add(loaderThread);
+                            // Create new downloader async, gated by the concurrency semaphore
+                            var loaderThread = Task.Run(async () =>
+                            {
+                                await fetchGate.WaitAsync();
+                                try
+                                {
+                                    return await LoadAllActivityReports(capturedContentType, capturedChunk, capturedBatchId);
+                                }
+                                finally
+                                {
+                                    fetchGate.Release();
+                                }
+                            });
+
+                            // Add task to list to wait for
+                            downloadListThreads.Add(loaderThread);
+                        }
                     }
-                }
 
-                // Wait for all the selects to finish
-                await Task.WhenAll(downloadListThreads);
+                    // Wait for all the selects to finish
+                    await Task.WhenAll(downloadListThreads);
+                }
 
                 // Combine results
                 foreach (var t in downloadListThreads)

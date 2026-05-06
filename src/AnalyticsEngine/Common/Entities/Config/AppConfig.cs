@@ -108,6 +108,13 @@ namespace Common.Entities.Config
             {
                 this.ForceUsageReportsImport = forceUsageReportsImportBool;
             }
+
+            // Optional cap on simultaneous Activity API summary fetches (default 8).
+            // Prevents burst throttling when (contentTypes × timeChunks) is large.
+            this.MaxSummaryFetchConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxSummaryFetchConcurrency"), out var maxSummaryFetchConcurrency)
+                && maxSummaryFetchConcurrency > 0
+                ? maxSummaryFetchConcurrency
+                : 8;
         }
 
         public string BuildLabel { get; set; }
@@ -198,5 +205,11 @@ namespace Common.Entities.Config
         /// Intended for development/manual reruns. Default false.
         /// </summary>
         public bool ForceUsageReportsImport { get; set; } = false;
+
+        /// <summary>
+        /// Maximum simultaneous Activity API summary fetches (per importer instance).
+        /// Default 8. Lower values reduce throttling risk; higher values increase wall-clock throughput.
+        /// </summary>
+        public int MaxSummaryFetchConcurrency { get; set; } = 8;
     }
 }
