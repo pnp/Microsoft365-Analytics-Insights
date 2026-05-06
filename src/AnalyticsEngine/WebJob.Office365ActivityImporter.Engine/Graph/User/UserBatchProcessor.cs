@@ -39,7 +39,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             int processedCount = 0;
             var batchedGraphUsers = allActiveGraphUsers
-                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName) && userUpnsToProcess.Contains(u.UserPrincipalName.ToLower()))
+                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName) && userUpnsToProcess.Contains(u.UserPrincipalName.ToLowerInvariant()))
                 .ToList();
 
             for (int i = 0; i < batchedGraphUsers.Count; i += batchSize)
@@ -78,7 +78,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 foreach (var existingGraphUser in batch)
                 {
-                    var upn = existingGraphUser.UserPrincipalName?.ToLower();
+                    var upn = existingGraphUser.UserPrincipalName?.ToLowerInvariant();
                     if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
                     {
                         // Get tracked version of the user (or attach if not tracked)
@@ -246,7 +246,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             foreach (var u in allActiveGraphUsers)
             {
                 if (!string.IsNullOrEmpty(u.UserPrincipalName) &&
-                    userUpnsToProcess.Contains(u.UserPrincipalName.ToLower()))
+                    userUpnsToProcess.Contains(u.UserPrincipalName.ToLowerInvariant()))
                 {
                     graphUsersToUpdate.Add(u);
                 }

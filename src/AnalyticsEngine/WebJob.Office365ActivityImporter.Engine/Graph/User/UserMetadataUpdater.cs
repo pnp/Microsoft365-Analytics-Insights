@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
@@ -147,7 +147,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         if (!string.IsNullOrEmpty(user.UserPrincipalName))
                         {
-                            insertedUpns.Add(user.UserPrincipalName.ToLower());
+                            insertedUpns.Add(user.UserPrincipalName.ToLowerInvariant());
                         }
                     }
 
@@ -160,7 +160,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         var batchCount = Math.Min(RELOAD_BATCH_SIZE, insertedUpns.Count - i);
                         var batchUpns = insertedUpns.GetRange(i, batchCount);
                         var batchReloaded = await db.users
-                            .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLower()))
+                            .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLowerInvariant()))
                             .ToListAsync();
                         reloadedUsers.AddRange(batchReloaded);
                     }
@@ -168,7 +168,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // Update lookup dictionaries with TRACKED entities
                     foreach (var insertedUser in reloadedUsers)
                     {
-                        var upnLower = insertedUser.UserPrincipalName?.ToLower();
+                        var upnLower = insertedUser.UserPrincipalName?.ToLowerInvariant();
                         if (!string.IsNullOrEmpty(upnLower))
                         {
                             dbUsersByUpn[upnLower] = insertedUser;
@@ -186,15 +186,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Identify users that need updating - use HashSet for O(1) lookup instead of Any()
                 var insertedUpnSet = new HashSet<string>(
-                    insertedDbUsers.Where(u => !string.IsNullOrEmpty(u.UserPrincipalName)).Select(u => u.UserPrincipalName.ToLower()),
+                    insertedDbUsers.Where(u => !string.IsNullOrEmpty(u.UserPrincipalName)).Select(u => u.UserPrincipalName.ToLowerInvariant()),
                     StringComparer.OrdinalIgnoreCase);
 
                 var notInsertedUpns = new HashSet<string>(allActiveGraphUsers.Count, StringComparer.OrdinalIgnoreCase);
                 foreach (var graphUser in allActiveGraphUsers)
                 {
-                    if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && !insertedUpnSet.Contains(graphUser.UserPrincipalName.ToLower()))
+                    if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && !insertedUpnSet.Contains(graphUser.UserPrincipalName.ToLowerInvariant()))
                     {
-                        notInsertedUpns.Add(graphUser.UserPrincipalName.ToLower());
+                        notInsertedUpns.Add(graphUser.UserPrincipalName.ToLowerInvariant());
                     }
                 }
 
@@ -251,7 +251,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     var upn = graphUser.UserPrincipalName;
                     if (!string.IsNullOrEmpty(upn) &&
                         dbUsersByUpn.TryGetValue(upn, out var dbUser) &&
-                        !insertedUpnSet.Contains(upn.ToLower()))
+                        !insertedUpnSet.Contains(upn.ToLowerInvariant()))
                     {
                         allProcessedDbUsers.Add(dbUser);
                     }
@@ -343,12 +343,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Fallback implementation
                 var dbUsersByUpn = allDbUsers
                     .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
-                    .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
+                    .ToDictionary(u => u.UserPrincipalName.ToLowerInvariant(), u => u, StringComparer.OrdinalIgnoreCase);
 
                 var users = new List<Common.Entities.User>();
                 foreach (var graphUser in allGraphUsers)
                 {
-                    var upn = graphUser.UserPrincipalName?.ToLower();
+                    var upn = graphUser.UserPrincipalName?.ToLowerInvariant();
                     if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
                     {
                         users.Add(dbUser);
