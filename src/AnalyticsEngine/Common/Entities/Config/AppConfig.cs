@@ -33,8 +33,7 @@ namespace Common.Entities.Config
             var useClientCertificate = ConfigurationManager.AppSettings.Get("UseClientCertificate");
             if (!string.IsNullOrEmpty(useClientCertificate))
             {
-                var useClientCertificateBool = false;
-                bool.TryParse(useClientCertificate, out useClientCertificateBool);
+                bool.TryParse(useClientCertificate, out var useClientCertificateBool);
                 this.UseClientCertificate = useClientCertificateBool;
             }
             if (string.IsNullOrEmpty(this.AADInstance))
@@ -95,8 +94,7 @@ namespace Common.Entities.Config
             var useRbacForSb = ConfigurationManager.AppSettings.Get("UseRBACForServiceBus");
             if (!string.IsNullOrEmpty(useRbacForSb))
             {
-                bool parsed = false;
-                if (bool.TryParse(useRbacForSb, out parsed))
+                if (bool.TryParse(useRbacForSb, out var parsed))
                 {
                     this.UseRBACForServiceBus = parsed;
                 }
