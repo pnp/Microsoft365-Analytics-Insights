@@ -277,9 +277,9 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblAllowPublicAccessHelp.ForeColor = System.Drawing.SystemColors.GrayText;
             this.lblAllowPublicAccessHelp.Location = new System.Drawing.Point(35, 162);
             this.lblAllowPublicAccessHelp.Name = "lblAllowPublicAccessHelp";
-            this.lblAllowPublicAccessHelp.Size = new System.Drawing.Size(550, 28);
+            this.lblAllowPublicAccessHelp.Size = new System.Drawing.Size(550, 42);
             this.lblAllowPublicAccessHelp.TabIndex = 36;
-            this.lblAllowPublicAccessHelp.Text = "Uncheck to disable public network access on supported PaaS resources (SQL, Storage, Key Vault, Redis, Service Bus, App Service, Automation, Cognitive Services). Log Analytics and Application Insights stay public; configure AMPLS manually if private access is required.";
+            this.lblAllowPublicAccessHelp.Text = "Uncheck to disable public access on SQL, Storage, Key Vault, Redis, Service Bus, App Service,\r\nAutomation, and Cognitive Services. Log Analytics and Application Insights always stay public —\r\nconfigure Azure Monitor Private Link Scope (AMPLS) manually if private access is required.";
             // 
             // grpEndpointNames
             // 
@@ -300,7 +300,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpEndpointNames.Controls.Add(this.txtPeCognitive);
             this.grpEndpointNames.Controls.Add(this.lblPeAutomation);
             this.grpEndpointNames.Controls.Add(this.txtPeAutomation);
-            this.grpEndpointNames.Location = new System.Drawing.Point(15, 195);
+            this.grpEndpointNames.Location = new System.Drawing.Point(15, 210);
             this.grpEndpointNames.Name = "grpEndpointNames";
             this.grpEndpointNames.Size = new System.Drawing.Size(570, 145);
             this.grpEndpointNames.TabIndex = 10;
@@ -447,7 +447,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
-            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 402);
+            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 417);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
             this.lblHybridWorkerVm.TabIndex = 17;
@@ -455,14 +455,14 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtHybridWorkerVm
             // 
-            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 349);
+            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 364);
             this.txtHybridWorkerVm.Name = "txtHybridWorkerVm";
             this.txtHybridWorkerVm.Size = new System.Drawing.Size(340, 20);
             this.txtHybridWorkerVm.TabIndex = 18;
             // 
             // btnBrowseVm
             // 
-            this.btnBrowseVm.Location = new System.Drawing.Point(506, 347);
+            this.btnBrowseVm.Location = new System.Drawing.Point(506, 362);
             this.btnBrowseVm.Name = "btnBrowseVm";
             this.btnBrowseVm.Size = new System.Drawing.Size(75, 23);
             this.btnBrowseVm.TabIndex = 19;
@@ -473,7 +473,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVmHelp
             // 
             this.lblHybridWorkerVmHelp.ForeColor = System.Drawing.SystemColors.GrayText;
-            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 372);
+            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 387);
             this.lblHybridWorkerVmHelp.Name = "lblHybridWorkerVmHelp";
             this.lblHybridWorkerVmHelp.Size = new System.Drawing.Size(430, 42);
             this.lblHybridWorkerVmHelp.TabIndex = 20;
@@ -482,7 +482,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblSkuWarning
             // 
             this.lblSkuWarning.ForeColor = System.Drawing.Color.DarkOrange;
-            this.lblSkuWarning.Location = new System.Drawing.Point(15, 422);
+            this.lblSkuWarning.Location = new System.Drawing.Point(15, 437);
             this.lblSkuWarning.Name = "lblSkuWarning";
             this.lblSkuWarning.Size = new System.Drawing.Size(570, 90);
             this.lblSkuWarning.TabIndex = 21;
