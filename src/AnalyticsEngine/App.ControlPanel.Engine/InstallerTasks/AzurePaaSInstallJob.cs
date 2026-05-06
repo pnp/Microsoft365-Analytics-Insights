@@ -126,12 +126,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
             const string FIREWALL_RULE_NAME = "O365 Adv Analytics Setup Rule";
 
             _sqlServerTask = new SqlServerTask(sqlServerConfig, logger, Location, tagDic, allowPublicAccess);
-            _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location);
 
             var sqlDbConfig = TaskConfig.GetConfigForName(config.SQLServerDatabaseName).AddSetting(SqlDatabaseTask.CONFIG_KEY_PERF_TIER, sqlPerfTier);
             _sqlDatabaseTask = new SqlDatabaseTask(sqlDbConfig, logger, Location, tagDic);
 
-            this.AddTask(_sqlServerTask, _sqlServerFirewallConfigTask, _sqlDatabaseTask);
+            // Only configure SQL Server firewall (detect public IP + add client rule) when public network
+            // access is enabled. With public access disabled, Azure rejects firewall rule edits with
+            // 'DenyPublicEndpointEnabled' and connectivity is expected to come via private endpoint.
+            if (allowPublicAccess)
+            {
+                _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location);
+                this.AddTask(_sqlServerTask, _sqlServerFirewallConfigTask, _sqlDatabaseTask);
+            }
+            else
+            {
+                this.AddTask(_sqlServerTask, _sqlDatabaseTask);
+            }
 
 
             // Redis - enforce Standard SKU for VNet
@@ -147,9 +157,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_TENANT_ID, config.InstallerAccount.DirectoryId);
             var _redisAccessPolicyTask = new RedisAccessPolicyAssignmentTask(redisAccessPolicyConfig, logger, Location, tagDic);
 
-            if (!vnetEnabled)
+            if (!vnetEnabled && allowPublicAccess)
             {
-                // Only add firewall rules when not using private endpoints
+                // Only add firewall rules when not using private endpoints and public access is enabled.
+                // With public access disabled, Azure rejects firewall rule edits with 'DenyPublicEndpointEnabled'.
                 var redisFirewallConfig = TaskConfig.GetConfigForName(config.RedisName)
                     .AddSetting(RedisFirewallConfigTask.CONFIG_KEY_APP_SERVICE_NAME, config.AppServiceWebAppName);
                 var _redisFirewallTask = new RedisFirewallConfigTask(redisFirewallConfig, logger, Location);
