@@ -63,6 +63,14 @@ namespace WebJob.AppInsightsImporter
 
             var telemetry = new AnalyticsLogger(config.AppInsightsConnectionString, "AppInsightsImporter");
 
+            // If no command line override was supplied, fall back to the config/app-setting value (if any).
+            // The command line argument takes precedence over the config value.
+            if (daysBeforeReadOverride == 0 && config.ReadHitsDaysBeforeToday.HasValue && config.ReadHitsDaysBeforeToday.Value > 0)
+            {
+                daysBeforeReadOverride = config.ReadHitsDaysBeforeToday.Value;
+                Console.WriteLine($"Using ReadHitsDaysBeforeToday='{daysBeforeReadOverride}' from app configuration.");
+            }
+
             bool validConfig = ValidateAndPrintConfig(config, telemetry);
             if (validConfig)
             {

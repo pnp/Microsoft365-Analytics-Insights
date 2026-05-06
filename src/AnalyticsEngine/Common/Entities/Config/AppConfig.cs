@@ -52,6 +52,18 @@ namespace Common.Entities.Config
             int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out daysBeforeNowToDownload);
             this.DaysBeforeNowToDownload = daysBeforeNowToDownload;
 
+            // Optional: how many days before today to start reading hits from App Insights.
+            // Can be overridden via the -readHitsDaysBeforeToday command line argument.
+            var readHitsDaysBeforeTodayString = ConfigurationManager.AppSettings.Get("ReadHitsDaysBeforeToday");
+            if (!string.IsNullOrEmpty(readHitsDaysBeforeTodayString))
+            {
+                int readHitsDaysBeforeTodayInt;
+                if (int.TryParse(readHitsDaysBeforeTodayString, out readHitsDaysBeforeTodayInt) && readHitsDaysBeforeTodayInt > 0)
+                {
+                    this.ReadHitsDaysBeforeToday = readHitsDaysBeforeTodayInt;
+                }
+            }
+
             // Time chunk overlap in minutes to prevent missing events at boundaries
             int timeChunkOverlapMinutes = 5;
             int.TryParse(ConfigurationManager.AppSettings.Get("TimeChunkOverlapMinutes"), out timeChunkOverlapMinutes);
@@ -137,6 +149,13 @@ namespace Common.Entities.Config
         public string ContentTypesString { get; set; }
 
         public int DaysBeforeNowToDownload { get; set; }
+
+        /// <summary>
+        /// Optional: how many days before today to start reading hits from App Insights.
+        /// When set, overrides the default scan-from date logic in the App Insights importer.
+        /// The -readHitsDaysBeforeToday command line argument takes precedence over this value.
+        /// </summary>
+        public int? ReadHitsDaysBeforeToday { get; set; } = null;
 
         /// <summary>
         /// Number of minutes to overlap between time chunks to prevent missing events at boundaries.
