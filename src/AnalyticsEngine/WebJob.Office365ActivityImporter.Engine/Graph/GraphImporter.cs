@@ -168,9 +168,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             var runImport = (lastImportedDate == null || DateTime.Now.Subtract(lastImportedDate.Value) > MIN_WAIT);
-#if DEBUG
-            runImport = true;
-#endif
+            if (_settings.ForceUsageReportsImport)
+            {
+                _telemetry.LogInformation("ForceUsageReportsImport=true; bypassing recently-imported gate.");
+                runImport = true;
+            }
             if (runImport)
             {
                 _telemetry.LogInformation($"Reading all activity reports from {daysBackMax} days back...");
