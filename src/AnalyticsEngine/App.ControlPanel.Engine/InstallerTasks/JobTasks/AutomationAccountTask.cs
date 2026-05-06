@@ -67,16 +67,13 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 if (automationAccount.Data.IsPublicNetworkAccessAllowed != _allowPublicAccess)
                 {
                     _logger.LogInformation($"Updating Automation account '{automationAccount.Data.Name}' public network access to '{(_allowPublicAccess ? "enabled" : "disabled")}'...");
-                    var update = new AutomationAccountCreateOrUpdateContent()
+                    var patch = new AutomationAccountPatch
                     {
-                        Location = base.AzureLocation,
-                        Sku = automationAccount.Data.Sku,
-                        Name = _config.ResourceName,
                         IsPublicNetworkAccessAllowed = _allowPublicAccess
                     };
                     try
                     {
-                        var updateReq = await Container.GetAutomationAccounts().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, update);
+                        var updateReq = await automationAccount.UpdateAsync(patch);
                         automationAccount = updateReq.Value;
                     }
                     catch (RequestFailedException ex)
