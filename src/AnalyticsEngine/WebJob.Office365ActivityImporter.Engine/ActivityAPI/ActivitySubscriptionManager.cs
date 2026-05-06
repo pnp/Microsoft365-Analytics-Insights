@@ -90,7 +90,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             foreach (var contentType in _settings.ContentTypesToRead)
             {
                 // Try and find content type in all subs
-                var sub = allSubs.Where(c => c.contentType == contentType).FirstOrDefault();
+                var sub = allSubs.FirstOrDefault(c => c.contentType == contentType);
 
                 if (sub != null)
                 {
