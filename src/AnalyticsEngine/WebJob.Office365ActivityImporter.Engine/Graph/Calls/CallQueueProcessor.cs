@@ -278,6 +278,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             using (var db = new AnalyticsEntitiesContext())
             {
                 callResponse = await CallRecordDTO.LoadFromGraphByID(callId, _graphCallClient, _teamsLoadContext, this._telemetry, this._thisTenantId);
+                if (callResponse == null)
+                {
+                    _telemetry.LogWarning($"Could not load call record '{callId}' from Graph. Skipping.");
+                    return null;
+                }
+
                 if (!string.IsNullOrEmpty(callResponse.OrganizerEmail))
                 {
                     await callResponse.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), _telemetry);
