@@ -36,9 +36,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger)
         {
+            if (string.IsNullOrEmpty(connectionString)) throw new ArgumentException($"'{nameof(connectionString)}' cannot be null or empty.", nameof(connectionString));
+            _copilotEventAdaptor = copilotEventAdaptor ?? throw new ArgumentNullException(nameof(copilotEventAdaptor));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
-            _copilotEventAdaptor = copilotEventAdaptor;
-            _logger = logger;
             _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsChatsNoContext = new InsertBatch<ChatOnlyCopilotLogTempEntity>(connectionString, logger);
@@ -61,11 +62,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             var contexts = auditRecord.CopilotEventData?.Contexts;
             if (contexts != null && contexts.Count > 0)
             {
-                // TODO: confirm intended semantics with the Copilot data-model owner.
-                // Today the loop stops after the first meeting OR first file context, but additional chat
-                // contexts that appear AFTER a meeting/file context are silently dropped. If a Copilot event
-                // can legitimately carry e.g. a meeting + a chat in the same record and both are meaningful,
-                // this loop should not break out of chat staging. Behaviour preserved as-is for now.
+                // NOTE: per the Copilot schema (https://learn.microsoft.com/office/office-365-management-api/copilot-schema)
+                // Contexts is an unordered collection. Current behaviour: the first meeting OR file context
+                // ends iteration; chat contexts are additive but only the first is staged. This is intentional
+                // and verified by CopilotEventManagerMeetingContextTakesPriorityOverChat /
+                // CopilotEventManagerFileContextBreaksBeforeChat tests. If product semantics ever require
+                // capturing trailing chat contexts after a meeting/file, those tests must be updated together
+                // with this loop.
                 foreach (var context in contexts)
                 {
                     // Only one meeting OR file per event is relevant; chat contexts are additive.
@@ -99,10 +102,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                         }
                         break; // after first file we break out (matching prior behaviour)
                     }
-
-                    // Preserve original logic: break after first meeting OR file context captured.
-                    if (eventMeetings > 0 || eventFiles > 0)
-                        break;
                 }
             }
             else
@@ -212,7 +211,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// </summary>
         internal string SerializeAccessedResources(IEnumerable<AccessedResource> accessedResources)
         {
-            if (accessedResources == null || accessedResources.Count() == 0)
+            if (accessedResources == null || !accessedResources.Any())
             {
                 return null;
             }
