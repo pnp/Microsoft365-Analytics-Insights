@@ -265,6 +265,17 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     _hybridWorkerGroupTask = new HybridWorkerGroupTask(hwgConfig, logger, Location, tagDic, creds);
                     this.AddTask(_hybridWorkerGroupTask);
                 }
+                else if (vnetEnabled && !allowPublicAccess)
+                {
+                    // VNet is enabled with public access disabled, but no Hybrid Worker VM was provided.
+                    // Automation runbooks cannot reach SQL/Storage/Key Vault via private endpoints without
+                    // a hybrid worker running inside the VNet. The Automation account is still created so
+                    // the customer can complete the configuration later.
+                    logger.LogWarning("VNet is enabled with public network access disabled, but no Hybrid Runbook Worker VM was specified. " +
+                        "Automation runbooks (Graph usage reports) will NOT be able to run because the Automation account cannot reach SQL/Storage/Key Vault via private endpoints from the Azure-hosted sandbox. " +
+                        "To enable runbooks: 1) Create a Windows VM connected to the VNet '" + (config.NetworkConfig?.VNetName ?? "<vnet>") + "' (any subnet that can reach the private endpoints), " +
+                        "2) Re-run this installer, 3) On the Networking page set the Hybrid Worker VM Resource ID to that VM, and the installer will register it as a Hybrid Runbook Worker and install the required extension.");
+                }
             }
 
             // Private endpoints and DNS zones for all resources when VNet is enabled
