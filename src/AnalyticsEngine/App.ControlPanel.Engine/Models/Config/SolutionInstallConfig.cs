@@ -106,6 +106,7 @@ namespace App.ControlPanel.Engine
             c.CognitiveServiceName = string.Empty;
             c.RedisName = string.Empty;
             c.CognitiveServicesEnabled = true;
+            c.ServiceBusEnabled = true;
             c.ServiceBusName = string.Empty;
             c.TasksConfig.InstallLatestSolutionContent = true;
             c.TasksConfig.UpgradeSchema = true;
@@ -358,22 +359,29 @@ namespace App.ControlPanel.Engine
             }
 
             // ServiceBus
-            if (string.IsNullOrWhiteSpace(this.ServiceBusName))
+            if (this.ServiceBusEnabled)
             {
-                errs.Add("Provide a service-bus name.");
-            }
-            else
-            {
-                bool isValidName = IsRegexExComplaint(this.ServiceBusName, @"^[-\w\._\(\)]+$", false);
-                if (!isValidName)
+                if (string.IsNullOrWhiteSpace(this.ServiceBusName))
                 {
-                    errs.Add("Enter valid service-bus name.");
+                    errs.Add("Provide a service-bus name.");
                 }
+                else
+                {
+                    bool isValidName = IsRegexExComplaint(this.ServiceBusName, @"^[-\w\._\(\)]+$", false);
+                    if (!isValidName)
+                    {
+                        errs.Add("Enter valid service-bus name.");
+                    }
 
-                if (this.ServiceBusName.Length > 50 || this.ServiceBusName.Length < 6)
-                {
-                    errs.Add("The service-bus name must be between 6 and 50 characters long.");
+                    if (this.ServiceBusName.Length > 50 || this.ServiceBusName.Length < 6)
+                    {
+                        errs.Add("The service-bus name must be between 6 and 50 characters long.");
+                    }
                 }
+            }
+            else if (SolutionConfig != null && SolutionConfig.ImportTaskSettings != null && SolutionConfig.ImportTaskSettings.Calls)
+            {
+                errs.Add("Teams calls import is enabled, but Service Bus is disabled. Either enable Service Bus or disable the calls import.");
             }
 
             // SQL

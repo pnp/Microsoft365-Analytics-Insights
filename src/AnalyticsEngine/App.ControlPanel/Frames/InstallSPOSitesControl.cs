@@ -94,6 +94,7 @@ namespace App.ControlPanel.Frames
                 SQLServerAdminUsername = azureStorageConfigControl1.SQLServerUsername,
                 SQLServerAdminPassword = azureStorageConfigControl1.SQLServerPassword,
                 ServiceBusName = azureStorageConfigControl1.ServiceBusName,
+                ServiceBusEnabled = azureStorageConfigControl1.ServiceBusEnabled,
                 RedisName = azureStorageConfigControl1.RedisName,
                 AllowTelemetry = installSolutionControl1.AllowTelemetry,
                 SolutionConfig = importJobSettingsSelection.Config,
@@ -181,6 +182,7 @@ namespace App.ControlPanel.Frames
             azureStorageConfigControl1.StorageAccount = config.StorageAccountName;
             azureStorageConfigControl1.RedisName = config.RedisName;
             azureStorageConfigControl1.ServiceBusName = config.ServiceBusName;
+            azureStorageConfigControl1.ServiceBusEnabled = config.ServiceBusEnabled;
 
             azurePaaSConfigControl1.AppInsightsName = config.AppInsightsName;
             azurePaaSConfigControl1.AppServicePlanName = config.AppServicePlanName;

@@ -38,6 +38,7 @@
             this.lblGUIAzureHeaderServiceBus = new System.Windows.Forms.Label();
             this.txtServiceBusName = new System.Windows.Forms.TextBox();
             this.lblGUIAzureServiceBusName = new System.Windows.Forms.Label();
+            this.chkServiceBusEnabled = new System.Windows.Forms.CheckBox();
             this.lblGUIAzureHeaderSQL = new System.Windows.Forms.Label();
             this.txtSQLServerPassword = new System.Windows.Forms.TextBox();
             this.lblGUIAzureSQLPassword = new System.Windows.Forms.Label();
@@ -147,6 +148,19 @@
             this.lblGUIAzureServiceBusName.Size = new System.Drawing.Size(38, 13);
             this.lblGUIAzureServiceBusName.TabIndex = 168;
             this.lblGUIAzureServiceBusName.Text = "Name:";
+            // 
+            // chkServiceBusEnabled
+            // 
+            this.chkServiceBusEnabled.AutoSize = true;
+            this.chkServiceBusEnabled.Checked = true;
+            this.chkServiceBusEnabled.CheckState = System.Windows.Forms.CheckState.Checked;
+            this.chkServiceBusEnabled.Location = new System.Drawing.Point(156, 219);
+            this.chkServiceBusEnabled.Name = "chkServiceBusEnabled";
+            this.chkServiceBusEnabled.Size = new System.Drawing.Size(186, 17);
+            this.chkServiceBusEnabled.TabIndex = 177;
+            this.chkServiceBusEnabled.Text = "Enable (required for Teams calls)";
+            this.chkServiceBusEnabled.UseVisualStyleBackColor = true;
+            this.chkServiceBusEnabled.CheckedChanged += new System.EventHandler(this.chkServiceBusEnabled_CheckedChanged);
             // 
             // lblGUIAzureHeaderSQL
             // 
@@ -334,6 +348,7 @@
             this.Controls.Add(this.lblGUIAzureStorageHeaderDesc);
             this.Controls.Add(this.lblGUIAzureStorageHeader);
             this.Controls.Add(this.lblGUIAzureHeaderServiceBus);
+            this.Controls.Add(this.chkServiceBusEnabled);
             this.Controls.Add(this.txtServiceBusName);
             this.Controls.Add(this.lblGUIAzureServiceBusName);
             this.Controls.Add(this.lblGUIAzureHeaderSQL);
@@ -377,6 +392,7 @@
         private System.Windows.Forms.Label lblGUIAzureHeaderServiceBus;
         private System.Windows.Forms.TextBox txtServiceBusName;
         private System.Windows.Forms.Label lblGUIAzureServiceBusName;
+        private System.Windows.Forms.CheckBox chkServiceBusEnabled;
         private System.Windows.Forms.Label lblGUIAzureHeaderSQL;
         private System.Windows.Forms.TextBox txtSQLServerPassword;
         private System.Windows.Forms.Label lblGUIAzureSQLPassword;

@@ -99,7 +99,9 @@ namespace Web.AnalyticsWeb.Models
             status.WebAppConfigCognitive = config.CognitiveEndpoint;
             status.WebAppConfigRedis = StackExchange.Redis.ConfigurationOptions.Parse(config.ConnectionStrings.RedisConnectionString).SslHost;
             status.WebAppConfigSQL = new System.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
-            status.WebAppConfigServiceBus = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString).Endpoint.ToString();
+            status.WebAppConfigServiceBus = string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString)
+                ? "(disabled)"
+                : ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString).Endpoint.ToString();
             status.CognitiveServiceEnabled = config.IsValidCognitiveConfig;
             status.WebAppBaseURL = config.WebAppURL;
             return status;
