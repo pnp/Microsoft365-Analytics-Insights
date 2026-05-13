@@ -154,7 +154,7 @@
             this.chkServiceBusEnabled.AutoSize = true;
             this.chkServiceBusEnabled.Checked = true;
             this.chkServiceBusEnabled.CheckState = System.Windows.Forms.CheckState.Checked;
-            this.chkServiceBusEnabled.Location = new System.Drawing.Point(156, 219);
+            this.chkServiceBusEnabled.Location = new System.Drawing.Point(355, 240);
             this.chkServiceBusEnabled.Name = "chkServiceBusEnabled";
             this.chkServiceBusEnabled.Size = new System.Drawing.Size(186, 17);
             this.chkServiceBusEnabled.TabIndex = 177;
