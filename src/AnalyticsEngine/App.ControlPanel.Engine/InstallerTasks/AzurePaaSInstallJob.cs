@@ -202,13 +202,21 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 new KeyVaultSecretAddTask(kvSecretAddConfig, logger));
 
             // ServiceBus - enforce Premium for VNet (private endpoints require Premium SKU)
-            const string QUEUE_NAME = "graphcalls";
-            const string RULE_NAME = "ListenAndSendPolicy";
-            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled, allowPublicAccess: allowPublicAccess);
+            // Service Bus is only required by the Teams calls import; skip provisioning when disabled.
+            if (config.ServiceBusEnabled)
+            {
+                const string QUEUE_NAME = "graphcalls";
+                const string RULE_NAME = "ListenAndSendPolicy";
+                _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled, allowPublicAccess: allowPublicAccess);
 
-            var queueConfig = TaskConfig.GetConfigForName(QUEUE_NAME).AddSetting(ServiceBusQueueWithPolicyInstallTask.CONFIG_KEY_RULE_NAME, RULE_NAME);
-            _serviceBusQueueWithPolicyInstallTask = new ServiceBusQueueWithPolicyInstallTask(queueConfig, logger, Location);
-            this.AddTask(_serviceBusNamespaceInstallTask, _serviceBusQueueWithPolicyInstallTask);
+                var queueConfig = TaskConfig.GetConfigForName(QUEUE_NAME).AddSetting(ServiceBusQueueWithPolicyInstallTask.CONFIG_KEY_RULE_NAME, RULE_NAME);
+                _serviceBusQueueWithPolicyInstallTask = new ServiceBusQueueWithPolicyInstallTask(queueConfig, logger, Location);
+                this.AddTask(_serviceBusNamespaceInstallTask, _serviceBusQueueWithPolicyInstallTask);
+            }
+            else
+            {
+                logger.LogInformation("Service Bus is disabled in the installer configuration; skipping Service Bus namespace and queue provisioning. Teams call imports will not be available.");
+            }
 
             // Storage
             _storageAccountInstallTask = new StorageAccountInstallTask(TaskConfig.GetConfigForName(config.StorageAccountName), logger, Location, tagDic, allowPublicAccess);
@@ -319,10 +327,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.vaultcore.azure.net", vnetId, kvPeName, logger, tagDic);
 
                 // Service Bus
-                var sbPeName = peNames.GetNameOrDefault(peNames.ServiceBus, $"pe-{config.ServiceBusName}-sb");
-                AddPrivateEndpointTask(sbPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.ServiceBus/namespaces/{config.ServiceBusName}",
-                    "namespace", subnetId, logger, tagDic);
-                if (deployDns) AddPrivateDnsZoneTask("privatelink.servicebus.windows.net", vnetId, sbPeName, logger, tagDic);
+                if (config.ServiceBusEnabled)
+                {
+                    var sbPeName = peNames.GetNameOrDefault(peNames.ServiceBus, $"pe-{config.ServiceBusName}-sb");
+                    AddPrivateEndpointTask(sbPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.ServiceBus/namespaces/{config.ServiceBusName}",
+                        "namespace", subnetId, logger, tagDic);
+                    if (deployDns) AddPrivateDnsZoneTask("privatelink.servicebus.windows.net", vnetId, sbPeName, logger, tagDic);
+                }
 
                 // Cognitive Services (Language/Text Analytics)
                 if (config.CognitiveServicesEnabled)
@@ -372,7 +383,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
         public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
-        public ServiceBusQueueResourceWithConnectionString SBQueueWithConnectionString => GetTaskResult<ServiceBusQueueResourceWithConnectionString>(_serviceBusQueueWithPolicyInstallTask);
+        public ServiceBusQueueResourceWithConnectionString SBQueueWithConnectionString => _serviceBusQueueWithPolicyInstallTask != null ? GetTaskResult<ServiceBusQueueResourceWithConnectionString>(_serviceBusQueueWithPolicyInstallTask) : null;
         public KeyVaultResource KeyVault => GetTaskResult<KeyVaultResource>(_keyVaultTask);
         public VirtualNetworkResource VNet => _vnetInstallTask != null ? GetTaskResult<VirtualNetworkResource>(_vnetInstallTask) : null;
         public string HybridWorkerGroupName => _hybridWorkerGroupName;
