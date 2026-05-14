@@ -28,13 +28,13 @@ namespace Tests.UnitTests
 
         private CommonAuditEvent BuildCommonEvent(string operationName, string upnSuffix)
         {
-            var ticks = DateTime.Now.Ticks;
+            var unique = Guid.NewGuid().ToString("N");
             return new CommonAuditEvent
             {
                 Id = Guid.NewGuid(),
                 TimeStamp = DateTime.UtcNow,
-                Operation = new EventOperation { Name = $"{operationName} {ticks}" },
-                User = new User { AzureAdId = "test-" + ticks, UserPrincipalName = $"test-{upnSuffix}-{ticks}@unit.test" }
+                Operation = new EventOperation { Name = $"{operationName} {unique}" },
+                User = new User { AzureAdId = "test-" + unique, UserPrincipalName = $"test-{upnSuffix}-{unique}@unit.test" }
             };
         }
 
