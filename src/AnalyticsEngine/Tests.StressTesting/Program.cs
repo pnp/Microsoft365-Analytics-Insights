@@ -31,7 +31,8 @@ namespace Tests.StressTesting
             var stressTests = new Dictionary<int, (string Name, Func<BaseStressTest> Factory)>
             {
                 { 1, ("ActivityAPI Import Stress Test", () => new ActivityAPIStressTest()) },
-                { 2, ("Copilot Event Import Stress Test", () => new CopilotStressTest()) }
+                { 2, ("Copilot Event Import Stress Test", () => new CopilotStressTest()) },
+                { 3, ("Power Platform Event Import Stress Test", () => new PowerPlatformStressTest()) }
             };
 
             bool running = true;

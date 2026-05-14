@@ -17,6 +17,13 @@
         public static string WORKLOAD_TEAMS { get { return "MicrosoftTeams"; } }
         public static string WORKLOAD_STREAM { get { return "MicrosoftStream"; } }
 
+        // Power Platform - all delivered via the Audit.General content-type subscription.
+        public static string WORKLOAD_POWER_APPS { get { return "PowerApps"; } }
+        public static string WORKLOAD_POWER_AUTOMATE { get { return "MicrosoftFlow"; } }
+        public static string WORKLOAD_POWER_BI { get { return "PowerBI"; } }
+        public static string WORKLOAD_COPILOT_STUDIO { get { return "MicrosoftCopilotStudio"; } }
+        public static string WORKLOAD_DATAVERSE { get { return "Dynamics365"; } }
+
         public static string PARAM_WEBHOOK_OVERRIDE { get { return "--webhook"; } }
         public static string PARAM_CALL_ID { get { return "--callId"; } }
         // New params for tracing audit log imports containing a specific email address
@@ -71,6 +78,24 @@
         public const string STAGING_TABLE_COPILOT_CHATONLY = "debug_import_staging_copilot_chatonly";
 #else
         public const string STAGING_TABLE_COPILOT_CHATONLY = "##debug_import_staging_copilot_chatonly";
+#endif
+
+#if DEBUG
+        public const string STAGING_TABLE_POWER_APP = "debug_import_staging_power_app";
+        public const string STAGING_TABLE_POWER_APP_SHARE = "debug_import_staging_power_app_share";
+        public const string STAGING_TABLE_POWER_AUTOMATE = "debug_import_staging_power_automate";
+        public const string STAGING_TABLE_POWER_AUTOMATE_SHARE = "debug_import_staging_power_automate_share";
+        public const string STAGING_TABLE_POWER_BI = "debug_import_staging_power_bi";
+        public const string STAGING_TABLE_COPILOT_STUDIO = "debug_import_staging_copilot_studio";
+        public const string STAGING_TABLE_DATAVERSE = "debug_import_staging_dataverse";
+#else
+        public const string STAGING_TABLE_POWER_APP = "##import_staging_power_app";
+        public const string STAGING_TABLE_POWER_APP_SHARE = "##import_staging_power_app_share";
+        public const string STAGING_TABLE_POWER_AUTOMATE = "##import_staging_power_automate";
+        public const string STAGING_TABLE_POWER_AUTOMATE_SHARE = "##import_staging_power_automate_share";
+        public const string STAGING_TABLE_POWER_BI = "##import_staging_power_bi";
+        public const string STAGING_TABLE_COPILOT_STUDIO = "##import_staging_copilot_studio";
+        public const string STAGING_TABLE_DATAVERSE = "##import_staging_dataverse";
 #endif
     }
 }
