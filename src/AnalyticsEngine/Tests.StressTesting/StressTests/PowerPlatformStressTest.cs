@@ -11,14 +11,13 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 namespace Tests.StressTesting.StressTests
 {
     /// <summary>
-    /// Stress test for the Power Platform (Power Apps + Power Automate) event staging and SQL commit pipeline.
-    /// Mirrors CopilotStressTest: generates a configurable mix of Power Apps launches and Flow runs,
-    /// exercising PowerPlatformAuditEventManager at scale to detect memory leaks, measure throughput
-    /// and validate the lookup-deduplication SQL path under load.
+    /// Stress test for the Power Platform event-staging + SQL-commit pipeline.
+    /// Covers the five adoption workloads served by PowerPlatformAuditEventManager:
+    /// Power Apps (with share + connector events), Power Automate (with share + connector events),
+    /// Power BI report/dashboard activity, Copilot Studio bots, and Dataverse record operations.
     /// </summary>
     public class PowerPlatformStressTest : BaseStressTest
     {
-        // Synthetic catalogue – mimics a tenant with a moderate number of repeat apps / flows.
         private static readonly string[] EnvironmentIds =
         {
             "Default-00000000-0000-0000-0000-000000000001",
@@ -27,45 +26,56 @@ namespace Tests.StressTesting.StressTests
         };
 
         private static readonly string[] RecurrenceTypes = { "Manual", "Recurrence", "Automated", "Hybrid" };
+        private static readonly string[] AppTypes = { "Canvas", "ModelDriven", "TeamsApp", "Portal" };
+        private static readonly string[] ClientTypes = { "Web", "Mobile", "Desktop", "Teams" };
+        private static readonly string[] ShareRoles = { "CanView", "CanEdit", "Owner" };
+        private static readonly string[] Connectors = { "shared_sharepointonline", "shared_office365", "shared_teams", "shared_onedriveforbusiness", "shared_sql", "shared_outlookmessage" };
+        private static readonly string[] ReportTypes = { "PowerBIReport", "PaginatedReport" };
+        private static readonly string[] DataverseEntities = { "account", "contact", "opportunity", "incident", "custom_widget" };
 
-        private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp" };
+        private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp", "CreatePowerApp" };
         private static readonly string[] FlowOperations = { "FlowRunStarted", "FlowRunCompleted", "EditFlow", "CreateFlow" };
 
         protected override StressTestResult Execute()
         {
-            Console.WriteLine("\n=== Power Platform Event Import Stress Test Configuration ===\n");
+            Console.WriteLine("\n=== Power Platform Event Import Stress Test ===\n");
 
             int totalEvents = GetIntegerInput("Total Power Platform events to generate", 5000, 1, 1000000);
             int batchSize = GetIntegerInput("Events per commit batch", 500, 1, 100000);
-            int distinctApps = GetIntegerInput("Distinct Power Apps to simulate", 25, 1, 100000);
-            int distinctFlows = GetIntegerInput("Distinct Power Automate flows to simulate", 50, 1, 100000);
-            int distinctUsers = GetIntegerInput("Distinct users to simulate", 200, 1, 100000);
-            int appEventPercent = GetIntegerInput("Percent of events that are Power Apps (0-100)", 50, 0, 100);
-            int adminEventPercent = GetIntegerInput("Percent of events that are admin events (0-100)", 5, 0, 100);
+            int distinctApps = GetIntegerInput("Distinct Power Apps", 25, 1, 100000);
+            int distinctFlows = GetIntegerInput("Distinct Power Automate flows", 50, 1, 100000);
+            int distinctReports = GetIntegerInput("Distinct Power BI reports", 20, 1, 100000);
+            int distinctBots = GetIntegerInput("Distinct Copilot Studio bots", 5, 1, 100000);
+            int distinctUsers = GetIntegerInput("Distinct users", 200, 1, 100000);
+
+            // Adoption mix (percentages must sum to <= 100; remainder rolls into Dataverse)
+            int appPercent = GetIntegerInput("% Power Apps events", 30, 0, 100);
+            int sharePercent = GetIntegerInput("% of app/flow events that also include a share", 5, 0, 100);
+            int flowPercent = GetIntegerInput("% Power Automate events", 30, 0, 100);
+            int powerBiPercent = GetIntegerInput("% Power BI events", 25, 0, 100);
+            int copilotStudioPercent = GetIntegerInput("% Copilot Studio events", 5, 0, 100);
+
             bool collectGarbageEachBatch = GetBooleanInput("Force GC after each batch", false);
             bool verbose = GetBooleanInput("Verbose output", false);
 
             string connectionString = ConnectionString;
             bool commitToSql = false;
-
             if (!string.IsNullOrEmpty(connectionString))
             {
                 commitToSql = GetBooleanInput("DB connection string provided. Commit batches to SQL", true);
             }
             else
             {
-                Console.WriteLine("No DB connection string provided - running staging-only (in-memory) stress test.");
-                Console.WriteLine("Pass a connection string as a command-line argument to enable SQL commits.");
+                Console.WriteLine("No DB connection string - running staging-only (in-memory) stress test.");
             }
 
             int batchCount = (int)Math.Ceiling((double)totalEvents / batchSize);
             Console.WriteLine($"\nCalculated load:");
             Console.WriteLine($"  Total events: {totalEvents:N0}");
             Console.WriteLine($"  Batches: {batchCount:N0} x {batchSize:N0} events");
-            Console.WriteLine($"  Apps catalogue: {distinctApps:N0}, Flows catalogue: {distinctFlows:N0}, Users: {distinctUsers:N0}");
-            Console.WriteLine($"  Mix: ~{appEventPercent}% apps, ~{adminEventPercent}% admin, remainder flows");
-            Console.WriteLine($"  Mode: {(commitToSql ? "Full pipeline (staging + SQL commit)" : "Staging only (in-memory)")}");
-            Console.WriteLine();
+            Console.WriteLine($"  Catalogue: {distinctApps:N0} apps, {distinctFlows:N0} flows, {distinctReports:N0} BI reports, {distinctBots:N0} bots, {distinctUsers:N0} users");
+            Console.WriteLine($"  Mix: ~{appPercent}% apps, ~{flowPercent}% flows, ~{powerBiPercent}% Power BI, ~{copilotStudioPercent}% Copilot Studio, rest Dataverse. ~{sharePercent}% of app/flow events also include a share recipient.");
+            Console.WriteLine($"  Mode: {(commitToSql ? "Full pipeline (staging + SQL commit)" : "Staging only")}\n");
             Console.WriteLine("Press any key to start test...");
             Console.ReadKey();
             Console.WriteLine();
@@ -92,6 +102,10 @@ namespace Tests.StressTesting.StressTests
 
             var appCatalogue = BuildIdCatalogue("app", distinctApps);
             var flowCatalogue = BuildIdCatalogue("flow", distinctFlows);
+            var workspaceCatalogue = BuildIdCatalogue("workspace", Math.Max(1, distinctReports / 5));
+            var reportCatalogue = BuildIdCatalogue("report", distinctReports);
+            var dashboardCatalogue = BuildIdCatalogue("dashboard", Math.Max(1, distinctReports / 4));
+            var botCatalogue = BuildIdCatalogue("bot", distinctBots);
             var userCatalogue = BuildUserCatalogue(distinctUsers);
 
             var result = new StressTestResult { Success = true };
@@ -106,18 +120,17 @@ namespace Tests.StressTesting.StressTests
                 for (int batch = 0; batch < batchCount; batch++)
                 {
                     int eventsThisBatch = Math.Min(batchSize, totalEvents - (batch * batchSize));
-
                     if (verbose || batch % 5 == 0)
                     {
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Batch {batch + 1}/{batchCount} " +
-                            $"({eventsThisBatch} events) - Memory: {_memoryMonitor.GetMemoryString(_memoryMonitor.CurrentMemoryBytes)}");
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Batch {batch + 1}/{batchCount} ({eventsThisBatch} events) - Memory: {_memoryMonitor.GetMemoryString(_memoryMonitor.CurrentMemoryBytes)}");
                     }
 
                     try
                     {
-                        long batchEvents = RunBatch(eventsThisBatch, appEventPercent, adminEventPercent,
-                            appCatalogue, flowCatalogue, userCatalogue,
-                            commitToSql, connectionString, random);
+                        long batchEvents = RunBatch(eventsThisBatch,
+                            appPercent, flowPercent, powerBiPercent, copilotStudioPercent, sharePercent,
+                            appCatalogue, flowCatalogue, workspaceCatalogue, reportCatalogue, dashboardCatalogue, botCatalogue,
+                            userCatalogue, commitToSql, connectionString, random);
 
                         totalEventsProcessed += batchEvents;
                         _memoryMonitor.UpdatePeak();
@@ -164,7 +177,6 @@ namespace Tests.StressTesting.StressTests
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
                     Console.WriteLine($"\nWARNING: Memory grew by {growthPercentage:F1}% ({_memoryMonitor.GetMemoryString(memoryGrowth)})");
-                    Console.WriteLine("This may indicate a memory leak in the power-platform staging pipeline.");
                     Console.ResetColor();
                     result.Message += $" | WARNING: {growthPercentage:F1}% memory growth";
                 }
@@ -181,76 +193,58 @@ namespace Tests.StressTesting.StressTests
             return result;
         }
 
-        private long RunBatch(int eventCount, int appEventPercent, int adminEventPercent,
-            List<string> appCatalogue, List<string> flowCatalogue, List<(string Upn, string AadId)> userCatalogue,
-            bool commitToSql, string connectionString, Random random)
+        private long RunBatch(int eventCount,
+            int appPercent, int flowPercent, int powerBiPercent, int copilotStudioPercent, int sharePercent,
+            List<string> apps, List<string> flows, List<string> workspaces, List<string> reports, List<string> dashboards, List<string> bots,
+            List<(string Upn, string AadId)> users, bool commitToSql, string connectionString, Random random)
         {
             var effectiveConnectionString = commitToSql ? connectionString : "Server=fake;Database=fake;";
             var quietLogger = new LoggerFactory().CreateLogger("PowerPlatformStress");
             var manager = new PowerPlatformAuditEventManager(effectiveConnectionString, quietLogger);
 
-            var eventIds = new List<(Guid Id, string Upn, string AadId)>(eventCount);
+            var eventIds = new List<(Guid Id, string Upn)>(eventCount);
             var sw = Stopwatch.StartNew();
 
             for (int i = 0; i < eventCount; i++)
             {
                 var eventId = Guid.NewGuid();
-                var user = userCatalogue[random.Next(userCatalogue.Count)];
-                eventIds.Add((eventId, user.Upn, user.AadId));
+                var user = users[random.Next(users.Count)];
+                eventIds.Add((eventId, user.Upn));
 
                 var common = new CommonAuditEvent
                 {
                     Id = eventId,
-                    TimeStamp = DateTime.UtcNow,
+                    TimeStamp = DateTime.UtcNow.AddSeconds(-random.Next(0, 86400)),
                     Operation = new EventOperation { Name = AppOperations[0] },
-                    User = new User
-                    {
-                        AzureAdId = user.AadId,
-                        UserPrincipalName = user.Upn
-                    }
+                    User = new User { AzureAdId = user.AadId, UserPrincipalName = user.Upn }
                 };
 
                 int roll = random.Next(0, 100);
-                if (roll < appEventPercent)
+                int cumulative = 0;
+
+                if (roll < (cumulative += appPercent))
                 {
-                    var appId = appCatalogue[random.Next(appCatalogue.Count)];
-                    var content = new PowerAppsAuditLogContent
-                    {
-                        AppName = appId,
-                        AppDisplayName = $"Display-{appId}",
-                        EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
-                        AppSessionId = Guid.NewGuid().ToString("N"),
-                    };
-                    common.Operation = new EventOperation { Name = AppOperations[random.Next(AppOperations.Length)] };
-                    manager.SaveSinglePowerAppEventToSqlStaging(content, common).GetAwaiter().GetResult();
+                    GenerateAppEvent(manager, common, apps, random, sharePercent, users);
                 }
-                else if (roll < appEventPercent + adminEventPercent)
+                else if (roll < (cumulative += flowPercent))
                 {
-                    var content = new PowerPlatformAdminAuditLogContent
-                    {
-                        EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
-                        OriginalImportFileContents = "{\"PolicyChange\":\"stress\"}",
-                    };
-                    common.Operation = new EventOperation { Name = "AdminAction" };
-                    manager.SaveSinglePowerPlatformAdminEventToSqlStaging(content, common).GetAwaiter().GetResult();
+                    GenerateFlowEvent(manager, common, flows, random, sharePercent, users);
+                }
+                else if (roll < (cumulative += powerBiPercent))
+                {
+                    GeneratePowerBIEvent(manager, common, workspaces, reports, dashboards, random);
+                }
+                else if (roll < (cumulative += copilotStudioPercent))
+                {
+                    GenerateCopilotStudioEvent(manager, common, bots, random);
                 }
                 else
                 {
-                    var flowId = flowCatalogue[random.Next(flowCatalogue.Count)];
-                    var content = new PowerAutomateAuditLogContent
-                    {
-                        FlowId = flowId,
-                        FlowDisplayName = $"Display-{flowId}",
-                        EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
-                        RunId = Guid.NewGuid().ToString("N"),
-                        RecurrenceType = RecurrenceTypes[random.Next(RecurrenceTypes.Length)],
-                    };
-                    common.Operation = new EventOperation { Name = FlowOperations[random.Next(FlowOperations.Length)] };
-                    manager.SaveSinglePowerAutomateEventToSqlStaging(content, common).GetAwaiter().GetResult();
+                    GenerateDataverseEvent(manager, common, random);
                 }
             }
 
-            Console.WriteLine($"  Staging: {sw.ElapsedMilliseconds:N0}ms ({eventCount} events staged)");
+            Console.WriteLine($"  Staging: {sw.ElapsedMilliseconds:N0}ms ({eventCount} events: {manager.StagedAppCount} apps + {manager.StagedAppShareCount} app-shares, {manager.StagedFlowCount} flows + {manager.StagedFlowShareCount} flow-shares, {manager.StagedPowerBiCount} BI, {manager.StagedCopilotStudioCount} bots, {manager.StagedDataverseCount} dv)");
 
             if (commitToSql)
             {
@@ -260,7 +254,7 @@ namespace Tests.StressTesting.StressTests
                 Console.WriteLine($"  Prerequisite insert: {sw.ElapsedMilliseconds:N0}ms");
 
                 sw.Restart();
-                Console.WriteLine($"  Running CommitAllChanges (staging table insert + merge SQL)...");
+                Console.WriteLine($"  Running CommitAllChanges (staging table insert + 7 merge scripts)...");
                 manager.CommitAllChanges().GetAwaiter().GetResult();
                 Console.WriteLine($"  CommitAllChanges: {sw.ElapsedMilliseconds:N0}ms");
             }
@@ -268,23 +262,168 @@ namespace Tests.StressTesting.StressTests
             return eventCount;
         }
 
+        private void GenerateAppEvent(PowerPlatformAuditEventManager manager, CommonAuditEvent common,
+            List<string> apps, Random random, int sharePercent, List<(string Upn, string AadId)> users)
+        {
+            var appId = apps[random.Next(apps.Count)];
+            var operation = AppOperations[random.Next(AppOperations.Length)];
+            common.Operation = new EventOperation { Name = operation };
+
+            var content = new PowerAppsAuditLogContent
+            {
+                AppName = appId,
+                AppDisplayName = $"Display-{appId}",
+                EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
+                AppSessionId = Guid.NewGuid().ToString("N"),
+                AppType = AppTypes[random.Next(AppTypes.Length)],
+                ClientType = ClientTypes[random.Next(ClientTypes.Length)],
+                UserAgent = "Mozilla/5.0 stress-test",
+            };
+
+            // Publish events typically carry connector bindings
+            if (operation == "PublishPowerApp" || operation == "CreatePowerApp")
+            {
+                content.ConnectionReferences = new List<PowerPlatformConnectionRef>();
+                int connectorCount = random.Next(1, 4);
+                for (int c = 0; c < connectorCount; c++)
+                {
+                    content.ConnectionReferences.Add(new PowerPlatformConnectionRef { ConnectorName = Connectors[random.Next(Connectors.Length)] });
+                }
+            }
+
+            // Optional share recipients
+            if (random.Next(100) < sharePercent)
+            {
+                content.Permissions = new List<PowerPlatformPermissionEntry>();
+                int recipients = random.Next(1, 3);
+                for (int r = 0; r < recipients; r++)
+                {
+                    var recipient = users[random.Next(users.Count)];
+                    content.Permissions.Add(new PowerPlatformPermissionEntry
+                    {
+                        PrincipalName = recipient.Upn,
+                        RoleName = ShareRoles[random.Next(ShareRoles.Length)]
+                    });
+                }
+            }
+
+            manager.SaveSinglePowerAppEventToSqlStaging(content, common).GetAwaiter().GetResult();
+        }
+
+        private void GenerateFlowEvent(PowerPlatformAuditEventManager manager, CommonAuditEvent common,
+            List<string> flows, Random random, int sharePercent, List<(string Upn, string AadId)> users)
+        {
+            var flowId = flows[random.Next(flows.Count)];
+            var operation = FlowOperations[random.Next(FlowOperations.Length)];
+            common.Operation = new EventOperation { Name = operation };
+
+            var content = new PowerAutomateAuditLogContent
+            {
+                FlowId = flowId,
+                FlowDisplayName = $"Display-{flowId}",
+                EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
+                RunId = Guid.NewGuid().ToString("N"),
+                RecurrenceType = RecurrenceTypes[random.Next(RecurrenceTypes.Length)],
+            };
+
+            if (operation == "CreateFlow" || operation == "EditFlow")
+            {
+                content.ConnectionReferences = new List<PowerPlatformConnectionRef>();
+                int connectorCount = random.Next(1, 4);
+                for (int c = 0; c < connectorCount; c++)
+                {
+                    content.ConnectionReferences.Add(new PowerPlatformConnectionRef { ConnectorName = Connectors[random.Next(Connectors.Length)] });
+                }
+            }
+
+            if (random.Next(100) < sharePercent)
+            {
+                content.Permissions = new List<PowerPlatformPermissionEntry>();
+                int recipients = random.Next(1, 3);
+                for (int r = 0; r < recipients; r++)
+                {
+                    var recipient = users[random.Next(users.Count)];
+                    content.Permissions.Add(new PowerPlatformPermissionEntry
+                    {
+                        PrincipalName = recipient.Upn,
+                        RoleName = ShareRoles[random.Next(ShareRoles.Length)]
+                    });
+                }
+            }
+
+            manager.SaveSinglePowerAutomateEventToSqlStaging(content, common).GetAwaiter().GetResult();
+        }
+
+        private void GeneratePowerBIEvent(PowerPlatformAuditEventManager manager, CommonAuditEvent common,
+            List<string> workspaces, List<string> reports, List<string> dashboards, Random random)
+        {
+            bool isDashboard = random.Next(0, 10) < 3;
+            var content = new PowerBIAuditLogContent
+            {
+                WorkspaceId = workspaces[random.Next(workspaces.Count)],
+                WorkspaceName = $"WS-{random.Next(1, 100)}",
+            };
+
+            if (isDashboard)
+            {
+                var dashId = dashboards[random.Next(dashboards.Count)];
+                content.DashboardId = dashId;
+                content.DashboardName = $"Dash-{dashId}";
+                common.Operation = new EventOperation { Name = "ViewDashboard" };
+            }
+            else
+            {
+                var reportId = reports[random.Next(reports.Count)];
+                content.ReportId = reportId;
+                content.ReportName = $"Report-{reportId}";
+                content.ReportType = ReportTypes[random.Next(ReportTypes.Length)];
+                common.Operation = new EventOperation { Name = random.Next(0, 10) < 8 ? "ViewReport" : "CreateReport" };
+            }
+
+            manager.SaveSinglePowerBIEventToSqlStaging(content, common).GetAwaiter().GetResult();
+        }
+
+        private void GenerateCopilotStudioEvent(PowerPlatformAuditEventManager manager, CommonAuditEvent common,
+            List<string> bots, Random random)
+        {
+            var botId = bots[random.Next(bots.Count)];
+            var content = new CopilotStudioAuditLogContent
+            {
+                BotId = botId,
+                BotName = $"Bot-{botId}",
+                EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
+            };
+            common.Operation = new EventOperation { Name = random.Next(0, 10) < 7 ? "MessageSent" : "BotPublished" };
+            manager.SaveSingleCopilotStudioEventToSqlStaging(content, common).GetAwaiter().GetResult();
+        }
+
+        private void GenerateDataverseEvent(PowerPlatformAuditEventManager manager, CommonAuditEvent common, Random random)
+        {
+            var content = new DataverseAuditLogContent
+            {
+                EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
+                EntityName = DataverseEntities[random.Next(DataverseEntities.Length)],
+                RecordId = Guid.NewGuid().ToString(),
+            };
+            common.Operation = new EventOperation { Name = new[] { "CreateRecord", "UpdateRecord", "DeleteRecord" }[random.Next(3)] };
+            manager.SaveSingleDataverseEventToSqlStaging(content, common).GetAwaiter().GetResult();
+        }
+
         /// <summary>
-        /// Inserts minimal users + audit_events rows so the FK constraints on the metadata tables are satisfied.
+        /// Inserts the prerequisite users + audit_events rows so FKs are satisfied when CommitAllChanges runs.
         /// </summary>
-        private void InsertPrerequisiteAuditEvents(string connectionString, List<(Guid Id, string Upn, string AadId)> eventIds)
+        private void InsertPrerequisiteAuditEvents(string connectionString, List<(Guid Id, string Upn)> eventIds)
         {
             using (var conn = new SqlConnection(connectionString))
             {
                 conn.Open();
 
-                // Make sure each distinct UPN exists in users.
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
 IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
     INSERT INTO users (user_name) VALUES (@upn);";
                     var pUpn = cmd.Parameters.Add("@upn", System.Data.SqlDbType.NVarChar, 400);
-
                     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var ev in eventIds)
                     {
@@ -301,7 +440,6 @@ IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
                     cmd.CommandText = "INSERT INTO audit_events (id, time_stamp) VALUES (@id, @ts)";
                     var pId = cmd.Parameters.AddWithValue("@id", DBNull.Value);
                     var pTs = cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow);
-
                     foreach (var ev in eventIds)
                     {
                         pId.Value = ev.Id;
@@ -314,20 +452,14 @@ IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
         private static List<string> BuildIdCatalogue(string prefix, int count)
         {
             var list = new List<string>(count);
-            for (int i = 0; i < count; i++)
-            {
-                list.Add($"{prefix}-{Guid.NewGuid():N}");
-            }
+            for (int i = 0; i < count; i++) list.Add($"{prefix}-{Guid.NewGuid():N}");
             return list;
         }
 
         private static List<(string Upn, string AadId)> BuildUserCatalogue(int count)
         {
             var list = new List<(string, string)>(count);
-            for (int i = 0; i < count; i++)
-            {
-                list.Add(($"stressuser{i}@contoso.com", Guid.NewGuid().ToString()));
-            }
+            for (int i = 0; i < count; i++) list.Add(($"stressuser{i}@contoso.com", Guid.NewGuid().ToString()));
             return list;
         }
     }

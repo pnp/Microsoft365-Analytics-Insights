@@ -177,9 +177,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                         {
                             thisAuditLogReport = reportItem.ToObject<PowerAutomateAuditLogContent>();
                         }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_PLATFORM_ADMIN)
+                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_BI)
                         {
-                            thisAuditLogReport = reportItem.ToObject<PowerPlatformAdminAuditLogContent>();
+                            thisAuditLogReport = reportItem.ToObject<PowerBIAuditLogContent>();
+                        }
+                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT_STUDIO)
+                        {
+                            thisAuditLogReport = reportItem.ToObject<CopilotStudioAuditLogContent>();
+                        }
+                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_DATAVERSE)
+                        {
+                            thisAuditLogReport = reportItem.ToObject<DataverseAuditLogContent>();
                         }
                     }
                     catch (JsonReaderException ex)
