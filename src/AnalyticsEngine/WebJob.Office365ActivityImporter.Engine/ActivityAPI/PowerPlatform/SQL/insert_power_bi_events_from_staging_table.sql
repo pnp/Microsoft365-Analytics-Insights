@@ -1,11 +1,17 @@
 -- Merge staged Power BI audit events into normalised tables (workspaces, reports, dashboards, per-event metadata).
 
--- 1. Upsert workspaces.
+-- 1. Upsert workspaces. Dedupe by workspace_id (a single batch can carry the same
+--    workspace_id with different display-names; we pick one to satisfy the unique index).
 INSERT INTO power_bi_workspaces (workspace_id, [name])
-SELECT DISTINCT i.workspace_id, COALESCE(i.workspace_name, i.workspace_id)
-FROM [${STAGING_TABLE_ACTIVITY}] i
-LEFT JOIN power_bi_workspaces w ON w.workspace_id = i.workspace_id
-WHERE i.workspace_id IS NOT NULL AND w.workspace_id IS NULL;
+SELECT d.workspace_id, d.workspace_name
+FROM (
+    SELECT i.workspace_id,
+           MAX(COALESCE(i.workspace_name, i.workspace_id)) AS workspace_name
+    FROM [${STAGING_TABLE_ACTIVITY}] i
+    WHERE i.workspace_id IS NOT NULL
+    GROUP BY i.workspace_id
+) d
+WHERE NOT EXISTS (SELECT 1 FROM power_bi_workspaces w WHERE w.workspace_id = d.workspace_id);
 
 
 -- 2. Upsert reports (with earliest first_seen_at).
