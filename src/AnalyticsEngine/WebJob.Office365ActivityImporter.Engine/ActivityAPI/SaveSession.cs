@@ -7,6 +7,7 @@ using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 {
@@ -16,6 +17,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     public class SaveSession : IDisposable
     {
         private CopilotAuditEventManager _copilotEventResolver = null;
+        private PowerPlatformAuditEventManager _powerPlatformEventResolver = null;
         private readonly GraphAppIndentityOAuthContext _authContext;
         private readonly ILogger _logger;
         private readonly AppConfig _appConfig;
@@ -37,9 +39,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             await _authContext.InitClientCredential();
             var loader = new GraphFileMetadataLoader(new GraphServiceClient(_authContext.Creds), _logger);
             _copilotEventResolver = new CopilotAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, loader, _logger);
+            _powerPlatformEventResolver = new PowerPlatformAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);
         }
 
         public CopilotAuditEventManager CopilotEventResolver => _copilotEventResolver ?? throw new Exception("Session not initialised");
+        public PowerPlatformAuditEventManager PowerPlatformEventResolver => _powerPlatformEventResolver ?? throw new Exception("Session not initialised");
         public SharePointLookupManager SharePointLookupManager { get; set; }
         public StreamLookupManager StreamLookupManager { get; set; }
 
@@ -55,6 +59,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         public async Task CommitAllChanges()
         {
             await _copilotEventResolver.CommitAllChanges();
+            await _powerPlatformEventResolver.CommitAllChanges();
             Database.ChangeTracker.DetectChanges();
             await this.Database.SaveChangesAsync();
         }
