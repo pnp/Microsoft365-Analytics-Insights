@@ -55,6 +55,7 @@
     <Compile Include="FakeLoaders\FakeContentMetaDataLoaderForStress.cs" />
     <Compile Include="FakeLoaders\FakeActivitySubscriptionManagerForStress.cs" />
     <Compile Include="StressTests\CopilotStressTest.cs" />
+    <Compile Include="StressTests\PowerPlatformStressTest.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

@@ -17,6 +17,11 @@
         public static string WORKLOAD_TEAMS { get { return "MicrosoftTeams"; } }
         public static string WORKLOAD_STREAM { get { return "MicrosoftStream"; } }
 
+        // Power Platform - all delivered via the Audit.General content-type subscription.
+        public static string WORKLOAD_POWER_APPS { get { return "PowerApps"; } }
+        public static string WORKLOAD_POWER_AUTOMATE { get { return "MicrosoftFlow"; } }
+        public static string WORKLOAD_POWER_PLATFORM_ADMIN { get { return "PowerPlatformAdmin"; } }
+
         public static string PARAM_WEBHOOK_OVERRIDE { get { return "--webhook"; } }
         public static string PARAM_CALL_ID { get { return "--callId"; } }
         // New params for tracing audit log imports containing a specific email address
@@ -71,6 +76,16 @@
         public const string STAGING_TABLE_COPILOT_CHATONLY = "debug_import_staging_copilot_chatonly";
 #else
         public const string STAGING_TABLE_COPILOT_CHATONLY = "##debug_import_staging_copilot_chatonly";
+#endif
+
+#if DEBUG
+        public const string STAGING_TABLE_POWER_APP = "debug_import_staging_power_app";
+        public const string STAGING_TABLE_POWER_AUTOMATE = "debug_import_staging_power_automate";
+        public const string STAGING_TABLE_POWER_PLATFORM_ADMIN = "debug_import_staging_power_platform_admin";
+#else
+        public const string STAGING_TABLE_POWER_APP = "##import_staging_power_app";
+        public const string STAGING_TABLE_POWER_AUTOMATE = "##import_staging_power_automate";
+        public const string STAGING_TABLE_POWER_PLATFORM_ADMIN = "##import_staging_power_platform_admin";
 #endif
     }
 }

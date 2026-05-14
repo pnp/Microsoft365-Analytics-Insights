@@ -139,6 +139,7 @@
     <Compile Include="Entities\AuditLog\SPEventFileName.cs" />
     <Compile Include="Entities\AuditLog\EventOperation.cs" />
     <Compile Include="Entities\AuditLog\SPEventType.cs" />
+    <Compile Include="Entities\AuditLog\PowerPlatformEvents.cs" />
     <Compile Include="Entities\WebTraffic\Hit.cs" />
     <Compile Include="Entities\KeyWord.cs" />
     <Compile Include="Entities\Language.cs" />
