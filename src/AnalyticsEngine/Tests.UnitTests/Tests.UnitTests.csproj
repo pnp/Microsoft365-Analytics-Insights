@@ -117,6 +117,7 @@
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
     <Compile Include="LookupCacheBatchProcessingTests.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
+    <Compile Include="PowerPlatformAuditEventManagerTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
