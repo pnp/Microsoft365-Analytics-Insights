@@ -209,8 +209,12 @@
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\common_upsert_copilot_agents.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_activity_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_share_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_platform_admin_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_share_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_bi_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_copilot_studio_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_dataverse_events_from_staging_table.sql" />
     <Content Include="Resources\Insert Activity from Staging Table.sql" />
   </ItemGroup>
   <ItemGroup>
