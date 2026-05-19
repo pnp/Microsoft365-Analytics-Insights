@@ -71,6 +71,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 AppId = auditRecord.AppName,
                 AppName = string.IsNullOrEmpty(auditRecord.AppDisplayName) ? auditRecord.AppName : auditRecord.AppDisplayName,
                 EnvironmentId = auditRecord.EnvironmentName,
+                EnvironmentName = auditRecord.EnvironmentDisplayName,
                 AppSessionId = auditRecord.AppSessionId,
                 AppType = auditRecord.AppType,
                 ClientType = NormaliseClientType(auditRecord.ClientType, auditRecord.UserAgent),
@@ -113,6 +114,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 FlowId = auditRecord.FlowId,
                 FlowName = string.IsNullOrEmpty(auditRecord.FlowDisplayName) ? auditRecord.FlowId : auditRecord.FlowDisplayName,
                 EnvironmentId = auditRecord.EnvironmentName,
+                EnvironmentName = auditRecord.EnvironmentDisplayName,
                 RunId = auditRecord.RunId,
                 RecurrenceType = auditRecord.RecurrenceType,
                 ConnectorsCsv = JoinConnectors(auditRecord.ConnectionReferences),
@@ -144,6 +146,16 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
             if (auditRecord == null || baseOfficeEvent == null)
             {
                 _logger.LogWarning("PowerPlatformAuditEventManager received null PowerBI auditRecord or baseOfficeEvent.");
+                return Task.CompletedTask;
+            }
+
+            // Defensive: a ViewReport without a workspace+report id is structurally invalid -
+            // persisting the staging row would land a NULL-FK row in event_meta_power_bi because
+            // the merge LEFT JOINs would have nothing to match. Skip + warn so a schema change
+            // surfaces in the logs instead of silently filling the metadata table with NULLs.
+            if (string.IsNullOrEmpty(auditRecord.WorkspaceId) || string.IsNullOrEmpty(auditRecord.ReportId))
+            {
+                _logger.LogWarning($"PowerPlatformAuditEventManager: PowerBI {auditRecord.Operation} event '{auditRecord.Id}' is missing WorkspaceId or ReportId - skipping staging row to avoid a NULL-FK event_meta_power_bi row.");
                 return Task.CompletedTask;
             }
 

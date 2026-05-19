@@ -2,11 +2,32 @@
 -- ${STAGING_TABLE_ACTIVITY} is replaced at runtime with the temp table name.
 
 -- 1. Upsert environments (lookup shared with flows / dataverse / copilot studio)
+--    Dedupe by environment_id; pick the best display name we saw for it this batch
+--    (fall back to the GUID when only the legacy schema is in play).
 INSERT INTO power_app_environments (environment_id, [name])
-SELECT DISTINCT i.environment_id, i.environment_id
-FROM [${STAGING_TABLE_ACTIVITY}] i
-LEFT JOIN power_app_environments env ON env.environment_id = i.environment_id
-WHERE i.environment_id IS NOT NULL AND env.environment_id IS NULL;
+SELECT d.environment_id, COALESCE(d.environment_name, d.environment_id)
+FROM (
+    SELECT i.environment_id,
+           MAX(i.environment_name) AS environment_name
+    FROM [${STAGING_TABLE_ACTIVITY}] i
+    WHERE i.environment_id IS NOT NULL
+    GROUP BY i.environment_id
+) d
+WHERE NOT EXISTS (SELECT 1 FROM power_app_environments env WHERE env.environment_id = d.environment_id);
+
+
+-- 1b. Backfill the environment friendly name if a later event provides one.
+UPDATE env
+SET [name] = d.environment_name
+FROM power_app_environments env
+INNER JOIN (
+    SELECT i.environment_id,
+           MAX(i.environment_name) AS environment_name
+    FROM [${STAGING_TABLE_ACTIVITY}] i
+    WHERE i.environment_id IS NOT NULL AND i.environment_name IS NOT NULL
+    GROUP BY i.environment_id
+) d ON d.environment_id = env.environment_id
+WHERE env.[name] IS NULL OR env.[name] = env.environment_id;
 
 
 -- 2. Upsert app types (canvas / model-driven / Teams / portal)
