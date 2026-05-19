@@ -349,38 +349,44 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// A ViewDashboard event should populate the dashboard lookup and link only the dashboard on the metadata row.
+        /// We only persist Power BI events with Operation="ViewReport". Other operations - and
+        /// even ViewReport events that are missing the workspace_id or report_id - must be
+        /// dropped before they reach staging, otherwise the merge would leave NULL-FK rows in
+        /// event_meta_power_bi (the visible symptom that triggered this guard).
         /// </summary>
         [TestMethod]
-        public async Task PowerBI_DashboardEvent_PersistsDashboard()
+        public async Task PowerBI_EventWithoutWorkspaceOrReportId_IsSkipped()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var commonEvent = BuildCommonEvent("ViewDashboard", "bi-dash");
+                var commonEvent = BuildCommonEvent("ViewReport", "bi-bad");
                 await PersistAuditEventAsync(db, commonEvent);
 
-                var workspaceId = "workspace-" + Guid.NewGuid().ToString("N");
-                var dashboardId = "dash-" + Guid.NewGuid().ToString("N");
-
                 var manager = NewManager();
+                // Missing both ReportId and WorkspaceId - structurally invalid.
                 await manager.SaveSinglePowerBIEventToSqlStaging(new PowerBIAuditLogContent
                 {
-                    WorkspaceId = workspaceId,
-                    WorkspaceName = "Ops Workspace",
-                    DashboardId = dashboardId,
-                    DashboardName = "Ops Dashboard"
+                    WorkspaceName = "WS-with-no-id",
+                    ReportName = "Report-with-no-id",
+                    ReportType = "PowerBIReport"
                 }, commonEvent);
+
+                // Missing only ReportId - also structurally invalid for a ViewReport.
+                var commonEvent2 = BuildCommonEvent("ViewReport", "bi-no-rep");
+                await PersistAuditEventAsync(db, commonEvent2);
+                await manager.SaveSinglePowerBIEventToSqlStaging(new PowerBIAuditLogContent
+                {
+                    WorkspaceId = "workspace-" + Guid.NewGuid().ToString("N"),
+                    WorkspaceName = "WS-Has-Id",
+                    ReportType = "PowerBIReport"
+                }, commonEvent2);
 
                 await manager.CommitAllChanges();
 
-                var dashboardRow = await db.power_bi_dashboards.SingleOrDefaultAsync(d => d.DashboardId == dashboardId);
-                Assert.IsNotNull(dashboardRow);
-                Assert.AreEqual("Ops Dashboard", dashboardRow.Name);
-
-                var meta = await db.power_bi_events.SingleOrDefaultAsync(m => m.EventID == commonEvent.Id);
-                Assert.IsNotNull(meta);
-                Assert.AreEqual(dashboardRow.ID, meta.DashboardId);
-                Assert.IsNull(meta.ReportId, "Dashboard-only event should not link a report.");
+                var meta1 = await db.power_bi_events.SingleOrDefaultAsync(m => m.EventID == commonEvent.Id);
+                Assert.IsNull(meta1, "Events with no WorkspaceId/ReportId must never produce an event_meta_power_bi row (would land NULL FKs).");
+                var meta2 = await db.power_bi_events.SingleOrDefaultAsync(m => m.EventID == commonEvent2.Id);
+                Assert.IsNull(meta2, "ViewReport events missing ReportId must never produce an event_meta_power_bi row.");
             }
         }
 

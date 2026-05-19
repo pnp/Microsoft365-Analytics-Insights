@@ -357,28 +357,17 @@ namespace Tests.StressTesting.StressTests
         private void GeneratePowerBIEvent(PowerPlatformAuditEventManager manager, CommonAuditEvent common,
             List<string> workspaces, List<string> reports, List<string> dashboards, Random random)
         {
-            bool isDashboard = random.Next(0, 10) < 3;
+            // Production only persists ViewReport events (see ActivityReportLoader gate).
+            var reportId = reports[random.Next(reports.Count)];
             var content = new PowerBIAuditLogContent
             {
                 WorkspaceId = workspaces[random.Next(workspaces.Count)],
                 WorkspaceName = $"WS-{random.Next(1, 100)}",
+                ReportId = reportId,
+                ReportName = $"Report-{reportId}",
+                ReportType = ReportTypes[random.Next(ReportTypes.Length)],
             };
-
-            if (isDashboard)
-            {
-                var dashId = dashboards[random.Next(dashboards.Count)];
-                content.DashboardId = dashId;
-                content.DashboardName = $"Dash-{dashId}";
-                common.Operation = new EventOperation { Name = "ViewDashboard" };
-            }
-            else
-            {
-                var reportId = reports[random.Next(reports.Count)];
-                content.ReportId = reportId;
-                content.ReportName = $"Report-{reportId}";
-                content.ReportType = ReportTypes[random.Next(ReportTypes.Length)];
-                common.Operation = new EventOperation { Name = random.Next(0, 10) < 8 ? "ViewReport" : "CreateReport" };
-            }
+            common.Operation = new EventOperation { Name = "ViewReport" };
 
             manager.SaveSinglePowerBIEventToSqlStaging(content, common).GetAwaiter().GetResult();
         }

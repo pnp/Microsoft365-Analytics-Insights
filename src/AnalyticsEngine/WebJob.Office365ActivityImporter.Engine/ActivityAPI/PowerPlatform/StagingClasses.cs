@@ -21,6 +21,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         [Column("environment_id", true)]
         public string EnvironmentId { get; set; }
 
+        [Column("environment_name", true)]
+        public string EnvironmentName { get; set; }
+
         [Column("app_session_id", true)]
         public string AppSessionId { get; set; }
 
@@ -73,6 +76,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
 
         [Column("environment_id", true)]
         public string EnvironmentId { get; set; }
+
+        [Column("environment_name", true)]
+        public string EnvironmentName { get; set; }
 
         [Column("run_id", true)]
         public string RunId { get; set; }

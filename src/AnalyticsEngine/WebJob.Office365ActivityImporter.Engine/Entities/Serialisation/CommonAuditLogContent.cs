@@ -40,8 +40,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         public DateTime CreationTime { get; set; }
         public Guid Id { get; set; }
 
-        public string Operation { get; set; }
-
         public string UserId { get; set; }
 
         public string ItemType { get; set; }
