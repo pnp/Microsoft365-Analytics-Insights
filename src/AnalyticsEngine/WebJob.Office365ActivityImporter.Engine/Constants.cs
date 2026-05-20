@@ -118,6 +118,34 @@
                 }
                 return false;
             }
+
+            /// <summary>
+            /// Power Automate operation names we treat as "a flow was run". Only these are
+            /// persisted into <c>power_automate_flow_events</c> - lifecycle operations like
+            /// CreateFlow / EditFlow / DeleteFlow / SharedFlow / PublishFlow are intentionally
+            /// dropped because they don't represent a flow execution.
+            ///
+            /// This list is best-effort: Microsoft does not publish a guaranteed-canonical
+            /// set of operation names for the legacy <c>MicrosoftFlow</c> workload or the
+            /// new unified PowerPlatform schema. The downstream skip log in
+            /// <see cref="PowerAutomateAuditLogContent.ProcessExtendedProperties"/> writes
+            /// the operation name of every dropped event, so any real "flow run" operation
+            /// name we are missing will surface in the logs and can be added here.
+            /// </summary>
+            public static readonly string[] FlowRunOps = new[]
+            {
+                "FlowRunStarted",
+            };
+
+            public static bool IsFlowRunOp(string operation)
+            {
+                if (string.IsNullOrEmpty(operation)) return false;
+                foreach (var op in FlowRunOps)
+                {
+                    if (string.Equals(operation, op, System.StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                return false;
+            }
         }
 
         /// <summary>
