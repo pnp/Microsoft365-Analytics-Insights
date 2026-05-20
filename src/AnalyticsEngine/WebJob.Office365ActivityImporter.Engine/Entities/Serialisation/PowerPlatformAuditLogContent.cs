@@ -70,10 +70,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         [JsonProperty("AppSessionId")]
         public string AppSessionId { get; set; }
 
-        /// <summary>"Canvas", "ModelDriven", "TeamsApp", "Portal".</summary>
-        [JsonProperty("AppType")]
-        public string AppType { get; set; }
-
         /// <summary>"Mobile", "Web", "Desktop", "Teams" - derived/normalised by sender.</summary>
         [JsonProperty("ClientType")]
         public string ClientType { get; set; }
@@ -122,9 +118,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// </summary>
         [JsonIgnore]
         public string EnvironmentDisplayName { get; set; }
-
-        [JsonProperty("RecurrenceType")]
-        public string RecurrenceType { get; set; }
 
         [JsonProperty("RunId")]
         public string RunId { get; set; }

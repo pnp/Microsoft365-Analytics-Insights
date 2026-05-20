@@ -73,7 +73,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 EnvironmentId = auditRecord.EnvironmentName,
                 EnvironmentName = auditRecord.EnvironmentDisplayName,
                 AppSessionId = auditRecord.AppSessionId,
-                AppType = auditRecord.AppType,
                 ClientType = NormaliseClientType(auditRecord.ClientType, auditRecord.UserAgent),
                 ConnectorsCsv = JoinConnectors(auditRecord.ConnectionReferences),
                 EventTime = baseOfficeEvent.TimeStamp,
@@ -116,7 +115,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 EnvironmentId = auditRecord.EnvironmentName,
                 EnvironmentName = auditRecord.EnvironmentDisplayName,
                 RunId = auditRecord.RunId,
-                RecurrenceType = auditRecord.RecurrenceType,
                 ConnectorsCsv = JoinConnectors(auditRecord.ConnectionReferences),
                 EventTime = baseOfficeEvent.TimeStamp,
             });

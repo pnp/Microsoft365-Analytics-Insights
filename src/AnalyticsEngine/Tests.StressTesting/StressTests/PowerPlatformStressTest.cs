@@ -25,8 +25,6 @@ namespace Tests.StressTesting.StressTests
             "Dev-00000000-0000-0000-0000-000000000003"
         };
 
-        private static readonly string[] RecurrenceTypes = { "Manual", "Recurrence", "Automated", "Hybrid" };
-        private static readonly string[] AppTypes = { "Canvas", "ModelDriven", "TeamsApp", "Portal" };
         private static readonly string[] ClientTypes = { "Web", "Mobile", "Desktop", "Teams" };
         private static readonly string[] ShareRoles = { "CanView", "CanEdit", "Owner" };
         private static readonly string[] Connectors = { "shared_sharepointonline", "shared_office365", "shared_teams", "shared_onedriveforbusiness", "shared_sql", "shared_outlookmessage" };
@@ -275,7 +273,6 @@ namespace Tests.StressTesting.StressTests
                 AppDisplayName = $"Display-{appId}",
                 EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
                 AppSessionId = Guid.NewGuid().ToString("N"),
-                AppType = AppTypes[random.Next(AppTypes.Length)],
                 ClientType = ClientTypes[random.Next(ClientTypes.Length)],
                 UserAgent = "Mozilla/5.0 stress-test",
             };
@@ -323,7 +320,6 @@ namespace Tests.StressTesting.StressTests
                 FlowDisplayName = $"Display-{flowId}",
                 EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
                 RunId = Guid.NewGuid().ToString("N"),
-                RecurrenceType = RecurrenceTypes[random.Next(RecurrenceTypes.Length)],
             };
 
             if (operation == "CreateFlow" || operation == "EditFlow")

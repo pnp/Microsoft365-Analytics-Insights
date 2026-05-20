@@ -29,15 +29,7 @@ INNER JOIN (
 WHERE env.[name] IS NULL OR env.[name] = env.environment_id;
 
 
--- 2. Upsert recurrence types.
-INSERT INTO flow_recurrence_types ([name])
-SELECT DISTINCT i.recurrence_type
-FROM [${STAGING_TABLE_ACTIVITY}] i
-LEFT JOIN flow_recurrence_types rt ON rt.[name] = i.recurrence_type
-WHERE i.recurrence_type IS NOT NULL AND rt.[name] IS NULL;
-
-
--- 3. Insert flows we haven't seen before (with earliest first_seen_at).
+-- 2. Insert flows we haven't seen before (with earliest first_seen_at).
 INSERT INTO power_automate_flows (flow_id, [name], environment_id, first_seen_at)
 SELECT d.flow_id, d.flow_name, env.id, d.first_seen_at
 FROM (
@@ -53,7 +45,7 @@ LEFT JOIN power_app_environments env ON env.environment_id = d.environment_id
 WHERE NOT EXISTS (SELECT 1 FROM power_automate_flows pf WHERE pf.flow_id = d.flow_id);
 
 
--- 4. Backfill flow display-names + environment if friendlier data arrives later.
+-- 3. Backfill flow display-names + environment if friendlier data arrives later.
 UPDATE pf
 SET [name] = COALESCE(NULLIF(i.flow_name, pf.flow_id), pf.[name]),
     environment_id = COALESCE(pf.environment_id, env.id)
@@ -63,16 +55,15 @@ LEFT JOIN power_app_environments env ON env.environment_id = i.environment_id
 WHERE (pf.[name] IS NULL OR pf.[name] = pf.flow_id OR pf.environment_id IS NULL);
 
 
--- 5. Insert per-event metadata.
-INSERT INTO event_meta_power_automate_flow (event_id, flow_id, run_id, recurrence_type_id)
-SELECT i.event_id, pf.id, i.run_id, rt.id
+-- 4. Insert per-event metadata.
+INSERT INTO event_meta_power_automate_flow (event_id, flow_id, run_id)
+SELECT i.event_id, pf.id, i.run_id
 FROM [${STAGING_TABLE_ACTIVITY}] i
 LEFT JOIN power_automate_flows pf ON pf.flow_id = i.flow_id
-LEFT JOIN flow_recurrence_types rt ON rt.[name] = i.recurrence_type
 WHERE NOT EXISTS (SELECT 1 FROM event_meta_power_automate_flow m WHERE m.event_id = i.event_id);
 
 
--- 6. Refresh connector bindings (pipe-delimited connectors_csv from save / publish events).
+-- 5. Refresh connector bindings (pipe-delimited connectors_csv from save / publish events).
 WITH split_connectors AS (
     SELECT DISTINCT
         i.flow_id,

@@ -22,22 +22,6 @@ namespace Common.Entities.Entities.AuditLog
     }
 
     /// <summary>
-    /// Lookup of Power App kinds (canvas / model-driven / Teams-embedded / portal).
-    /// </summary>
-    [Table("power_app_types")]
-    public class PowerAppType : AbstractEFEntityWithName
-    {
-    }
-
-    /// <summary>
-    /// Lookup of how a flow was triggered ("Manual", "Recurrence", "Automated", ...)
-    /// </summary>
-    [Table("flow_recurrence_types")]
-    public class FlowRecurrenceType : AbstractEFEntityWithName
-    {
-    }
-
-    /// <summary>
     /// Lookup of client surfaces (Mobile / Web / Desktop / Teams).
     /// Drives the "% of Power App launches inside Teams" adoption KPI.
     /// </summary>
@@ -92,11 +76,6 @@ namespace Common.Entities.Entities.AuditLog
         [Column("environment_id")]
         public int? EnvironmentId { get; set; }
         public PowerAppEnvironment Environment { get; set; }
-
-        [ForeignKey(nameof(AppType))]
-        [Column("app_type_id")]
-        public int? AppTypeId { get; set; }
-        public PowerAppType AppType { get; set; }
 
         /// <summary>
         /// First time we saw this app in the audit feed - powers "new apps this month" reports.
@@ -226,11 +205,6 @@ namespace Common.Entities.Entities.AuditLog
         [Column("run_id")]
         [MaxLength(200)]
         public string RunId { get; set; }
-
-        [ForeignKey(nameof(RecurrenceType))]
-        [Column("recurrence_type_id")]
-        public int? RecurrenceTypeId { get; set; }
-        public FlowRecurrenceType RecurrenceType { get; set; }
     }
 
     /// <summary>

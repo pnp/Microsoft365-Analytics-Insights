@@ -565,12 +565,11 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
         }
 
         /// <summary>
-        /// SharePoint events without a URL (e.g. ManagedSyncClientAllowed) should still be saved -
-        /// the filter exists to drop *other* tenants' SP URLs, not to drop SP events that happen
-        /// to lack a URL.
+        /// SharePoint events without a URL (e.g. ManagedSyncClientAllowed) have nothing to match
+        /// against the org-URL whitelist, so the SharePoint filter treats them as out of scope.
         /// </summary>
         [TestMethod]
-        public void OrgURLsFilter_SharePointContent_WithoutObjectId_IsInScope()
+        public void OrgURLsFilter_SharePointContent_WithoutObjectId_IsOutOfScope()
         {
             const string TEST_PREFIX = "https://unittesting.sharepoint.local";
             var spFilterConfig = new SharePointOrgUrlsFilterConfig();
@@ -578,10 +577,10 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
 
             var noUrlEvent = DataGenerators.GetRandomSharePointLog();
             noUrlEvent.ObjectId = null;
-            Assert.IsTrue(spFilterConfig.InScope(noUrlEvent));
+            Assert.IsFalse(spFilterConfig.InScope(noUrlEvent));
 
             noUrlEvent.ObjectId = string.Empty;
-            Assert.IsTrue(spFilterConfig.InScope(noUrlEvent));
+            Assert.IsFalse(spFilterConfig.InScope(noUrlEvent));
         }
 
         /// <summary>

@@ -30,9 +30,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         [Column("client_type", true)]
         public string ClientType { get; set; }
 
-        [Column("app_type", true)]
-        public string AppType { get; set; }
-
         [Column("connectors_csv", true)]
         public string ConnectorsCsv { get; set; }
 
@@ -82,9 +79,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
 
         [Column("run_id", true)]
         public string RunId { get; set; }
-
-        [Column("recurrence_type", true)]
-        public string RecurrenceType { get; set; }
 
         [Column("connectors_csv", true)]
         public string ConnectorsCsv { get; set; }

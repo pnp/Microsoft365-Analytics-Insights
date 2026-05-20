@@ -31,10 +31,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 return true;
             }
 
-            // SharePoint event without a URL ("ManagedSyncClientAllowed" for example). Assume we want it.
+            // SharePoint event without a URL (e.g. ManagedSyncClientAllowed). We only persist SP
+            // events whose URL falls inside the configured org-URL whitelist, so a SharePoint event
+            // without a URL has nothing to match against and is treated as out of scope.
             if (string.IsNullOrEmpty(spContent.ObjectId))
             {
-                return true;
+                return false;
             }
 
             // Analyse all org URLs to see which one matches this hit.

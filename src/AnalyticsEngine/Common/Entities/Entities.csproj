@@ -272,6 +272,10 @@
     <Compile Include="Migrations\202605141410030_PowerPlatformAuditLogging.Designer.cs">
       <DependentUpon>202605141410030_PowerPlatformAuditLogging.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs" />
+    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.Designer.cs">
+      <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -394,6 +398,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202605141410030_PowerPlatformAuditLogging.resx">
       <DependentUpon>202605141410030_PowerPlatformAuditLogging.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.resx">
+      <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
