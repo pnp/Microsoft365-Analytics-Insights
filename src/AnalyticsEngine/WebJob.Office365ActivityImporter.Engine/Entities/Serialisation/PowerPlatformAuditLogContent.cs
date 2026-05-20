@@ -300,7 +300,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 return ToPowerAutomateContent(logger);
             }
 
-            logger?.LogInformation($"PowerPlatform admin activity: skipping record with unsupported resource type '{resourceType}' (operation='{Operation}', id='{Id}').");
+            if (string.IsNullOrEmpty(resourceType))
+            {
+                logger?.LogInformation($"PowerPlatform admin activity: skipping record - no '{ActivityImportConstants.PowerPlatformProps.ResourceType}' property, so this event is not tied to a tracked Power App or Cloud Flow resource (operation='{Operation}', id='{Id}'). This is expected for operations like ApiEndpointCallEvent and most Dataverse / connector events.");
+            }
+            else
+            {
+                logger?.LogInformation($"PowerPlatform admin activity: skipping record with unsupported resource type '{resourceType}' - only PowerApp and CloudFlow are persisted today (operation='{Operation}', id='{Id}').");
+            }
             return null;
         }
 

@@ -72,10 +72,12 @@
     <Compile Include="ActivityAPI\Copilot\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\StagingClasses.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
+    <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\StagingClasses.cs" />
     <Compile Include="ActivityAPI\Interfaces.cs" />
     <Compile Include="ActivityAPI\Loaders\ActivityReportLoader.cs" />
     <Compile Include="ActivityAPI\Loaders\ActivityWebImporter.cs" />
+    <Compile Include="ActivityAPI\Loaders\AuditLogContentDispatcher.cs" />
     <Compile Include="ActivityAPI\Loaders\ContentMetaDataLoader.cs" />
     <Compile Include="ActivityAPI\Loaders\WebContentMetaDataLoader.cs" />
     <Compile Include="ActivityAPI\ActivityReportSqlPersistenceManager.cs" />

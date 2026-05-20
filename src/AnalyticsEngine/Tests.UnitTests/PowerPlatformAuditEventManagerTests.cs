@@ -221,7 +221,7 @@ namespace Tests.UnitTests
         // -- Power Automate -------------------------------------------------------------------
 
         /// <summary>
-        /// A FlowRunCompleted event should create the flow lookup and the per-event metadata
+        /// A FlowRunStarted event should create the flow lookup and the per-event metadata
         /// with recurrence_type linked.
         /// </summary>
         [TestMethod]
@@ -229,7 +229,7 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var commonEvent = BuildCommonEvent("FlowRunCompleted", "flow-run");
+                var commonEvent = BuildCommonEvent("FlowRunStarted", "flow-run");
                 await PersistAuditEventAsync(db, commonEvent);
 
                 var flowId = "flow-" + Guid.NewGuid().ToString("N");

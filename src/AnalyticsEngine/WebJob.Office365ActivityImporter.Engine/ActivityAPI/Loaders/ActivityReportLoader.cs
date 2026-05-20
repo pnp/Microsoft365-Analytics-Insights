@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
@@ -140,74 +141,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                         continue;
                     }
 
-                    // Determine which deserialization to use, depending on the workload
-                    // Deserialize directly from JToken to avoid creating intermediate string
+                    // Route to the workload-specific deserialisation + per-workload operation
+                    // filters. Centralised in AuditLogContentDispatcher so this loader stays a
+                    // thin IO + batching layer.
                     try
                     {
-                        if (logBase.Workload == ActivityImportConstants.WORKLOAD_SP || logBase.Workload == ActivityImportConstants.WORKLOAD_OD)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<SharePointAuditLogContent>();
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_EXCHANGE)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<ExchangeAuditLogContent>();
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_AZURE_AD)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<AzureADAuditLogContent>();
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_STREAM)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<StreamAuditLogContent>();
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT)
-                        {
-                            // Convert to string only if needed for Copilot's custom parser
-                            if (logJson == null)
-                            {
-                                logJson = reportItem.ToString();
-                            }
-                            thisAuditLogReport = CopilotAuditLogContent.FromJson(logJson);
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_PLATFORM)
-                        {
-                            // Unified Power Platform admin activity record (RecordType 256). Data
-                            // lives in a PropertyCollection rather than top-level fields, so it
-                            // needs its own deserialisation + mapping to a workload-specific
-                            // content class for the existing downstream save path to consume.
-                            var ppRecord = reportItem.ToObject<PowerPlatformAdminActivityRecordContent>();
-                            if (ppRecord != null)
-                            {
-                                thisAuditLogReport = ppRecord.ToWorkloadSpecificContent(_telemetry);
-                            }
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_APPS)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<PowerAppsAuditLogContent>();
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_AUTOMATE)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<PowerAutomateAuditLogContent>();
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_BI)
-                        {
-                            // Only persist ViewReport. The PowerBI workload emits a long tail of
-                            // operations (Login, AddDatasetUser, PublishReport, ...) but most do
-                            // not carry the WorkspaceId/ReportId we depend on, so they would
-                            // otherwise land NULL-FK rows in event_meta_power_bi.
-                            if (ActivityImportConstants.PowerBIOps.IsSupported(logBase.Operation))
-                            {
-                                thisAuditLogReport = reportItem.ToObject<PowerBIAuditLogContent>();
-                            }
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT_STUDIO)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<CopilotStudioAuditLogContent>();
-                        }
-                        else if (logBase.Workload == ActivityImportConstants.WORKLOAD_DATAVERSE)
-                        {
-                            thisAuditLogReport = reportItem.ToObject<DataverseAuditLogContent>();
-                        }
+                        thisAuditLogReport = AuditLogContentDispatcher.Dispatch(reportItem, logBase, _telemetry);
                     }
                     catch (JsonReaderException ex)
                     {
