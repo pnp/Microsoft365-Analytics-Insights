@@ -67,7 +67,6 @@ namespace Tests.UnitTests
                     AppDisplayName = "My Stress Test App",
                     EnvironmentName = "env-test",
                     AppSessionId = Guid.NewGuid().ToString("N"),
-                    AppType = "Canvas",
                     ClientType = "Web",
                     UserAgent = "Mozilla/5.0 unit-test"
                 }, commonEvent);
@@ -107,7 +106,6 @@ namespace Tests.UnitTests
                 {
                     AppName = appId,
                     AppDisplayName = "App With Connectors",
-                    AppType = "Canvas",
                     ClientType = "Web",
                     ConnectionReferences = new List<PowerPlatformConnectionRef>
                     {
@@ -156,7 +154,6 @@ namespace Tests.UnitTests
                 {
                     AppName = appId,
                     AppDisplayName = "Shared App",
-                    AppType = "Canvas",
                     Permissions = new List<PowerPlatformPermissionEntry>
                     {
                         new PowerPlatformPermissionEntry { PrincipalName = recipient1, RoleName = "CanView" },
@@ -221,8 +218,7 @@ namespace Tests.UnitTests
         // -- Power Automate -------------------------------------------------------------------
 
         /// <summary>
-        /// A FlowRunStarted event should create the flow lookup and the per-event metadata
-        /// with recurrence_type linked.
+        /// A FlowRunStarted event should create the flow lookup and the per-event metadata.
         /// </summary>
         [TestMethod]
         public async Task PowerAutomate_FlowEvent_PersistsFlowAndMetadata()
@@ -240,8 +236,7 @@ namespace Tests.UnitTests
                     FlowId = flowId,
                     FlowDisplayName = "Nightly Sync",
                     EnvironmentName = "env-test",
-                    RunId = Guid.NewGuid().ToString("N"),
-                    RecurrenceType = "Recurrence"
+                    RunId = Guid.NewGuid().ToString("N")
                 }, commonEvent);
 
                 await manager.CommitAllChanges();
@@ -254,7 +249,6 @@ namespace Tests.UnitTests
                 var meta = await db.power_automate_flow_events.SingleOrDefaultAsync(m => m.EventID == commonEvent.Id);
                 Assert.IsNotNull(meta, "event_meta_power_automate_flow must exist for the staged event.");
                 Assert.AreEqual(flowRow.ID, meta.FlowId);
-                Assert.IsNotNull(meta.RecurrenceTypeId, "recurrence_type lookup should be linked.");
             }
         }
 
@@ -517,7 +511,6 @@ namespace Tests.UnitTests
                 {
                     AppName = appId,
                     AppDisplayName = "Idempotent App",
-                    AppType = "Canvas",
                     ClientType = "Web"
                 };
 

@@ -100,24 +100,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 
                     // Only convert to string if trace logging is enabled to save memory
                     string logJson = null;
-                    if (!string.IsNullOrWhiteSpace(AuditTraceConfig.TraceEmail) && !string.IsNullOrWhiteSpace(AuditTraceConfig.TraceDirectory))
+                    if (!string.IsNullOrWhiteSpace(AuditTraceConfig.TraceDirectory))
                     {
                         try
                         {
                             logJson = reportItem.ToString();
-                            if (logJson.IndexOf(AuditTraceConfig.TraceEmail, StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                var safeEmail = AuditTraceConfig.TraceEmail.Trim().ToLower();
-                                // Sanitize for filesystem
-                                foreach (var c in _debugTraceFileNameInvalidChars)
-                                {
-                                    safeEmail = safeEmail.Replace(c, '_');
-                                }
-                                var fileName = $"audit_trace_{safeEmail}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}_{DateTime.UtcNow.Ticks % 1000000}.json";
-                                var fullPath = Path.Combine(AuditTraceConfig.TraceDirectory, fileName);
-                                File.WriteAllText(fullPath, logJson);
-                                _telemetry.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
-                            }
+
+                            var fileName = $"audit_trace_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}_{DateTime.UtcNow.Ticks % 1000000}.json";
+                            var fullPath = Path.Combine(AuditTraceConfig.TraceDirectory, fileName);
+                            File.WriteAllText(fullPath, logJson);
+                            _telemetry.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
+
                         }
                         catch (Exception ex)
                         {

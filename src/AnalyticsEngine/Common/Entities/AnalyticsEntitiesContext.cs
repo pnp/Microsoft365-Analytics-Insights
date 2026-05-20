@@ -180,8 +180,6 @@ namespace Common.Entities
             modelBuilder.Entity<PowerApp>().HasIndex(p => p.AppId).IsUnique();
             modelBuilder.Entity<PowerAutomateFlow>().HasIndex(f => f.FlowId).IsUnique();
             modelBuilder.Entity<PowerAppEnvironment>().HasIndex(e => e.EnvironmentId).IsUnique();
-            modelBuilder.Entity<FlowRecurrenceType>().HasIndex(t => t.Name).IsUnique();
-            modelBuilder.Entity<PowerAppType>().HasIndex(t => t.Name).IsUnique();
             modelBuilder.Entity<PowerPlatformClientType>().HasIndex(t => t.Name).IsUnique();
             modelBuilder.Entity<PowerPlatformConnector>().HasIndex(c => c.Name).IsUnique();
             modelBuilder.Entity<PowerAppConnector>().HasIndex(j => new { j.PowerAppId, j.ConnectorId }).IsUnique();
@@ -338,8 +336,6 @@ namespace Common.Entities
         public virtual DbSet<PowerApp> power_apps { get; set; }
         public virtual DbSet<PowerAutomateFlow> power_automate_flows { get; set; }
         public virtual DbSet<PowerAppEnvironment> power_app_environments { get; set; }
-        public virtual DbSet<FlowRecurrenceType> flow_recurrence_types { get; set; }
-        public virtual DbSet<PowerAppType> power_app_types { get; set; }
         public virtual DbSet<PowerPlatformClientType> power_platform_client_types { get; set; }
         public virtual DbSet<PowerPlatformConnector> power_platform_connectors { get; set; }
         public virtual DbSet<PowerAppConnector> power_app_connectors { get; set; }
