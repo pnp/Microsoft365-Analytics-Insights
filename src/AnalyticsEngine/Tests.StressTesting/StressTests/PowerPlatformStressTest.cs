@@ -31,6 +31,10 @@ namespace Tests.StressTesting.StressTests
         private static readonly string[] ReportTypes = { "PowerBIReport", "PaginatedReport" };
         private static readonly string[] DataverseEntities = { "account", "contact", "opportunity", "incident", "custom_widget" };
 
+        private static readonly string[] Departments = { "Engineering", "Marketing", "Sales", "Finance", "Human Resources", "Legal", "Operations", "Product", "Design", "Customer Support", "IT", "Research & Development" };
+        private static readonly string[] Companies = { "Contoso Ltd", "Fabrikam Inc", "Northwind Traders", "Adventure Works", "Woodgrove Bank", "Tailspin Toys", "Litware Inc", "Proseware" };
+        private static readonly string[] JobTitles = { "Software Engineer", "Senior Developer", "Product Manager", "Data Analyst", "UX Designer", "DevOps Engineer", "Solutions Architect", "Business Analyst", "Project Manager", "QA Engineer", "Technical Lead", "VP of Engineering", "Marketing Specialist", "Account Executive", "Support Engineer" };
+
         private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp", "CreatePowerApp" };
         private static readonly string[] FlowOperations = { "FlowRunStarted", "FlowRunCompleted", "EditFlow", "CreateFlow" };
 
@@ -200,14 +204,13 @@ namespace Tests.StressTesting.StressTests
             var quietLogger = new LoggerFactory().CreateLogger("PowerPlatformStress");
             var manager = new PowerPlatformAuditEventManager(effectiveConnectionString, quietLogger);
 
-            var eventIds = new List<(Guid Id, string Upn)>(eventCount);
+            var eventIds = new List<(Guid Id, string Upn, string Operation, DateTime TimeStamp)>(eventCount);
             var sw = Stopwatch.StartNew();
 
             for (int i = 0; i < eventCount; i++)
             {
                 var eventId = Guid.NewGuid();
                 var user = users[random.Next(users.Count)];
-                eventIds.Add((eventId, user.Upn));
 
                 var common = new CommonAuditEvent
                 {
@@ -240,6 +243,8 @@ namespace Tests.StressTesting.StressTests
                 {
                     GenerateDataverseEvent(manager, common, random);
                 }
+
+                eventIds.Add((eventId, user.Upn, common.Operation.Name, common.TimeStamp));
             }
 
             Console.WriteLine($"  Staging: {sw.ElapsedMilliseconds:N0}ms ({eventCount} events: {manager.StagedAppCount} apps + {manager.StagedAppShareCount} app-shares, {manager.StagedFlowCount} flows + {manager.StagedFlowShareCount} flow-shares, {manager.StagedPowerBiCount} BI, {manager.StagedCopilotStudioCount} bots, {manager.StagedDataverseCount} dv)");
@@ -395,41 +400,104 @@ namespace Tests.StressTesting.StressTests
         }
 
         /// <summary>
-        /// Inserts the prerequisite users + audit_events rows so FKs are satisfied when CommitAllChanges runs.
+        /// Inserts the prerequisite users (with departments, companies, job titles) + audit_events rows
+        /// so FKs are satisfied when CommitAllChanges runs.
         /// </summary>
-        private void InsertPrerequisiteAuditEvents(string connectionString, List<(Guid Id, string Upn)> eventIds)
+        private void InsertPrerequisiteAuditEvents(string connectionString, List<(Guid Id, string Upn, string Operation, DateTime TimeStamp)> eventIds)
         {
+            var random = new Random(123);
+
             using (var conn = new SqlConnection(connectionString))
             {
                 conn.Open();
 
+                // Insert lookup data: departments, companies, job titles
+                InsertLookupValues(conn, "user_departments", Departments);
+                InsertLookupValues(conn, "user_company_name", Companies);
+                InsertLookupValues(conn, "user_job_titles", JobTitles);
+
+                // Insert distinct users with department, company, and job title
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
 IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
-    INSERT INTO users (user_name) VALUES (@upn);";
+    INSERT INTO users (user_name, department_id, company_name_id, job_title_id)
+    SELECT @upn, d.id, c.id, j.id
+    FROM user_departments d, user_company_name c, user_job_titles j
+    WHERE d.name = @dept AND c.name = @company AND j.name = @job;";
                     var pUpn = cmd.Parameters.Add("@upn", System.Data.SqlDbType.NVarChar, 400);
-                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var pDept = cmd.Parameters.Add("@dept", System.Data.SqlDbType.NVarChar, 100);
+                    var pCompany = cmd.Parameters.Add("@company", System.Data.SqlDbType.NVarChar, 100);
+                    var pJob = cmd.Parameters.Add("@job", System.Data.SqlDbType.NVarChar, 100);
+                    var seenUsers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var ev in eventIds)
                     {
-                        if (seen.Add(ev.Upn))
+                        if (seenUsers.Add(ev.Upn))
                         {
                             pUpn.Value = ev.Upn;
+                            pDept.Value = Departments[random.Next(Departments.Length)];
+                            pCompany.Value = Companies[random.Next(Companies.Length)];
+                            pJob.Value = JobTitles[random.Next(JobTitles.Length)];
                             cmd.ExecuteNonQuery();
                         }
                     }
                 }
 
+                // Insert distinct operations
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "INSERT INTO audit_events (id, time_stamp) VALUES (@id, @ts)";
-                    var pId = cmd.Parameters.AddWithValue("@id", DBNull.Value);
-                    var pTs = cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow);
+                    cmd.CommandText = @"
+IF NOT EXISTS (SELECT 1 FROM event_operations WHERE operation_name = @op)
+    INSERT INTO event_operations (operation_name) VALUES (@op);";
+                    var pOp = cmd.Parameters.Add("@op", System.Data.SqlDbType.NVarChar, 400);
+                    var seenOps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var ev in eventIds)
+                    {
+                        if (seenOps.Add(ev.Operation))
+                        {
+                            pOp.Value = ev.Operation;
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                }
+
+                // Insert audit_events with user_id and operation_id linked
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+INSERT INTO audit_events (id, time_stamp, user_id, operation_id)
+SELECT @id, @ts, u.id, o.id
+FROM users u
+INNER JOIN event_operations o ON o.operation_name = @op
+WHERE u.user_name = @upn;";
+                    var pId = cmd.Parameters.Add("@id", System.Data.SqlDbType.UniqueIdentifier);
+                    var pTs = cmd.Parameters.Add("@ts", System.Data.SqlDbType.DateTime);
+                    var pUpn = cmd.Parameters.Add("@upn", System.Data.SqlDbType.NVarChar, 400);
+                    var pOp = cmd.Parameters.Add("@op", System.Data.SqlDbType.NVarChar, 400);
                     foreach (var ev in eventIds)
                     {
                         pId.Value = ev.Id;
+                        pTs.Value = ev.TimeStamp;
+                        pUpn.Value = ev.Upn;
+                        pOp.Value = ev.Operation;
                         cmd.ExecuteNonQuery();
                     }
+                }
+            }
+        }
+
+        private static void InsertLookupValues(SqlConnection conn, string tableName, string[] values)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $@"
+IF NOT EXISTS (SELECT 1 FROM [{tableName}] WHERE name = @name)
+    INSERT INTO [{tableName}] (name) VALUES (@name);";
+                var pName = cmd.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 100);
+                foreach (var val in values)
+                {
+                    pName.Value = val;
+                    cmd.ExecuteNonQuery();
                 }
             }
         }
