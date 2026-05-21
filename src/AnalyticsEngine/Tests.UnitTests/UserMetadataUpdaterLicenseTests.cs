@@ -308,5 +308,382 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(dbUser, "User should be created even without tenant SKU permissions");
             }
         }
+
+        /// <summary>
+        /// Reproduces the production duplicate-key error:
+        ///   "Cannot insert duplicate key row in object 'dbo.user_license_type_lookups'
+        ///    with unique index 'IX_license_type_id_user_id'."
+        ///
+        /// Two different SKU part numbers ("RIGHTSMANAGEMENT" and "RIGHTSMANAGEMENT_CE")
+        /// both resolve to the same product display name ("Azure Information Protection
+        /// Plan 1") via OfficeLicenseNameResolver. The license-type cache is keyed by
+        /// display-name, so both SKUs return the same LicenseType. When a single user
+        /// is assigned both SKUs the importer tries to insert two
+        /// UserLicenseTypeLookup rows with the same (license_type_id, user_id), which
+        /// the IX_license_type_id_user_id unique index rejects.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_TwoSkusSameDisplayName_DoesNotThrowDuplicateKey()
+        {
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"dupkeyuser{DateTime.Now.Ticks}@test.com";
+
+            // These two SKU part numbers both resolve to the SAME display name
+            // ("Azure Information Protection Plan 1") in the Microsoft licensing CSV,
+            // which is why this scenario hits the unique index.
+            var sku1Id = Guid.NewGuid(); var sku1PartNumber = "RIGHTSMANAGEMENT";
+            var sku2Id = Guid.NewGuid(); var sku2PartNumber = "RIGHTSMANAGEMENT_CE";
+            var sharedLicenseName = "Azure Information Protection Plan 1";
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
+            var skus = new GraphServiceSubscribedSkusCollectionPage
+            {
+                new SubscribedSku { SkuId = sku1Id, SkuPartNumber = sku1PartNumber },
+                new SubscribedSku { SkuId = sku2Id, SkuPartNumber = sku2PartNumber }
+            };
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            {
+                { sku1Id, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } } },
+                { sku2Id, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } } }
+            };
+
+            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
+            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+
+            // Should NOT throw. Before the fix this throws a DbUpdateException with the
+            // SQL "Cannot insert duplicate key row ... IX_license_type_id_user_id".
+            await updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser, "User should have been saved");
+                // Two SKUs collapse to a single LicenseType (same display-name) so we
+                // expect exactly one lookup row, not two.
+                Assert.AreEqual(1, dbUser.LicenseLookups.Count,
+                    "User should have one license lookup when two SKUs share a display name");
+                Assert.AreEqual(sharedLicenseName, dbUser.LicenseLookups[0].License.Name);
+            }
+        }
+
+        /// <summary>
+        /// Second possible root cause of the production duplicate-key error:
+        /// Microsoft Graph is documented (in GraphUserLoader.LoadAllActiveUsers,
+        /// "Graph for some reason gives duplicates; filter that out") to
+        /// occasionally return the same user twice in delta-style queries.
+        /// LoadUsersBySku does NOT currently dedupe its response, so if Graph
+        /// returns the same UPN twice for one SKU the import would try to
+        /// insert two UserLicenseTypeLookup rows with identical
+        /// (license_type_id, user_id) values.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_GraphReturnsDuplicateUserForSingleSku_DoesNotThrowDuplicateKey()
+        {
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"graphdupuser{DateTime.Now.Ticks}@test.com";
+            var skuId = Guid.NewGuid();
+            var skuPartNumber = "ENTERPRISEPACK";
+            var licenseName = "Office 365 E3";
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
+            var skus = new GraphServiceSubscribedSkusCollectionPage { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
+
+            // Simulate the Graph quirk: same user returned twice for one SKU.
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            {
+                {
+                    skuId,
+                    new List<Microsoft.Graph.User>
+                    {
+                        new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId },
+                        new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId }
+                    }
+                }
+            };
+
+            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
+            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+
+            await updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser, "User should have been saved");
+                Assert.AreEqual(1, dbUser.LicenseLookups.Count,
+                    "Duplicate users from Graph for the same SKU must collapse to one lookup");
+                Assert.AreEqual(licenseName, dbUser.LicenseLookups[0].License.Name);
+            }
+        }
+
+        /// <summary>
+        /// Third possible root cause: SubscribedSkus.GetAsync returning the same
+        /// SkuId twice (Graph occasionally returns duplicates here too). The
+        /// outer foreach would process it twice, hitting GetLicenseType -> same
+        /// cached LicenseType, and try to insert another lookup for the same user.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_DuplicateSubscribedSku_DoesNotThrowDuplicateKey()
+        {
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"dupskuuser{DateTime.Now.Ticks}@test.com";
+            var skuId = Guid.NewGuid();
+            var skuPartNumber = "ENTERPRISEPACK";
+            var licenseName = "Office 365 E3";
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
+
+            // Same SKU listed twice in the subscribed-SKUs response.
+            var skus = new GraphServiceSubscribedSkusCollectionPage
+            {
+                new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber },
+                new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber }
+            };
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            {
+                { skuId, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } } }
+            };
+
+            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
+            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+
+            await updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser);
+                Assert.AreEqual(1, dbUser.LicenseLookups.Count,
+                    "Same SKU appearing twice in SubscribedSkus must not produce duplicate lookups");
+                Assert.AreEqual(licenseName, dbUser.LicenseLookups[0].License.Name);
+            }
+        }
+
+        /// <summary>
+        /// Same root cause as <see cref="UserMetadataUpdater_TwoSkusSameDisplayName_DoesNotThrowDuplicateKey"/>
+        /// but via the per-user-licenses code path (used when the importer cannot
+        /// read tenant-level SKUs due to missing Organization.Read.All). Two SKU
+        /// part numbers in the user's license-details list resolve to the same
+        /// LicenseType.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_PerUserLicenses_TwoSkusSameDisplayName_DoesNotThrowDuplicateKey()
+        {
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"peruserdupuser{DateTime.Now.Ticks}@test.com";
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
+
+            // Build a fake IUserLicenseDetailsCollectionPage with two SKU part
+            // numbers that both resolve to the same display name.
+            var licenseDetailsPage = new UserLicenseDetailsCollectionPage
+            {
+                new LicenseDetails { SkuId = Guid.NewGuid(), SkuPartNumber = "RIGHTSMANAGEMENT" },
+                new LicenseDetails { SkuId = Guid.NewGuid(), SkuPartNumber = "RIGHTSMANAGEMENT_CE" }
+            };
+            var fakeLicenseDetails = new Dictionary<string, IUserLicenseDetailsCollectionPage>
+            {
+                { userId, licenseDetailsPage }
+            };
+
+            // fakeSkus = null forces the per-user license path.
+            var fakeLoader = new FakeUserMetadataLoader(
+                new List<GraphUser> { graphUser },
+                fakeSkus: null,
+                fakeUsersBySku: null,
+                fakeLicenseDetails: fakeLicenseDetails);
+
+            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+
+            await updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var dbUser = await verifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+
+                Assert.IsNotNull(dbUser);
+                Assert.AreEqual(1, dbUser.LicenseLookups.Count,
+                    "Per-user license path must dedupe two SKUs that share a display name");
+                Assert.AreEqual("Azure Information Protection Plan 1", dbUser.LicenseLookups[0].License.Name);
+            }
+        }
+
+        /// <summary>
+        /// Step 3: if anything in the user-license / metadata import throws, the
+        /// Graph delta token must NOT be advanced. Otherwise the failing users
+        /// would be skipped on subsequent cycles (Graph would consider them
+        /// "already delivered") and we'd permanently lose them - which matches
+        /// the production symptom of "we seem to have not many users imported".
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_LicenseProcessingThrows_DeltaTokenNotAdvanced()
+        {
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"deltarollbackuser{DateTime.Now.Ticks}@test.com";
+            var skuId = Guid.NewGuid();
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
+            var skus = new GraphServiceSubscribedSkusCollectionPage { new SubscribedSku { SkuId = skuId, SkuPartNumber = "ENTERPRISEPACK" } };
+            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, new Dictionary<Guid, List<Microsoft.Graph.User>>());
+
+            // Seed the delta provider with an existing token, then arrange for the
+            // import to throw before CommitDeltaTokenAsync would be called.
+            const string preExistingDelta = "delta-from-previous-successful-cycle";
+            await fakeLoader.DeltaValueProvider.SetDeltaToken(preExistingDelta);
+            fakeLoader.SimulatedNewDeltaToken = "delta-that-must-NOT-be-saved";
+            fakeLoader.OnLoadUsersBySku = _ => throw new InvalidOperationException("simulated Graph failure during license import");
+
+            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                async () => await updater.InsertAndUpdateDatabaseFromExternalUsers(),
+                "Import should propagate the license-loading failure.");
+
+            var persistedDelta = await fakeLoader.DeltaValueProvider.GetDeltaToken();
+            Assert.AreEqual(preExistingDelta, persistedDelta,
+                "Delta token must NOT be advanced when the user import fails - " +
+                "otherwise failed users get skipped on the next cycle.");
+        }
+
+        /// <summary>
+        /// Sanity check that confirms the OPPOSITE side of Step 3: on a clean,
+        /// successful import the new delta token IS committed.
+        /// </summary>
+        [TestMethod]
+        public async Task UserMetadataUpdater_SuccessfulImport_DeltaTokenCommitted()
+        {
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"deltacommituser{DateTime.Now.Ticks}@test.com";
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
+            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
+
+            const string newDelta = "delta-after-successful-import";
+            fakeLoader.SimulatedNewDeltaToken = newDelta;
+
+            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            await updater.InsertAndUpdateDatabaseFromExternalUsers();
+
+            var persistedDelta = await fakeLoader.DeltaValueProvider.GetDeltaToken();
+            Assert.AreEqual(newDelta, persistedDelta,
+                "Delta token should be persisted after a successful import.");
+        }
     }
 }

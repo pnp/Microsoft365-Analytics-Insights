@@ -272,6 +272,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
+                // All insert/metadata/license work succeeded. Now and ONLY now is it
+                // safe to persist the new Graph delta token. If any of the previous
+                // steps had thrown, control would have left this method via the
+                // exception and the previously-persisted delta would still be in
+                // effect, so the failed users will be retried on the next import
+                // cycle instead of being skipped because Graph already considers
+                // them "seen".
+                await _userLoader.CommitDeltaTokenAsync();
+
                 // Final cleanup
                 dbUsersByUpn.Clear();
                 dbUsersByAadId.Clear();
