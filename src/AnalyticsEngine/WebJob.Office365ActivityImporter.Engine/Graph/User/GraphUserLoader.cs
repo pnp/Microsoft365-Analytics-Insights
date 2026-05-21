@@ -18,6 +18,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly ILogger _telemetry;
         private readonly GraphServiceClient _graphServiceClient;
 
+        // Buffer the delta token returned by Graph during the most recent
+        // LoadAllActiveUsers call. We do NOT persist it to the underlying
+        // IDeltaValueProvider until the caller explicitly commits via
+        // CommitDeltaTokenAsync, which happens only after the entire user
+        // import (insert + metadata update + license update) has succeeded.
+        // This guarantees that a mid-import failure doesn't cause us to skip
+        // the failed users on the next cycle.
+        private string _pendingDeltaToken;
+        private bool _hasPendingDeltaToken;
+
         public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger telemetry, GraphServiceClient graphServiceClient)
         {
             this._httpClient = httpClient;
@@ -40,11 +50,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 initialDeltaUrl += $"&$deltatoken={usersQueryDelta}";
             }
 
+            // Reset any previously buffered token before a new load.
+            _pendingDeltaToken = null;
+            _hasPendingDeltaToken = false;
+
             var results = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(initialDeltaUrl, _telemetry,
-                async (deltaLink) =>
+                (deltaLink) =>
                 {
-                    var thisPageDelta = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
-                    await _deltaValueProvider.SetDeltaToken(thisPageDelta);
+                    // Buffer the new delta in memory. It will only be persisted to
+                    // the underlying provider when CommitDeltaTokenAsync is called
+                    // after the rest of the import succeeds.
+                    _pendingDeltaToken = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
+                    _hasPendingDeltaToken = true;
+                    return Task.CompletedTask;
                 });
 
 
@@ -62,6 +80,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var allActiveGraphUsers = allGraphUsers.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value).ToList();
 
             return allActiveGraphUsers;
+        }
+
+        public async Task CommitDeltaTokenAsync()
+        {
+            if (_hasPendingDeltaToken)
+            {
+                await _deltaValueProvider.SetDeltaToken(_pendingDeltaToken);
+                _pendingDeltaToken = null;
+                _hasPendingDeltaToken = false;
+            }
         }
 
         public async Task<IGraphServiceSubscribedSkusCollectionPage> LoadTenantSkus()

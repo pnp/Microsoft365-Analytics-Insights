@@ -17,6 +17,18 @@ namespace Tests.UnitTests.FakeLoaderClasses
         private readonly Dictionary<string, IUserLicenseDetailsCollectionPage> _fakeLicenseDetails;
         private readonly FakeDeltaValueProvider _deltaProvider;
 
+        // Mirrors GraphUserLoader's deferred-commit pattern so tests can verify
+        // that the new delta is only persisted after a successful import.
+        private string _pendingDeltaToken;
+        private bool _hasPendingDeltaToken;
+
+        /// <summary>
+        /// Delta token that LoadAllActiveUsers will buffer (and CommitDeltaTokenAsync
+        /// will persist). Defaults to "fake-new-delta" so tests can distinguish a
+        /// committed vs uncommitted import without extra setup.
+        /// </summary>
+        public string SimulatedNewDeltaToken { get; set; } = "fake-new-delta";
+
         public FakeUserMetadataLoader(
             List<GraphUser> fakeUsers = null,
             IGraphServiceSubscribedSkusCollectionPage fakeSkus = null,
@@ -30,10 +42,21 @@ namespace Tests.UnitTests.FakeLoaderClasses
             _deltaProvider = new FakeDeltaValueProvider();
         }
 
+        /// <summary>
+        /// Optional hook invoked by LoadUsersBySku before returning. Tests can
+        /// set this to throw an exception, simulating a Graph error mid-import.
+        /// </summary>
+        public Func<Guid, Task> OnLoadUsersBySku { get; set; }
+
         public IDeltaValueProvider DeltaValueProvider => _deltaProvider;
 
         public Task<List<GraphUser>> LoadAllActiveUsers()
         {
+            // Simulate GraphUserLoader behavior: buffer the new delta token in
+            // memory; only CommitDeltaTokenAsync persists it.
+            _pendingDeltaToken = SimulatedNewDeltaToken;
+            _hasPendingDeltaToken = true;
+
             // Return a defensive copy so callers that Clear() the result
             // do not wipe the original list (InsertAndUpdateDatabaseFromExternalUsers does this).
             return Task.FromResult(new List<GraphUser>(_fakeUsers));
@@ -44,13 +67,18 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.FromResult(_fakeSkus);
         }
 
-        public Task<List<Microsoft.Graph.User>> LoadUsersBySku(Guid skuId)
+        public async Task<List<Microsoft.Graph.User>> LoadUsersBySku(Guid skuId)
         {
+            if (OnLoadUsersBySku != null)
+            {
+                await OnLoadUsersBySku(skuId);
+            }
+
             if (_fakeUsersBySku.ContainsKey(skuId))
             {
-                return Task.FromResult(_fakeUsersBySku[skuId]);
+                return _fakeUsersBySku[skuId];
             }
-            return Task.FromResult(new List<Microsoft.Graph.User>());
+            return new List<Microsoft.Graph.User>();
         }
 
         public Task<IUserLicenseDetailsCollectionPage> LoadUserLicenseDetails(string userId)
@@ -60,6 +88,16 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 return Task.FromResult(_fakeLicenseDetails[userId]);
             }
             return Task.FromResult<IUserLicenseDetailsCollectionPage>(null);
+        }
+
+        public async Task CommitDeltaTokenAsync()
+        {
+            if (_hasPendingDeltaToken)
+            {
+                await _deltaProvider.SetDeltaToken(_pendingDeltaToken);
+                _pendingDeltaToken = null;
+                _hasPendingDeltaToken = false;
+            }
         }
     }
 
