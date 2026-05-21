@@ -35,6 +35,19 @@ namespace Tests.StressTesting.StressTests
         private static readonly string[] Companies = { "Contoso Ltd", "Fabrikam Inc", "Northwind Traders", "Adventure Works", "Woodgrove Bank", "Tailspin Toys", "Litware Inc", "Proseware" };
         private static readonly string[] JobTitles = { "Software Engineer", "Senior Developer", "Product Manager", "Data Analyst", "UX Designer", "DevOps Engineer", "Solutions Architect", "Business Analyst", "Project Manager", "QA Engineer", "Technical Lead", "VP of Engineering", "Marketing Specialist", "Account Executive", "Support Engineer" };
 
+        // O365 / M365 license catalogue assigned to stress-test users so they aren't license-less.
+        // SKU IDs reference: https://learn.microsoft.com/entra/identity/users/licensing-service-plan-reference
+        private static readonly (string Name, string SkuId)[] LicenseCatalogue =
+        {
+            ("Microsoft 365 Copilot",          "Microsoft_365_Copilot"),
+            ("Office 365 E5",                  "ENTERPRISEPREMIUM"),
+            ("Office 365 E3",                  "ENTERPRISEPACK"),
+            ("Microsoft 365 Business Premium", "SPB"),
+            ("Exchange Online Plan 1",         "EXCHANGESTANDARD"),
+            ("Power BI Pro",                   "POWER_BI_PRO"),
+            ("Power Automate Premium",         "POWERAUTOMATE_ATTENDED_RPA")
+        };
+
         private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp", "CreatePowerApp" };
         private static readonly string[] FlowOperations = { "FlowRunStarted", "FlowRunCompleted", "EditFlow", "CreateFlow" };
 
@@ -416,15 +429,59 @@ namespace Tests.StressTesting.StressTests
                 InsertLookupValues(conn, "user_company_name", Companies);
                 InsertLookupValues(conn, "user_job_titles", JobTitles);
 
-                // Insert distinct users with department, company, and job title
+                // Insert license types ONLY if the table is currently empty - never overwrite or
+                // duplicate an existing tenant's real license catalogue.
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM license_types;";
+                    int existingLicenseCount = Convert.ToInt32(cmd.ExecuteScalar());
+                    if (existingLicenseCount == 0)
+                    {
+                        Console.WriteLine($"  Seeding license_types ({LicenseCatalogue.Length} SKUs)...");
+                        cmd.CommandText = "INSERT INTO license_types (sku_id, name) VALUES (@sku, @name);";
+                        var pSku = cmd.Parameters.Add("@sku", System.Data.SqlDbType.NVarChar, 400);
+                        var pName = cmd.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 100);
+                        foreach (var lic in LicenseCatalogue)
+                        {
+                            pSku.Value = lic.SkuId;
+                            pName.Value = lic.Name;
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  license_types already populated ({existingLicenseCount} rows) - skipping seed.");
+                    }
+                }
+
+                // Load current license_type ids so we can randomly assign one per newly-created user.
+                var licenseTypeIds = new List<int>();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT id FROM license_types;";
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read()) licenseTypeIds.Add(reader.GetInt32(0));
+                    }
+                }
+
+                // Insert distinct users with department, company, and job title.
+                // Track which UPNs were actually inserted (i.e. didn't already exist) so we can
+                // assign each newly-created user a single random license below.
+                var newlyCreatedUpns = new List<string>();
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
 IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
+BEGIN
     INSERT INTO users (user_name, department_id, company_name_id, job_title_id)
     SELECT @upn, d.id, c.id, j.id
     FROM user_departments d, user_company_name c, user_job_titles j
-    WHERE d.name = @dept AND c.name = @company AND j.name = @job;";
+    WHERE d.name = @dept AND c.name = @company AND j.name = @job;
+    SELECT 1;
+END
+ELSE
+    SELECT 0;";
                     var pUpn = cmd.Parameters.Add("@upn", System.Data.SqlDbType.NVarChar, 400);
                     var pDept = cmd.Parameters.Add("@dept", System.Data.SqlDbType.NVarChar, 100);
                     var pCompany = cmd.Parameters.Add("@company", System.Data.SqlDbType.NVarChar, 100);
@@ -438,9 +495,40 @@ IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
                             pDept.Value = Departments[random.Next(Departments.Length)];
                             pCompany.Value = Companies[random.Next(Companies.Length)];
                             pJob.Value = JobTitles[random.Next(JobTitles.Length)];
+                            var inserted = Convert.ToInt32(cmd.ExecuteScalar());
+                            if (inserted == 1)
+                            {
+                                newlyCreatedUpns.Add(ev.Upn);
+                            }
+                        }
+                    }
+                }
+
+                // Assign each newly-created user exactly one random license so license-joined
+                // reports have data. Skip if no licenses are available.
+                if (newlyCreatedUpns.Count > 0 && licenseTypeIds.Count > 0)
+                {
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+INSERT INTO user_license_type_lookups (user_id, license_type_id)
+SELECT u.id, @licenseTypeId
+FROM users u
+WHERE u.user_name = @upn
+  AND NOT EXISTS (
+      SELECT 1 FROM user_license_type_lookups x
+      WHERE x.user_id = u.id AND x.license_type_id = @licenseTypeId);";
+                        var pUpn = cmd.Parameters.Add("@upn", System.Data.SqlDbType.NVarChar, 400);
+                        var pLicId = cmd.Parameters.Add("@licenseTypeId", System.Data.SqlDbType.Int);
+
+                        foreach (var upn in newlyCreatedUpns)
+                        {
+                            pUpn.Value = upn;
+                            pLicId.Value = licenseTypeIds[random.Next(licenseTypeIds.Count)];
                             cmd.ExecuteNonQuery();
                         }
                     }
+                    Console.WriteLine($"  Assigned a random license to {newlyCreatedUpns.Count} newly-created user(s).");
                 }
 
                 // Insert distinct operations
