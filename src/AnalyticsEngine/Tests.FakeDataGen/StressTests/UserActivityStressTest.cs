@@ -207,6 +207,15 @@ namespace Tests.FakeDataGen.StressTests
                 result.Message = $"Seeded {userCount:N0} user(s) + {totalRowsInserted:N0} activity rows across {workloadCount} workload(s) over {weeks} week(s).";
 
                 _memoryMonitor.PrintReport();
+
+                // Optional follow-up: roll up the freshly-seeded daily rows into the
+                // weekly profiling tables so the data is immediately consumable by the
+                // profiling reports without waiting for the scheduled Automation job.
+                var compileStatus = RunCompileWeeklyIfRequested(connectionString, weeks);
+                if (!string.IsNullOrEmpty(compileStatus))
+                {
+                    result.Message += " " + compileStatus;
+                }
             }
             catch (Exception ex)
             {
@@ -216,6 +225,75 @@ namespace Tests.FakeDataGen.StressTests
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Prompts the user (post-seed) whether to execute <c>[profiling].[usp_CompileWeekly]</c>
+        /// against the same database, then runs it with a configurable <c>@WeeksToKeep</c>.
+        /// Returns null if the user declined, or a short status string suitable for inclusion
+        /// in the stress-test result message.
+        /// </summary>
+        private string RunCompileWeeklyIfRequested(string connectionString, int defaultWeeksToKeep)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Optional: run [profiling].[usp_CompileWeekly] to refresh weekly profiling stats");
+            Console.WriteLine("from the rows that were just seeded (matches what the scheduled Automation job does).");
+            bool runIt = GetBooleanInput("Run usp_CompileWeekly now", false);
+            if (!runIt)
+            {
+                Console.WriteLine("Skipped usp_CompileWeekly.");
+                return null;
+            }
+
+            int weeksToKeep = GetIntegerInput("@WeeksToKeep (retention window passed to the proc)", Math.Max(defaultWeeksToKeep, 1), 1, 520);
+
+            Console.WriteLine($"Running [profiling].[usp_CompileWeekly] @WeeksToKeep = {weeksToKeep}...");
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                using (var conn = new SqlConnection(connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandType = CommandType.StoredProcedure;
+                        cmd.CommandText = "[profiling].[usp_CompileWeekly]";
+                        cmd.CommandTimeout = 10500; // 3 hours, same as Weekly.ps1
+                        cmd.Parameters.AddWithValue("@WeeksToKeep", weeksToKeep);
+
+                        var returnParam = new SqlParameter("@returnValue", SqlDbType.Int)
+                        {
+                            Direction = ParameterDirection.ReturnValue
+                        };
+                        cmd.Parameters.Add(returnParam);
+
+                        cmd.ExecuteNonQuery();
+                        sw.Stop();
+
+                        int returned = returnParam.Value is int i ? i : Convert.ToInt32(returnParam.Value);
+                        if (returned == 0)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"usp_CompileWeekly completed OK in {sw.Elapsed}.");
+                            Console.ResetColor();
+                            return $"usp_CompileWeekly OK ({sw.Elapsed:hh\\:mm\\:ss}).";
+                        }
+
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine($"usp_CompileWeekly returned non-zero ({returned}) after {sw.Elapsed}.");
+                        Console.ResetColor();
+                        return $"usp_CompileWeekly returned {returned} ({sw.Elapsed:hh\\:mm\\:ss}).";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"usp_CompileWeekly FAILED after {sw.Elapsed}: {ex.GetBaseException().Message}");
+                Console.ResetColor();
+                return $"usp_CompileWeekly FAILED: {ex.GetBaseException().Message}";
+            }
         }
 
         /// <summary>
