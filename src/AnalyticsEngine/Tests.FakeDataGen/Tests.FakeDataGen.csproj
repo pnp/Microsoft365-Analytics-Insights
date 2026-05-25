@@ -71,6 +71,10 @@
     <None Include="README.md" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj">
+      <Project>{B9BE1134-F5FE-41A9-9498-F411261D9A9C}</Project>
+      <Name>App.ControlPanel.Engine</Name>
+    </ProjectReference>
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">
       <Project>{b8da83ac-9151-4922-b255-12d105b33dc6}</Project>
       <Name>DataUtils</Name>

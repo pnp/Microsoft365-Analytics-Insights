@@ -12,6 +12,10 @@ namespace Tests.FakeDataGen.StressTests
     /// </summary>
     public class ActivityAPIStressTest : BaseStressTest
     {
+        // Runs entirely against the in-memory fake loaders - no SQL connection is opened,
+        // so the DB upgrade check is unnecessary.
+        public override bool RequiresDatabase => false;
+
         protected override StressTestResult Execute()
         {
             Console.WriteLine("\n=== ActivityAPI Import Stress Test Configuration ===\n");

@@ -1,3 +1,5 @@
+using App.ControlPanel.Engine;
+using App.ControlPanel.Engine.Models;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
@@ -153,6 +155,10 @@ namespace Tests.FakeDataGen
         private static void RunStressTest(BaseStressTest test, RunContext ctx)
         {
             test.ConnectionString = ctx.ConnectionString;
+            if (test.RequiresDatabase)
+            {
+                ctx.EnsureDbUpgraded();
+            }
             test.Run();
         }
 
@@ -254,6 +260,8 @@ namespace Tests.FakeDataGen
 
         private class RunContext
         {
+            private bool _dbUpgraded;
+
             public string ConnectionString { get; }
 
             public RunContext(string connectionString)
@@ -263,6 +271,8 @@ namespace Tests.FakeDataGen
 
             /// <summary>
             /// Used by data generators that have nowhere to write without a connection string.
+            /// Also guarantees the database is on the latest schema before the caller starts
+            /// inserting rows, so consumers never see "missing column / table / proc" errors.
             /// Throws a clear exception that is caught by the menu loop.
             /// </summary>
             public string RequireConnectionString()
@@ -272,7 +282,38 @@ namespace Tests.FakeDataGen
                     throw new InvalidOperationException(
                         "This option needs a SQL connection string. Re-run the tool and pass it as the first argument.");
                 }
+                EnsureDbUpgraded();
                 return ConnectionString;
+            }
+
+            /// <summary>
+            /// Runs <see cref="DatabaseUpgrader.CheckDbUpgraded"/> exactly once per process
+            /// against the configured connection string, so EF migrations + the custom SQL
+            /// scripts under <c>App.ControlPanel.Engine\SqlExtentions</c> (profiling schema,
+            /// stored procedures, etc.) are applied before any data generator or stress test
+            /// touches the database. No-op when no connection string was supplied.
+            /// </summary>
+            public void EnsureDbUpgraded()
+            {
+                if (_dbUpgraded || string.IsNullOrEmpty(ConnectionString))
+                {
+                    return;
+                }
+
+                Console.WriteLine();
+                Console.WriteLine("Ensuring database schema is up to date (DatabaseUpgrader.CheckDbUpgraded)...");
+                Console.WriteLine(new string('-', 60));
+
+                var initInfo = new DatabaseUpgradeInfo { ConnectionString = ConnectionString };
+                DatabaseUpgrader.CheckDbUpgraded(initInfo, msg => Console.WriteLine($"[DB] {msg}"));
+
+                Console.WriteLine(new string('-', 60));
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("Database upgrade check complete.");
+                Console.ResetColor();
+                Console.WriteLine();
+
+                _dbUpgraded = true;
             }
         }
     }
