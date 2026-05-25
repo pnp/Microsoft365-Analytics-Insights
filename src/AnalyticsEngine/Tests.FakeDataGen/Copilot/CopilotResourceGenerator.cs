@@ -3,7 +3,7 @@ using Common.Entities.Entities.AuditLog;
 using System;
 using System.Linq;
 
-namespace Tests.FakeDataGen
+namespace Tests.FakeDataGen.Copilot
 {
     /// <summary>
     /// Generates accessed resources for custom Copilot agent events
@@ -85,7 +85,7 @@ namespace Tests.FakeDataGen
         {
             // Web page or other resource
             string webUrl = CopilotActivityGeneratorConfig.ResourceSiteUrls[_random.Next(CopilotActivityGeneratorConfig.ResourceSiteUrls.Length)];
-            string resourceName = webUrl.Contains("accuweather") ? "Weather Forecast - São Tomé" : "Email Message";
+            string resourceName = webUrl.Contains("accuweather") ? "Weather Forecast - Sï¿½o Tomï¿½" : "Email Message";
 
             resource.ResourceId = GetOrCreateAccessedResourceId(db, webUrl);
             resource.ResourceName = GetOrCreateAccessedResourceName(db, resourceName);

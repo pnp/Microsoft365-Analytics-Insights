@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 
-namespace Tests.StressTesting.FakeLoaders
+namespace Tests.FakeDataGen.StressTests.FakeLoaders
 {
     /// <summary>
     /// Fake subscription manager for stress testing

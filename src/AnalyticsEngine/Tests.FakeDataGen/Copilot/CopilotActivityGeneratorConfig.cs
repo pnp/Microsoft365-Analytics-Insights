@@ -1,4 +1,4 @@
-namespace Tests.FakeDataGen
+namespace Tests.FakeDataGen.Copilot
 {
     /// <summary>
     /// Configuration and constants for Copilot activity generation
