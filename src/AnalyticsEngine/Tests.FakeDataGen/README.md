@@ -15,6 +15,15 @@ Tests.FakeDataGen.exe "<SQL Connection String>"
 The connection string is optional. Options that need SQL will refuse to run
 without one; stress tests that work in-memory still run.
 
+The first time a menu option that needs the database runs in a session, the
+host invokes `App.ControlPanel.Engine.DatabaseUpgrader.CheckDbUpgraded` against
+the supplied connection string. This applies the Entity Framework migrations
+and the custom SQL scripts under
+`App.ControlPanel.Engine/SqlExtentions/` (including the profiling schema and
+stored procedures) so generators and stress tests never run against a stale
+schema. The upgrade is performed once per process; the in-memory
+`ActivityAPIStressTest` skips it because it does not touch SQL.
+
 When launched, an interactive menu is shown:
 
 ```
