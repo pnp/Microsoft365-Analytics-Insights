@@ -4,11 +4,11 @@ using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Diagnostics;
-using Tests.StressTesting.Infrastructure;
+using Tests.FakeDataGen.Seeding;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
-namespace Tests.StressTesting.StressTests
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Stress test for the Power Platform event-staging + SQL-commit pipeline.
@@ -31,25 +31,14 @@ namespace Tests.StressTesting.StressTests
         private static readonly string[] ReportTypes = { "PowerBIReport", "PaginatedReport" };
         private static readonly string[] DataverseEntities = { "account", "contact", "opportunity", "incident", "custom_widget" };
 
-        private static readonly string[] Departments = { "Engineering", "Marketing", "Sales", "Finance", "Human Resources", "Legal", "Operations", "Product", "Design", "Customer Support", "IT", "Research & Development" };
-        private static readonly string[] Companies = { "Contoso Ltd", "Fabrikam Inc", "Northwind Traders", "Adventure Works", "Woodgrove Bank", "Tailspin Toys", "Litware Inc", "Proseware" };
-        private static readonly string[] JobTitles = { "Software Engineer", "Senior Developer", "Product Manager", "Data Analyst", "UX Designer", "DevOps Engineer", "Solutions Architect", "Business Analyst", "Project Manager", "QA Engineer", "Technical Lead", "VP of Engineering", "Marketing Specialist", "Account Executive", "Support Engineer" };
-
-        // O365 / M365 license catalogue assigned to stress-test users so they aren't license-less.
-        // SKU IDs reference: https://learn.microsoft.com/entra/identity/users/licensing-service-plan-reference
-        private static readonly (string Name, string SkuId)[] LicenseCatalogue =
-        {
-            ("Microsoft 365 Copilot",          "Microsoft_365_Copilot"),
-            ("Office 365 E5",                  "ENTERPRISEPREMIUM"),
-            ("Office 365 E3",                  "ENTERPRISEPACK"),
-            ("Microsoft 365 Business Premium", "SPB"),
-            ("Exchange Online Plan 1",         "EXCHANGESTANDARD"),
-            ("Power BI Pro",                   "POWER_BI_PRO"),
-            ("Power Automate Premium",         "POWERAUTOMATE_ATTENDED_RPA")
-        };
-
         private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp", "CreatePowerApp" };
         private static readonly string[] FlowOperations = { "FlowRunStarted", "FlowRunCompleted", "EditFlow", "CreateFlow" };
+
+        // Names for lookup tables / license catalogue come from shared seed data
+        // so every stress test and data generator populates the same metadata.
+        private static string[] Departments => SeedDataCatalogue.Departments;
+        private static string[] Companies => SeedDataCatalogue.Companies;
+        private static string[] JobTitles => SeedDataCatalogue.JobTitles;
 
         protected override StressTestResult Execute()
         {
@@ -424,46 +413,14 @@ namespace Tests.StressTesting.StressTests
             {
                 conn.Open();
 
-                // Insert lookup data: departments, companies, job titles
-                InsertLookupValues(conn, "user_departments", Departments);
-                InsertLookupValues(conn, "user_company_name", Companies);
-                InsertLookupValues(conn, "user_job_titles", JobTitles);
-
-                // Insert license types ONLY if the table is currently empty - never overwrite or
-                // duplicate an existing tenant's real license catalogue.
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT COUNT(*) FROM license_types;";
-                    int existingLicenseCount = Convert.ToInt32(cmd.ExecuteScalar());
-                    if (existingLicenseCount == 0)
-                    {
-                        Console.WriteLine($"  Seeding license_types ({LicenseCatalogue.Length} SKUs)...");
-                        cmd.CommandText = "INSERT INTO license_types (sku_id, name) VALUES (@sku, @name);";
-                        var pSku = cmd.Parameters.Add("@sku", System.Data.SqlDbType.NVarChar, 400);
-                        var pName = cmd.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 100);
-                        foreach (var lic in LicenseCatalogue)
-                        {
-                            pSku.Value = lic.SkuId;
-                            pName.Value = lic.Name;
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"  license_types already populated ({existingLicenseCount} rows) - skipping seed.");
-                    }
-                }
+                // Seed shared lookup tables (departments, companies, job titles, states,
+                // countries, office locations, usage locations) and the license catalogue
+                // via the common helper so every stress test populates the same metadata.
+                UserMetadataSeeder.EnsureMetadataLookups(conn);
+                UserMetadataSeeder.EnsureLicenseTypes(conn);
 
                 // Load current license_type ids so we can randomly assign one per newly-created user.
-                var licenseTypeIds = new List<int>();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT id FROM license_types;";
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read()) licenseTypeIds.Add(reader.GetInt32(0));
-                    }
-                }
+                var licenseTypeIds = UserMetadataSeeder.LoadLicenseTypeIds(conn);
 
                 // Insert distinct users with department, company, and job title.
                 // Track which UPNs were actually inserted (i.e. didn't already exist) so we can
@@ -570,22 +527,6 @@ WHERE u.user_name = @upn;";
                         pOp.Value = ev.Operation;
                         cmd.ExecuteNonQuery();
                     }
-                }
-            }
-        }
-
-        private static void InsertLookupValues(SqlConnection conn, string tableName, string[] values)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = $@"
-IF NOT EXISTS (SELECT 1 FROM [{tableName}] WHERE name = @name)
-    INSERT INTO [{tableName}] (name) VALUES (@name);";
-                var pName = cmd.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 100);
-                foreach (var val in values)
-                {
-                    pName.Value = val;
-                    cmd.ExecuteNonQuery();
                 }
             }
         }

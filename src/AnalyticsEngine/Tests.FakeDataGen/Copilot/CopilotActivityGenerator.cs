@@ -4,7 +4,7 @@ using Common.Entities.Entities.AuditLog;
 using System;
 using System.Linq;
 
-namespace Tests.FakeDataGen
+namespace Tests.FakeDataGen.Copilot
 {
     /// <summary>
     /// Generates fake Copilot activity data for testing purposes
