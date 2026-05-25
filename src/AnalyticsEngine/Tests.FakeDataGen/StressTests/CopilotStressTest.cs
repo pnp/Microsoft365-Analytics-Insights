@@ -5,11 +5,10 @@ using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Diagnostics;
-using Tests.StressTesting.Infrastructure;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
-namespace Tests.StressTesting.StressTests
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Stress test for the Copilot event staging and SQL commit pipeline.

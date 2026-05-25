@@ -2,17 +2,20 @@ using DataUtils;
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
-using Tests.StressTesting.FakeLoaders;
-using Tests.StressTesting.Infrastructure;
+using Tests.FakeDataGen.StressTests.FakeLoaders;
 using Tests.UnitTests.FakeLoaderClasses;
 
-namespace Tests.StressTesting.StressTests
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Stress test for ActivityAPI importing engine to detect memory leaks and performance issues
     /// </summary>
     public class ActivityAPIStressTest : BaseStressTest
     {
+        // Runs entirely against the in-memory fake loaders - no SQL connection is opened,
+        // so the DB upgrade check is unnecessary.
+        public override bool RequiresDatabase => false;
+
         protected override StressTestResult Execute()
         {
             Console.WriteLine("\n=== ActivityAPI Import Stress Test Configuration ===\n");

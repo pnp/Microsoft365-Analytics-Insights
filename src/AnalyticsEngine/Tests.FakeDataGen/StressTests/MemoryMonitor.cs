@@ -1,7 +1,7 @@
 using System;
 using System.Diagnostics;
 
-namespace Tests.StressTesting.Infrastructure
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Monitors memory usage during stress tests

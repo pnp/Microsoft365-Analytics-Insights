@@ -1,7 +1,7 @@
 using DataUtils;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 
-namespace Tests.StressTesting.FakeLoaders
+namespace Tests.FakeDataGen.StressTests.FakeLoaders
 {
     /// <summary>
     /// Fake activity importer for stress testing with configurable load

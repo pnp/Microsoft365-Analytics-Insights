@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Tests.FakeDataGen
+namespace Tests.FakeDataGen.Copilot
 {
     /// <summary>
     /// Manages user creation and department assignment

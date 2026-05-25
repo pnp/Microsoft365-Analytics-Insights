@@ -1,7 +1,6 @@
 using System;
-using Tests.StressTesting.Infrastructure;
 
-namespace Tests.StressTesting.StressTests
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Base class for all stress tests
@@ -14,6 +13,16 @@ namespace Tests.StressTesting.StressTests
         /// Optional SQL connection string passed via command-line argument.
         /// </summary>
         public string ConnectionString { get; set; }
+
+        /// <summary>
+        /// True if this stress test reads or writes the analytics database.
+        /// When true, the host runs <c>DatabaseUpgrader.CheckDbUpgraded</c> once per session
+        /// before the first DB-bound test executes, so the schema, custom SQL scripts and
+        /// stored procedures (e.g. profiling) are always up to date before the test starts
+        /// inserting data. Override to <c>false</c> for tests that run purely in-memory
+        /// against fake loaders.
+        /// </summary>
+        public virtual bool RequiresDatabase => true;
 
         public BaseStressTest()
         {

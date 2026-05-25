@@ -1,6 +1,6 @@
 using System;
 
-namespace Tests.StressTesting.Infrastructure
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Results from a stress test execution

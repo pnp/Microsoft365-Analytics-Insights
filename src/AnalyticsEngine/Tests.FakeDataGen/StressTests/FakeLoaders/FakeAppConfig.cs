@@ -2,7 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using System;
 
-namespace Tests.StressTesting.FakeLoaders
+namespace Tests.FakeDataGen.StressTests.FakeLoaders
 {
     /// <summary>
     /// Fake AppConfig for stress testing. Uses reflection to bypass base constructor validation.

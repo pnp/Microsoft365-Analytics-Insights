@@ -2,7 +2,7 @@ using Common.Entities;
 using System;
 using System.Linq;
 
-namespace Tests.FakeDataGen
+namespace Tests.FakeDataGen.Copilot
 {
     /// <summary>
     /// Manages license creation and assignment for test users

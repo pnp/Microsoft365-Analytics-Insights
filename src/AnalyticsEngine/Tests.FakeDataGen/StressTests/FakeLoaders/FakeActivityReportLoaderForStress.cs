@@ -3,7 +3,7 @@ using Tests.UnitTests.FakeEntities;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 
-namespace Tests.StressTesting.FakeLoaders
+namespace Tests.FakeDataGen.StressTests.FakeLoaders
 {
     /// <summary>
     /// Fake activity report loader that generates random activity for stress testing
