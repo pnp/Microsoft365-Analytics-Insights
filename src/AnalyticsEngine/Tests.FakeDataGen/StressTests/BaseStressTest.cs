@@ -1,7 +1,6 @@
 using System;
-using Tests.StressTesting.Infrastructure;
 
-namespace Tests.StressTesting.StressTests
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Base class for all stress tests

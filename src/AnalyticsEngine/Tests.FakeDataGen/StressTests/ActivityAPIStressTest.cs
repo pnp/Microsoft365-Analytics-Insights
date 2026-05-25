@@ -2,11 +2,10 @@ using DataUtils;
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
-using Tests.StressTesting.FakeLoaders;
-using Tests.StressTesting.Infrastructure;
+using Tests.FakeDataGen.StressTests.FakeLoaders;
 using Tests.UnitTests.FakeLoaderClasses;
 
-namespace Tests.StressTesting.StressTests
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Stress test for ActivityAPI importing engine to detect memory leaks and performance issues
