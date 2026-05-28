@@ -5,7 +5,7 @@ using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
-using Azure.ResourceManager.Redis;
+using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Models;
@@ -39,7 +39,7 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
-            RedisResource redis, CognitiveServicesInfo cognitiveServicesInfo,
+            RedisEnterpriseDatabaseResource redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription)
         {
             // Configure app-service connection-strings, etc
@@ -135,7 +135,7 @@ namespace App.ControlPanel.Engine
 
         async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
-            RedisResource redis,
+            RedisEnterpriseDatabaseResource redis,
             CognitiveServicesInfo cognitiveServicesInfo,
             AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
         {
@@ -179,8 +179,12 @@ namespace App.ControlPanel.Engine
             }
 
             // Connection strings
+            // For Azure Managed Redis: hostname is on the cluster, port and keys are on the database.
+            var clusterRef = redis.Client.GetRedisEnterpriseClusterResource(redis.Id.Parent);
+            var cluster = (await clusterRef.GetAsync()).Value;
             var redisKeys = redis.GetKeys();
-            var redisConnectionString = $"{redis.Data.HostName}:{redis.Data.SslPort},password={redisKeys.Value.PrimaryKey},ssl=True,abortConnect=False";
+            var redisPort = redis.Data.Port ?? 10000;
+            var redisConnectionString = $"{cluster.Data.HostName}:{redisPort},password={redisKeys.Value.PrimaryKey},ssl=True,abortConnect=False";
 
             var storageInfo = new AzStorageConnectionInfo(storage);
             var connectionStrings = new ConnectionStringDictionary();

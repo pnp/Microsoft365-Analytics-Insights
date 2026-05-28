@@ -5,7 +5,7 @@ using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Network;
-using Azure.ResourceManager.Redis;
+using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using Azure.ResourceManager.Storage;
@@ -280,9 +280,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
                 // Redis
                 var redisPeName = peNames.GetNameOrDefault(peNames.Redis, $"pe-{config.RedisName}-redis");
-                AddPrivateEndpointTask(redisPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Cache/Redis/{config.RedisName}",
-                    "redisCache", subnetId, logger, tagDic);
-                if (deployDns) AddPrivateDnsZoneTask("privatelink.redis.cache.windows.net", vnetId, redisPeName, logger, tagDic);
+                AddPrivateEndpointTask(redisPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Cache/redisEnterprise/{config.RedisName}",
+                    "redisEnterprise", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.redisenterprise.cache.azure.net", vnetId, redisPeName, logger, tagDic);
 
                 // Storage
                 var storagePeName = peNames.GetNameOrDefault(peNames.Storage, $"pe-{config.StorageAccountName}-blob");
@@ -346,7 +346,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public SqlDatabaseResource CreatedSqlDatabase => GetTaskResult<SqlDatabaseResource>(_sqlDatabaseTask);
         public WebSiteResource CreatedWebSiteResource => GetTaskResult<WebSiteResource>(_appServiceWebsiteTask);
         public DatabasePaaSInfo DatabasePaaSInfo => new DatabasePaaSInfo(CreatedSqlServer, CreatedSqlDatabase, _config);
-        public RedisResource Redis => GetTaskResult<RedisResource>(_redisTask);
+        public RedisEnterpriseDatabaseResource Redis => GetTaskResult<RedisEnterpriseDatabaseResource>(_redisTask);
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
         public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
