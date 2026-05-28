@@ -11,6 +11,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
 {
     public class RedisInstallTask : InstallTaskInAzResourceGroup<RedisEnterpriseDatabaseResource>
     {
+        /// <summary>Azure Managed Redis always uses port 10000 for TLS connections.</summary>
+        public const int DEFAULT_TLS_PORT = 10000;
+
         private readonly bool _requireStandardSku;
         private readonly bool _allowPublicAccess;
 
@@ -25,8 +28,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public async override Task<RedisEnterpriseDatabaseResource> ExecuteTaskReturnResult(object contextArg)
         {
             var name = base._config.GetNameConfigValue();
-            // Balanced_B0 is the smallest/cheapest SKU (256 MB, no VNet/PE support).
-            // Balanced_B1 is required when private endpoints are needed (VNet-enabled deployments).
+            // BalancedB0 is the smallest/cheapest SKU (256 MB, no VNet/PE support).
+            // BalancedB1 is required when private endpoints are needed (VNet-enabled deployments).
             var skuName = _requireStandardSku ? RedisEnterpriseSkuName.BalancedB1 : RedisEnterpriseSkuName.BalancedB0;
             var skuLabel = _requireStandardSku ? "Balanced B1" : "Balanced B0";
 

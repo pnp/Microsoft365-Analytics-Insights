@@ -8,6 +8,7 @@ using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
+using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
@@ -183,7 +184,7 @@ namespace App.ControlPanel.Engine
             var clusterRef = redis.Client.GetRedisEnterpriseClusterResource(redis.Id.Parent);
             var cluster = (await clusterRef.GetAsync()).Value;
             var redisKeys = redis.GetKeys();
-            var redisPort = redis.Data.Port ?? 10000;
+            var redisPort = redis.Data.Port ?? RedisInstallTask.DEFAULT_TLS_PORT;
             var redisConnectionString = $"{cluster.Data.HostName}:{redisPort},password={redisKeys.Value.PrimaryKey},ssl=True,abortConnect=False";
 
             var storageInfo = new AzStorageConnectionInfo(storage);
