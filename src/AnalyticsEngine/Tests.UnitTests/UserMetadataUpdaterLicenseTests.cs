@@ -685,5 +685,154 @@ namespace Tests.UnitTests
             Assert.AreEqual(newDelta, persistedDelta,
                 "Delta token should be persisted after a successful import.");
         }
+
+        [TestMethod]
+        public async Task UserMetadataUpdater_LicenceRefreshSpansEntireDb_NotJustDeltaUsers()
+        {
+            // Regression test for the licence-count drift bug seen against tenants
+            // that persist the Graph users/delta token (e.g. Redis-backed deployments).
+            //
+            // Scenario reproduced:
+            //   Run 1: two users (A and B) exist in Graph, neither has a licence.
+            //          Both are inserted into the DB, delta token gets persisted.
+            //   Run 2: in Graph both users have just been assigned a licence, but
+            //          only user A also has a non-licence metadata change. The
+            //          Graph /users/delta response therefore returns ONLY user A.
+            //          LoadUsersBySku for the new SKU returns BOTH users.
+            //
+            // Bug (pre-fix): UserLicenseProcessor.ProcessSKUsForAllUsers was called
+            // with the delta-matched subset, so only user A got a licence row. User B
+            // - despite having the licence in Graph - was never written, exactly the
+            // pattern that produced the customer's ~1/4 licence counts.
+            //
+            // Fix: the licence refresh now spans the entire DB user population (all
+            // existing DB users plus newly inserted ones), so both A and B end up
+            // with the correct licence row.
+
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var tick = DateTime.Now.Ticks;
+            var userAId = Guid.NewGuid().ToString();
+            var userBId = Guid.NewGuid().ToString();
+            var userAUpn = $"licencedriftA{tick}@test.com";
+            var userBUpn = $"licencedriftB{tick}@test.com";
+
+            var skuId = Guid.NewGuid();
+            var skuPartNumber = "ENTERPRISEPACK";
+            var licenseName = "Office 365 E3";
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existing = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userAUpn || u.UserPrincipalName == userBUpn)
+                    .ToListAsync();
+                foreach (var u in existing)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(u.LicenseLookups);
+                }
+                cleanupDb.users.RemoveRange(existing);
+                await cleanupDb.SaveChangesAsync();
+
+                var staleLicenseTypes = await cleanupDb.LicenseTypes
+                    .Where(l => l.Name == licenseName)
+                    .ToListAsync();
+                if (staleLicenseTypes.Any())
+                {
+                    cleanupDb.LicenseTypes.RemoveRange(staleLicenseTypes);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            // -------- Run 1: insert both users, no licence assigned to either --------
+
+            var userAGraph = new GraphUser { UserPrincipalName = userAUpn, Id = userAId, AccountEnabled = true, Mail = userAUpn, JobTitle = "Engineer" };
+            var userBGraph = new GraphUser { UserPrincipalName = userBUpn, Id = userBId, AccountEnabled = true, Mail = userBUpn, JobTitle = "Engineer" };
+
+            var emptySkuPage = new GraphServiceSubscribedSkusCollectionPage();
+            var emptyUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>();
+
+            // IMPORTANT: re-use the SAME loader instance across both runs so the
+            // FakeDeltaValueProvider keeps the token persisted by run 1 - this
+            // mirrors a Redis-backed deployment.
+            var fakeLoader = new FakeUserMetadataLoader(
+                new List<GraphUser> { userAGraph, userBGraph },
+                emptySkuPage,
+                emptyUsersBySku);
+            fakeLoader.SimulatedNewDeltaToken = $"delta-after-run-1-{tick}";
+
+            await new UserMetadataUpdater(telemetry, config, fakeLoader)
+                .InsertAndUpdateDatabaseFromExternalUsers();
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var a = await verifyDb.users.Include(u => u.LicenseLookups)
+                    .FirstOrDefaultAsync(u => u.UserPrincipalName == userAUpn);
+                var b = await verifyDb.users.Include(u => u.LicenseLookups)
+                    .FirstOrDefaultAsync(u => u.UserPrincipalName == userBUpn);
+                Assert.IsNotNull(a, "User A should be inserted in run 1.");
+                Assert.IsNotNull(b, "User B should be inserted in run 1.");
+                Assert.AreEqual(0, a.LicenseLookups.Count, "User A should have no licences after run 1.");
+                Assert.AreEqual(0, b.LicenseLookups.Count, "User B should have no licences after run 1.");
+            }
+
+            var persistedDeltaAfterRun1 = await fakeLoader.DeltaValueProvider.GetDeltaToken();
+            Assert.IsFalse(string.IsNullOrEmpty(persistedDeltaAfterRun1),
+                "Delta token must be persisted after run 1 so run 2 simulates the bugged scenario.");
+
+            // -------- Run 2: both users now have the SKU in Graph, but only user A
+            //                 surfaces in the delta response. --------
+
+            var sku = new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber };
+            var skuPage = new GraphServiceSubscribedSkusCollectionPage { sku };
+            var usersWithSku = new List<Microsoft.Graph.User>
+            {
+                new Microsoft.Graph.User { UserPrincipalName = userAUpn, Id = userAId },
+                new Microsoft.Graph.User { UserPrincipalName = userBUpn, Id = userBId }
+            };
+            var usersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>> { { skuId, usersWithSku } };
+
+            // Mutate fake state in place so the same loader/delta provider is reused.
+            fakeLoader.SetFakeState(
+                new List<GraphUser> { userAGraph, userBGraph },
+                skuPage,
+                usersBySku);
+
+            // Only user A has a non-licence metadata change, so the simulated
+            // /users/delta response returns ONLY user A.
+            userAGraph.JobTitle = "Senior Engineer";
+            fakeLoader.DeltaUsersOverride = new List<GraphUser> { userAGraph };
+            fakeLoader.SimulatedNewDeltaToken = $"delta-after-run-2-{tick}";
+
+            await new UserMetadataUpdater(telemetry, config, fakeLoader)
+                .InsertAndUpdateDatabaseFromExternalUsers();
+
+            // -------- Assert: BOTH users have the licence row, not just user A. --------
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                var a = await verifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .FirstOrDefaultAsync(u => u.UserPrincipalName == userAUpn);
+                var b = await verifyDb.users
+                    .Include(u => u.LicenseLookups.Select(l => l.License))
+                    .FirstOrDefaultAsync(u => u.UserPrincipalName == userBUpn);
+
+                Assert.IsNotNull(a, "User A should still exist after run 2.");
+                Assert.IsNotNull(b, "User B should still exist after run 2.");
+
+                Assert.AreEqual(1, a.LicenseLookups.Count,
+                    "User A (in delta) should have the new licence row.");
+                Assert.AreEqual(licenseName, a.LicenseLookups[0].License.Name);
+
+                Assert.AreEqual(1, b.LicenseLookups.Count,
+                    "REGRESSION: User B is not in the current Graph delta response but is reported by LoadUsersBySku. " +
+                    "Pre-fix, ProcessSKUsForAllUsers was scoped to delta users so user B never got a licence row even " +
+                    "though Graph said they had the SKU - this caused the customer's tenant-wide licence counts to " +
+                    "drift downward run after run. The fix scopes the licence refresh to the entire DB user population.");
+                Assert.AreEqual(licenseName, b.LicenseLookups[0].License.Name);
+            }
+        }
     }
 }
