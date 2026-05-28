@@ -42,8 +42,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             // Cache delta using tenant ID
             var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
+            // assignedLicenses / assignedPlans are added to $select as defence-in-depth
+            // so that a user whose ONLY change is a licence assignment will still be
+            // surfaced by /users/delta on subsequent runs. The primary correctness
+            // guarantee for licence counts now comes from UserMetadataUpdater /
+            // UserLicenseProcessor processing the full DB user population each run
+            // (not just delta users) - selecting these fields here is a belt-and-
+            // braces measure: without them, Graph would not flag a user as changed
+            // when only their licence assignments were updated, even though those
+            // are tracked properties on the underlying user object.
             var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
-                "?$select=id,accountEnabled,officeLocation,usageLocation,jobTitle,department,mail,userPrincipalName,manager,companyName,postalCode,country,state" +
+                "?$select=id,accountEnabled,officeLocation,usageLocation,jobTitle,department,mail,userPrincipalName,manager,companyName,postalCode,country,state,assignedLicenses,assignedPlans" +
                 "&$expand=manager";
             if (!string.IsNullOrEmpty(usersQueryDelta))
             {
