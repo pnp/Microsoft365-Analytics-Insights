@@ -31,6 +31,8 @@ namespace Tests.FakeDataGen
                 ctx => RunStressTest(new CopilotStressTest(), ctx)),
             new MenuItem("Power Platform event import stress test", MenuCategory.StressTest,
                 ctx => RunStressTest(new PowerPlatformStressTest(), ctx)),
+            new MenuItem("Sent email importer stress test", MenuCategory.StressTest,
+                ctx => RunStressTest(new SentEmailImporterStressTest(), ctx)),
             new MenuItem("User activity data stress test (profiling SQL inputs)", MenuCategory.StressTest,
                 ctx => RunStressTest(new UserActivityStressTest(), ctx)),
         };

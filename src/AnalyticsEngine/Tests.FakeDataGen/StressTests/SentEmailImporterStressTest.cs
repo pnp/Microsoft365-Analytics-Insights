@@ -6,11 +6,10 @@ using System.Data.Entity;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
-using Tests.StressTesting.FakeLoaders;
-using Tests.StressTesting.Infrastructure;
+using Tests.FakeDataGen.StressTests.FakeLoaders;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 
-namespace Tests.StressTesting.StressTests
+namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// End-to-end stress test for the sent-email import pipeline. Drives the real
