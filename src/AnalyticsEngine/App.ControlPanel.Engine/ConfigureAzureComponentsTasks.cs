@@ -69,11 +69,18 @@ namespace App.ControlPanel.Engine
 
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
             {
-                // Install AITracker from downloaded source
-                var aiTrackerDownload = solutionSources.GetSolutionComponentLocation(SoftwareComponent.AITracker);
+                if (this.Config.TasksConfig.InstallLatestSolutionContent)
+                {
+                    // Install AITracker from downloaded source
+                    var aiTrackerDownload = solutionSources.GetSolutionComponentLocation(SoftwareComponent.AITracker);
 
-                var spTasks = new SharePointWebComponentsInstallJob(Config, _logger, webApp.Data.DefaultHostName);
-                await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString);
+                    var spTasks = new SharePointWebComponentsInstallJob(Config, _logger, webApp.Data.DefaultHostName);
+                    await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString);
+                }
+                else
+                {
+                    _logger.LogInformation("Skipping SharePoint web components (AITracker / SPFx) install because 'Update solution with latest release' is not selected.");
+                }
             }
         }
 
@@ -181,7 +188,14 @@ namespace App.ControlPanel.Engine
             connectionStrings.Properties.Add("AzureWebJobsDashboard", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
             connectionStrings.Properties.Add("AzureWebJobsStorage", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
             connectionStrings.Properties.Add("Storage", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
-            connectionStrings.Properties.Add("ServiceBus", new ConnStringValueTypePair(serviceBusConnectionString, ConnectionStringType.Custom));
+            if (!string.IsNullOrWhiteSpace(serviceBusConnectionString))
+            {
+                connectionStrings.Properties.Add("ServiceBus", new ConnStringValueTypePair(serviceBusConnectionString, ConnectionStringType.Custom));
+            }
+            else
+            {
+                _logger.LogInformation("Service Bus is disabled; skipping 'ServiceBus' connection-string on the App Service.");
+            }
             connectionStrings.Properties.Add("Redis", new ConnStringValueTypePair(redisConnectionString, ConnectionStringType.Custom));
 
             await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = new SiteConfigProperties { Use32BitWorkerProcess = false, IsAlwaysOn = true } });

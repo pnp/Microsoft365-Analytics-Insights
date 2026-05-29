@@ -21,26 +21,26 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     {
         public override bool InScope(AbstractAuditLogContent content)
         {
-            // Only include SharePoint events that are in the URLs we're interested in
-            string url = content.ObjectId;
-
-            // Do we have a URL?
-            if (!string.IsNullOrEmpty(url))
+            // This filter is the SharePoint org-URL whitelist; it only applies to SharePoint/OneDrive
+            // events that carry a URL in ObjectId. Non-SharePoint workloads (Power BI, Power Automate,
+            // Copilot, Exchange, Azure AD, ...) store report names / flow IDs / GUIDs in ObjectId, so
+            // running them through the URL matcher would always drop them. Their own filters live
+            // alongside the workload dispatch logic.
+            if (!(content is Entities.Serialisation.SharePointAuditLogContent spContent))
             {
-                var siteFilter = string.Empty;
-                if (content is Entities.Serialisation.SharePointAuditLogContent)
-                {
-                    // Find an org URL that exactly matches the sharepoint event
-                    var spContent = content as Entities.Serialisation.SharePointAuditLogContent;
-                    siteFilter = spContent.SiteUrl;
-                }
-
-                // Analyse all org URLs to see which one matches this hit
-                return OrgUrlConfigs.UrlInScope(siteFilter, url);
+                return true;
             }
 
-            // Something happened in SharePoint/OneDrive without a URL ("ManagedSyncClientAllowed" for example). Assume we want it
-            return true;
+            // SharePoint event without a URL (e.g. ManagedSyncClientAllowed). We only persist SP
+            // events whose URL falls inside the configured org-URL whitelist, so a SharePoint event
+            // without a URL has nothing to match against and is treated as out of scope.
+            if (string.IsNullOrEmpty(spContent.ObjectId))
+            {
+                return false;
+            }
+
+            // Analyse all org URLs to see which one matches this hit.
+            return OrgUrlConfigs.UrlInScope(spContent.SiteUrl, spContent.ObjectId);
         }
 
         public List<FilterUrlConfig> OrgUrlConfigs { get; set; } = new List<FilterUrlConfig>();

@@ -10,8 +10,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
 {
     public class StorageAccountInstallTask : InstallTaskInAzResourceGroup<StorageAccountResource>
     {
-        public StorageAccountInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
+        private readonly bool _allowPublicAccess;
+
+        public StorageAccountInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create storage account";
@@ -35,24 +38,38 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 var newAccountInfo = new StorageAccountCreateOrUpdateContent(new StorageSku("Standard_LRS"), StorageKind.StorageV2, AzureLocation)
                 {
-                    MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2
+                    MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2,
+                    PublicNetworkAccess = _allowPublicAccess ? StoragePublicNetworkAccess.Enabled : StoragePublicNetworkAccess.Disabled
                 };
                 EnsureTagsOnNew(newAccountInfo.Tags);
                 var storageAccountReq = await Container.GetStorageAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, newAccountInfo);
                 storageAccount = storageAccountReq.Value;
 
-                _logger.LogInformation($"Created storage-account '{storageAccount.Data.Name}'");
+                _logger.LogInformation($"Created storage-account '{storageAccount.Data.Name}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")}).");
             }
             else
             {
+                var patch = new StorageAccountPatch();
+                var needsPatch = false;
+
                 // Ensure minimum TLS version is 1.2
                 if (storageAccount.Data.MinimumTlsVersion == null || !storageAccount.Data.MinimumTlsVersion.Value.ToString().Equals(StorageMinimumTlsVersion.Tls1_2.ToString()))
                 {
                     _logger.LogInformation($"Updating storage account '{name}' to enforce TLS 1.2...");
-                    var patch = new StorageAccountPatch
-                    {
-                        MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2
-                    };
+                    patch.MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2;
+                    needsPatch = true;
+                }
+
+                var desiredAccess = _allowPublicAccess ? StoragePublicNetworkAccess.Enabled : StoragePublicNetworkAccess.Disabled;
+                if (storageAccount.Data.PublicNetworkAccess == null || storageAccount.Data.PublicNetworkAccess.Value != desiredAccess)
+                {
+                    _logger.LogInformation($"Updating storage account '{name}' public network access to '{desiredAccess}'...");
+                    patch.PublicNetworkAccess = desiredAccess;
+                    needsPatch = true;
+                }
+
+                if (needsPatch)
+                {
                     await storageAccount.UpdateAsync(patch);
                 }
 

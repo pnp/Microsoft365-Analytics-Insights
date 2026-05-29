@@ -73,13 +73,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     user.LicenseLookups.Clear();
             }
 
+            // Track which (LicenseType-display-name, user_id) pairs have already been queued
+            // in this import run so we never try to insert two rows that would violate the
+            // IX_license_type_id_user_id unique index. Two SKU part numbers (e.g.
+            // RIGHTSMANAGEMENT and RIGHTSMANAGEMENT_CE) can resolve to the same display name
+            // and therefore the same LicenseType, so without this guard the second SKU's
+            // SaveChanges fails with "Cannot insert duplicate key row in object
+            // 'dbo.user_license_type_lookups'".
+            var assignedLicenses = new HashSet<(string licenseName, int userId)>();
+
             foreach (var sku in skus)
             {
                 // Load users with this SKU
                 var allUsersWithSku = await _userLoader.LoadUsersBySku(sku.SkuId.Value);
 
                 // Update all
-                await AddSkuForUsers(graphFoundDbUsers, allUsersWithSku, sku, db);
+                await AddSkuForUsers(graphFoundDbUsers, allUsersWithSku, sku, db, assignedLicenses);
 
                 // Clear the SKU users list to free memory
                 allUsersWithSku.Clear();
@@ -100,7 +109,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             List<Common.Entities.User> graphFoundDbUsers,
             List<Microsoft.Graph.User> usersWithSku,
             SubscribedSku sku,
-            AnalyticsEntitiesContext db)
+            AnalyticsEntitiesContext db,
+            HashSet<(string licenseName, int userId)> assignedLicenses = null)
         {
             // Create dictionary for O(1) lookup of DB users by UPN
             var dbUsersByUpn = graphFoundDbUsers
@@ -122,6 +132,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Get license type once for all users
             var licence = await GetLicenseType(sku.SkuPartNumber);
 
+            int duplicatesSkipped = 0;
+
             // Process in batches
             for (int i = 0; i < relevantDbUsers.Count; i += SKU_BATCH_SIZE)
             {
@@ -131,6 +143,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 foreach (var dbUser in batch)
                 {
+                    // Two different SKU part numbers can resolve to the same product
+                    // display name (and therefore the same LicenseType). The
+                    // user_license_type_lookups table has a UNIQUE index on
+                    // (license_type_id, user_id), so we must skip duplicates here
+                    // instead of letting SaveChanges throw.
+                    if (assignedLicenses != null &&
+                        !assignedLicenses.Add((licence.Name, dbUser.ID)))
+                    {
+                        duplicatesSkipped++;
+                        continue;
+                    }
+
                     // Use FK ID directly so the User entity does not need to be
                     // tracked by EF, avoiding the costly re-attach loop for large
                     // user counts.  The License navigation property is kept because
@@ -148,6 +172,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Clear batch list to free memory
                 list.Clear();
+            }
+
+            if (duplicatesSkipped > 0)
+            {
+                _telemetry.LogInformation($"User import - Skipped {duplicatesSkipped.ToString("N0")} duplicate license lookups for SKU '{sku.SkuPartNumber}' (display-name '{licence.Name}' already assigned via another SKU).");
             }
 
             // Clear dictionaries and lists to free memory
@@ -179,9 +208,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Remove old lookups & re-add
                 db.UserLicenseTypeLookups.RemoveRange(dbUser.LicenseLookups.Where(l => l.IsSavedToDB));
+
+                // Dedupe by LicenseType display name: two SKU part numbers can resolve
+                // to the same LicenseType, and the user_license_type_lookups table has
+                // a UNIQUE index on (license_type_id, user_id).
+                var addedLicenseNames = new HashSet<string>();
                 foreach (var userPlan in userServicePlans)
                 {
-                    if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence))
+                    if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence) &&
+                        addedLicenseNames.Add(licence.Name))
                     {
                         dbUser.LicenseLookups.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
                     }

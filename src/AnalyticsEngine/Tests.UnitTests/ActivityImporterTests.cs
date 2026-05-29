@@ -525,6 +525,65 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
         }
 
         /// <summary>
+        /// The SharePoint org-URL whitelist only applies to SharePoint/OneDrive events. Every other
+        /// workload's ObjectId is a report name / flow GUID / message ID, so running them through
+        /// the URL matcher would always drop them. This test pins that behaviour for every concrete
+        /// AbstractAuditLogContent subclass we deserialise into.
+        /// </summary>
+        [TestMethod]
+        public void OrgURLsFilter_NonSharePointContent_IsAlwaysInScope()
+        {
+            const string TEST_PREFIX = "https://unittesting.sharepoint.local";
+            var spFilterConfig = new SharePointOrgUrlsFilterConfig();
+            spFilterConfig.OrgUrlConfigs.Add(new FilterUrlConfig { Url = TEST_PREFIX });
+
+            // ObjectId values picked to look NOTHING like a SharePoint URL so we'd see a false
+            // negative if the filter ever fell back to URL-matching for these types.
+            var nonSpContents = new AbstractAuditLogContent[]
+            {
+                new PowerBIAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_BI, ObjectId = "Sales Dashboard" },
+                new PowerAutomateAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_AUTOMATE, ObjectId = Guid.NewGuid().ToString() },
+                new PowerAppsAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_APPS, ObjectId = Guid.NewGuid().ToString() },
+                new CopilotStudioAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_COPILOT_STUDIO, ObjectId = "bot-id" },
+                new DataverseAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_DATAVERSE, ObjectId = "entity-id" },
+                new CopilotAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_COPILOT, ObjectId = Guid.NewGuid().ToString() },
+                new ExchangeAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_EXCHANGE, ObjectId = "user@contoso.com" },
+                new AzureADAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_AZURE_AD, ObjectId = Guid.NewGuid().ToString() },
+                new StreamAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_STREAM, ObjectId = "video-id" },
+                new GeneralAuditLogContent { Workload = "SomeOtherWorkload", ObjectId = "whatever" },
+            };
+
+            foreach (var content in nonSpContents)
+            {
+                Assert.IsTrue(spFilterConfig.InScope(content),
+                    $"Non-SharePoint content {content.GetType().Name} (workload '{content.Workload}', ObjectId '{content.ObjectId}') was wrongly filtered out by the SharePoint org-URL filter.");
+            }
+
+            // Empty / null ObjectId on a non-SP content type must still pass.
+            Assert.IsTrue(spFilterConfig.InScope(new PowerBIAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_BI, ObjectId = null }));
+            Assert.IsTrue(spFilterConfig.InScope(new PowerAutomateAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_AUTOMATE, ObjectId = string.Empty }));
+        }
+
+        /// <summary>
+        /// SharePoint events without a URL (e.g. ManagedSyncClientAllowed) have nothing to match
+        /// against the org-URL whitelist, so the SharePoint filter treats them as out of scope.
+        /// </summary>
+        [TestMethod]
+        public void OrgURLsFilter_SharePointContent_WithoutObjectId_IsOutOfScope()
+        {
+            const string TEST_PREFIX = "https://unittesting.sharepoint.local";
+            var spFilterConfig = new SharePointOrgUrlsFilterConfig();
+            spFilterConfig.OrgUrlConfigs.Add(new FilterUrlConfig { Url = TEST_PREFIX });
+
+            var noUrlEvent = DataGenerators.GetRandomSharePointLog();
+            noUrlEvent.ObjectId = null;
+            Assert.IsFalse(spFilterConfig.InScope(noUrlEvent));
+
+            noUrlEvent.ObjectId = string.Empty;
+            Assert.IsFalse(spFilterConfig.InScope(noUrlEvent));
+        }
+
+        /// <summary>
         /// Tests SP events save & load correctly, all properties
         /// </summary>
         [TestMethod]

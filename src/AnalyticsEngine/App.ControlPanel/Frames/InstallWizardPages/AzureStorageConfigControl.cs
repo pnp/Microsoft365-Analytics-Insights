@@ -18,12 +18,26 @@ namespace App.ControlPanel.Frames.InstallWizard
         public string RedisName { get { return txtRedisName.Text; } set { txtRedisName.Text = value; } }
         public string ServiceBusName { get { return txtServiceBusName.Text; } set { txtServiceBusName.Text = value; } }
 
+        public bool ServiceBusEnabled
+        {
+            get { return chkServiceBusEnabled.Checked; }
+            set
+            {
+                chkServiceBusEnabled.Checked = value;
+                UpdateResponsiveUIControls();
+            }
+        }
+
         private void UpdateResponsiveUIControls()
         {
             lblStorageAccountURL.Text = $"https://{txtStorageAccount.Text}.blob.core.windows.net/";
             lblRedisName.Text = $"{txtRedisName.Text}.redis.cache.windows.net";
             lblServiceBusName.Text = $"{txtServiceBusName.Text}.servicebus.windows.net";
             lblSQLServerName.Text = $"{txtSQLServerName.Text}.database.windows.net";
+
+            // Disable SB name fields when Service Bus is disabled
+            txtServiceBusName.Enabled = chkServiceBusEnabled.Checked;
+            lblServiceBusName.Enabled = chkServiceBusEnabled.Checked;
         }
 
         private void txtStorageAccount_TextChanged(object sender, EventArgs e)
@@ -42,6 +56,11 @@ namespace App.ControlPanel.Frames.InstallWizard
         }
 
         private void txtSQLServerName_TextChanged(object sender, EventArgs e)
+        {
+            UpdateResponsiveUIControls();
+        }
+
+        private void chkServiceBusEnabled_CheckedChanged(object sender, EventArgs e)
         {
             UpdateResponsiveUIControls();
         }

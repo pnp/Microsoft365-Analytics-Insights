@@ -24,8 +24,11 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
         public const string CONFIG_PARAM_NAME_SQL_USERNAME = "sqlusername";
         public const string CONFIG_PARAM_NAME_SQL_PASSWORD = "sqlpassword";
 
-        public AutomationAccountTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
+        private readonly bool _allowPublicAccess;
+
+        public AutomationAccountTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override async Task<AutomationAccountResource> ExecuteTaskReturnResult(object contextArg)
@@ -38,11 +41,12 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 {
                     Location = base.AzureLocation,
                     Sku = new AutomationSku(AutomationSkuName.Free),
-                    Name = _config.ResourceName
+                    Name = _config.ResourceName,
+                    IsPublicNetworkAccessAllowed = _allowPublicAccess
                 };
                 base.EnsureTagsOnNew(newAutomationAccountInfo.Tags);     // Add configured tags
 
-                _logger.LogInformation($"Creating Automation account '{_config.ResourceName}' ...");
+                _logger.LogInformation($"Creating Automation account '{_config.ResourceName}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")}) ...");
                 try
                 {
                     var newAccountReq = await Container.GetAutomationAccounts().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newAutomationAccountInfo);
@@ -59,6 +63,24 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             {
                 _logger.LogInformation($"Using existing Automation account'{automationAccount.Data.Name}'.");
                 await base.EnsureTagsOnExisting(automationAccount.Data.Tags, automationAccount.GetTagResource());
+
+                if (automationAccount.Data.IsPublicNetworkAccessAllowed != _allowPublicAccess)
+                {
+                    _logger.LogInformation($"Updating Automation account '{automationAccount.Data.Name}' public network access to '{(_allowPublicAccess ? "enabled" : "disabled")}'...");
+                    var patch = new AutomationAccountPatch
+                    {
+                        IsPublicNetworkAccessAllowed = _allowPublicAccess
+                    };
+                    try
+                    {
+                        var updateReq = await automationAccount.UpdateAsync(patch);
+                        automationAccount = updateReq.Value;
+                    }
+                    catch (RequestFailedException ex)
+                    {
+                        _logger.LogWarning($"Could not update Automation account '{_config.ResourceName}' public access setting: {ex.Message}");
+                    }
+                }
             }
 
             // Vars

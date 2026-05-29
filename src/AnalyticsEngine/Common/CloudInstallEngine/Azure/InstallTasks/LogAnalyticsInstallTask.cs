@@ -11,6 +11,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
 {
     public class LogAnalyticsInstallTask : InstallTaskInAzResourceGroup<LogWorkspaceInfo>
     {
+        // Note: Log Analytics public network access is intentionally not toggled by the installer.
+        // Disabling public access on a workspace requires an Azure Monitor Private Link Scope (AMPLS)
+        // plus the corresponding private DNS zones, which can affect Azure Monitor connectivity for
+        // every VNet that resolves those zones (potentially across unrelated workloads/subscriptions).
+        // Customers that need a private workspace must configure AMPLS manually after install.
         public LogAnalyticsInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
         {
         }
