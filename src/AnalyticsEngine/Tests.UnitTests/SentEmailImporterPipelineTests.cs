@@ -19,7 +19,7 @@ namespace Tests.UnitTests
     ///     (parameter shapes, OUTPUT clause, multi-row VALUES, parameter-count guard rails);
     ///   - <c>NullSentEmailSentimentScorer</c> (no-op behavior);
     ///   - <c>FakeSentEmailSourceLoader</c> isn't referenced here to keep the unit-test
-    ///     project independent of <c>Tests.StressTesting</c>; instead we hand-roll messages.
+    ///     project independent of <c>Tests.FakeDataGen</c>; instead we hand-roll messages.
     /// </summary>
     [TestClass]
     public class SentEmailImporterPipelineTests

@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 
-namespace Tests.StressTesting.FakeLoaders
+namespace Tests.FakeDataGen.StressTests.FakeLoaders
 {
     /// <summary>
     /// Fake <see cref="ISentEmailSourceLoader"/> that synthesises large numbers of
