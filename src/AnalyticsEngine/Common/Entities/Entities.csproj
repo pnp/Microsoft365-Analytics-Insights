@@ -284,6 +284,14 @@
     <Compile Include="Migrations\202605290817012_AddSentEmailTables.Designer.cs">
       <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.cs" />
+    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.Designer.cs">
+      <DependentUpon>202605291149290_AddAuditEventsOperationIndex.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.cs" />
+    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.Designer.cs">
+      <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -412,6 +420,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202605290817012_AddSentEmailTables.resx">
       <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605291149290_AddAuditEventsOperationIndex.resx">
+      <DependentUpon>202605291149290_AddAuditEventsOperationIndex.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605291207010_AddAuditEventsOperationFK.resx">
+      <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
