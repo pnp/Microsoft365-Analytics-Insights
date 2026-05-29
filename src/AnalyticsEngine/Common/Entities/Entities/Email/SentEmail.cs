@@ -20,8 +20,12 @@ namespace Common.Entities.Entities.Email
         [Column("sent_date")]
         public DateTime SentDate { get; set; }
 
+        // 450 chars keeps the unique index under SQL Server's 900-byte legacy
+        // key limit (450 * 2-byte nvarchar = 900). Graph message IDs are well
+        // inside that, but the wider 500-char setting would only work on
+        // SQL Server 2016+/Azure SQL where the limit was raised to 1700 bytes.
         [Column("graph_message_id")]
-        [MaxLength(500)]
+        [MaxLength(450)]
         [Required]
         public string GraphMessageId { get; set; }
 

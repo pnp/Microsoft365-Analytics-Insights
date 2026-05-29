@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
@@ -13,11 +13,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     }
 
     /// <summary>
-    /// In-memory delta token store. Useful for tests and single-process runs.
+    /// In-memory delta token store. Useful for tests and single-process runs. Backed by a
+    /// <see cref="ConcurrentDictionary{TKey, TValue}"/> because the sent-email importer's
+    /// parallel Graph loader calls Get/Set concurrently per user.
     /// </summary>
     public class InMemoryDeltaTokenStore : IDeltaTokenStore
     {
-        private readonly Dictionary<string, string> _tokens = new Dictionary<string, string>();
+        private readonly ConcurrentDictionary<string, string> _tokens = new ConcurrentDictionary<string, string>();
 
         public Task<string> GetDeltaToken(string key)
         {

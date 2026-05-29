@@ -27,7 +27,7 @@ namespace WebJob.AppInsightsImporter.Engine
     {
         private readonly ILogger _debugTracer;
         private readonly int _chunkSize;
-        private readonly TextAnalyticsClient _textAnalyticsClient = null;
+        private readonly CognitiveServicesClient _cognitiveClient = null;
         private readonly AppConfig _config;
 
         public PageUpdateManager(ILogger debugTracer, AppConfig config) : this(debugTracer, 1000, config)
@@ -45,11 +45,10 @@ namespace WebJob.AppInsightsImporter.Engine
 
             // Do we have cognitive services configured?
             var cognitiveConfig = new AppConfig();
-            if (!string.IsNullOrEmpty(cognitiveConfig.CognitiveEndpoint) && !string.IsNullOrEmpty(cognitiveConfig.CognitiveKey))
-            {
-                var credentials = new AzureKeyCredential(cognitiveConfig.CognitiveKey);
-                _textAnalyticsClient = new TextAnalyticsClient(new Uri(cognitiveConfig.CognitiveEndpoint), credentials);
-            }
+            // Single wrapper for the lifetime of this manager: uses key auth when CognitiveKey
+            // is set and auto-falls back to RBAC (ClientSecretCredential) on 403
+            // AuthenticationTypeDisabled so we still work when key auth is disabled on the resource.
+            _cognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(debugTracer);
         }
 
         public async Task<List<string>> SaveAll(IEnumerable<PageUpdateEventAppInsightsQueryResult> pageUpdateEvents)
@@ -168,11 +167,11 @@ namespace WebJob.AppInsightsImporter.Engine
             });
 
             // Get sentiment scores for new comments, if we have cognitive services configured
-            if (_textAnalyticsClient != null && newComments.Count > 0)
+            if (_cognitiveClient != null && newComments.Count > 0)
             {
                 var cognitiveResults = await newComments.Keys
                     .ToTextAnalysisSampleList()
-                    .GetCognitiveDataStats(_textAnalyticsClient, _debugTracer);
+                    .GetCognitiveDataStats(_cognitiveClient, _debugTracer);
 
                 if (cognitiveResults != null)
                 {

@@ -22,10 +22,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private static readonly Regex HtmlTagRegex =
             new Regex("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-        private readonly TextAnalyticsClient _client;
+        private readonly CognitiveServicesClient _client;
         private readonly AnalyticsLogger _telemetry;
 
-        public AzureLanguageSentEmailSentimentScorer(TextAnalyticsClient client, AnalyticsLogger telemetry)
+        public AzureLanguageSentEmailSentimentScorer(CognitiveServicesClient client, AnalyticsLogger telemetry)
         {
             _client = client;
             _telemetry = telemetry;
@@ -61,7 +61,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
                 try
                 {
-                    var response = await _client.AnalyzeSentimentBatchAsync(docs);
+                    var response = await _client.ExecuteAsync(c => c.AnalyzeSentimentBatchAsync(docs));
                     foreach (var doc in response.Value)
                     {
                         if (doc.HasError)
@@ -100,9 +100,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             if (settings == null || !settings.IsValidCognitiveConfig)
                 return NullSentEmailSentimentScorer.Instance;
 
-            var client = new TextAnalyticsClient(
-                new Uri(settings.CognitiveEndpoint),
-                new Azure.AzureKeyCredential(settings.CognitiveKey));
+            // Single CognitiveServicesClient per importer run: caches its inner TextAnalyticsClient
+            // and auto-falls back to RBAC if the key auth call returns 403 AuthenticationTypeDisabled.
+            var client = settings.CreateCognitiveServicesClient(telemetry);
+            if (client == null)
+                return NullSentEmailSentimentScorer.Instance;
 
             return new AzureLanguageSentEmailSentimentScorer(client, telemetry);
         }

@@ -280,6 +280,10 @@
     <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.Designer.cs">
       <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202605290817012_AddSentEmailTables.cs" />
+    <Compile Include="Migrations\202605290817012_AddSentEmailTables.Designer.cs">
+      <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -405,6 +409,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.resx">
       <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605290817012_AddSentEmailTables.resx">
+      <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

@@ -23,25 +23,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     /// <see cref="SentEmailRecipient"/> child per recipient.
     /// </summary>
     /// <remarks>
-    /// The importer parallelises I/O-heavy stages (Graph loading, sentiment scoring, and
-    /// per-user row persistence) across small user chunks while serialising the address
-    /// lookup-table writes. Email address inserts must remain single-threaded because
-    /// concurrent threads would each see "does not exist" and race to insert the same
-    /// row, hitting the unique index on <c>email_addresses.address</c>.
+    /// The importer parallelises Graph load and sentiment scoring across small user chunks
+    /// but writes are serialised on a single connection using multi-row <c>INSERT ... VALUES</c>
+    /// statements. Email address inserts in particular must remain single-threaded because
+    /// concurrent threads would each see "does not exist" and race to insert the same row,
+    /// hitting the unique index on <c>email_addresses.address</c>.
     /// </remarks>
     public class SentEmailImporter : AbstractApiLoader
     {
         // Tunables - kept conservative to avoid hammering Graph throttling limits and SQL.
         private const int DefaultUserChunkSize = 25;
         private const int DefaultGraphLoadParallelism = 8;
-        private const int DefaultPersistParallelism = 4;
 
         private readonly ISentEmailSourceLoader _sourceLoader;
         private readonly ISentEmailSentimentScorer _sentimentScorer;
         private readonly Func<AnalyticsEntitiesContext> _dbContextFactory;
         private readonly int _userChunkSize;
         private readonly int _graphLoadParallelism;
-        private readonly int _persistParallelism;
 
         // Stats collected across the whole run. All updated via Interlocked from worker threads.
         private int _mailboxesScanned;
@@ -59,8 +57,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             ISentEmailSentimentScorer sentimentScorer,
             Func<AnalyticsEntitiesContext> dbContextFactory = null,
             int userChunkSize = DefaultUserChunkSize,
-            int graphLoadParallelism = DefaultGraphLoadParallelism,
-            int persistParallelism = DefaultPersistParallelism)
+            int graphLoadParallelism = DefaultGraphLoadParallelism)
             : base(telemetry, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
@@ -68,7 +65,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             _dbContextFactory = dbContextFactory ?? (() => new AnalyticsEntitiesContext());
             _userChunkSize = userChunkSize > 0 ? userChunkSize : DefaultUserChunkSize;
             _graphLoadParallelism = graphLoadParallelism > 0 ? graphLoadParallelism : DefaultGraphLoadParallelism;
-            _persistParallelism = persistParallelism > 0 ? persistParallelism : DefaultPersistParallelism;
         }
 
         /// <summary>
@@ -148,7 +144,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         ///   2. Single-threaded bulk address lookup-table reconciliation (avoids unique-index races).
         ///   3. Single-threaded bulk existing-key check across the chunk.
         ///   4. Parallel sentiment scoring (no DB writes).
-        ///   5. Parallel SaveChanges of SentEmail rows across multiple DbContexts.
+        ///   5. Single-connection two-phase multi-row INSERTs of SentEmail and SentEmailRecipient rows.
         /// </summary>
         private async Task ProcessUserChunkAsync(List<Common.Entities.User> users)
         {
@@ -239,12 +235,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             // ---- 4. Sentiment scoring (parallel-safe; no DB writes) --------------------
             var sentimentByMessageId = await ScoreSentimentAcrossChunkAsync(perUser);
 
-            // ---- 5. Parallel persistence of SentEmail rows -----------------------------
+            // ---- 5. Single-connection persistence of SentEmail + recipient rows -------
             swPhase.Restart();
             _telemetry.LogInformation(
                 $"  [chunk] persisting {totalToInsert} new messages across {perUser.Count} users " +
-                $"(persist parallelism: {_persistParallelism})...");
-            await PersistChunkInParallelAsync(perUser, addressIds, sentimentByMessageId);
+                "(serial multi-row INSERTs on one connection to avoid unique-index races)...");
+            await PersistChunkAsync(perUser, addressIds, sentimentByMessageId);
             swPhase.Stop();
             _telemetry.LogInformation(
                 $"  [chunk] persistence done in {swPhase.ElapsedMilliseconds}ms.");
@@ -322,7 +318,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         /// keyed on the unique <c>graph_message_id</c>, so phase B can set
         /// <c>SentEmailRecipient.SentEmailID</c> without an extra round-trip per row.
         /// </summary>
-        private async Task PersistChunkInParallelAsync(
+        private async Task PersistChunkAsync(
             List<UserChunkResult> perUser,
             Dictionary<string, int> addressIds,
             Dictionary<string, double?> sentimentByMessageId)
