@@ -126,6 +126,8 @@
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
     <Compile Include="AuditTests.cs" />
+    <Compile Include="AddAuditEventsOperationIndexMigrationTests.cs" />
+    <Compile Include="AddAuditEventsOperationFKMigrationTests.cs" />
     <Compile Include="EntityTests.cs" />
     <Compile Include="FakeControllers\FakePageableResultsController.cs" />
     <Compile Include="FakeControllers\FakeCallsController.cs" />
