@@ -58,6 +58,7 @@
     <Compile Include="StressTests\CopilotStressTest.cs" />
     <Compile Include="StressTests\MemoryMonitor.cs" />
     <Compile Include="StressTests\PowerPlatformStressTest.cs" />
+    <Compile Include="StressTests\SentEmailImporterStressTest.cs" />
     <Compile Include="StressTests\StressTestResult.cs" />
     <Compile Include="StressTests\UserActivityStressTest.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeActivityImporterForStress.cs" />
@@ -65,6 +66,7 @@
     <Compile Include="StressTests\FakeLoaders\FakeActivitySubscriptionManagerForStress.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeAppConfig.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeContentMetaDataLoaderForStress.cs" />
+    <Compile Include="StressTests\FakeLoaders\FakeSentEmailSourceLoader.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

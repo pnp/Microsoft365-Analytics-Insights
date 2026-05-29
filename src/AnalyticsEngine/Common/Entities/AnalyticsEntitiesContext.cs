@@ -3,6 +3,7 @@ using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Entities.UsageReports;
+using Common.Entities.Entities.Email;
 using Common.Entities.Entities.WebTraffic;
 using Common.Entities.Teams;
 using Microsoft.Extensions.Logging;
@@ -194,6 +195,38 @@ namespace Common.Entities
             modelBuilder.Entity<CopilotStudioBot>().HasIndex(b => b.BotId).IsUnique();
             modelBuilder.Entity<DataverseEntity>().HasIndex(e => e.Name).IsUnique();
 
+            modelBuilder.Entity<EmailAddress>()
+             .HasIndex(t => new { t.Address })
+             .IsUnique();
+
+            modelBuilder.Entity<SentEmail>()
+             .HasIndex(t => new { t.GraphMessageId })
+             .IsUnique();
+
+            modelBuilder.Entity<SentEmail>()
+             .HasRequired(s => s.FromAddress)
+             .WithMany()
+             .HasForeignKey(s => s.FromAddressID)
+             .WillCascadeOnDelete(false);
+
+            // Recipients live in sent_email_recipients so a message with N recipients
+            // is stored as one sent_emails row plus N join rows.
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasRequired(r => r.SentEmail)
+             .WithMany(s => s.Recipients)
+             .HasForeignKey(r => r.SentEmailID)
+             .WillCascadeOnDelete(true);
+
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasRequired(r => r.RecipientAddress)
+             .WithMany()
+             .HasForeignKey(r => r.RecipientAddressID)
+             .WillCascadeOnDelete(false);
+
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasIndex(t => new { t.SentEmailID, t.RecipientAddressID })
+             .IsUnique();
+
             base.OnModelCreating(modelBuilder);
         }
 
@@ -358,6 +391,11 @@ namespace Common.Entities
         // Dataverse
         public virtual DbSet<DataverseEntity> dataverse_entities { get; set; }
         public virtual DbSet<DataverseEventMetadata> dataverse_events { get; set; }
+
+        // Sent email import - one row per sent message, recipients live in the join table.
+        public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
+        public virtual DbSet<SentEmail> SentEmails { get; set; }
+        public virtual DbSet<SentEmailRecipient> SentEmailRecipients { get; set; }
         #endregion
     }
 
