@@ -162,9 +162,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public List<string> MessageIds { get; set; } = new List<string>();
 
         /// <summary>
-        /// Information about an AI system plugin invoked during the interaction.
+        /// Information about AI system plugins invoked during the interaction.
         /// </summary>
-        public AISystemPlugin AISystemPlugin { get; set; }
+        public List<AISystemPlugin> AISystemPlugin { get; set; } = new List<AISystemPlugin>();
     }
 
     /// <summary>
