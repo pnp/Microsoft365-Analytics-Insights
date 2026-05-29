@@ -326,12 +326,15 @@ namespace Tests.UnitTests
         {
             var config = new AppConfig();
 
-            if (string.IsNullOrEmpty(config.CognitiveEndpoint) || string.IsNullOrEmpty(config.CognitiveKey))
+            if (!config.IsValidCognitiveConfig)
             {
-                Assert.Inconclusive("CognitiveEndpoint or CognitiveKey is not configured.");
+                Assert.Inconclusive("CognitiveEndpoint or credentials are not configured.");
             }
-            var credentials = new AzureKeyCredential(config.CognitiveKey);
-            var client = new TextAnalyticsClient(new Uri(config.CognitiveEndpoint), credentials);
+            var client = config.CreateCognitiveServicesClient(AnalyticsLogger.ConsoleOnlyTracer());
+            if (client == null)
+            {
+                Assert.Inconclusive("CognitiveEndpoint or credentials are not configured.");
+            }
 
             var propsString1 = @"[
                         {
