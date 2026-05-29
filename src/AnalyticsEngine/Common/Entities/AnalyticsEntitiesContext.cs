@@ -347,10 +347,32 @@ namespace Common.Entities
         public DbSet<CopilotAIModel> CopilotAIModels { get; set; }
         public DbSet<CopilotEventAIModel> CopilotEventAIModels { get; set; }
 
-        // Email tracking
-        public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
-        public virtual DbSet<SentEmail> SentEmails { get; set; }
-        public virtual DbSet<SentEmailRecipient> SentEmailRecipients { get; set; }
+        // Power Platform
+        public virtual DbSet<PowerApp> power_apps { get; set; }
+        public virtual DbSet<PowerAutomateFlow> power_automate_flows { get; set; }
+        public virtual DbSet<PowerAppEnvironment> power_app_environments { get; set; }
+        public virtual DbSet<PowerPlatformClientType> power_platform_client_types { get; set; }
+        public virtual DbSet<PowerPlatformConnector> power_platform_connectors { get; set; }
+        public virtual DbSet<PowerAppConnector> power_app_connectors { get; set; }
+        public virtual DbSet<PowerAutomateFlowConnector> power_automate_flow_connectors { get; set; }
+        public virtual DbSet<PowerAppEventMetadata> power_app_events { get; set; }
+        public virtual DbSet<PowerAutomateFlowEventMetadata> power_automate_flow_events { get; set; }
+        public virtual DbSet<PowerAppShareEventMetadata> power_app_share_events { get; set; }
+        public virtual DbSet<PowerAutomateFlowShareEventMetadata> power_automate_flow_share_events { get; set; }
+
+        // Power BI
+        public virtual DbSet<PowerBIWorkspace> power_bi_workspaces { get; set; }
+        public virtual DbSet<PowerBIReport> power_bi_reports { get; set; }
+        public virtual DbSet<PowerBIDashboard> power_bi_dashboards { get; set; }
+        public virtual DbSet<PowerBIEventMetadata> power_bi_events { get; set; }
+
+        // Copilot Studio
+        public virtual DbSet<CopilotStudioBot> copilot_studio_bots { get; set; }
+        public virtual DbSet<CopilotStudioEventMetadata> copilot_studio_events { get; set; }
+
+        // Dataverse
+        public virtual DbSet<DataverseEntity> dataverse_entities { get; set; }
+        public virtual DbSet<DataverseEventMetadata> dataverse_events { get; set; }
         #endregion
     }
 

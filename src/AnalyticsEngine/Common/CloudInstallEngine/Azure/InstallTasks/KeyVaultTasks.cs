@@ -20,8 +20,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
     public class KeyVaultTask : InstallTaskInAzResourceGroup<KeyVaultResource>
     {
         public const string CONFIG_KEY_TENANT_ID = "tenantId";
-        public KeyVaultTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
+        private readonly bool _allowPublicAccess;
+
+        public KeyVaultTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
+            _allowPublicAccess = allowPublicAccess;
         }
 
         public override string TaskName => "get/create key vault";
@@ -45,9 +48,13 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             if (r == null)
             {
-                _logger.LogInformation($"Creating new key vault '{name}'...");
+                _logger.LogInformation($"Creating new key vault '{name}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")})...");
 
-                var newKeyVaultInfo = new KeyVaultCreateOrUpdateContent(AzureLocation, new KeyVaultProperties(tenantId, new KeyVaultSku(KeyVaultSkuFamily.A, KeyVaultSkuName.Standard)));
+                var props = new KeyVaultProperties(tenantId, new KeyVaultSku(KeyVaultSkuFamily.A, KeyVaultSkuName.Standard))
+                {
+                    PublicNetworkAccess = _allowPublicAccess ? "Enabled" : "Disabled"
+                };
+                var newKeyVaultInfo = new KeyVaultCreateOrUpdateContent(AzureLocation, props);
                 EnsureTagsOnNew(newKeyVaultInfo.Tags);
 
                 var serverCreateResult = await Container.GetKeyVaults().CreateOrUpdateAsync(WaitUntil.Completed, name, newKeyVaultInfo);
@@ -56,6 +63,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
             else
             {
                 _logger.LogInformation($"Found existing key vault '{r.Data.Name}'.");
+
+                var desiredAccess = _allowPublicAccess ? "Enabled" : "Disabled";
+                if (!string.Equals(r.Data.Properties.PublicNetworkAccess, desiredAccess, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation($"Updating key vault '{r.Data.Name}' public network access to '{desiredAccess}'...");
+                    var props = new KeyVaultProperties(r.Data.Properties.TenantId, r.Data.Properties.Sku)
+                    {
+                        PublicNetworkAccess = desiredAccess
+                    };
+                    var update = new KeyVaultCreateOrUpdateContent(AzureLocation, props);
+                    EnsureTagsOnNew(update.Tags);
+                    var updateResult = await Container.GetKeyVaults().CreateOrUpdateAsync(WaitUntil.Completed, name, update);
+                    r = updateResult.Value;
+                }
+
                 await EnsureTagsOnExisting(r.Data.Tags, r.GetTagResource());
             }
             return r;

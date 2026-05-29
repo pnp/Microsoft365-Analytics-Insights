@@ -143,6 +143,7 @@
     <Compile Include="Entities\AuditLog\SPEventFileName.cs" />
     <Compile Include="Entities\AuditLog\EventOperation.cs" />
     <Compile Include="Entities\AuditLog\SPEventType.cs" />
+    <Compile Include="Entities\AuditLog\PowerPlatformEvents.cs" />
     <Compile Include="Entities\WebTraffic\Hit.cs" />
     <Compile Include="Entities\KeyWord.cs" />
     <Compile Include="Entities\Language.cs" />
@@ -271,6 +272,14 @@
     <Compile Include="Migrations\202512011404129_CopilotExtendedDataAgentType.Designer.cs">
       <DependentUpon>202512011404129_CopilotExtendedDataAgentType.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202605141410030_PowerPlatformAuditLogging.cs" />
+    <Compile Include="Migrations\202605141410030_PowerPlatformAuditLogging.Designer.cs">
+      <DependentUpon>202605141410030_PowerPlatformAuditLogging.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs" />
+    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.Designer.cs">
+      <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -391,6 +400,12 @@
     <EmbeddedResource Include="Migrations\202512011404129_CopilotExtendedDataAgentType.resx">
       <DependentUpon>202512011404129_CopilotExtendedDataAgentType.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605141410030_PowerPlatformAuditLogging.resx">
+      <DependentUpon>202605141410030_PowerPlatformAuditLogging.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.resx">
+      <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
     </EmbeddedResource>
@@ -443,6 +458,9 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Azure.Core">
+      <Version>1.45.0</Version>
+    </PackageReference>
     <PackageReference Include="Azure.Identity">
       <Version>1.11.4</Version>
     </PackageReference>

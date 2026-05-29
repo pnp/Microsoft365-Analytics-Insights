@@ -94,6 +94,7 @@ namespace App.ControlPanel.Frames
                 SQLServerAdminUsername = azureStorageConfigControl1.SQLServerUsername,
                 SQLServerAdminPassword = azureStorageConfigControl1.SQLServerPassword,
                 ServiceBusName = azureStorageConfigControl1.ServiceBusName,
+                ServiceBusEnabled = azureStorageConfigControl1.ServiceBusEnabled,
                 RedisName = azureStorageConfigControl1.RedisName,
                 AllowTelemetry = installSolutionControl1.AllowTelemetry,
                 SolutionConfig = importJobSettingsSelection.Config,
@@ -122,6 +123,7 @@ namespace App.ControlPanel.Frames
                     AppServiceIntegrationSubnetName = networkingConfigControl1.AppServiceSubnetName,
                     AppServiceIntegrationSubnetAddressPrefix = networkingConfigControl1.AppServiceSubnetAddressPrefix,
                     DeployDnsZones = networkingConfigControl1.DeployDnsZones,
+                    AllowPublicAccess = networkingConfigControl1.AllowPublicAccess,
                     CustomEndpointNames = networkingConfigControl1.GetEndpointNames(),
                     HybridWorkerVmResourceId = networkingConfigControl1.HybridWorkerVmResourceId
                 }
@@ -180,6 +182,7 @@ namespace App.ControlPanel.Frames
             azureStorageConfigControl1.StorageAccount = config.StorageAccountName;
             azureStorageConfigControl1.RedisName = config.RedisName;
             azureStorageConfigControl1.ServiceBusName = config.ServiceBusName;
+            azureStorageConfigControl1.ServiceBusEnabled = config.ServiceBusEnabled;
 
             azurePaaSConfigControl1.AppInsightsName = config.AppInsightsName;
             azurePaaSConfigControl1.AppServicePlanName = config.AppServicePlanName;
@@ -201,6 +204,7 @@ namespace App.ControlPanel.Frames
                 networkingConfigControl1.AppServiceSubnetName = config.NetworkConfig.AppServiceIntegrationSubnetName;
                 networkingConfigControl1.AppServiceSubnetAddressPrefix = config.NetworkConfig.AppServiceIntegrationSubnetAddressPrefix;
                 networkingConfigControl1.DeployDnsZones = config.NetworkConfig.DeployDnsZones;
+                networkingConfigControl1.AllowPublicAccess = config.NetworkConfig.AllowPublicAccess;
                 networkingConfigControl1.SetEndpointNames(config.NetworkConfig.CustomEndpointNames);
                 networkingConfigControl1.HybridWorkerVmResourceId = config.NetworkConfig.HybridWorkerVmResourceId;
             }

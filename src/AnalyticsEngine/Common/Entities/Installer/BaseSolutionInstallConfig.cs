@@ -19,6 +19,7 @@ namespace Common.Entities.Installer
             this.SQLServerName = string.Empty;
             this.CognitiveServiceName = string.Empty;
             this.CognitiveServicesEnabled = true;
+            this.ServiceBusEnabled = true;
             this.AllowTelemetry = true;
 
             this.ConfigSchemaVersion = new Version(CONFIG_VERSION);
@@ -36,6 +37,12 @@ namespace Common.Entities.Installer
         public string AzureLocationName { get; set; } = null;
 
         public string ServiceBusName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Whether to provision Azure Service Bus and configure related runtime connection strings.
+        /// Service Bus is only required by the Teams calls/call-records import.
+        /// </summary>
+        public bool ServiceBusEnabled { get; set; } = true;
 
         public string StorageAccountName { get; set; } = string.Empty;
 
@@ -128,6 +135,15 @@ namespace Common.Entities.Installer
         /// Set to false if using custom DNS management (e.g. on-premises DNS or Azure DNS Private Resolver).
         /// </summary>
         public bool DeployDnsZones { get; set; } = true;
+
+        /// <summary>
+        /// Whether to allow public network access on Azure PaaS resources created/updated by the installer.
+        /// Only honoured when <see cref="Enabled"/> is true (VNet integration enabled). When VNet is disabled,
+        /// resources are always created with public access enabled (legacy/default behaviour).
+        /// Some customers' Azure policies disallow creation of PaaS resources with public access, so this can
+        /// be turned off to require all data-plane access to flow over private endpoints.
+        /// </summary>
+        public bool AllowPublicAccess { get; set; } = true;
 
         /// <summary>
         /// Custom private endpoint names. Leave empty/null to use auto-generated defaults (pe-{resourceName}-{suffix}).

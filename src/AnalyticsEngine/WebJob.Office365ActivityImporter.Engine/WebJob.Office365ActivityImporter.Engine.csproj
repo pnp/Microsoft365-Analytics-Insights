@@ -71,9 +71,13 @@
     <Compile Include="ActivityAPI\Copilot\GraphFileMetadataLoader.cs" />
     <Compile Include="ActivityAPI\Copilot\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\StagingClasses.cs" />
+    <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
+    <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
+    <Compile Include="ActivityAPI\PowerPlatform\StagingClasses.cs" />
     <Compile Include="ActivityAPI\Interfaces.cs" />
     <Compile Include="ActivityAPI\Loaders\ActivityReportLoader.cs" />
     <Compile Include="ActivityAPI\Loaders\ActivityWebImporter.cs" />
+    <Compile Include="ActivityAPI\Loaders\AuditLogContentDispatcher.cs" />
     <Compile Include="ActivityAPI\Loaders\ContentMetaDataLoader.cs" />
     <Compile Include="ActivityAPI\Loaders\WebContentMetaDataLoader.cs" />
     <Compile Include="ActivityAPI\ActivityReportSqlPersistenceManager.cs" />
@@ -94,6 +98,7 @@
     <Compile Include="Entities\Serialisation\CopilotAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\ExchangeAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\GeneralAuditLogContent.cs" />
+    <Compile Include="Entities\Serialisation\PowerPlatformAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\SharePointAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\StreamAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\UsageReports\AppPlatformUserActivityDetail.cs" />
@@ -211,6 +216,13 @@
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_teams_copilot_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\common_upsert_copilot_agents.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_activity_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_share_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_share_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_bi_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_copilot_studio_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_dataverse_events_from_staging_table.sql" />
     <Content Include="Resources\Insert Activity from Staging Table.sql" />
   </ItemGroup>
   <ItemGroup>
@@ -228,6 +240,9 @@
   <ItemGroup>
     <PackageReference Include="Azure.AI.TextAnalytics">
       <Version>5.3.0</Version>
+    </PackageReference>
+    <PackageReference Include="Azure.Core">
+      <Version>1.45.0</Version>
     </PackageReference>
     <PackageReference Include="Azure.Identity">
       <Version>1.11.4</Version>
