@@ -106,6 +106,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="ActivityReportSetMinMaxTests.cs" />
+    <Compile Include="AppInsightsConnectionStringParserTests.cs" />
+    <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
     <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
@@ -126,6 +129,8 @@
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="SimplePropsDicTests.cs" />
+    <Compile Include="PageUpdateEventListParseTests.cs" />
+    <Compile Include="UserGroupsCacheTtlTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
