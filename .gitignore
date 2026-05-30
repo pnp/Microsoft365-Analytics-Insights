@@ -32,3 +32,7 @@
 /src/SPO/AITracker/DevConfig.json
 /src/SPO/AITracker/aitracker.js
 /src/AnalyticsEngine/Directory.Build.props
+
+# VSTest output (vstest.console.exe writes TRX logs + per-run subfolders here)
+**/TestResults/
+*.trx
