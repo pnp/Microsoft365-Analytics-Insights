@@ -98,10 +98,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_onmicrosoft_com/Documents/MyDoc.docx
                 try
                 {
-                    // Currently we can't filter by webUrl, so we have to get all items and filter client side
+                    // Currently we can't filter by webUrl, so we have to get all items and filter client side.
+                    // Walk all pages: the previous first-page-only call silently returned null for any
+                    // item past page 1, so Copilot file context for items in large lists was unresolved.
                     var listItems = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items
                         .Request().Select("id,webUrl").GetAsync();
-                    if (listItems != null)
+
+                    while (listItems != null)
                     {
                         foreach (var i in listItems)
                         {
@@ -110,6 +113,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                                 return new SpoDocumentFileInfo(i, site);
                             }
                         }
+                        if (listItems.NextPageRequest == null) break;
+                        listItems = await listItems.NextPageRequest.GetAsync();
                     }
                 }
                 catch (ServiceException ex)
