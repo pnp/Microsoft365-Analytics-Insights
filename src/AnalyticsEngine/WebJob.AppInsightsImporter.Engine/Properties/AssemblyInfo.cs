@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 // General Information about an assembly is controlled through the following
@@ -12,6 +13,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("Copyright © __year__")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
+
+// Allow Tests.UnitTests to exercise the internal connection-string parser, KQL
+// builder, and other internal helpers in this assembly.
+[assembly: InternalsVisibleTo("Tests.UnitTests")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
