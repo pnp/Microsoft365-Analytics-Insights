@@ -185,6 +185,10 @@ namespace WebJob.Office365ActivityImporter.Engine
                     .Include(e => e.User)
                     .Where(e => ids.Contains(e.Id)).ToList();
 
+                // O(1) lookup by Id - the previous foreach (...) eventsJustSaved.Where(e => e.Id == log.Id)
+                // pattern was O(n^2) over the batch and dominated CPU for large imports.
+                var eventsJustSavedById = eventsJustSaved.ToDictionary(e => e.Id);
+
                 var spEventsJustSaved = db.sharepoint_events
                     .Include(spe => spe.AuditEvent)
                     .Where(e => ids.Contains(e.EventID)).ToList();
@@ -204,7 +208,8 @@ namespace WebJob.Office365ActivityImporter.Engine
                     }
 #endif
                     // Add metadata
-                    var changesMade = await log.ProcessExtendedProperties(saveSession, eventsJustSaved.Where(e => e.Id == log.Id).SingleOrDefault(), _telemetry);
+                    eventsJustSavedById.TryGetValue(log.Id, out var savedEvent);
+                    var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _telemetry);
                     if (changesMade)
                         changesMadeCount++;
 
