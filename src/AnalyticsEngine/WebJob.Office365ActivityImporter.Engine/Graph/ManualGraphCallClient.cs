@@ -28,32 +28,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
         public async Task<T> GetAsyncWithThrottleRetries<T>(string url, Action<string> jsonStringAction)
         {
-            var callResponse = await this.GetAsyncWithThrottleRetries(url, base._logger);
-            var callResponseBody = await callResponse.Content.ReadAsStringAsync();
+            // 'using' so the underlying socket is released promptly rather than waiting for finalisation.
+            using (var callResponse = await this.GetAsyncWithThrottleRetries(url, base._logger))
+            {
+                var callResponseBody = await callResponse.Content.ReadAsStringAsync();
 
-            try
-            {
-                callResponse.EnsureSuccessStatusCode();
-            }
-            catch (HttpRequestException ex)
-            {
-                _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
-                throw;
-            }
+                try
+                {
+                    callResponse.EnsureSuccessStatusCode();
+                }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
+                    throw;
+                }
 
-            // Get call
-            T dto = default(T);
-            try
-            {
-                dto = JsonConvert.DeserializeObject<T>(callResponseBody);
-            }
-            catch (JsonReaderException ex)
-            {
-                _logger.LogError(ex, $"Failed to deserialize JSON response from {url} with error '{ex.Message}'. Response body: {callResponseBody}");
-            }
+                // Get call
+                T dto = default(T);
+                try
+                {
+                    dto = JsonConvert.DeserializeObject<T>(callResponseBody);
+                }
+                catch (JsonReaderException ex)
+                {
+                    _logger.LogError(ex, $"Failed to deserialize JSON response from {url} with error '{ex.Message}'. Response body: {callResponseBody}");
+                }
 
-            jsonStringAction?.Invoke(callResponseBody);
-            return dto;
+                jsonStringAction?.Invoke(callResponseBody);
+                return dto;
+            }
         }
     }
 }
