@@ -104,26 +104,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             {
                 if (_taxProps == null)
                 {
-                    if (string.IsNullOrEmpty(this.TaxonomyPropsString)) _taxProps = new List<TaxonomoyProperty>();
-
-                    else
-                    {
-                        var success = false;
-                        try
-                        {
-                            _taxProps = JsonConvert.DeserializeObject<List<TaxonomoyProperty>>(this.TaxonomyPropsString);
-                            success = true;
-                        }
-                        catch (JsonException)
-                        {
-                            // Ignore
-                        }
-                        if (!success)
-                        {
-                            Console.WriteLine($"\nERROR:Unexpected {nameof(TaxonomyPropsString)} value for URL {Url}: '{TaxonomyPropsString}'");
-                            _taxProps = new List<TaxonomoyProperty>();
-                        }
-                    }
+                    _taxProps = TryDeserializeList<TaxonomoyProperty>(this.TaxonomyPropsString, nameof(TaxonomyPropsString));
                 }
                 return _taxProps;
             }
@@ -137,26 +118,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             {
                 if (_pageComments == null)
                 {
-                    if (string.IsNullOrEmpty(this.CommentsString)) _pageComments = new List<PageCommentEvent>();
-
-                    else
-                    {
-                        var success = false;
-                        try
-                        {
-                            _pageComments = JsonConvert.DeserializeObject<List<PageCommentEvent>>(this.CommentsString);
-                            success = true;
-                        }
-                        catch (JsonException)
-                        {
-                            // Ignore
-                        }
-                        if (!success)
-                        {
-                            Console.WriteLine($"\nERROR:Unexpected {nameof(CommentsString)} value for URL {Url}: '{CommentsString}'");
-                            _pageComments = new List<PageCommentEvent>();
-                        }
-                    }
+                    _pageComments = TryDeserializeList<PageCommentEvent>(this.CommentsString, nameof(CommentsString));
                 }
                 return _pageComments;
             }
@@ -170,28 +132,31 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             {
                 if (_likes == null)
                 {
-                    if (string.IsNullOrEmpty(this.LikesString)) _likes = new List<UserBasedCustomAIEvent>();
-
-                    else
-                    {
-                        var success = false;
-                        try
-                        {
-                            _likes = JsonConvert.DeserializeObject<List<UserBasedCustomAIEvent>>(this.LikesString);
-                            success = true;
-                        }
-                        catch (JsonException)
-                        {
-                            // Ignore
-                        }
-                        if (!success)
-                        {
-                            Console.WriteLine($"\nERROR:Unexpected {nameof(LikesString)} value for URL {Url}: '{LikesString}'");
-                            _likes = new List<UserBasedCustomAIEvent>();
-                        }
-                    }
+                    _likes = TryDeserializeList<UserBasedCustomAIEvent>(this.LikesString, nameof(LikesString));
                 }
                 return _likes;
+            }
+        }
+
+        /// <summary>
+        /// Attempt to deserialize <paramref name="json"/> as a <see cref="List{T}"/>; on parse failure or empty input
+        /// returns an empty list and writes a diagnostic note. Replaces three near-identical lazy-parse blocks
+        /// that each duplicated try/catch + Console.WriteLine fallback logic.
+        /// </summary>
+        private List<T> TryDeserializeList<T>(string json, string fieldName)
+        {
+            if (string.IsNullOrEmpty(json)) return new List<T>();
+            try
+            {
+                var parsed = JsonConvert.DeserializeObject<List<T>>(json);
+                return parsed ?? new List<T>();
+            }
+            catch (JsonException)
+            {
+                // Parse-error visibility: no logger is injected into the DTO so we still fall back
+                // to stderr until callers thread one through. See audit follow-up TEST-09 in PR notes.
+                Console.WriteLine($"\nERROR:Unexpected {fieldName} value for URL {Url}: '{json}'");
+                return new List<T>();
             }
         }
 
