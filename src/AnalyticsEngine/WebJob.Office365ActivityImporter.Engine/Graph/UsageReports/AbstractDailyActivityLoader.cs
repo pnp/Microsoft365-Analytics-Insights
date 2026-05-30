@@ -45,7 +45,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Go back one extra day always. Otherwise we risk asking for data too soon...
                 // Example: Message: {"error":{"code":"InvalidArgument","message":"Invalid date value specified: $DateTime.Now. Only support data for the past 28 days."}}
                 var daysBack = (daysBackIdx + 1) * -1;
-                var dt = DateTime.Now.AddDays(daysBack);
+                // Graph Usage Reports API operates in UTC; DateTime.Now on a non-UTC server
+                // produces the wrong date bucket near midnight.
+                var dt = DateTime.UtcNow.AddDays(daysBack);
 
                 Telemetry.LogInformation($"Loading {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")}");
 
@@ -74,15 +76,37 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             Telemetry.LogInformation($"Saving {this.GetType().Name} for {LoadedReportPages.Keys.Count} dates");
 
+            // Compute total once. The previous "LoadedReportPages.SelectMany(r => r.Value).Count()"
+            // call ran on every 1000-row progress print, making progress O(n^2).
+            var totalReports = LoadedReportPages.Sum(kv => kv.Value.Count);
+
+            // Pre-fetch all existing reports across the whole date range in one query - the previous
+            // code issued one EF query per date (up to 28 sequential round-trips per loader run).
+            Dictionary<DateTime, List<TReportDbType>> existingByDate;
+            if (LoadedReportPages.Count > 0)
+            {
+                var minDate = LoadedReportPages.Keys.Min().Date;
+                var maxDate = LoadedReportPages.Keys.Max().Date;
+                var rangeRows = await GetTable(lookupCache.DB)
+                    .Where(t => t.Date >= minDate && t.Date <= maxDate)
+                    .ToListAsync();
+                existingByDate = rangeRows
+                    .GroupBy(r => r.Date.Date)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+            }
+            else
+            {
+                existingByDate = new Dictionary<DateTime, List<TReportDbType>>();
+            }
+
             // For each day in dataset (Key)
             foreach (var dateTime in LoadedReportPages.Keys)
             {
                 // Pre-cache all reports on that date
-                var allReportsOnDate = await GetTable(lookupCache.DB).Where(t =>
-                                                t.Date.Year == dateTime.Year &&
-                                                t.Date.Month == dateTime.Month &&
-                                                t.Date.Day == dateTime.Day
-                                            ).ToListAsync();
+                if (!existingByDate.TryGetValue(dateTime.Date, out var allReportsOnDate))
+                {
+                    allReportsOnDate = new List<TReportDbType>();
+                }
 
                 // Look through Graph results & compare with already saved reports for this date
                 foreach (var reportPage in LoadedReportPages[dateTime])
@@ -97,24 +121,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                     // Do we have a cached ID for the lookup?
                     int? lookupId = null;
-                    lock (userEmailToDbIdCache)     // Lock between import threads
+                    bool needsResolve = false;
+                    lock (userEmailToDbIdCache)
                     {
                         lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
+                        if (lookupId == null) needsResolve = true;
+                    }
 
-                        if (lookupId == null)
+                    if (needsResolve)
+                    {
+                        // Resolve the lookup OUTSIDE the lock. The previous .Result-inside-lock pattern
+                        // held a shared mutex through a full DB round-trip, starving all parallel import
+                        // threads on the same cache.
+                        var lookup = await reportPage.GetOrCreateLookup(lookupCache);
+
+                        // Sanity
+                        if (!lookup.IsSavedToDB)
                         {
-                            // See if there's already a log defined for this date + lookup (usually "user")
-                            var lookup = reportPage.GetOrCreateLookup(lookupCache).Result;
+                            throw new InvalidOperationException("Cannot use unsaved lookups for activity records");
+                        }
 
-                            // Sanity
-                            if (!lookup.IsSavedToDB)
+                        lock (userEmailToDbIdCache)
+                        {
+                            // Re-check in case another thread populated it while we were resolving.
+                            lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
+                            if (lookupId == null)
                             {
-                                throw new InvalidOperationException("Cannot use unsaved lookups for activity records");
+                                lookupId = lookup.ID;
+                                userEmailToDbIdCache.AddOrUpdateForName<TReportDbType>(reportPage.LookupFieldValue, lookupId.Value);
                             }
-
-                            // Cache lookup
-                            lookupId = lookup.ID;
-                            userEmailToDbIdCache.AddOrUpdateForName<TReportDbType>(reportPage.LookupFieldValue, lookupId.Value);
                         }
                     }
 
@@ -123,7 +158,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     // Output progress every 1000 imports
                     if (i > 0 && i % 1000 == 0)
                     {
-                        Console.WriteLine($"{this.GetType().Name}: Saved {i} / {LoadedReportPages.SelectMany(r => r.Value).Count()}");
+                        Console.WriteLine($"{this.GetType().Name}: Saved {i} / {totalReports}");
                     }
 
                     // Create new log if necesary
@@ -136,6 +171,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                         // Add new logs to list to insert
                         allInserts.Add(dateRequestedLog);
+                        // Track in the per-date cache so a duplicate within the same import doesn't insert again
+                        allReportsOnDate.Add(dateRequestedLog);
                     }
 
                     // Set log stats
