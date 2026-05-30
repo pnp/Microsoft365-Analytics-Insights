@@ -310,7 +310,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public void Dispose()
         {
-            DisposeAsyncCore().ConfigureAwait(false);
+            // Sync-over-async in Dispose is acceptable here: this WebJob doesn't run inside an
+            // ASP.NET request context, so there's no captured SynchronizationContext to deadlock on.
+            // The previous fire-and-forget pattern dropped the returned ValueTask, so the host
+            // could exit while ServiceBus messages were still being drained and any teardown
+            // exception was silently swallowed.
+            try
+            {
+                DisposeAsyncCore().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _telemetry?.LogError(ex, $"Error during {nameof(CallQueueProcessor)} dispose: {ex.Message}");
+            }
             GC.SuppressFinalize(this);
         }
 
@@ -325,12 +337,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     await _processor.StopProcessingAsync();
                 }
 
-                await _processor.DisposeAsync().ConfigureAwait(false);
-            }
+                // Unsubscribe handlers BEFORE disposing the processor (after disposal the
+                // event accessors can throw ObjectDisposedException) and before nulling the field.
+                _processor.ProcessMessageAsync -= ProcessSBMessagesAsync;
+                _processor.ProcessErrorAsync -= ExceptionReceivedHandler;
 
-            _processor.ProcessMessageAsync -= ProcessSBMessagesAsync;
-            _processor.ProcessErrorAsync -= ExceptionReceivedHandler;
-            _processor = null;
+                await _processor.DisposeAsync().ConfigureAwait(false);
+
+                _processor = null;
+            }
         }
 
         #endregion
