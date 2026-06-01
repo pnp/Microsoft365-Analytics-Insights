@@ -239,9 +239,8 @@ END
             //
             // On customer DBs with very large audit_events tables (100M+ rows), step 5
             // (WITH CHECK CHECK CONSTRAINT) is the slowest - it scans every row to
-            // validate the FK. The default EF command timeout in Configuration.cs
-            // applies; if your DB is exceptionally large you may want to run the
-            // SQL manually with a longer timeout instead of relying on auto-apply.
+            // validate the FK. Configuration.cs sets CommandTimeout = 0 (infinite) so
+            // the migration will not time out even on multi-hour validation scans.
             Console.WriteLine("DB SCHEMA: Applying 'AddAuditEventsOperationFK'. On large audit_events tables this can take minutes to hours due to FK validation; check the SQL session for live progress (RAISERROR ... WITH NOWAIT).");
             Sql(Up_Sql, suppressTransaction: true);
         }

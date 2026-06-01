@@ -9,8 +9,14 @@ namespace Common.Entities.Migrations
         public Configuration()
         {
             AutomaticMigrationsEnabled = true;
-            const int TWO_HOURS = 60 * 60;
-            this.CommandTimeout = TWO_HOURS;
+
+            // Migrations run during installer / DatabaseUpgrader.CheckDbUpgraded, where the
+            // operator is watching and is happy to wait. Some upgrades (notably the audit_events
+            // FK validation - see AddAuditEventsOperationFK and the "Audit Events FK Upgrade"
+            // wiki page) can run for many hours on very large tables (100M+ rows), well beyond
+            // any reasonable per-command timeout. Use 0 = infinite so the migration completes
+            // rather than aborting mid-way through an FK validation scan.
+            this.CommandTimeout = 0;
         }
 
         public void OutputCurrentMigration(AnalyticsEntitiesContext context)
