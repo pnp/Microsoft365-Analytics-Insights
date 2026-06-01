@@ -150,9 +150,10 @@ ALTER TABLE [dbo].[urls] ALTER COLUMN [full_url] nvarchar(max) NOT NULL;");
                 await EnsureSchemaAsync(db);
                 await SetLegacyStateAsync(db);
 
-                // 1701 characters - one over the limit.
-                var tooLong = "https://contoso.sharepoint.com/" + new string('a', 1701 - "https://contoso.sharepoint.com/".Length + 1);
-                Assert.IsTrue(tooLong.Length > MaxLen, "Test setup: URL must exceed the limit.");
+                // 1701 characters - one over the 1700 limit.
+                const string prefix = "https://contoso.sharepoint.com/";
+                var tooLong = prefix + new string('a', (MaxLen + 1) - prefix.Length);
+                Assert.AreEqual(MaxLen + 1, tooLong.Length, "Test setup: URL must be exactly one character over the limit.");
                 var id = await InsertUrlAsync(db, tooLong);
 
                 try
