@@ -5,6 +5,8 @@ using Common.Entities.Redis.Teams;
 using Common.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -24,7 +26,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public O365Team()
         {
             this.Users = new List<BaseUser>();
-            this.OwnerUserAccounts = new List<Microsoft.Graph.User>();
+            this.OwnerUserAccounts = new List<Microsoft.Graph.Models.User>();
         }
 
         public O365Team(Team team) : this()
@@ -61,7 +63,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// Graph users in the Team. 
         /// </summary>
         public List<BaseUser> Users { get; set; }
-        public List<Microsoft.Graph.User> OwnerUserAccounts { get; set; }
+        public List<Microsoft.Graph.Models.User> OwnerUserAccounts { get; set; }
 
         public List<UserReaction> AllReactions { get; set; } = new List<UserReaction>();
 
@@ -188,11 +190,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             var teamId = parentGroup.Id;
             // Get Team details from Graph and convert to our own class
-            var team = await context.GraphClient.Teams[teamId].Request().GetAsync();
+            var team = await context.GraphClient.Teams[teamId].GetAsync();
             var fullTeam = new O365Team(team);
 
             // Populate new Teams definition with graph data
-            var parentGroupFull = await context.GraphClient.Groups[teamId].Request().Expand("Owners").GetAsync();
+            var parentGroupFull = await context.GraphClient.Groups[teamId].GetAsync(rc =>
+            {
+                rc.QueryParameters.Expand = new[] { "Owners" };
+            });
 
             // Add owners
             foreach (var groupOwner in parentGroupFull.Owners)
@@ -211,7 +216,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 #if DEBUG
             Console.WriteLine($"\nReading team '{parentGroup.DisplayName}':");
 #endif
-            var members = await LoadMembers(context.GraphClient.Groups[parentGroup.Id].Members.Request(), telemetry);
+            var members = await LoadAllGroupMembers(context.GraphClient, parentGroup.Id, telemetry);
 
             foreach (var member in members)
             {
@@ -232,13 +237,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
 
             // Load apps
-            var apps = await context.GraphClient.Teams[teamId].InstalledApps.Request().Expand("TeamsAppDefinition,TeamsApp").GetAsync();
-            fullTeam.InstalledApps = apps;
+            var appsPage = await context.GraphClient.Teams[teamId].InstalledApps.GetAsync(rc =>
+            {
+                rc.QueryParameters.Expand = new[] { "TeamsAppDefinition", "TeamsApp" };
+            });
+            fullTeam.InstalledApps = appsPage?.Value ?? new List<TeamsAppInstallation>();
 
             // Channels and tabs:
-            var channelsLoaded = await context.GraphClient.Teams[teamId].Channels.Request().GetAsync();
-            foreach (var channel in channelsLoaded)
-                fullTeam.Channels.Add(new ChannelWithReactions(channel));
+            var channelsLoaded = await context.GraphClient.Teams[teamId].Channels.GetAsync();
+            if (channelsLoaded?.Value != null)
+            {
+                foreach (var channel in channelsLoaded.Value)
+                    fullTeam.Channels.Add(new ChannelWithReactions(channel));
+            }
 
 
             var teamTokenManager = new TeamTokenManager(fullTeam, appConfig, telemetry);
@@ -252,7 +263,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     // Clear delta cache if new channel in DB. Mainly for debug reasons but also if there's no channel, we need to make sure we ignore any delta code (just in case)
                     await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(fullTeam.Id, channel.Id, telemetry);
                 }
-                channel.Tabs = await context.GraphClient.Teams[teamId].Channels[channel.Id].Tabs.Request().Expand("teamsApp").GetAsync();
+                var tabsPage = await context.GraphClient.Teams[teamId].Channels[channel.Id].Tabs.GetAsync(rc =>
+                {
+                    rc.QueryParameters.Expand = new[] { "teamsApp" };
+                });
+                channel.Tabs = tabsPage?.Value ?? new List<TeamsTab>();
             }
 
             // Get token for Team
@@ -319,25 +334,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         }
         #endregion
 
-        private static async Task<IGroupMembersCollectionWithReferencesPage> LoadMembers(IGroupMembersCollectionWithReferencesRequest req, ILogger telemetry)
+        private static async Task<List<DirectoryObject>> LoadAllGroupMembers(GraphServiceClient client, string groupId, ILogger telemetry)
         {
-            return await LoadMembers(req, telemetry, 0);
-        }
-        private static async Task<IGroupMembersCollectionWithReferencesPage> LoadMembers(IGroupMembersCollectionWithReferencesRequest req, ILogger telemetry, int page)
-        {
-            var results = await req.GetAsync();
-            if (results.NextPageRequest != null)
-            {
-                telemetry.LogInformation($"Load members page {++page}");
+            // Safety cap on paging: at 200k-user scale a single group rarely exceeds ~50k members
+            // but a runaway nextLink shouldn't ever fill memory unbounded. 200k members per group
+            // is comfortably above any realistic limit.
+            const int MAX_MEMBERS = 200_000;
+            var all = new List<DirectoryObject>();
 
-                var nextResults = await LoadMembers(results.NextPageRequest, telemetry, page++);
-                foreach (var item in nextResults)
+            var firstPage = await client.Groups[groupId].Members.GetAsync();
+            if (firstPage == null) return all;
+
+            int loaded = 0;
+            var iterator = PageIterator<DirectoryObject, DirectoryObjectCollectionResponse>
+                .CreatePageIterator(client, firstPage, item =>
                 {
-                    results.Add(item);
-                }
+                    all.Add(item);
+                    loaded++;
+                    return loaded < MAX_MEMBERS;
+                });
+
+            await iterator.IterateAsync();
+
+            if (iterator.State == PagingState.Paused)
+            {
+                telemetry.LogWarning($"Group {groupId}: hit MAX_MEMBERS ({MAX_MEMBERS:N0}). Returning partial list of {all.Count:N0} members.");
             }
 
-            return results;
+            return all;
         }
     }
 }

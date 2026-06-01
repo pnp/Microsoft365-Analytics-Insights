@@ -2,6 +2,8 @@
 using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -29,17 +31,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public async Task CreateOrUpdateWebhook(Uri webAppUrl, string secret)
         {
-            var allSubs = await this.Client.Subscriptions.Request().GetAsync();
+            var allSubs = await this.Client.Subscriptions.GetAsync();
 
             // https://docs.microsoft.com/en-us/graph/api/resources/webhooks?view=graph-rest-1.0
             const string CALL_TYPE = "/communications/callRecords";
-            var subs = allSubs.Where(s => s.Resource == CALL_TYPE && s.NotificationUrl == webAppUrl.ToString());
-            if (subs.Count() == 0)
+            var subs = (allSubs?.Value ?? new System.Collections.Generic.List<Subscription>())
+                .Where(s => s.Resource == CALL_TYPE && s.NotificationUrl == webAppUrl.ToString())
+                .ToList();
+            if (subs.Count == 0)
             {
                 Telemetry.LogInformation($"No subscription found for call-records, for URL '{webAppUrl}'. Creating...");
                 try
                 {
-                    var result = await this.Client.Subscriptions.Request().AddAsync(new Subscription()
+                    var result = await this.Client.Subscriptions.PostAsync(new Subscription()
                     {
                         NotificationUrl = webAppUrl.ToString(),
                         Resource = CALL_TYPE,
@@ -49,7 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     });
                     Telemetry.LogInformation($"Created subscription id '{result.Id}' for webhook.");
                 }
-                catch (ServiceException ex)
+                catch (ODataError ex)
                 {
                     Telemetry.LogError(ex, $"Couldn't create webhook at URL '{webAppUrl}'. Got exception: '{ex.Message}'");
                 }
@@ -59,7 +63,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 // https://docs.microsoft.com/en-us/graph/api/subscription-update?view=graph-rest-beta&tabs=http
 
-                var result = this.Client.Subscriptions[subs.First().Id].Request().UpdateAsync(
+                var result = await this.Client.Subscriptions[subs.First().Id].PatchAsync(
                     new Subscription
                     {
                         ExpirationDateTime = DateTime.Now.AddDays(2)

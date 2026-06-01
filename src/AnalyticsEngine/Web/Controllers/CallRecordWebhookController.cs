@@ -81,7 +81,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 telemetry.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
                 var errResponse = new HttpResponseMessage(HttpStatusCode.BadRequest);
-                errResponse.Content = new StringContent($"Could not find {nameof(ChangeNotificationCollection)} in body",
+                errResponse.Content = new StringContent($"Could not find {nameof(GraphChangeNotificationList)} in body",
                     System.Text.Encoding.UTF8, "text/plain");
                 return errResponse;
             }

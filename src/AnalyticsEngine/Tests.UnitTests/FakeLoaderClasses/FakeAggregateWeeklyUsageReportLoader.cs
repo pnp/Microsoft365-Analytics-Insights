@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
