@@ -112,7 +112,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
             for (int i = 0; i < users.Count; i += _userChunkSize)
             {
-                var chunk = users.Skip(i).Take(_userChunkSize).ToList();
+                // GetRange instead of Skip().Take() - Skip() on a List walks past every
+                // prior element, so chunking N users in slices of K costs O(N^2/K). At
+                // 200k users with K=25 that's ~800M wasted iterations just for slicing.
+                var chunk = users.GetRange(i, Math.Min(_userChunkSize, users.Count - i));
                 _telemetry.LogInformation(
                     $"Processing user chunk {(i / _userChunkSize) + 1} of " +
                     $"{(users.Count + _userChunkSize - 1) / _userChunkSize} ({chunk.Count} users).");

@@ -57,9 +57,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (userIds.Count > 0)
             {
                 const int SQL_BATCH_SIZE = 10000;
+                // GetRange instead of Skip().Take() - Skip() on a List walks past every prior
+                // element, so chunking N ids in slices of K costs O(N^2/K). At 200k users this
+                // is ~2M wasted iterations just for the slicing.
                 for (int i = 0; i < userIds.Count; i += SQL_BATCH_SIZE)
                 {
-                    var batchIds = userIds.Skip(i).Take(SQL_BATCH_SIZE).ToList();
+                    var batchCount = Math.Min(SQL_BATCH_SIZE, userIds.Count - i);
+                    var batchIds = userIds.GetRange(i, batchCount);
                     var idList = string.Join(",", batchIds);
                     await db.Database.ExecuteSqlCommandAsync(
                         $"DELETE FROM dbo.user_license_type_lookups WHERE user_id IN ({idList})");
@@ -71,6 +75,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 if (user.LicenseLookups != null)
                     user.LicenseLookups.Clear();
+            }
+
+            // Build the UPN dictionary ONCE for the whole tenant and reuse for every SKU.
+            // Previous code rebuilt this 200k-entry dictionary inside AddSkuForUsers on every
+            // SKU iteration - 30 SKUs * 200k users = 6M unnecessary string allocations.
+            // OrdinalIgnoreCase comparer makes .ToLower() on keys redundant.
+            var dbUsersByUpn = new Dictionary<string, Common.Entities.User>(
+                graphFoundDbUsers.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var u in graphFoundDbUsers)
+            {
+                if (!string.IsNullOrEmpty(u.UserPrincipalName))
+                {
+                    dbUsersByUpn[u.UserPrincipalName] = u;
+                }
             }
 
             // Track which (LicenseType-display-name, user_id) pairs have already been queued
@@ -87,8 +105,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Load users with this SKU
                 var allUsersWithSku = await _userLoader.LoadUsersBySku(sku.SkuId.Value);
 
-                // Update all
-                await AddSkuForUsers(graphFoundDbUsers, allUsersWithSku, sku, db, assignedLicenses);
+                // Update all - reuse the hoisted dbUsersByUpn dictionary.
+                await AddSkuForUsers(dbUsersByUpn, allUsersWithSku, sku, db, assignedLicenses);
 
                 // Clear the SKU users list to free memory
                 allUsersWithSku.Clear();
@@ -103,25 +121,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Add SKU licenses for specific users
+        /// Add SKU licenses for specific users. The <paramref name="dbUsersByUpn"/> dictionary
+        /// is built once per import in <see cref="ProcessSKUsForAllUsers"/> and reused across
+        /// all SKUs - rebuilding it per SKU at 200k users x ~30 SKUs costs millions of
+        /// unnecessary string allocations.
         /// </summary>
         public async Task AddSkuForUsers(
-            List<Common.Entities.User> graphFoundDbUsers,
+            Dictionary<string, Common.Entities.User> dbUsersByUpn,
             List<Microsoft.Graph.User> usersWithSku,
             SubscribedSku sku,
             AnalyticsEntitiesContext db,
             HashSet<(string licenseName, int userId)> assignedLicenses = null)
         {
-            // Create dictionary for O(1) lookup of DB users by UPN
-            var dbUsersByUpn = graphFoundDbUsers
-                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
-                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
-
             var relevantDbUsers = new List<Common.Entities.User>();
             foreach (var graphUser in usersWithSku)
             {
+                // dbUsersByUpn is OrdinalIgnoreCase so we can look up with the original UPN
+                // (no .ToLower() allocation per Graph user).
                 if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) &&
-                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName.ToLower(), out var dbUser))
+                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName, out var dbUser))
                 {
                     relevantDbUsers.Add(dbUser);
                 }
@@ -179,8 +197,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _telemetry.LogInformation($"User import - Skipped {duplicatesSkipped.ToString("N0")} duplicate license lookups for SKU '{sku.SkuPartNumber}' (display-name '{licence.Name}' already assigned via another SKU).");
             }
 
-            // Clear dictionaries and lists to free memory
-            dbUsersByUpn.Clear();
+            // Clear list to free memory. Do NOT clear dbUsersByUpn here - it is owned by
+            // ProcessSKUsForAllUsers and reused across SKUs.
             relevantDbUsers.Clear();
         }
 

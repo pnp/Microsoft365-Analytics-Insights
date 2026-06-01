@@ -35,9 +35,12 @@
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
     <Compile Include="CopilotTestBase.cs" />
+    <Compile Include="PageUpdateManagerPerfTests.cs" />
+    <Compile Include="PerfRegressionTests.cs" />
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
+    <Compile Include="UserImportCaseSensitivityTests.cs" />
     <Compile Include="UserMetadataUpdaterBasicTests.cs" />
     <Compile Include="UserMetadataUpdaterInsertTests.cs" />
     <Compile Include="UserMetadataUpdaterLicenseTests.cs" />
