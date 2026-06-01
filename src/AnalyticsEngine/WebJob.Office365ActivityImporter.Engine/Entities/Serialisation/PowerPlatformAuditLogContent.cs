@@ -194,28 +194,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     }
 
     /// <summary>
-    /// Audit-log payload for the 'Dynamics365' workload (Dataverse CreateRecord / UpdateRecord / DeleteRecord).
-    /// Captures depth-of-engagement signal for Dataverse.
-    /// </summary>
-    public class DataverseAuditLogContent : AbstractAuditLogContent
-    {
-        [JsonProperty("EnvironmentName")]
-        public string EnvironmentName { get; set; }
-
-        [JsonProperty("EntityName")]
-        public string EntityName { get; set; }
-
-        [JsonProperty("RecordId")]
-        public string RecordId { get; set; }
-
-        public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent, ILogger logger)
-        {
-            await saveBatch.PowerPlatformEventResolver.SaveSingleDataverseEventToSqlStaging(this, relatedAuditEvent);
-            return true;
-        }
-    }
-
-    /// <summary>
     /// A single OpenTelemetry-style key/value pair on a PowerPlatformAdministratorActivityRecord.
     /// </summary>
     public class PowerPlatformProperty
@@ -295,7 +273,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
             if (string.IsNullOrEmpty(resourceType))
             {
-                logger?.LogInformation($"PowerPlatform admin activity: skipping record - no '{ActivityImportConstants.PowerPlatformProps.ResourceType}' property, so this event is not tied to a tracked Power App or Cloud Flow resource (operation='{Operation}', id='{Id}'). This is expected for operations like ApiEndpointCallEvent and most Dataverse / connector events.");
+                logger?.LogInformation($"PowerPlatform admin activity: skipping record - no '{ActivityImportConstants.PowerPlatformProps.ResourceType}' property, so this event is not tied to a tracked Power App or Cloud Flow resource (operation='{Operation}', id='{Id}'). This is expected for operations like ApiEndpointCallEvent and connector-only events.");
             }
             else
             {

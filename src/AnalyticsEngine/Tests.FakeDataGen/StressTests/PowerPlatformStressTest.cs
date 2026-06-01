@@ -12,9 +12,9 @@ namespace Tests.FakeDataGen.StressTests
 {
     /// <summary>
     /// Stress test for the Power Platform event-staging + SQL-commit pipeline.
-    /// Covers the five adoption workloads served by PowerPlatformAuditEventManager:
+    /// Covers the four adoption workloads served by PowerPlatformAuditEventManager:
     /// Power Apps (with share + connector events), Power Automate (with share + connector events),
-    /// Power BI report/dashboard activity, Copilot Studio bots, and Dataverse record operations.
+    /// Power BI report/dashboard activity, and Copilot Studio bots.
     /// </summary>
     public class PowerPlatformStressTest : BaseStressTest
     {
@@ -29,7 +29,6 @@ namespace Tests.FakeDataGen.StressTests
         private static readonly string[] ShareRoles = { "CanView", "CanEdit", "Owner" };
         private static readonly string[] Connectors = { "shared_sharepointonline", "shared_office365", "shared_teams", "shared_onedriveforbusiness", "shared_sql", "shared_outlookmessage" };
         private static readonly string[] ReportTypes = { "PowerBIReport", "PaginatedReport" };
-        private static readonly string[] DataverseEntities = { "account", "contact", "opportunity", "incident", "custom_widget" };
 
         private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp", "CreatePowerApp" };
         private static readonly string[] FlowOperations = { "FlowRunStarted", "FlowRunCompleted", "EditFlow", "CreateFlow" };
@@ -52,10 +51,11 @@ namespace Tests.FakeDataGen.StressTests
             int distinctBots = GetIntegerInput("Distinct Copilot Studio bots", 5, 1, 100000);
             int distinctUsers = GetIntegerInput("Distinct users", 200, 1, 100000);
 
-            // Adoption mix (percentages must sum to <= 100; remainder rolls into Dataverse)
-            int appPercent = GetIntegerInput("% Power Apps events", 30, 0, 100);
+            // Adoption mix (percentages must sum to 100; the residual after apps/flows/BI/Copilot Studio
+            // is generated as another app event to keep the total stable).
+            int appPercent = GetIntegerInput("% Power Apps events", 35, 0, 100);
             int sharePercent = GetIntegerInput("% of app/flow events that also include a share", 5, 0, 100);
-            int flowPercent = GetIntegerInput("% Power Automate events", 30, 0, 100);
+            int flowPercent = GetIntegerInput("% Power Automate events", 35, 0, 100);
             int powerBiPercent = GetIntegerInput("% Power BI events", 25, 0, 100);
             int copilotStudioPercent = GetIntegerInput("% Copilot Studio events", 5, 0, 100);
 
@@ -78,7 +78,7 @@ namespace Tests.FakeDataGen.StressTests
             Console.WriteLine($"  Total events: {totalEvents:N0}");
             Console.WriteLine($"  Batches: {batchCount:N0} x {batchSize:N0} events");
             Console.WriteLine($"  Catalogue: {distinctApps:N0} apps, {distinctFlows:N0} flows, {distinctReports:N0} BI reports, {distinctBots:N0} bots, {distinctUsers:N0} users");
-            Console.WriteLine($"  Mix: ~{appPercent}% apps, ~{flowPercent}% flows, ~{powerBiPercent}% Power BI, ~{copilotStudioPercent}% Copilot Studio, rest Dataverse. ~{sharePercent}% of app/flow events also include a share recipient.");
+            Console.WriteLine($"  Mix: ~{appPercent}% apps, ~{flowPercent}% flows, ~{powerBiPercent}% Power BI, ~{copilotStudioPercent}% Copilot Studio (any residual rolls into apps). ~{sharePercent}% of app/flow events also include a share recipient.");
             Console.WriteLine($"  Mode: {(commitToSql ? "Full pipeline (staging + SQL commit)" : "Staging only")}\n");
             Console.WriteLine("Press any key to start test...");
             Console.ReadKey();
@@ -243,13 +243,14 @@ namespace Tests.FakeDataGen.StressTests
                 }
                 else
                 {
-                    GenerateDataverseEvent(manager, common, random);
+                    // Any residual rolls into an app event so totals stay consistent.
+                    GenerateAppEvent(manager, common, apps, random, sharePercent, users);
                 }
 
                 eventIds.Add((eventId, user.Upn, common.Operation.Name, common.TimeStamp));
             }
 
-            Console.WriteLine($"  Staging: {sw.ElapsedMilliseconds:N0}ms ({eventCount} events: {manager.StagedAppCount} apps + {manager.StagedAppShareCount} app-shares, {manager.StagedFlowCount} flows + {manager.StagedFlowShareCount} flow-shares, {manager.StagedPowerBiCount} BI, {manager.StagedCopilotStudioCount} bots, {manager.StagedDataverseCount} dv)");
+            Console.WriteLine($"  Staging: {sw.ElapsedMilliseconds:N0}ms ({eventCount} events: {manager.StagedAppCount} apps + {manager.StagedAppShareCount} app-shares, {manager.StagedFlowCount} flows + {manager.StagedFlowShareCount} flow-shares, {manager.StagedPowerBiCount} BI, {manager.StagedCopilotStudioCount} bots)");
 
             if (commitToSql)
             {
@@ -259,7 +260,7 @@ namespace Tests.FakeDataGen.StressTests
                 Console.WriteLine($"  Prerequisite insert: {sw.ElapsedMilliseconds:N0}ms");
 
                 sw.Restart();
-                Console.WriteLine($"  Running CommitAllChanges (staging table insert + 7 merge scripts)...");
+                Console.WriteLine($"  Running CommitAllChanges (staging table insert + 6 merge scripts)...");
                 manager.CommitAllChanges().GetAwaiter().GetResult();
                 Console.WriteLine($"  CommitAllChanges: {sw.ElapsedMilliseconds:N0}ms");
             }
@@ -387,18 +388,6 @@ namespace Tests.FakeDataGen.StressTests
             };
             common.Operation = new EventOperation { Name = random.Next(0, 10) < 7 ? "MessageSent" : "BotPublished" };
             manager.SaveSingleCopilotStudioEventToSqlStaging(content, common).GetAwaiter().GetResult();
-        }
-
-        private void GenerateDataverseEvent(PowerPlatformAuditEventManager manager, CommonAuditEvent common, Random random)
-        {
-            var content = new DataverseAuditLogContent
-            {
-                EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
-                EntityName = DataverseEntities[random.Next(DataverseEntities.Length)],
-                RecordId = Guid.NewGuid().ToString(),
-            };
-            common.Operation = new EventOperation { Name = new[] { "CreateRecord", "UpdateRecord", "DeleteRecord" }[random.Next(3)] };
-            manager.SaveSingleDataverseEventToSqlStaging(content, common).GetAwaiter().GetResult();
         }
 
         /// <summary>

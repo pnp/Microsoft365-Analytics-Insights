@@ -161,23 +161,4 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         [Column("event_time")]
         public DateTime EventTime { get; set; }
     }
-
-    /// <summary>
-    /// Staging row for a single Dataverse audit event (CreateRecord / UpdateRecord / DeleteRecord).
-    /// </summary>
-    [TempTableName(ActivityImportConstants.STAGING_TABLE_DATAVERSE)]
-    internal class DataverseLogTempEntity
-    {
-        [Column("event_id")]
-        public Guid EventId { get; set; }
-
-        [Column("environment_id", true)]
-        public string EnvironmentId { get; set; }
-
-        [Column("entity_name", true)]
-        public string EntityName { get; set; }
-
-        [Column("record_id", true)]
-        public string RecordId { get; set; }
-    }
 }
