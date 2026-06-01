@@ -63,6 +63,7 @@ Statistics focused on adoption. All information is historical, and a snapshot ke
 High-level Outlook usage statistics.
 
 * User activity
+* Sent emails (optional). Per-recipient records of messages from each user's `sentitems` folder, including subject, sent date, sender, recipient and an optional Azure AI Language sentiment score. Requires the Graph `Mail.Read` application permission.
 
 ### OneDrive Usage
 

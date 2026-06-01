@@ -19,6 +19,7 @@ namespace Common.Entities.Installer
             this.SQLServerName = string.Empty;
             this.CognitiveServiceName = string.Empty;
             this.CognitiveServicesEnabled = true;
+            this.ServiceBusEnabled = true;
             this.AllowTelemetry = true;
 
             this.ConfigSchemaVersion = new Version(CONFIG_VERSION);
@@ -36,6 +37,12 @@ namespace Common.Entities.Installer
         public string AzureLocationName { get; set; } = null;
 
         public string ServiceBusName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Whether to provision Azure Service Bus and configure related runtime connection strings.
+        /// Service Bus is only required by the Teams calls/call-records import.
+        /// </summary>
+        public bool ServiceBusEnabled { get; set; } = true;
 
         public string StorageAccountName { get; set; } = string.Empty;
 

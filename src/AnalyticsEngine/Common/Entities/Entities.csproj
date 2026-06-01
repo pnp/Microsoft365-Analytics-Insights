@@ -83,6 +83,9 @@
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
+    <Compile Include="Entities\Email\EmailAddress.cs" />
+    <Compile Include="Entities\Email\SentEmail.cs" />
+    <Compile Include="Entities\Email\SentEmailRecipient.cs" />
     <Compile Include="Entities\OnlineMeeting.cs" />
     <Compile Include="Entities\UsageReports\AppPlatformUserActivityLog.cs" />
     <Compile Include="Entities\UsageReports\SharePointSitesFileWeeklyStats.cs" />
@@ -95,6 +98,7 @@
     <Compile Include="LookupCaches\Discrete\CompanyNameCache.cs" />
     <Compile Include="LookupCaches\Discrete\CountryOrRegionCache.cs" />
     <Compile Include="LookupCaches\Discrete\DBLookupCache.cs" />
+    <Compile Include="LookupCaches\Discrete\EmailAddressCache.cs" />
     <Compile Include="LookupCaches\Discrete\KeywordCache.cs" />
     <Compile Include="LookupCaches\Discrete\LanguageCache.cs" />
     <Compile Include="LookupCaches\Discrete\LicenseTypeCache.cs" />
@@ -139,6 +143,7 @@
     <Compile Include="Entities\AuditLog\SPEventFileName.cs" />
     <Compile Include="Entities\AuditLog\EventOperation.cs" />
     <Compile Include="Entities\AuditLog\SPEventType.cs" />
+    <Compile Include="Entities\AuditLog\PowerPlatformEvents.cs" />
     <Compile Include="Entities\WebTraffic\Hit.cs" />
     <Compile Include="Entities\KeyWord.cs" />
     <Compile Include="Entities\Language.cs" />
@@ -267,6 +272,30 @@
     <Compile Include="Migrations\202512011404129_CopilotExtendedDataAgentType.Designer.cs">
       <DependentUpon>202512011404129_CopilotExtendedDataAgentType.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202605141410030_PowerPlatformAuditLogging.cs" />
+    <Compile Include="Migrations\202605141410030_PowerPlatformAuditLogging.Designer.cs">
+      <DependentUpon>202605141410030_PowerPlatformAuditLogging.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs" />
+    <Compile Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.Designer.cs">
+      <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202605290817012_AddSentEmailTables.cs" />
+    <Compile Include="Migrations\202605290817012_AddSentEmailTables.Designer.cs">
+      <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.cs" />
+    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.Designer.cs">
+      <DependentUpon>202605291149290_AddAuditEventsOperationIndex.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.cs" />
+    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.Designer.cs">
+      <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.cs" />
+    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.Designer.cs">
+      <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -386,6 +415,24 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202512011404129_CopilotExtendedDataAgentType.resx">
       <DependentUpon>202512011404129_CopilotExtendedDataAgentType.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605141410030_PowerPlatformAuditLogging.resx">
+      <DependentUpon>202605141410030_PowerPlatformAuditLogging.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.resx">
+      <DependentUpon>202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605290817012_AddSentEmailTables.resx">
+      <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605291149290_AddAuditEventsOperationIndex.resx">
+      <DependentUpon>202605291149290_AddAuditEventsOperationIndex.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605291207010_AddAuditEventsOperationFK.resx">
+      <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202606011010001_RemoveDataverseTables.resx">
+      <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

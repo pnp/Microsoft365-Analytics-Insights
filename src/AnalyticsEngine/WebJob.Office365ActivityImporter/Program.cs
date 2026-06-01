@@ -178,14 +178,21 @@ namespace WebJob.Office365ActivityImporter
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
                 {
-                    try
+                    if (string.IsNullOrWhiteSpace(configuredSettings.ConnectionStrings.ServiceBusConnectionString))
                     {
-                        await tasks.ProcessCallQueueAndWebhook(webHookUrl);
+                        telemetry.LogCritical("Teams calls import is enabled but Service Bus is not configured. Skipping Call Queue import & webhook validation. Re-run the installer with Service Bus enabled, or disable the Calls import.");
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        telemetry.TrackException(ex);
-                        telemetry.LogCritical($"Got exception on {nameof(ProgramTasks.ProcessCallQueueAndWebhook)}: {ex.Message}");
+                        try
+                        {
+                            await tasks.ProcessCallQueueAndWebhook(webHookUrl);
+                        }
+                        catch (Exception ex)
+                        {
+                            telemetry.TrackException(ex);
+                            telemetry.LogCritical($"Got exception on {nameof(ProgramTasks.ProcessCallQueueAndWebhook)}: {ex.Message}");
+                        }
                     }
                 }
                 else

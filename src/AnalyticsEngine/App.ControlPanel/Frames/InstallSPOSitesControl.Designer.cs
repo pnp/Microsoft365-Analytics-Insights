@@ -207,6 +207,7 @@
             this.azureStorageConfigControl1.Name = "azureStorageConfigControl1";
             this.azureStorageConfigControl1.RedisName = "";
             this.azureStorageConfigControl1.ServiceBusName = "";
+            this.azureStorageConfigControl1.ServiceBusEnabled = true;
             this.azureStorageConfigControl1.Size = new System.Drawing.Size(632, 537);
             this.azureStorageConfigControl1.SQLDb = "";
             this.azureStorageConfigControl1.SQLServerName = "";
