@@ -141,13 +141,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _telemetry.LogInformation($"User import - Reloading {insertedDbUsers.Count.ToString("N0")} newly inserted users with tracking for manager relationships...");
 
-                    // Pre-compute lowercase UPNs for SQL query matching
+                    // Collect UPNs as Graph delivers them. SQL Server's default code-first
+                    // collation (Latin1_General_CI_AS) is case-insensitive, so we no longer
+                    // need to lowercase here. The reload query below compares without LOWER()
+                    // to stay SARGable against the user_name index - critical at 200k-user scale
+                    // where a non-SARGable predicate forces a full clustered-index scan.
                     var insertedUpns = new List<string>(insertedDbUsers.Count);
                     foreach (var user in insertedDbUsers)
                     {
                         if (!string.IsNullOrEmpty(user.UserPrincipalName))
                         {
-                            insertedUpns.Add(user.UserPrincipalName.ToLower());
+                            insertedUpns.Add(user.UserPrincipalName);
                         }
                     }
 
@@ -159,20 +163,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         var batchCount = Math.Min(RELOAD_BATCH_SIZE, insertedUpns.Count - i);
                         var batchUpns = insertedUpns.GetRange(i, batchCount);
+                        // No LOWER() on the column - the CI collation handles case-insensitive
+                        // matching and keeps the predicate SARGable.
                         var batchReloaded = await db.users
-                            .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLower()))
+                            .Where(u => batchUpns.Contains(u.UserPrincipalName))
                             .ToListAsync();
                         reloadedUsers.AddRange(batchReloaded);
                     }
 
-                    // Update lookup dictionaries with TRACKED entities
+                    // Update lookup dictionaries with TRACKED entities.
+                    // dbUsersByUpn was built with StringComparer.OrdinalIgnoreCase so we can
+                    // key by the original UPN without lowering it - the comparer handles case.
                     foreach (var insertedUser in reloadedUsers)
                     {
-                        var upnLower = insertedUser.UserPrincipalName?.ToLower();
-                        if (!string.IsNullOrEmpty(upnLower))
+                        if (!string.IsNullOrEmpty(insertedUser.UserPrincipalName))
                         {
-                            dbUsersByUpn[upnLower] = insertedUser;
-                            await _userMetaCache.UserCache.GetOrCreateNewResource(upnLower, insertedUser);
+                            dbUsersByUpn[insertedUser.UserPrincipalName] = insertedUser;
+                            await _userMetaCache.UserCache.GetOrCreateNewResource(insertedUser.UserPrincipalName, insertedUser);
                         }
 
                         if (!string.IsNullOrEmpty(insertedUser.AzureAdId))
@@ -184,17 +191,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     insertedDbUsers = reloadedUsers;
                 }
 
-                // Identify users that need updating - use HashSet for O(1) lookup instead of Any()
+                // Identify users that need updating - use HashSet for O(1) lookup instead of Any().
+                // Both sets are OrdinalIgnoreCase so we keep the original UPN casing and let
+                // the comparer handle case-insensitivity (cheaper than .ToLower() at 200k scale).
                 var insertedUpnSet = new HashSet<string>(
-                    insertedDbUsers.Where(u => !string.IsNullOrEmpty(u.UserPrincipalName)).Select(u => u.UserPrincipalName.ToLower()),
+                    insertedDbUsers.Where(u => !string.IsNullOrEmpty(u.UserPrincipalName)).Select(u => u.UserPrincipalName),
                     StringComparer.OrdinalIgnoreCase);
 
                 var notInsertedUpns = new HashSet<string>(allActiveGraphUsers.Count, StringComparer.OrdinalIgnoreCase);
                 foreach (var graphUser in allActiveGraphUsers)
                 {
-                    if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && !insertedUpnSet.Contains(graphUser.UserPrincipalName.ToLower()))
+                    if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && !insertedUpnSet.Contains(graphUser.UserPrincipalName))
                     {
-                        notInsertedUpns.Add(graphUser.UserPrincipalName.ToLower());
+                        notInsertedUpns.Add(graphUser.UserPrincipalName);
                     }
                 }
 

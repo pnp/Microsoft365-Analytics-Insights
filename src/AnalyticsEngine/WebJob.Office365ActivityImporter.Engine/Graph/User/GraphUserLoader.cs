@@ -84,8 +84,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _telemetry.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
             }
 
-            // Graph for some reason gives duplicates; filter that out
-            var allGraphUsers = results.GroupBy(u => u.UserPrincipalName).Select(g => g.First()).ToList();
+            // Graph for some reason gives duplicates; filter that out.
+            // HashSet pre-allocated to results.Count avoids the per-Grouping allocation that
+            // GroupBy + First would do - at 200k users that's ~200k fewer allocations.
+            var seenUpns = new HashSet<string>(results.Count, StringComparer.OrdinalIgnoreCase);
+            var allGraphUsers = new List<GraphUser>(results.Count);
+            foreach (var u in results)
+            {
+                if (string.IsNullOrEmpty(u.UserPrincipalName))
+                {
+                    continue;
+                }
+                if (seenUpns.Add(u.UserPrincipalName))
+                {
+                    allGraphUsers.Add(u);
+                }
+            }
+
             var allActiveGraphUsers = allGraphUsers.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value).ToList();
 
             return allActiveGraphUsers;
@@ -138,7 +153,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var usersWithSku = await req.GetAsync();
                 allUsersWithSku.AddRange(usersWithSku);
                 req = usersWithSku.NextPageRequest;
-                Console.WriteLine($"DEBUG: SKU {skuId} page {skuPage}");
+                _telemetry.LogDebug($"SKU {skuId} page {skuPage}");
                 skuPage++;
             }
 
