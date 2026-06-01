@@ -25,8 +25,12 @@ namespace Tests.UnitTests
                 return;
             }
 
-            var credentials = new AzureKeyCredential(cognitiveConfig.CognitiveKey);
-            var client = new TextAnalyticsClient(new Uri(cognitiveConfig.CognitiveEndpoint), credentials);
+            var client = cognitiveConfig.CreateCognitiveServicesClient(AnalyticsLogger.ConsoleOnlyTracer());
+            if (client == null)
+            {
+                Assert.Inconclusive("Cognitive config is not set, cannot run test");
+                return;
+            }
 
             var msg = new ChatMessage();
             msg.Id = "Test " + DateTime.Now.Ticks;

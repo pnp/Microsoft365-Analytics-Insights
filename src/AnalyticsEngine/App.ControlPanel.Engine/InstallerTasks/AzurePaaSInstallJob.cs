@@ -126,12 +126,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
             const string FIREWALL_RULE_NAME = "O365 Adv Analytics Setup Rule";
 
             _sqlServerTask = new SqlServerTask(sqlServerConfig, logger, Location, tagDic, allowPublicAccess);
-            _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location);
 
             var sqlDbConfig = TaskConfig.GetConfigForName(config.SQLServerDatabaseName).AddSetting(SqlDatabaseTask.CONFIG_KEY_PERF_TIER, sqlPerfTier);
             _sqlDatabaseTask = new SqlDatabaseTask(sqlDbConfig, logger, Location, tagDic);
 
-            this.AddTask(_sqlServerTask, _sqlServerFirewallConfigTask, _sqlDatabaseTask);
+            // Only configure SQL Server firewall (detect public IP + add client rule) when public network
+            // access is enabled. With public access disabled, Azure rejects firewall rule edits with
+            // 'DenyPublicEndpointEnabled' and connectivity is expected to come via private endpoint.
+            if (allowPublicAccess)
+            {
+                _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location);
+                this.AddTask(_sqlServerTask, _sqlServerFirewallConfigTask, _sqlDatabaseTask);
+            }
+            else
+            {
+                this.AddTask(_sqlServerTask, _sqlDatabaseTask);
+            }
 
 
             // Redis - enforce Standard SKU for VNet
@@ -147,9 +157,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 .AddSetting(RedisAccessPolicyAssignmentTask.CONFIG_KEY_INSTALLER_TENANT_ID, config.InstallerAccount.DirectoryId);
             var _redisAccessPolicyTask = new RedisAccessPolicyAssignmentTask(redisAccessPolicyConfig, logger, Location, tagDic);
 
-            if (!vnetEnabled)
+            if (!vnetEnabled && allowPublicAccess)
             {
-                // Only add firewall rules when not using private endpoints
+                // Only add firewall rules when not using private endpoints and public access is enabled.
+                // With public access disabled, Azure rejects firewall rule edits with 'DenyPublicEndpointEnabled'.
                 var redisFirewallConfig = TaskConfig.GetConfigForName(config.RedisName)
                     .AddSetting(RedisFirewallConfigTask.CONFIG_KEY_APP_SERVICE_NAME, config.AppServiceWebAppName);
                 var _redisFirewallTask = new RedisFirewallConfigTask(redisFirewallConfig, logger, Location);
@@ -191,13 +202,21 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 new KeyVaultSecretAddTask(kvSecretAddConfig, logger));
 
             // ServiceBus - enforce Premium for VNet (private endpoints require Premium SKU)
-            const string QUEUE_NAME = "graphcalls";
-            const string RULE_NAME = "ListenAndSendPolicy";
-            _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled, allowPublicAccess: allowPublicAccess);
+            // Service Bus is only required by the Teams calls import; skip provisioning when disabled.
+            if (config.ServiceBusEnabled)
+            {
+                const string QUEUE_NAME = "graphcalls";
+                const string RULE_NAME = "ListenAndSendPolicy";
+                _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled, allowPublicAccess: allowPublicAccess);
 
-            var queueConfig = TaskConfig.GetConfigForName(QUEUE_NAME).AddSetting(ServiceBusQueueWithPolicyInstallTask.CONFIG_KEY_RULE_NAME, RULE_NAME);
-            _serviceBusQueueWithPolicyInstallTask = new ServiceBusQueueWithPolicyInstallTask(queueConfig, logger, Location);
-            this.AddTask(_serviceBusNamespaceInstallTask, _serviceBusQueueWithPolicyInstallTask);
+                var queueConfig = TaskConfig.GetConfigForName(QUEUE_NAME).AddSetting(ServiceBusQueueWithPolicyInstallTask.CONFIG_KEY_RULE_NAME, RULE_NAME);
+                _serviceBusQueueWithPolicyInstallTask = new ServiceBusQueueWithPolicyInstallTask(queueConfig, logger, Location);
+                this.AddTask(_serviceBusNamespaceInstallTask, _serviceBusQueueWithPolicyInstallTask);
+            }
+            else
+            {
+                logger.LogInformation("Service Bus is disabled in the installer configuration; skipping Service Bus namespace and queue provisioning. Teams call imports will not be available.");
+            }
 
             // Storage
             _storageAccountInstallTask = new StorageAccountInstallTask(TaskConfig.GetConfigForName(config.StorageAccountName), logger, Location, tagDic, allowPublicAccess);
@@ -254,6 +273,17 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     _hybridWorkerGroupTask = new HybridWorkerGroupTask(hwgConfig, logger, Location, tagDic, creds);
                     this.AddTask(_hybridWorkerGroupTask);
                 }
+                else if (vnetEnabled && !allowPublicAccess)
+                {
+                    // VNet is enabled with public access disabled, but no Hybrid Worker VM was provided.
+                    // Automation runbooks cannot reach SQL/Storage/Key Vault via private endpoints without
+                    // a hybrid worker running inside the VNet. The Automation account is still created so
+                    // the customer can complete the configuration later.
+                    logger.LogWarning("VNet is enabled with public network access disabled, but no Hybrid Runbook Worker VM was specified. " +
+                        "Automation runbooks (Graph usage reports) will NOT be able to run because the Automation account cannot reach SQL/Storage/Key Vault via private endpoints from the Azure-hosted sandbox. " +
+                        "To enable runbooks: 1) Create a Windows VM connected to the VNet '" + (config.NetworkConfig?.VNetName ?? "<vnet>") + "' (any subnet that can reach the private endpoints), " +
+                        "2) Re-run this installer, 3) On the Networking page set the Hybrid Worker VM Resource ID to that VM, and the installer will register it as a Hybrid Runbook Worker and install the required extension.");
+                }
             }
 
             // Private endpoints and DNS zones for all resources when VNet is enabled
@@ -297,10 +327,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.vaultcore.azure.net", vnetId, kvPeName, logger, tagDic);
 
                 // Service Bus
-                var sbPeName = peNames.GetNameOrDefault(peNames.ServiceBus, $"pe-{config.ServiceBusName}-sb");
-                AddPrivateEndpointTask(sbPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.ServiceBus/namespaces/{config.ServiceBusName}",
-                    "namespace", subnetId, logger, tagDic);
-                if (deployDns) AddPrivateDnsZoneTask("privatelink.servicebus.windows.net", vnetId, sbPeName, logger, tagDic);
+                if (config.ServiceBusEnabled)
+                {
+                    var sbPeName = peNames.GetNameOrDefault(peNames.ServiceBus, $"pe-{config.ServiceBusName}-sb");
+                    AddPrivateEndpointTask(sbPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.ServiceBus/namespaces/{config.ServiceBusName}",
+                        "namespace", subnetId, logger, tagDic);
+                    if (deployDns) AddPrivateDnsZoneTask("privatelink.servicebus.windows.net", vnetId, sbPeName, logger, tagDic);
+                }
 
                 // Cognitive Services (Language/Text Analytics)
                 if (config.CognitiveServicesEnabled)
@@ -350,7 +383,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
         public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
-        public ServiceBusQueueResourceWithConnectionString SBQueueWithConnectionString => GetTaskResult<ServiceBusQueueResourceWithConnectionString>(_serviceBusQueueWithPolicyInstallTask);
+        public ServiceBusQueueResourceWithConnectionString SBQueueWithConnectionString => _serviceBusQueueWithPolicyInstallTask != null ? GetTaskResult<ServiceBusQueueResourceWithConnectionString>(_serviceBusQueueWithPolicyInstallTask) : null;
         public KeyVaultResource KeyVault => GetTaskResult<KeyVaultResource>(_keyVaultTask);
         public VirtualNetworkResource VNet => _vnetInstallTask != null ? GetTaskResult<VirtualNetworkResource>(_vnetInstallTask) : null;
         public string HybridWorkerGroupName => _hybridWorkerGroupName;

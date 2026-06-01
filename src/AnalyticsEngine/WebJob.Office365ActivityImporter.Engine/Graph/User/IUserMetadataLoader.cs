@@ -39,5 +39,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <param name="userId">The user ID (Graph object ID)</param>
         /// <returns>Collection of license details for the user, or null if unable to load</returns>
         Task<IUserLicenseDetailsCollectionPage> LoadUserLicenseDetails(string userId);
+
+        /// <summary>
+        /// Persists any delta token captured during the most recent
+        /// <see cref="LoadAllActiveUsers"/> call to the underlying delta value
+        /// provider. <see cref="LoadAllActiveUsers"/> buffers the new delta in
+        /// memory; callers must invoke this only after the entire user import
+        /// has succeeded. If the import fails before commit, the previously
+        /// persisted delta is preserved and the failed users will be retried
+        /// on the next cycle.
+        /// </summary>
+        Task CommitDeltaTokenAsync();
     }
 }

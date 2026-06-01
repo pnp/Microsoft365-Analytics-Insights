@@ -3,6 +3,7 @@ using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Entities.UsageReports;
+using Common.Entities.Entities.Email;
 using Common.Entities.Entities.WebTraffic;
 using Common.Entities.Teams;
 using Microsoft.Extensions.Logging;
@@ -176,6 +177,55 @@ namespace Common.Entities
              .HasIndex(t => new { t.UrlId, t.FieldId })
              .IsUnique();
 
+            // Power Platform lookups - unique by external id so we don't duplicate apps/flows/environments
+            modelBuilder.Entity<PowerApp>().HasIndex(p => p.AppId).IsUnique();
+            modelBuilder.Entity<PowerAutomateFlow>().HasIndex(f => f.FlowId).IsUnique();
+            modelBuilder.Entity<PowerAppEnvironment>().HasIndex(e => e.EnvironmentId).IsUnique();
+            modelBuilder.Entity<PowerPlatformClientType>().HasIndex(t => t.Name).IsUnique();
+            modelBuilder.Entity<PowerPlatformConnector>().HasIndex(c => c.Name).IsUnique();
+            modelBuilder.Entity<PowerAppConnector>().HasIndex(j => new { j.PowerAppId, j.ConnectorId }).IsUnique();
+            modelBuilder.Entity<PowerAutomateFlowConnector>().HasIndex(j => new { j.FlowId, j.ConnectorId }).IsUnique();
+            modelBuilder.Entity<PowerAppShareEventMetadata>().HasIndex(s => new { s.EventId, s.SharedWithUserId }).IsUnique();
+            modelBuilder.Entity<PowerAutomateFlowShareEventMetadata>().HasIndex(s => new { s.EventId, s.SharedWithUserId }).IsUnique();
+
+            // Power BI / Copilot Studio lookups
+            modelBuilder.Entity<PowerBIWorkspace>().HasIndex(w => w.WorkspaceId).IsUnique();
+            modelBuilder.Entity<PowerBIReport>().HasIndex(r => r.ReportId).IsUnique();
+            modelBuilder.Entity<PowerBIDashboard>().HasIndex(d => d.DashboardId).IsUnique();
+            modelBuilder.Entity<CopilotStudioBot>().HasIndex(b => b.BotId).IsUnique();
+
+            modelBuilder.Entity<EmailAddress>()
+             .HasIndex(t => new { t.Address })
+             .IsUnique();
+
+            modelBuilder.Entity<SentEmail>()
+             .HasIndex(t => new { t.GraphMessageId })
+             .IsUnique();
+
+            modelBuilder.Entity<SentEmail>()
+             .HasRequired(s => s.FromAddress)
+             .WithMany()
+             .HasForeignKey(s => s.FromAddressID)
+             .WillCascadeOnDelete(false);
+
+            // Recipients live in sent_email_recipients so a message with N recipients
+            // is stored as one sent_emails row plus N join rows.
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasRequired(r => r.SentEmail)
+             .WithMany(s => s.Recipients)
+             .HasForeignKey(r => r.SentEmailID)
+             .WillCascadeOnDelete(true);
+
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasRequired(r => r.RecipientAddress)
+             .WithMany()
+             .HasForeignKey(r => r.RecipientAddressID)
+             .WillCascadeOnDelete(false);
+
+            modelBuilder.Entity<SentEmailRecipient>()
+             .HasIndex(t => new { t.SentEmailID, t.RecipientAddressID })
+             .IsUnique();
+
             base.OnModelCreating(modelBuilder);
         }
 
@@ -313,6 +363,34 @@ namespace Common.Entities
         // AI Model transparency
         public DbSet<CopilotAIModel> CopilotAIModels { get; set; }
         public DbSet<CopilotEventAIModel> CopilotEventAIModels { get; set; }
+
+        // Power Platform
+        public virtual DbSet<PowerApp> power_apps { get; set; }
+        public virtual DbSet<PowerAutomateFlow> power_automate_flows { get; set; }
+        public virtual DbSet<PowerAppEnvironment> power_app_environments { get; set; }
+        public virtual DbSet<PowerPlatformClientType> power_platform_client_types { get; set; }
+        public virtual DbSet<PowerPlatformConnector> power_platform_connectors { get; set; }
+        public virtual DbSet<PowerAppConnector> power_app_connectors { get; set; }
+        public virtual DbSet<PowerAutomateFlowConnector> power_automate_flow_connectors { get; set; }
+        public virtual DbSet<PowerAppEventMetadata> power_app_events { get; set; }
+        public virtual DbSet<PowerAutomateFlowEventMetadata> power_automate_flow_events { get; set; }
+        public virtual DbSet<PowerAppShareEventMetadata> power_app_share_events { get; set; }
+        public virtual DbSet<PowerAutomateFlowShareEventMetadata> power_automate_flow_share_events { get; set; }
+
+        // Power BI
+        public virtual DbSet<PowerBIWorkspace> power_bi_workspaces { get; set; }
+        public virtual DbSet<PowerBIReport> power_bi_reports { get; set; }
+        public virtual DbSet<PowerBIDashboard> power_bi_dashboards { get; set; }
+        public virtual DbSet<PowerBIEventMetadata> power_bi_events { get; set; }
+
+        // Copilot Studio
+        public virtual DbSet<CopilotStudioBot> copilot_studio_bots { get; set; }
+        public virtual DbSet<CopilotStudioEventMetadata> copilot_studio_events { get; set; }
+
+        // Sent email import - one row per sent message, recipients live in the join table.
+        public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
+        public virtual DbSet<SentEmail> SentEmails { get; set; }
+        public virtual DbSet<SentEmailRecipient> SentEmailRecipients { get; set; }
         #endregion
     }
 

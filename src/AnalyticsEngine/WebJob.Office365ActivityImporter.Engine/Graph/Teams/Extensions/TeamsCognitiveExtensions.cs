@@ -20,7 +20,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// Loads Azure Cognitive data for a message
         /// </summary>
         /// <returns>Stats and whether it was returned from redis or not</returns>
-        public static async Task<(MessageCognitiveStats, bool)> LoadCognitiveStatsFromCacheOrAI(this ChatMessage msg, TextAnalyticsClient client, ILogger telemetry, ChannelWithReactions parentChannel)
+        public static async Task<(MessageCognitiveStats, bool)> LoadCognitiveStatsFromCacheOrAI(this ChatMessage msg, CognitiveServicesClient client, ILogger telemetry, ChannelWithReactions parentChannel)
         {
             var stats = new MessageCognitiveStats(parentChannel, msg.CreatedDateTime.Value.DateTime);
 
@@ -57,7 +57,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 // Break down API calls into chunks of 10 max and compile results
                 var keyPhrasesResponses = await listProcessor.CallAndCompileToSingleList(languageBatchInput.Select(i => i.Text), async (List<string> chunk) =>
                 {
-                    var result = await client.ExtractKeyPhrasesBatchAsync(chunk);
+                    var result = await client.ExecuteAsync(c => c.ExtractKeyPhrasesBatchAsync(chunk));
                     return result.Value.ToList();
                 }, 10);
 
@@ -102,7 +102,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Loads Azure Cognitive data for a message
         /// </summary>
-        public static async Task<MessageCognitiveStats> LoadSameDayCognitiveDataStats(this List<ChatMessage> msgsInChannel, TextAnalyticsClient client, ILogger telemetry, ChannelWithReactions parentChannel)
+        public static async Task<MessageCognitiveStats> LoadSameDayCognitiveDataStats(this List<ChatMessage> msgsInChannel, CognitiveServicesClient client, ILogger telemetry, ChannelWithReactions parentChannel)
         {
             if (msgsInChannel != null && msgsInChannel.Count > 0)
             {

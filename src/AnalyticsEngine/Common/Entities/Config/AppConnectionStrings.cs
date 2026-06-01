@@ -59,14 +59,8 @@ namespace Common.Entities.Config
             this.RedisConnectionString = redisConnectionString?.ConnectionString;
 
             var sb = ConfigurationManager.ConnectionStrings["ServiceBus"];
-            if (sb == null)
-            {
-                throw new ConfigurationErrorsException("Missing ServiceBus connection string");
-            }
-            else
-            {
-                this.ServiceBusConnectionString = sb.ConnectionString;
-            }
+            // Service Bus is optional: only the Teams calls import needs it.
+            this.ServiceBusConnectionString = sb?.ConnectionString;
 
             var storageConfig = ConfigurationManager.ConnectionStrings["Storage"];
             if (storageConfig == null)
