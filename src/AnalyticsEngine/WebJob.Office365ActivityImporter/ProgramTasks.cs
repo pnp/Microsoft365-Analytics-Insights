@@ -3,7 +3,9 @@ using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
+using System.Net;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
@@ -62,10 +64,10 @@ namespace WebJob.Office365ActivityImporter
             {
                 await graphReader.GetAndSaveAllGraphData(_settings);
             }
-            catch (Microsoft.Graph.ServiceException ex)
+            catch (ODataError ex)
             {
                 // Don't make a drama if Graph permissions aren't assigned yet.
-                if (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                if (ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden)
                 {
                     _telemetry.LogWarning("ERROR: Can't access Teams user data - are application permissions configured correctly?");
                     return;
@@ -87,8 +89,7 @@ namespace WebJob.Office365ActivityImporter
                 return;
             }
             await _graphAppIndentityOAuthContext.InitClientCredential();
-            _graphClient = new GraphServiceClient(_graphAppIndentityOAuthContext.Creds);
-            _graphClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
+            _graphClient = GraphServiceClientFactory.CreateWithTimeout(_graphAppIndentityOAuthContext.Creds, TimeSpan.FromHours(1));
             _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _telemetry);
             _graphUserGroupsCache = new GraphUserGroupsCache(_manualGraphCallClient, _telemetry);
 

@@ -1,6 +1,7 @@
 using Common.Entities;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -36,7 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Process SKUs for all users in batches
         /// </summary>
         public async Task ProcessSKUsForAllUsers(
-            IGraphServiceSubscribedSkusCollectionPage skus,
+            List<SubscribedSku> skus,
             List<Common.Entities.User> graphFoundDbUsers,
             AnalyticsEntitiesContext db)
         {
@@ -128,7 +129,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public async Task AddSkuForUsers(
             Dictionary<string, Common.Entities.User> dbUsersByUpn,
-            List<Microsoft.Graph.User> usersWithSku,
+            List<Microsoft.Graph.Models.User> usersWithSku,
             SubscribedSku sku,
             AnalyticsEntitiesContext db,
             HashSet<(string licenseName, int userId)> assignedLicenses = null)

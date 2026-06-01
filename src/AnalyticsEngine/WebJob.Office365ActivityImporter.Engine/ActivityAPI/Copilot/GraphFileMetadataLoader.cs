@@ -1,6 +1,8 @@
 ﻿using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
@@ -30,11 +32,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             // Requires OnlineMeetings.Read.All and https://learn.microsoft.com/en-us/graph/cloud-communication-online-meeting-application-access-policy#configure-application-access-policy
             try
             {
-                var meeting = await _graphServiceClient.Users[userGuid].OnlineMeetings[meetingId].Request().GetAsync();
+                var meeting = await _graphServiceClient.Users[userGuid].OnlineMeetings[meetingId].GetAsync();
 
                 return new MeetingMetadata(meeting);
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
                 _logger.LogWarning(ex, "Error getting meeting info for meetingId {meetingId}", meetingId);
                 return null;
@@ -82,9 +84,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 try
                 {
                     item = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items[driveItemId]
-                        .Request().Expand("fields").GetAsync();
+                        .GetAsync(rc => { rc.QueryParameters.Expand = new[] { "fields" }; });
                 }
-                catch (ServiceException ex)
+                catch (ODataError ex)
                 {
                     _logger.LogWarning(ex, "Error getting file info for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
                     return null;
@@ -100,10 +102,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 {
                     // Currently we can't filter by webUrl, so we have to get all items and filter client side
                     var listItems = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items
-                        .Request().Select("id,webUrl").GetAsync();
-                    if (listItems != null)
+                        .GetAsync(rc => { rc.QueryParameters.Select = new[] { "id", "webUrl" }; });
+                    if (listItems?.Value != null)
                     {
-                        foreach (var i in listItems)
+                        foreach (var i in listItems.Value)
                         {
                             if (i.WebUrl == copilotDocContextId)
                             {
@@ -112,7 +114,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                         }
                     }
                 }
-                catch (ServiceException ex)
+                catch (ODataError ex)
                 {
                     _logger.LogWarning(ex, "Error getting items info for list {spListId} on site {siteUrl}", spListId, siteUrl);
                     return null;
@@ -134,11 +136,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             // Needs Files.Read.All
             try
             {
-                return await _graphServiceClient.Users[eventUpn].Drive.Request().Select("SharePointIds").GetAsync() ?? throw new ArgumentOutOfRangeException(eventUpn);
+                return await _graphServiceClient.Users[eventUpn].Drive
+                    .GetAsync(rc => { rc.QueryParameters.Select = new[] { "SharePointIds" }; })
+                    ?? throw new ArgumentOutOfRangeException(eventUpn);
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
-                _logger.LogWarning(ex, $"Error {ex.StatusCode} getting drive info for user {eventUpn}", eventUpn);
+                _logger.LogWarning(ex, $"Error {ex.ResponseStatusCode} getting drive info for user {eventUpn}", eventUpn);
                 return null;
             }
         }
@@ -156,9 +160,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             Drive siteDrive = null;
             try
             {
-                siteDrive = await _graphServiceClient.Sites[siteAddress].Drive.Request().Select("SharePointIds").GetAsync() ?? throw new ArgumentOutOfRangeException(siteAddress);
+                siteDrive = await _graphServiceClient.Sites[siteAddress].Drive
+                    .GetAsync(rc => { rc.QueryParameters.Select = new[] { "SharePointIds" }; })
+                    ?? throw new ArgumentOutOfRangeException(siteAddress);
             }
-            catch (ServiceException)
+            catch (ODataError)
             {
                 // We can't get the drive via the site address, for some reason. Most of the time we can, but sometimes it doesn't work...
                 // Load just the site and then try getting the drive using the loaded site ID
@@ -169,9 +175,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 Site site = null;
                 try
                 {
-                    site = await _graphServiceClient.Sites[siteAddress].Request().GetAsync() ?? throw new ArgumentOutOfRangeException(siteAddress);
+                    site = await _graphServiceClient.Sites[siteAddress].GetAsync() ?? throw new ArgumentOutOfRangeException(siteAddress);
                 }
-                catch (ServiceException ex)
+                catch (ODataError ex)
                 {
                     _logger.LogWarning(ex, "Error getting site info for site {siteUrl}", siteUrl);
                     return null;
@@ -181,9 +187,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     try
                     {
                         // Try one more time using site ID
-                        siteDrive = await _graphServiceClient.Sites[site.Id].Drive.Request().Select("SharePointIds").GetAsync() ?? throw new ArgumentOutOfRangeException(siteAddress);
+                        siteDrive = await _graphServiceClient.Sites[site.Id].Drive
+                            .GetAsync(rc => { rc.QueryParameters.Select = new[] { "SharePointIds" }; })
+                            ?? throw new ArgumentOutOfRangeException(siteAddress);
                     }
-                    catch (ServiceException)
+                    catch (ODataError)
                     {
                         // Ignore. Handle logging below
                     }

@@ -25,9 +25,9 @@ namespace Tests.UnitTests.FakeControllers
             var graphClient = new GraphServiceClient(_auth.Creds);
 
             // Get Adele user from Graph & insert blanks into DB 
-            var graphUsersFirstPage = await graphClient.Users.Request().GetAsync();
-            var user1 = graphUsersFirstPage[0];
-            var user2 = graphUsersFirstPage[1];
+            var graphUsersFirstPage = await graphClient.Users.GetAsync();
+            var user1 = graphUsersFirstPage.Value[0];
+            var user2 = graphUsersFirstPage.Value[1];
 
             var call = new CallRecordDTO()
             {
