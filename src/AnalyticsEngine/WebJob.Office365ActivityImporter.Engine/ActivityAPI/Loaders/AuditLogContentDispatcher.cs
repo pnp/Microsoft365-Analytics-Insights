@@ -33,38 +33,60 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return null;
             }
 
+            // Workload string values below come from the Office 365 Management Activity API
+            // Common schema (the "Workload" field) and are cross-checked against the
+            // AuditLogRecordType enum. Authoritative reference:
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema
+
+            // Workload "SharePoint" / "OneDrive" -> AuditLogRecordType 4 SharePoint, 6
+            // SharePointFileOperation, 14 SharePointSharingOperation, 7 OneDrive.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_SP || logBase.Workload == ActivityImportConstants.WORKLOAD_OD)
             {
                 return reportItem.ToObject<SharePointAuditLogContent>();
             }
 
+            // Workload "Exchange" -> AuditLogRecordType 1 ExchangeAdmin, 2 ExchangeItem,
+            // 3 ExchangeItemGroup, 19 ExchangeAggregatedOperation, 50 ExchangeItemAggregated.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_EXCHANGE)
             {
                 return reportItem.ToObject<ExchangeAuditLogContent>();
             }
 
+            // Workload "AzureActiveDirectory" (Microsoft Entra ID) -> AuditLogRecordType 8
+            // AzureActiveDirectory and 15 AzureActiveDirectoryStsLogon.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_AZURE_AD)
             {
                 return reportItem.ToObject<AzureADAuditLogContent>();
             }
 
+            // Workload "MicrosoftStream" -> AuditLogRecordType 32 MicrosoftStream.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_STREAM)
             {
                 return reportItem.ToObject<StreamAuditLogContent>();
             }
 
+            // Workload "Copilot" (M365 Copilot user interactions) -> AuditLogRecordType 261
+            // CopilotInteraction. The CopilotInteractionAuditRecord entity is explicitly
+            // annotated WorkloadType=Copilot in the published EDM schema.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/copilot-schema
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT)
             {
                 // Copilot's custom parser takes a JSON string.
                 return CopilotAuditLogContent.FromJson(reportItem.ToString());
             }
 
+            // Workload "PowerPlatform" -> AuditLogRecordType 256 PowerPlatformAdministratorActivity.
+            // Unified Power Platform admin activity record where data lives in a
+            // PropertyCollection (OpenTelemetry-style key/value pairs) rather than top-level
+            // fields, so it needs its own deserialisation + mapping to a workload-specific
+            // content class for the existing downstream save path to consume.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_PLATFORM)
             {
-                // Unified Power Platform admin activity record (RecordType 256). Data lives in a
-                // PropertyCollection rather than top-level fields, so it needs its own
-                // deserialisation + mapping to a workload-specific content class for the
-                // existing downstream save path to consume.
                 var ppRecord = reportItem.ToObject<PowerPlatformAdminActivityRecordContent>();
                 if (ppRecord == null)
                 {
@@ -84,15 +106,21 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return mapped;
             }
 
+            // Workload "PowerApps" -> AuditLogRecordType 45 PowerAppsApp (and 46 PowerAppsPlan,
+            // 79 PowerAppsResource). Legacy per-product schema, delivered alongside the unified
+            // PowerPlatform workload above.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_APPS)
             {
                 return reportItem.ToObject<PowerAppsAuditLogContent>();
             }
 
+            // Workload "MicrosoftFlow" (Power Automate) -> AuditLogRecordType 30 MicrosoftFlow.
+            // Same flow-run-only gate as the unified PowerPlatform schema above; filtered here
+            // so nothing reaches the staging tables.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_AUTOMATE)
             {
-                // Legacy 'MicrosoftFlow' workload. Same flow-run-only gate as the unified
-                // PowerPlatform schema above; filtered here so nothing reaches the staging tables.
                 if (!PowerPlatformAuditLogFilter.ShouldPersistPowerAutomateOperation(logBase.Operation, logger))
                 {
                     return null;
@@ -100,12 +128,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return reportItem.ToObject<PowerAutomateAuditLogContent>();
             }
 
+            // Workload "PowerBI" -> AuditLogRecordType 20 PowerBIAudit. We only persist ViewReport:
+            // the PowerBI workload emits a long tail of operations (Login, AddDatasetUser,
+            // PublishReport, ...) but most do not carry the WorkspaceId/ReportId we depend on,
+            // so they would otherwise land NULL-FK rows in event_meta_power_bi.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
+            // Power BI service-specific schema:
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#power-bi-schema
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_BI)
             {
-                // Only persist ViewReport. The PowerBI workload emits a long tail of operations
-                // (Login, AddDatasetUser, PublishReport, ...) but most do not carry the
-                // WorkspaceId/ReportId we depend on, so they would otherwise land NULL-FK rows
-                // in event_meta_power_bi.
                 if (!ActivityImportConstants.PowerBIOps.IsSupported(logBase.Operation))
                 {
                     return null;
@@ -113,11 +144,21 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return reportItem.ToObject<PowerBIAuditLogContent>();
             }
 
+            // Workload "MicrosoftCopilotStudio" (formerly Power Virtual Agents) - admin and user
+            // activity for Copilot Studio agents, surfaced in Purview as workload
+            // "MicrosoftCopilotStudio".
+            // https://learn.microsoft.com/en-us/microsoft-copilot-studio/admin-logging-copilot-studio
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT_STUDIO)
             {
                 return reportItem.ToObject<CopilotStudioAuditLogContent>();
             }
 
+            // Workload "Dynamics365" (Dataverse / model-driven apps) -> AuditLogRecordType 21 CRM.
+            // Dataverse audit events flow through the Office 365 Management Activity API under
+            // the Audit.General content type.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
+            // Dataverse activity logging reference:
+            // https://learn.microsoft.com/en-us/power-platform/admin/activity-logging-auditing/activity-logs-dataverse-model-driven-apps
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_DATAVERSE)
             {
                 return reportItem.ToObject<DataverseAuditLogContent>();
