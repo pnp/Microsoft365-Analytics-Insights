@@ -9,6 +9,7 @@ namespace DataUtils.Sql
         {
             ColationOverride = attribute.ColationOverride;
             FieldName = attribute.FieldName;
+            SqlTypeOverride = attribute.SqlTypeOverride;
         }
 
         public string FieldName { get; set; }
@@ -16,6 +17,16 @@ namespace DataUtils.Sql
         public string SqlColDefinition { get; set; }
         public bool Nullable { get; set; } = false;
         public DbType SqlType { get; internal set; }
+
+        /// <summary>
+        /// Optional explicit SQL column type (e.g. "varchar(1700)") that overrides the default
+        /// <c>[nvarchar] (max)</c> emitted for <see cref="string"/> properties by
+        /// <see cref="Inserts.InsertBatchTypeFieldCache{T}"/>. Set via <see cref="ColumnAttribute.SqlTypeOverride"/>
+        /// on properties whose staging-column type must match an indexed target column to avoid
+        /// implicit conversion (which defeats indexes on the join target — see PR #108 / issue #109
+        /// for <c>urls.full_url</c>).
+        /// </summary>
+        public string SqlTypeOverride { get; set; }
     }
     public class ColumnAttribute : Attribute
     {
@@ -31,6 +42,15 @@ namespace DataUtils.Sql
         public string FieldName { get; set; } = string.Empty;
         public bool Nullable { get; set; } = DEFAULT_NULLABLE;
         public string ColationOverride { get; set; }
+
+        /// <summary>
+        /// Optional explicit SQL column type definition for the generated staging column
+        /// (e.g. <c>"varchar(1700)"</c>). When set, overrides the type
+        /// <see cref="Inserts.InsertBatchTypeFieldCache{T}"/> would otherwise infer from the
+        /// property's CLR type. Only meaningful for <see cref="string"/> properties today; the
+        /// generator still emits <c>nvarchar(max)</c> as the default when this is null/empty.
+        /// </summary>
+        public string SqlTypeOverride { get; set; }
 
         public bool IsValid => !string.IsNullOrEmpty(FieldName);
 
