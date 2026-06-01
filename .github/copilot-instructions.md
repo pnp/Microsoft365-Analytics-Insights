@@ -17,6 +17,11 @@ That file is the source of truth for:
 
 Always read it before making changes under `src/AnalyticsEngine/`.
 
+## Pull requests
+- Always open PRs against the `dev` branch unless the user explicitly says to target `main` (or another branch).
+- This applies to both human-driven and Copilot-driven PRs, including coding-agent tasks that auto-create branches.
+- If a PR has already been opened against the wrong base, retarget it with `gh pr edit <num> --base dev` rather than closing and reopening.
+
 ## Documentation
 - The wiki repo for Microsoft365-Analytics-Insights is normally cloned as a sibling directory named `Microsoft365-Analytics-Insights.wiki` (e.g., `V:\Repos\Microsoft365-Analytics-Insights.wiki`).
 - When a docs update is requested, make the changes in the wiki repo.
