@@ -16,19 +16,103 @@ namespace Tests.UnitTests
     {
         #region ImportTaskSettings Tests
 
+        // NOTE: All [ImportProp] flags default to false (opt-in) so a fresh / unconfigured install
+        // does not start writing data to the database unexpectedly. Each flag must be explicitly
+        // enabled via the settings string or a property setter.
+
+        [TestMethod]
+        public void ImportTaskSettings_AllProps_DefaultFalse()
+        {
+            // Every [ImportProp] flag defaults to false (opt-in model).
+            var settings = new ImportTaskSettings();
+            Assert.IsFalse(settings.Calls, "Calls should default to false");
+            Assert.IsFalse(settings.GraphUsersMetadata, "GraphUsersMetadata should default to false");
+            Assert.IsFalse(settings.GraphUserApps, "GraphUserApps should default to false");
+            Assert.IsFalse(settings.GraphUsageReports, "GraphUsageReports should default to false");
+            Assert.IsFalse(settings.GraphTeams, "GraphTeams should default to false");
+            Assert.IsFalse(settings.ActivityLog, "ActivityLog should default to false");
+            Assert.IsFalse(settings.WebTraffic, "WebTraffic should default to false");
+            Assert.IsFalse(settings.SentEmails, "SentEmails should default to false");
+        }
+
         [TestMethod]
         public void ImportTaskSettings_SentEmails_DefaultFalse()
         {
+            // Kept as a focused regression test for the SentEmails default specifically.
             var settings = new ImportTaskSettings();
             Assert.IsFalse(settings.SentEmails, "SentEmails should default to false");
         }
 
         [TestMethod]
-        public void ImportTaskSettings_SentEmails_ParseFromString()
+        public void ImportTaskSettings_ParseFromString_MissingTokensKeepFalseDefault()
         {
-            // Verify it defaults to true when not explicitly set to false
-            var settings = new ImportTaskSettings("GraphTeams=False");
-            Assert.IsFalse(settings.SentEmails, "SentEmails should remain false (default) when not mentioned");
+            // Props not mentioned in the string remain at their default (false).
+            var settings = new ImportTaskSettings("GraphTeams=True");
+            Assert.IsTrue(settings.GraphTeams, "GraphTeams should be enabled by explicit =True token");
+            Assert.IsFalse(settings.SentEmails, "SentEmails should remain false when not mentioned");
+            Assert.IsFalse(settings.Calls, "Calls should remain false when not mentioned");
+            Assert.IsFalse(settings.WebTraffic, "WebTraffic should remain false when not mentioned");
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ParseFromString_ExplicitTrueEnablesEachProp()
+        {
+            // Parse honours =True for every [ImportProp] (opt-in model).
+            var settings = new ImportTaskSettings(
+                "Calls=True;GraphUsersMetadata=True;GraphUserApps=True;GraphUsageReports=True;" +
+                "GraphTeams=True;ActivityLog=True;WebTraffic=True;SentEmails=True");
+
+            Assert.IsTrue(settings.Calls);
+            Assert.IsTrue(settings.GraphUsersMetadata);
+            Assert.IsTrue(settings.GraphUserApps);
+            Assert.IsTrue(settings.GraphUsageReports);
+            Assert.IsTrue(settings.GraphTeams);
+            Assert.IsTrue(settings.ActivityLog);
+            Assert.IsTrue(settings.WebTraffic);
+            Assert.IsTrue(settings.SentEmails);
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ParseFromString_ExplicitFalseKeepsFalse()
+        {
+            // Redundant =False tokens are harmless and leave the property at false.
+            var settings = new ImportTaskSettings("Calls=False;GraphTeams=False");
+            Assert.IsFalse(settings.Calls);
+            Assert.IsFalse(settings.GraphTeams);
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ParseFromString_FalseTokenOverridesExplicitTrue()
+        {
+            // Property setter enables, then a =False token in the string disables it.
+            // Validates that Parse() can flip true -> false.
+            var settings = new ImportTaskSettings { Calls = true, GraphTeams = true };
+            // Re-parse onto a fresh instance (this is the typical load path).
+            var reparsed = new ImportTaskSettings("Calls=False;GraphTeams=True");
+            Assert.IsFalse(reparsed.Calls, "Calls=False in the string must produce false");
+            Assert.IsTrue(reparsed.GraphTeams, "GraphTeams=True in the string must produce true");
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ParseFromString_IsCaseInsensitive()
+        {
+            // Parse lowercases both the token and the property name before matching.
+            var settings = new ImportTaskSettings("calls=TRUE;sentemails=true;graphteams=FALSE");
+            Assert.IsTrue(settings.Calls, "Lowercase token name should still enable Calls");
+            Assert.IsTrue(settings.SentEmails, "Lowercase token name should still enable SentEmails");
+            Assert.IsFalse(settings.GraphTeams, "Lowercase token name should still keep GraphTeams false");
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ParseFromString_NullOrEmpty_KeepsDefaults()
+        {
+            var fromNull = new ImportTaskSettings(null);
+            var fromEmpty = new ImportTaskSettings(string.Empty);
+            var defaults = new ImportTaskSettings();
+
+            Assert.IsTrue(fromNull.Equals(defaults), "Null settings string should produce defaults (all false)");
+            Assert.IsTrue(fromEmpty.Equals(defaults), "Empty settings string should produce defaults (all false)");
+            Assert.IsFalse(fromNull.HaveSomethingToDo(), "Null settings string should produce nothing to do");
         }
 
         [TestMethod]
@@ -39,10 +123,69 @@ namespace Tests.UnitTests
             var str = settings.ToSettingsString();
             Assert.IsTrue(str.Contains("SentEmails=True"), "Settings string should contain SentEmails=True");
 
-            // Parse it back - since default is false and string doesn't set it to false, it stays default
-            // But our field defaults to false, so round-trip with True means we need custom handling
-            // The Parse method only sets false, so the default will remain false on parse
-            // This matches the pattern: default is false, enabling requires explicit setting
+            // Parse honours both =True and =False, so round-tripping an explicitly enabled value should preserve it.
+            var reloaded = new ImportTaskSettings(str);
+            Assert.IsTrue(reloaded.SentEmails, "SentEmails should round-trip back to true when explicitly set");
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_FullRoundTrip_AllPropsPreserved()
+        {
+            // Mixed values across all opt-in props should survive ToSettingsString -> ctor.
+            var original = new ImportTaskSettings
+            {
+                Calls = false,
+                GraphUsersMetadata = true,
+                GraphUserApps = false,
+                GraphUsageReports = true,
+                GraphTeams = false,
+                ActivityLog = true,
+                WebTraffic = false,
+                SentEmails = true,
+            };
+
+            var reloaded = new ImportTaskSettings(original.ToSettingsString());
+
+            Assert.IsTrue(reloaded.Equals(original), "All [ImportProp] values should round-trip exactly");
+            Assert.AreEqual(original.Calls, reloaded.Calls);
+            Assert.AreEqual(original.GraphUsersMetadata, reloaded.GraphUsersMetadata);
+            Assert.AreEqual(original.GraphUserApps, reloaded.GraphUserApps);
+            Assert.AreEqual(original.GraphUsageReports, reloaded.GraphUsageReports);
+            Assert.AreEqual(original.GraphTeams, reloaded.GraphTeams);
+            Assert.AreEqual(original.ActivityLog, reloaded.ActivityLog);
+            Assert.AreEqual(original.WebTraffic, reloaded.WebTraffic);
+            Assert.AreEqual(original.SentEmails, reloaded.SentEmails);
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ToSettingsString_ContainsEveryImportProp()
+        {
+            var settingsString = new ImportTaskSettings().ToSettingsString();
+            foreach (var propName in new[]
+            {
+                "Calls", "GraphUsersMetadata", "GraphUserApps", "GraphUsageReports",
+                "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails",
+            })
+            {
+                Assert.IsTrue(settingsString.Contains(propName + "="),
+                    $"Settings string should contain '{propName}=' but was: {settingsString}");
+            }
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ToSettingsString_DefaultIsAllFalse()
+        {
+            // Documents the wire format produced for a fresh / unconfigured instance.
+            var settingsString = new ImportTaskSettings().ToSettingsString();
+            foreach (var propName in new[]
+            {
+                "Calls", "GraphUsersMetadata", "GraphUserApps", "GraphUsageReports",
+                "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails",
+            })
+            {
+                Assert.IsTrue(settingsString.Contains(propName + "=False"),
+                    $"Settings string should contain '{propName}=False' but was: {settingsString}");
+            }
         }
 
         [TestMethod]
@@ -52,7 +195,8 @@ namespace Tests.UnitTests
             settings.SentEmails = true;
             var settingsString = settings.ToSettingsString();
 
-            Assert.IsTrue(settingsString.Contains("SentEmails"), "SentEmails should be in settings string");
+            Assert.IsTrue(settingsString.Contains("SentEmails=True"),
+                "SentEmails=True should be in settings string after enabling it");
         }
 
         [TestMethod]
@@ -67,6 +211,28 @@ namespace Tests.UnitTests
 
             s2.SentEmails = true;
             Assert.IsTrue(s1.Equals(s2), "Settings with same SentEmails should be equal");
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_HaveSomethingToDo_DefaultsReturnFalse()
+        {
+            // The whole point of the opt-in model: a fresh install does nothing until enabled.
+            Assert.IsFalse(new ImportTaskSettings().HaveSomethingToDo(),
+                "HaveSomethingToDo should be false for a fresh default instance (opt-in model)");
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_HaveSomethingToDo_AnySinglePropTrueReturnsTrue()
+        {
+            // Enabling any single opt-in flag is enough to have work to do.
+            Assert.IsTrue(new ImportTaskSettings { Calls = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { GraphUsersMetadata = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { GraphUserApps = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { GraphUsageReports = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { GraphTeams = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { ActivityLog = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { WebTraffic = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { SentEmails = true }.HaveSomethingToDo());
         }
 
         #endregion
