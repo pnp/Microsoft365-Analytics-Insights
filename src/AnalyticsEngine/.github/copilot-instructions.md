@@ -8,6 +8,19 @@
 ## Project Guidelines
 - User prefers to keep the existing InsertBatch row-by-row implementation rather than replacing it with SqlBulkCopy.
 
+## Performance baseline for new / epic features
+For any new feature or epic work in this solution, **assume a tenant of ~200,000 users**. Flag performance concerns proactively in reviews and design — don't wait to be asked. In particular, any new code that touches importers, batch processing, EF queries, SQL merges or Graph paging must be evaluated against this scale.
+
+Concrete anti-patterns that get expensive at 200k users:
+1. **`.ToLower()` on an indexed EF column** (e.g. `db.users.Where(u => u.UserPrincipalName.ToLower() == upn)` or `.Where(u => list.Contains(u.UserPrincipalName.ToLower()))`). EF6 translates `.ToLower()` to a SQL `LOWER()` call, which makes the predicate non-SARGable and forces a table scan even when an index exists. SQL Server's default code-first collation (`Latin1_General_CI_AS`) is already case-insensitive, so just compare against the column directly: `.Where(u => list.Contains(u.UserPrincipalName))`. Same applies to `==` comparisons.
+2. **`List<T>.Skip(i).Take(n).ToList()` inside a chunking loop**. `Skip()` on a list walks past `i` elements every call, so chunking N items in slices of K costs O(N²/K) iterations (~700M for 187k/25). Use `list.GetRange(i, Math.Min(K, list.Count - i))`.
+3. **`.ToLower()` keys into a `StringComparer.OrdinalIgnoreCase` dictionary or HashSet**. The comparer already does case-insensitive matching; the `.ToLower()` allocates a new string per lookup. At 200k users x N lookups this is millions of unnecessary string allocations.
+4. **Per-row EF queries inside a loop** (e.g. `foreach (var url in urls) { db.urls.Where(u => u.Url == url).SingleOrDefaultAsync(); }`). Batch with `Where(u => batch.Contains(u.Url)).ToListAsync()` in IN-clause-friendly chunks (~1000 elements is safe for SQL Server's 2100 parameter limit).
+5. **Rebuilding a 200k-entry dictionary inside a per-SKU / per-batch loop**. Hoist the dictionary build to the outer scope and pass it in.
+6. **Unbounded per-user Graph pulls**. A single noisy mailbox / dataset can dominate import time; add a per-entity cap with a "will resume next cycle" log.
+
+When writing or reviewing such code, call this out in the PR description / review comment with a concrete cost estimate at 200k-user scale.
+
 ## NuGet Package Management
 - When NuGet packages are added or updated, always update binding redirects in both App.Template.config and App.config for all affected projects (including test projects). App.config is generated dynamically from App.Template.config at build time, so App.Template.config is the source of truth.
 - When updating Azure SDK packages in this solution, be aware that CloudInstallEngine targets .NET Standard 2.0 while App.ControlPanel.Engine and test projects target .NET Framework 4.8. Upgrading packages in CloudInstallEngine can cause CS1705 assembly version mismatch errors in consuming .NET Framework projects that need matching direct PackageReference additions and binding redirect updates.
