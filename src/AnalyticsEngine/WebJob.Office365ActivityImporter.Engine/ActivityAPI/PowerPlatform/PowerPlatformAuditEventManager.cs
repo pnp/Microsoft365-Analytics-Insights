@@ -12,7 +12,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
 {
     /// <summary>
     /// Saves Power Platform event metadata to SQL via staging tables + merge scripts.
-    /// Covers Power Apps, Power Automate, Power BI, Copilot Studio, Dataverse - all driven
+    /// Covers Power Apps, Power Automate, Power BI, and Copilot Studio - all driven
     /// by the same Audit.General content-type subscription. Mirrors CopilotAuditEventManager.
     /// </summary>
     public class PowerPlatformAuditEventManager : IDisposable
@@ -26,7 +26,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         private readonly InsertBatch<PowerAutomateFlowShareLogTempEntity> _flowShareInserts;
         private readonly InsertBatch<PowerBILogTempEntity> _powerBiInserts;
         private readonly InsertBatch<CopilotStudioLogTempEntity> _copilotStudioInserts;
-        private readonly InsertBatch<DataverseLogTempEntity> _dataverseInserts;
 
         private int _totalAppCount;
         private int _totalAppShareCount;
@@ -34,7 +33,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         private int _totalFlowShareCount;
         private int _totalPowerBiCount;
         private int _totalCopilotStudioCount;
-        private int _totalDataverseCount;
 
         public PowerPlatformAuditEventManager(string connectionString, ILogger logger)
         {
@@ -46,7 +44,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
             _flowShareInserts = new InsertBatch<PowerAutomateFlowShareLogTempEntity>(connectionString, logger);
             _powerBiInserts = new InsertBatch<PowerBILogTempEntity>(connectionString, logger);
             _copilotStudioInserts = new InsertBatch<CopilotStudioLogTempEntity>(connectionString, logger);
-            _dataverseInserts = new InsertBatch<DataverseLogTempEntity>(connectionString, logger);
         }
 
         public int StagedAppCount => _totalAppCount;
@@ -55,7 +52,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         public int StagedFlowShareCount => _totalFlowShareCount;
         public int StagedPowerBiCount => _totalPowerBiCount;
         public int StagedCopilotStudioCount => _totalCopilotStudioCount;
-        public int StagedDataverseCount => _totalDataverseCount;
 
         public Task SaveSinglePowerAppEventToSqlStaging(PowerAppsAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
         {
@@ -193,25 +189,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
             return Task.CompletedTask;
         }
 
-        public Task SaveSingleDataverseEventToSqlStaging(DataverseAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
-        {
-            if (auditRecord == null || baseOfficeEvent == null)
-            {
-                _logger.LogWarning("PowerPlatformAuditEventManager received null Dataverse auditRecord or baseOfficeEvent.");
-                return Task.CompletedTask;
-            }
-
-            _dataverseInserts.Rows.Add(new DataverseLogTempEntity
-            {
-                EventId = baseOfficeEvent.Id,
-                EnvironmentId = auditRecord.EnvironmentName,
-                EntityName = auditRecord.EntityName,
-                RecordId = auditRecord.RecordId,
-            });
-            _totalDataverseCount++;
-            return Task.CompletedTask;
-        }
-
         private static string JoinConnectors(System.Collections.Generic.List<PowerPlatformConnectionRef> refs)
         {
             if (refs == null || refs.Count == 0) return null;
@@ -243,7 +220,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         {
             _logger.LogDebug($"PowerPlatform commit: {_totalAppCount} app events, {_totalAppShareCount} app shares, " +
                 $"{_totalFlowCount} flow events, {_totalFlowShareCount} flow shares, {_totalPowerBiCount} Power BI events, " +
-                $"{_totalCopilotStudioCount} Copilot Studio events, {_totalDataverseCount} Dataverse events.");
+                $"{_totalCopilotStudioCount} Copilot Studio events.");
 
             await _appInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_APP, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_app_events_from_staging_table.sql"));
             await _appShareInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_APP_SHARE, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_app_share_events_from_staging_table.sql"));
@@ -251,7 +228,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
             await _flowShareInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_AUTOMATE_SHARE, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_automate_share_events_from_staging_table.sql"));
             await _powerBiInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_BI, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_bi_events_from_staging_table.sql"));
             await _copilotStudioInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_STUDIO, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_copilot_studio_events_from_staging_table.sql"));
-            await _dataverseInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_DATAVERSE, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_dataverse_events_from_staging_table.sql"));
 
             _appInserts.Rows.Clear();
             _appShareInserts.Rows.Clear();
@@ -259,14 +235,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
             _flowShareInserts.Rows.Clear();
             _powerBiInserts.Rows.Clear();
             _copilotStudioInserts.Rows.Clear();
-            _dataverseInserts.Rows.Clear();
             _totalAppCount = 0;
             _totalAppShareCount = 0;
             _totalFlowCount = 0;
             _totalFlowShareCount = 0;
             _totalPowerBiCount = 0;
             _totalCopilotStudioCount = 0;
-            _totalDataverseCount = 0;
         }
 
         private string GetSql(string tempTableName, string embeddedScriptName)

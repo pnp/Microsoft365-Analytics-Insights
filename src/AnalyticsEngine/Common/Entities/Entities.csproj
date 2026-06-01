@@ -292,6 +292,10 @@
     <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.Designer.cs">
       <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.cs" />
+    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.Designer.cs">
+      <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -426,6 +430,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202605291207010_AddAuditEventsOperationFK.resx">
       <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202606011010001_RemoveDataverseTables.resx">
+      <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

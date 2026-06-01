@@ -153,17 +153,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return reportItem.ToObject<CopilotStudioAuditLogContent>();
             }
 
-            // Workload "Dynamics365" (Dataverse / model-driven apps) -> AuditLogRecordType 21 CRM.
-            // Dataverse audit events flow through the Office 365 Management Activity API under
-            // the Audit.General content type.
-            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
-            // Dataverse activity logging reference:
-            // https://learn.microsoft.com/en-us/power-platform/admin/activity-logging-auditing/activity-logs-dataverse-model-driven-apps
-            if (logBase.Workload == ActivityImportConstants.WORKLOAD_DATAVERSE)
-            {
-                return reportItem.ToObject<DataverseAuditLogContent>();
-            }
-
             // Unknown workload - nothing to do.
             return null;
         }

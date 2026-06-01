@@ -1,7 +1,7 @@
 -- Merge staged Power Apps audit events into normalised tables.
 -- ${STAGING_TABLE_ACTIVITY} is replaced at runtime with the temp table name.
 
--- 1. Upsert environments (lookup shared with flows / dataverse / copilot studio)
+-- 1. Upsert environments (lookup shared with flows / copilot studio)
 --    Dedupe by environment_id; pick the best display name we saw for it this batch
 --    (fall back to the GUID when only the legacy schema is in play).
 INSERT INTO power_app_environments (environment_id, [name])

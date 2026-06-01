@@ -47,33 +47,6 @@
                 .Index(t => t.bot_id);
             
             CreateTable(
-                "dbo.dataverse_entities",
-                c => new
-                    {
-                        id = c.Int(nullable: false, identity: true),
-                        name = c.String(maxLength: 100),
-                    })
-                .PrimaryKey(t => t.id)
-                .Index(t => t.name, unique: true);
-            
-            CreateTable(
-                "dbo.event_meta_dataverse",
-                c => new
-                    {
-                        event_id = c.Guid(nullable: false),
-                        environment_id = c.Int(),
-                        entity_id = c.Int(),
-                        record_id = c.String(maxLength: 200),
-                    })
-                .PrimaryKey(t => t.event_id)
-                .ForeignKey("dbo.audit_events", t => t.event_id)
-                .ForeignKey("dbo.dataverse_entities", t => t.entity_id)
-                .ForeignKey("dbo.power_app_environments", t => t.environment_id)
-                .Index(t => t.event_id)
-                .Index(t => t.environment_id)
-                .Index(t => t.entity_id);
-            
-            CreateTable(
                 "dbo.flow_recurrence_types",
                 c => new
                     {
@@ -331,9 +304,6 @@
             DropForeignKey("dbo.power_apps", "environment_id", "dbo.power_app_environments");
             DropForeignKey("dbo.power_apps", "app_type_id", "dbo.power_app_types");
             DropForeignKey("dbo.power_app_connectors", "connector_id", "dbo.power_platform_connectors");
-            DropForeignKey("dbo.event_meta_dataverse", "environment_id", "dbo.power_app_environments");
-            DropForeignKey("dbo.event_meta_dataverse", "entity_id", "dbo.dataverse_entities");
-            DropForeignKey("dbo.event_meta_dataverse", "event_id", "dbo.audit_events");
             DropForeignKey("dbo.event_meta_copilot_studio", "bot_id", "dbo.copilot_studio_bots");
             DropForeignKey("dbo.event_meta_copilot_studio", "event_id", "dbo.audit_events");
             DropForeignKey("dbo.copilot_studio_bots", "environment_id", "dbo.power_app_environments");
@@ -367,10 +337,6 @@
             DropIndex("dbo.power_platform_connectors", new[] { "name" });
             DropIndex("dbo.power_app_connectors", new[] { "power_app_id", "connector_id" });
             DropIndex("dbo.flow_recurrence_types", new[] { "name" });
-            DropIndex("dbo.event_meta_dataverse", new[] { "entity_id" });
-            DropIndex("dbo.event_meta_dataverse", new[] { "environment_id" });
-            DropIndex("dbo.event_meta_dataverse", new[] { "event_id" });
-            DropIndex("dbo.dataverse_entities", new[] { "name" });
             DropIndex("dbo.event_meta_copilot_studio", new[] { "bot_id" });
             DropIndex("dbo.event_meta_copilot_studio", new[] { "event_id" });
             DropIndex("dbo.power_app_environments", new[] { "environment_id" });
@@ -392,8 +358,6 @@
             DropTable("dbo.power_platform_connectors");
             DropTable("dbo.power_app_connectors");
             DropTable("dbo.flow_recurrence_types");
-            DropTable("dbo.event_meta_dataverse");
-            DropTable("dbo.dataverse_entities");
             DropTable("dbo.event_meta_copilot_studio");
             DropTable("dbo.copilot_studio_bots");
             DropTable("dbo.power_app_environments");
