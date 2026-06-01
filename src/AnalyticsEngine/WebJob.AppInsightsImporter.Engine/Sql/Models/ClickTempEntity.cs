@@ -35,7 +35,10 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
             }
         }
 
-        [Column("url", true)]
+        // Must match dbo.urls.full_url (varchar(1700), see migration ShrinkUrlsFullUrlColumn /
+        // PR #108) so the join in "Migrate clicks from staging.sql" can use IX_urls_full_url
+        // instead of an implicit nvarchar -> varchar conversion that defeats the index. See #109.
+        [Column("url", true, SqlTypeOverride = "varchar(1700)")]
         public string Url { get; set; }
 
         [Column("timestamp")]

@@ -105,3 +105,26 @@ To get the benefit, a follow‑up change must make the comparison types match �
 relevant staging columns (and ideally the `Url.FullUrl` EF mapping) as `varchar`, so the join
 seeks `IX_urls_full_url`. That is intentionally **not** part of this migration; it is a
 separate, independently testable change.
+
+### Update — this follow-up is now bundled in the same PR (issue #109)
+
+The bundled follow-up adds:
+
+1. A `SqlTypeOverride` option on the internal `ColumnAttribute` used by
+   `InsertBatchTypeFieldCache`, defaulting to the existing `nvarchar(max)` behaviour so other
+   string columns are unchanged.
+2. `SqlTypeOverride = "varchar(1700)"` on the two staging join columns:
+   - `HitTempEntity.Url` (`##import_staging_hit_imports.url`)
+   - `AuditLogTempEntity.ObjectId` (`##import_staging_event_lookups.object_id`)
+3. EF mapping on `Url.FullUrl` to `[Column(TypeName = "varchar")] [MaxLength(1700)] [Required]`,
+   so EF emits `varchar` parameters for non-staging code paths too.
+4. A second migration `UrlFullUrlVarcharMapping` (Up/Down are empty) whose **only** purpose is
+   to refresh the EF model snapshot so the new `Url.FullUrl` mapping doesn't trigger
+   `AutomaticDataLossException` at every `AnalyticsEntitiesContext` construction. The actual
+   schema change is still done by `ShrinkUrlsFullUrlColumn`; replaying an `AlterColumn` here
+   would fail because `full_url` is now part of `IX_urls_full_url`.
+
+Operator impact for `UrlFullUrlVarcharMapping`: **negligible — instant, metadata-only**. It
+runs after `ShrinkUrlsFullUrlColumn` in the same `__MigrationHistory` batch and does not touch
+data, schema, or indexes. The pre-flight checks and slow `ALTER COLUMN` already happened in
+`ShrinkUrlsFullUrlColumn`.

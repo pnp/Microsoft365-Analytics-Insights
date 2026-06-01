@@ -132,6 +132,7 @@
     <Compile Include="AddAuditEventsOperationIndexMigrationTests.cs" />
     <Compile Include="AddAuditEventsOperationFKMigrationTests.cs" />
     <Compile Include="ShrinkUrlsFullUrlColumnMigrationTests.cs" />
+    <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
     <Compile Include="EntityTests.cs" />
     <Compile Include="FakeControllers\FakePageableResultsController.cs" />
     <Compile Include="FakeControllers\FakeCallsController.cs" />
