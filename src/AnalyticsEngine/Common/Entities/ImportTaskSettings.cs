@@ -6,7 +6,10 @@ using System.Reflection;
 namespace Common.Entities
 {
     /// <summary>
-    /// What to import for the solution
+    /// What to import for the solution.
+    /// All [ImportProp] flags default to <c>false</c> (opt-in) so a fresh / unconfigured
+    /// install does not start writing data to the database unexpectedly.
+    /// Each flag must be explicitly enabled via the settings string or property setter.
     /// </summary>
     public class ImportTaskSettings : IEquatable<ImportTaskSettings>
     {
@@ -40,41 +43,55 @@ namespace Common.Entities
 
         private void Parse(PropertyInfo propertyInfo, string token)
         {
-            if (token.ToLower().Contains($"{propertyInfo.Name.ToLower()}=false"))
+            // The field initializer is the source of truth for defaults.
+            // Parse only overrides the default when the token explicitly specifies a value.
+            var lowerToken = token.ToLower();
+            var lowerName = propertyInfo.Name.ToLower();
+            if (lowerToken.Contains($"{lowerName}=false"))
             {
                 propertyInfo.SetValue(this, false);
+            }
+            else if (lowerToken.Contains($"{lowerName}=true"))
+            {
+                propertyInfo.SetValue(this, true);
             }
         }
         #endregion
 
 
         [ImportProp]
-        public bool Calls { get; set; } = true;
+        public bool Calls { get; set; } = false;
 
 
         [ImportProp]
-        public bool GraphUsersMetadata { get; set; } = true;
+        public bool GraphUsersMetadata { get; set; } = false;
 
         /// <summary>
         /// User Teams apps for user refresh
         /// </summary>
         [ImportProp]
-        public bool GraphUserApps { get; set; } = true;
+        public bool GraphUserApps { get; set; } = false;
 
         [ImportProp]
-        public bool GraphUsageReports { get; set; } = true;
+        public bool GraphUsageReports { get; set; } = false;
 
         [ImportProp]
-        public bool GraphTeams { get; set; } = true;
+        public bool GraphTeams { get; set; } = false;
 
         [ImportProp]
-        public bool ActivityLog { get; set; } = true;
+        public bool ActivityLog { get; set; } = false;
 
         /// <summary>
         /// SPO analytics with JS
         /// </summary>
         [ImportProp]
-        public bool WebTraffic { get; set; } = true;
+        public bool WebTraffic { get; set; } = false;
+
+        /// <summary>
+        /// Import sent emails from mailboxes via Graph.
+        /// </summary>
+        [ImportProp]
+        public bool SentEmails { get; set; } = false;
 
         IEnumerable<PropertyInfo> GetImportProps()
         {

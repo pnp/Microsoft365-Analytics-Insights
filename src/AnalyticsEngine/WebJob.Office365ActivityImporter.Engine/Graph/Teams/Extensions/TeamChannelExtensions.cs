@@ -6,8 +6,11 @@ using Common.Entities.Models;
 using Common.Entities.Redis;
 using Common.Entities.Redis.Teams;
 using Common.Entities.Teams;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -19,6 +22,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 {
     public static class TeamChannelExtensions
     {
+        // Per-process cached cognitive client. Reused across all channels in an importer run
+        // because TextAnalyticsClient is thread-safe and pools HTTP connections; rebuilding it
+        // per channel would leak sockets. The CognitiveServicesClient wrapper also handles
+        // auto-fallback to RBAC when the resource rejects key auth at runtime.
+        private static readonly object _cognitiveClientLock = new object();
+        private static CognitiveServicesClient _cachedCognitiveClient;
+        private static bool _cognitiveClientBuilt;
+
+        private static CognitiveServicesClient GetOrBuildCognitiveClient(AppConfig cognitiveConfig, ILogger telemetry)
+        {
+            if (_cognitiveClientBuilt) return _cachedCognitiveClient;
+            lock (_cognitiveClientLock)
+            {
+                if (!_cognitiveClientBuilt)
+                {
+                    _cachedCognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(telemetry);
+                    _cognitiveClientBuilt = true;
+                }
+                return _cachedCognitiveClient;
+            }
+        }
         /// <summary>
         /// Sets the "Messages" prop on each channel by reading each channel messages.
         /// </summary>
@@ -50,14 +74,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Try and get user-delegated channel stats
             if (refreshToken != null)
             {
-                // Managed to get user-delegated token from refresh-token. Impersonate user
-                var _preCachedTokenClient = new GraphServiceClient(new DelegateAuthenticationProvider(
-                    (requestMessage) =>
-                    {
-                        requestMessage.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("bearer", refreshToken.AccessToken);
-                        return Task.FromResult(0);
-                    })
-                );
+                // Managed to get user-delegated token from refresh-token. Impersonate user.
+                // v5+ removed DelegateAuthenticationProvider — drop in our own
+                // IAuthenticationProvider that pins the supplied bearer token onto every request.
+                var _preCachedTokenClient = new GraphServiceClient(new BearerTokenAuthenticationProvider(refreshToken.AccessToken));
 
                 var channelMessagesLoader = new ChannelMessagesLoader(_preCachedTokenClient, cacheConnectionManager, telemetry);
                 try
@@ -65,7 +85,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     // Load msgs using user token
                     channelDeltaInfo = await channelMessagesLoader.LoadTeamMessagesAndReplies(channel, parentTeam.Id);
                 }
-                catch (ServiceException ex)
+                catch (ODataError ex)
                 {
                     // Assume there's an issue with the token. Parent will handle token clean-up
                     throw new ChannelMessagesReadException(ex);
@@ -100,8 +120,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 return allStatsAllDays;
             }
 
-            var credentials = new AzureKeyCredential(cognitiveConfig.CognitiveKey);
-            var client = new TextAnalyticsClient(new Uri(cognitiveConfig.CognitiveEndpoint), credentials);
+            // Use key auth when CognitiveKey is set, otherwise RBAC (ClientSecretCredential)
+            // so we still work against resources that have key auth disabled. The wrapper
+            // is cached per process and auto-falls back to RBAC on key-auth failure.
+            var client = GetOrBuildCognitiveClient(cognitiveConfig, telemetry);
+            if (client == null)
+            {
+                telemetry.LogWarning($"Could not build cognitive client for channel {parentChannel.DisplayName} ({parentChannel.Id}). Adding basic stats with no cognitive insights.");
+                foreach (var uniqueMsgDate in msgDates)
+                {
+                    var msgsForDate = allChannelMsgs.GetByDate(uniqueMsgDate);
+                    allStatsAllDays.Add(new MessageCognitiveStats(parentChannel, uniqueMsgDate) { ChatsCount = msgsForDate.Count });
+                }
+                return allStatsAllDays;
+            }
 
             foreach (var uniqueMsgDate in msgDates)
             {

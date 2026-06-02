@@ -2,6 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -42,7 +43,7 @@ namespace Tests.UnitTests
             var graphUsers = GenerateGraphUsers(USER_COUNT, testPrefix);
 
             // Use non-null (empty) SKUs so the bulk update path is exercised
-            var fakeSkus = new GraphServiceSubscribedSkusCollectionPage();
+            var fakeSkus = new List<SubscribedSku>();
 
             try
             {

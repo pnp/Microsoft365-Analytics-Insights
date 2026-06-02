@@ -2,6 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -124,8 +125,12 @@ namespace Tests.UnitTests
                 var graphClient = new GraphServiceClient(auth.Creds);
 
                 // Get Allan user from Graph & insert blanks into DB (needs license)
-                var graphUsers = await graphClient.Users.Request().Filter("startswith(mail,'AllanD')").Top(1).GetAsync();
-                var graphUser = graphUsers[0];
+                var graphUsers = await graphClient.Users.GetAsync(rc =>
+                {
+                    rc.QueryParameters.Filter = "startswith(mail,'AllanD')";
+                    rc.QueryParameters.Top = 1;
+                });
+                var graphUser = graphUsers.Value[0];
 
                 // Run updater; force full load
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();

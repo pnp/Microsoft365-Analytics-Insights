@@ -43,16 +43,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             _telemetry.LogInformation($"User import - Inserting missing users (two-phase: bulk insert + metadata enrichment)...");
 
-            // Create HashSet for O(1) lookup of existing DB users
+            // Create HashSet for O(1) lookup of existing DB users.
+            // OrdinalIgnoreCase comparer handles case so we don't need .ToLower() on the keys
+            // (saves ~187k string allocations on a 200k-user tenant).
             var existingUpns = new HashSet<string>(
-                graphMentionedDbUsers.Select(u => u.UserPrincipalName?.ToLower()).Where(upn => !string.IsNullOrEmpty(upn)),
+                graphMentionedDbUsers.Select(u => u.UserPrincipalName).Where(upn => !string.IsNullOrEmpty(upn)),
                 StringComparer.OrdinalIgnoreCase);
 
             // Build list of users to insert - optimized with HashSet lookup
             var usersToInsert = new List<GraphUser>();
             foreach (var graphUser in allGraphUsers)
             {
-                var upn = graphUser.UserPrincipalName?.ToLower();
+                var upn = graphUser.UserPrincipalName;
                 if (!string.IsNullOrEmpty(upn) && !existingUpns.Contains(upn))
                 {
                     usersToInsert.Add(graphUser);
@@ -74,7 +76,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             // PHASE 2: Load inserted users and enrich with metadata
             _telemetry.LogInformation($"User import - Phase 2: Starting metadata enrichment for {usersToInsert.Count.ToString("N0")} new users (existing users will be updated separately)...");
-            var insertedUserUpns = usersToInsert.Select(u => u.UserPrincipalName.ToLower()).ToList();
+            var insertedUserUpns = usersToInsert.Select(u => u.UserPrincipalName).ToList();
             var insertedDbUsers = await EnrichInsertedUsersWithMetadata(
                 db,
                 allGraphUsers,
@@ -105,10 +107,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var connectionString = db.Database.Connection.ConnectionString;
             var totalInserted = 0;
 
-            // Process in batches to manage memory
+            // Process in batches to manage memory.
+            // GetRange instead of Skip().Take() - Skip() walks past i elements every call,
+            // so chunking N items in slices of K costs O(N^2/K). For 200k users in 10k batches
+            // that's a 2M-step linear scan over the list head.
             for (int batchStart = 0; batchStart < graphUsers.Count; batchStart += batchSize)
             {
-                var batch = graphUsers.Skip(batchStart).Take(batchSize).ToList();
+                var batchCount = Math.Min(batchSize, graphUsers.Count - batchStart);
+                var batch = graphUsers.GetRange(batchStart, batchCount);
                 var dataTable = CreateUserDataTable(batch);
 
                 using (var bulkCopy = new SqlBulkCopy(connectionString))
@@ -211,9 +217,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var batchCount = Math.Min(batchSize, insertedUserUpns.Count - batchStart);
                 var batchUpns = insertedUserUpns.GetRange(batchStart, batchCount);
 
-                // Load batch of newly inserted users from database WITH TRACKING for updates
+                // Load batch of newly inserted users from database WITH TRACKING for updates.
+                // No LOWER() on the column - the default code-first collation is case-insensitive
+                // (Latin1_General_CI_AS) so the comparison still matches mixed-case UPNs but the
+                // predicate stays SARGable against the user_name index. At 200k users this turns
+                // a clustered-index scan into an index seek per batch.
                 var batchUsers = await db.users
-                    .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLower()))
+                    .Where(u => batchUpns.Contains(u.UserPrincipalName))
                     .Include(u => u.LicenseLookups)
                     .ToListAsync();
 
@@ -226,21 +236,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
-                // Pre-populate cache with tracked entities from this batch to prevent duplicate inserts
+                // Pre-populate cache with tracked entities from this batch to prevent duplicate inserts.
+                // userMetaCache.UserCache uses OrdinalIgnoreCase so we don't need to lowercase the key.
                 foreach (var trackedUser in batchUsers)
                 {
-                    var upnLower = trackedUser.UserPrincipalName?.ToLower();
-                    if (!string.IsNullOrEmpty(upnLower))
+                    if (!string.IsNullOrEmpty(trackedUser.UserPrincipalName))
                     {
-                        await userMetaCache.UserCache.GetOrCreateNewResource(upnLower, trackedUser);
+                        await userMetaCache.UserCache.GetOrCreateNewResource(trackedUser.UserPrincipalName, trackedUser);
                     }
                 }
 
                 // Update metadata for each user
                 foreach (var dbUser in batchUsers)
                 {
-                    var upnLower = dbUser.UserPrincipalName?.ToLower();
-                    if (!string.IsNullOrEmpty(upnLower) && graphUsersByUpn.TryGetValue(upnLower, out var graphUser))
+                    if (!string.IsNullOrEmpty(dbUser.UserPrincipalName) && graphUsersByUpn.TryGetValue(dbUser.UserPrincipalName, out var graphUser))
                     {
                         await updateAction(db, graphUser, allGraphUsers, new List<Common.Entities.User>(), dbUser, readUserSkus, dbUsersByAadId);
                     }

@@ -166,7 +166,41 @@ namespace Common.Entities.Config
         public string CognitiveEndpoint { get; set; }
         public string CognitiveKey { get; set; }
 
-        public bool IsValidCognitiveConfig => !(string.IsNullOrEmpty(this.CognitiveEndpoint) || string.IsNullOrEmpty(this.CognitiveKey));
+        /// <summary>
+        /// True when we have enough configuration to talk to Azure AI Language. Valid if the
+        /// endpoint is set AND we have either a key (legacy auth) OR the runtime service
+        /// principal credentials (used for RBAC/Entra ID auth when the resource has key auth
+        /// disabled - <c>403 AuthenticationTypeDisabled</c>).
+        /// </summary>
+        public bool IsValidCognitiveConfig =>
+            !string.IsNullOrEmpty(this.CognitiveEndpoint) &&
+            (!string.IsNullOrEmpty(this.CognitiveKey) || HasRuntimeServicePrincipal);
+
+        private bool HasRuntimeServicePrincipal =>
+            this.TenantGUID != Guid.Empty &&
+            !string.IsNullOrEmpty(this.ClientID) &&
+            !string.IsNullOrEmpty(this.ClientSecret);
+
+        /// <summary>
+        /// Builds a <see cref="DataUtils.CognitiveServicesClient"/> from the configured
+        /// cognitive endpoint. Initially uses key auth when the key is set, otherwise builds
+        /// an RBAC client (<see cref="Azure.Identity.ClientSecretCredential"/> from the
+        /// runtime service principal). The returned wrapper also auto-retries with RBAC when
+        /// a key-auth call is rejected at runtime (e.g. <c>403 AuthenticationTypeDisabled</c>),
+        /// so callers don't need to react to <c>disableLocalAuth</c> being toggled on the
+        /// resource.
+        /// Returns <c>null</c> when no usable configuration is present.
+        /// </summary>
+        public DataUtils.CognitiveServicesClient CreateCognitiveServicesClient(Microsoft.Extensions.Logging.ILogger logger = null)
+        {
+            return DataUtils.CognitiveServicesClient.TryCreate(
+                this.CognitiveEndpoint,
+                this.CognitiveKey,
+                this.TenantGUID == Guid.Empty ? null : this.TenantGUID.ToString(),
+                this.ClientID,
+                this.ClientSecret,
+                logger);
+        }
 
         public ImportTaskSettings ImportJobSettings { get; set; }
 

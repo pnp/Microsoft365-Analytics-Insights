@@ -15,6 +15,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly RoleAssignmentTask _appInsightsReaderRoleTask;
         private readonly RoleAssignmentTask _storageBlobDataContributorRoleTask;
         private readonly RoleAssignmentTask _redisCacheContributorRoleTask;
+        private readonly RoleAssignmentTask _cognitiveServicesUserRoleTask;
 
         public ResourceSecurityInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
         {
@@ -49,10 +50,30 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _redisCacheContributorRoleTask = new RoleAssignmentTask(redisCacheContributorConfig, logger, Location, tagDic);
             this.AddTask(_redisCacheContributorRoleTask);
+
+            // Assign "Cognitive Services User" to the runtime account for data-plane access
+            // (sentiment/language/key-phrase calls). Required when the Azure AI Language
+            // resource has key auth disabled (disableLocalAuth=true) - the runtime falls back
+            // to RBAC via ClientSecretCredential and would otherwise hit
+            // "401 PermissionDenied: Principal does not have access to API/Operation".
+            // Only assigned when cognitive services are part of the install.
+            if (config.CognitiveServicesEnabled)
+            {
+                var cognitiveServicesUserConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Cognitive Services User")
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_PRINCIPAL_TYPE, "ServicePrincipal");
+
+                _cognitiveServicesUserRoleTask = new RoleAssignmentTask(cognitiveServicesUserConfig, logger, Location, tagDic);
+                this.AddTask(_cognitiveServicesUserRoleTask);
+            }
         }
 
         public RoleAssignmentResource AppInsightsReaderRole => GetTaskResult<RoleAssignmentResource>(_appInsightsReaderRoleTask);
         public RoleAssignmentResource StorageBlobDataContributorRole => GetTaskResult<RoleAssignmentResource>(_storageBlobDataContributorRoleTask);
         public RoleAssignmentResource RedisCacheContributorRole => GetTaskResult<RoleAssignmentResource>(_redisCacheContributorRoleTask);
+        public RoleAssignmentResource CognitiveServicesUserRole =>
+            _cognitiveServicesUserRoleTask == null ? null : GetTaskResult<RoleAssignmentResource>(_cognitiveServicesUserRoleTask);
     }
 }

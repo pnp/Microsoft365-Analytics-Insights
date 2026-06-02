@@ -1,7 +1,25 @@
 # Copilot Instructions
 
+## Git workflow
+- Never commit. Never push. Make file changes only.
+- Wait for the user to explicitly say "commit", "commit and push", or similar before running any `git commit` / `git push`. "Commit and push" given for one change does not extend to subsequent changes — ask again each time.
+- This applies to all branches, including `dev`, and to the sibling wiki repo at `V:\Repos\Microsoft365-Analytics-Insights.wiki`.
+
 ## Project Guidelines
 - User prefers to keep the existing InsertBatch row-by-row implementation rather than replacing it with SqlBulkCopy.
+
+## Performance baseline for new / epic features
+For any new feature or epic work in this solution, **assume a tenant of ~200,000 users**. Flag performance concerns proactively in reviews and design — don't wait to be asked. In particular, any new code that touches importers, batch processing, EF queries, SQL merges or Graph paging must be evaluated against this scale.
+
+Concrete anti-patterns that get expensive at 200k users:
+1. **`.ToLower()` on an indexed EF column** (e.g. `db.users.Where(u => u.UserPrincipalName.ToLower() == upn)` or `.Where(u => list.Contains(u.UserPrincipalName.ToLower()))`). EF6 translates `.ToLower()` to a SQL `LOWER()` call, which makes the predicate non-SARGable and forces a table scan even when an index exists. SQL Server's default code-first collation (`Latin1_General_CI_AS`) is already case-insensitive, so just compare against the column directly: `.Where(u => list.Contains(u.UserPrincipalName))`. Same applies to `==` comparisons.
+2. **`List<T>.Skip(i).Take(n).ToList()` inside a chunking loop**. `Skip()` on a list walks past `i` elements every call, so chunking N items in slices of K costs O(N²/K) iterations (~700M for 187k/25). Use `list.GetRange(i, Math.Min(K, list.Count - i))`.
+3. **`.ToLower()` keys into a `StringComparer.OrdinalIgnoreCase` dictionary or HashSet**. The comparer already does case-insensitive matching; the `.ToLower()` allocates a new string per lookup. At 200k users x N lookups this is millions of unnecessary string allocations.
+4. **Per-row EF queries inside a loop** (e.g. `foreach (var url in urls) { db.urls.Where(u => u.Url == url).SingleOrDefaultAsync(); }`). Batch with `Where(u => batch.Contains(u.Url)).ToListAsync()` in IN-clause-friendly chunks (~1000 elements is safe for SQL Server's 2100 parameter limit).
+5. **Rebuilding a 200k-entry dictionary inside a per-SKU / per-batch loop**. Hoist the dictionary build to the outer scope and pass it in.
+6. **Unbounded per-user Graph pulls**. A single noisy mailbox / dataset can dominate import time; add a per-entity cap with a "will resume next cycle" log.
+
+When writing or reviewing such code, call this out in the PR description / review comment with a concrete cost estimate at 200k-user scale.
 
 ## NuGet Package Management
 - When NuGet packages are added or updated, always update binding redirects in both App.Template.config and App.config for all affected projects (including test projects). App.config is generated dynamically from App.Template.config at build time, so App.Template.config is the source of truth.
@@ -14,3 +32,22 @@
 - Note that the "Redis Cache Contributor" RBAC role is control-plane only and does NOT grant data-plane access.
 - For Redis RBAC fallback in this codebase, use `ClientSecretCredential` with the runtime account from config (tenantId, clientId, clientSecret) — NOT `DefaultAzureCredential` or managed identity.
 - The Azure.ResourceManager.Redis SDK version 1.1.0 uses an API version too old to support `aad-enabled` configuration. To set `aad-enabled` on Redis, use the ARM REST API directly with api-version 2023-08-01 or later instead of the SDK.
+
+## EF6 migrations and `AnalyticsEntitiesContext`
+
+### Default behaviour: the context does NOT apply migrations in Release builds
+- `new AnalyticsEntitiesContext()` (the parameterless constructor) only auto-applies migrations when compiled in **DEBUG** (it sets `MigrateDatabaseToLatestVersion<...>`). In **Release** the initializer is `CreateDatabaseIfNotExists<>` — no migrations are run.
+- In production the schema is brought up to date explicitly by `DatabaseUpgrader.CheckDbUpgraded` (called from the WebJob bootstraps and the installer). Never assume `new AnalyticsEntitiesContext()` will run migrations at runtime.
+- The `// THIS IS BAD` comment on the DEBUG branch is intentional; the production path uses the explicit upgrader so test/dev failures aren't masked by silent auto-migrations.
+
+### `AutomaticMigrationsEnabled = true` + an outdated snapshot ⇒ `AutomaticDataLossException`
+- `Migrations/Configuration.cs` has `AutomaticMigrationsEnabled = true`. When the latest explicit migration's model snapshot (the gzipped EDMX inside the `.resx` Target) doesn't match the current C# entity model, EF auto-generates an on-the-fly migration. If that auto-migration would DROP a table or column, it throws `System.Data.Entity.Migrations.Infrastructure.AutomaticDataLossException`.
+- This bites every time you remove an entity / `DbSet` / property / `[Table]` but forget to update the snapshot in the last migration's `.resx`.
+
+### Rules of thumb when editing entities or migrations
+1. **Always pair entity removals with a migration**. Removing a `DbSet<T>` / `[Table("...")]` / property without updating the EF model snapshot leaves every test / runtime startup throwing `AutomaticDataLossException`.
+2. **The Target snapshot in `.resx` is the source of truth EF compares against at runtime**. It is gzipped + base64-encoded EDMX (CSDL + SSDL + Mapping). Editing the XML by hand only works if it ends up byte-identical to what EF would serialize — namespace prefixes, attribute order and whitespace all count. Hand-editing usually triggers an auto-migration anyway.
+3. **The canonical way to refresh a `.resx` snapshot** is `Add-Migration -Force <Name>` in the Visual Studio Package Manager Console (with `Entities` as the project, `WebJob.Office365ActivityImporter` as the startup project). That re-scaffolds the `.cs`, `.Designer.cs` and `.resx` from the live entity model.
+4. **For a one-off schema cleanup** (e.g. dropping orphan tables that were created by an older dev-only migration that we no longer want to ship), add a defensive follow-up migration that uses `IF OBJECT_ID(...) IS NOT NULL DROP TABLE [...]` so it is safe on fresh installs *and* on databases that already have the orphan tables.
+5. **Tests fail at `AnalyticsEntitiesContext..ctor` with `AutomaticDataLossException`?** Don't enable `AutomaticMigrationDataLossAllowed = true` to make them pass — that masks the real problem and silently drops customer data. Instead, fix the snapshot so the current model matches the latest migration's Target, or add an explicit cleanup migration.
+6. **Reproducing snapshot mismatches locally**: drop `(localdb)\MSSQLLocalDB::UnitTestingAnalytics` (the default test DB per `Tests.UnitTests/App.Debug.config`) to force a fresh migration replay; that's the fastest way to surface a snapshot/model mismatch before pushing.
