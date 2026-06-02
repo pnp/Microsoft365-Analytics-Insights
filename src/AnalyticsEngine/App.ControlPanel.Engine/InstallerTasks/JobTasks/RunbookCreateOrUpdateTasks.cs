@@ -8,135 +8,151 @@ using CloudInstallEngine.Azure.InstallTasks;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
 {
     // Specialist runbook upload tasks for the profiling automation scripts
-    public class ProfilingScriptWeeklyPSRunbookUploadTask : RunbookUploadTask<AzStorageRunbookFileLocations>
+    public class ProfilingScriptWeeklyPSRunbookUploadTask : RunbookUploadTask
     {
         public ProfilingScriptWeeklyPSRunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
         {
         }
 
-        public override Task<AzStorageRunbookFileLocations> ExecuteTaskReturnResult(object contextArg)
+        public override Task<RunbookFileLocalLocations> ExecuteTaskReturnResult(object contextArg)
         {
             // Get right script from the context passed from previous task. Set the config for the script to be uploaded
-            var context = base.EnsureContextArgType<AzStorageRunbookFileLocations>(contextArg);
+            var context = base.EnsureContextArgType<RunbookFileLocalLocations>(contextArg);
 
             // Name and script location
             _config.Add(TaskConfig.GetConfigForName("Weekly_Update"));
             _config.Add(CONFIG_PARAM_FILE_LOCATION, context.WeeklyPS);
-            _config.Add(CONFIG_PARAM_FILE_HASH_SHA256, context.WeeklyFileHash);
             return base.ExecuteTaskReturnResult(contextArg);
         }
     }
-    public class ProfilingScriptAggregationStatusPSRunbookUploadTask : RunbookUploadTask<AzStorageRunbookFileLocations>
+
+    public class ProfilingScriptAggregationStatusPSRunbookUploadTask : RunbookUploadTask
     {
         public ProfilingScriptAggregationStatusPSRunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
             : base(config, logger, azureLocation, tags)
         {
         }
 
-        public override Task<AzStorageRunbookFileLocations> ExecuteTaskReturnResult(object contextArg)
+        public override Task<RunbookFileLocalLocations> ExecuteTaskReturnResult(object contextArg)
         {
             // Get right script from the context passed from previous task. Set the config for the script to be uploaded
-            var context = base.EnsureContextArgType<AzStorageRunbookFileLocations>(contextArg);
+            var context = base.EnsureContextArgType<RunbookFileLocalLocations>(contextArg);
 
             // Name and script location
             _config.Add(TaskConfig.GetConfigForName("Aggregation_Status"));
             _config.Add(CONFIG_PARAM_FILE_LOCATION, context.AggregationStatusPS);
-            _config.Add(CONFIG_PARAM_FILE_HASH_SHA256, context.AggregationStatusFileHash);
             return base.ExecuteTaskReturnResult(contextArg);
         }
     }
-    public class ProfilingScriptDatabaseMaintenancePSRunbookUploadTask : RunbookUploadTask<AzStorageRunbookFileLocations>
+
+    public class ProfilingScriptDatabaseMaintenancePSRunbookUploadTask : RunbookUploadTask
     {
         public ProfilingScriptDatabaseMaintenancePSRunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
             : base(config, logger, azureLocation, tags)
         {
         }
 
-        public override Task<AzStorageRunbookFileLocations> ExecuteTaskReturnResult(object contextArg)
+        public override Task<RunbookFileLocalLocations> ExecuteTaskReturnResult(object contextArg)
         {
             // Get right script from the context passed from previous task. Set the config for the script to be uploaded
-            var context = base.EnsureContextArgType<AzStorageRunbookFileLocations>(contextArg);
+            var context = base.EnsureContextArgType<RunbookFileLocalLocations>(contextArg);
 
             // Name and script location
             _config.Add(TaskConfig.GetConfigForName("Database_Maintenance"));
             _config.Add(CONFIG_PARAM_FILE_LOCATION, context.DatabaseMaintenancePS);
-            _config.Add(CONFIG_PARAM_FILE_HASH_SHA256, context.DatabaseMaintenanceFileHash);
             return base.ExecuteTaskReturnResult(contextArg);
         }
     }
 
     /// <summary>
-    /// Run a task to upload a runbook to an automation account. Return same result as previous task gave so can be used for various uploads using same metadata object. 
+    /// Creates (or updates) a runbook in an Azure Automation account using the runbook draft content API:
+    ///   1. PUT runbook metadata with an empty draft (no PublishContentLink).
+    ///   2. PUT the script body into the draft via <see cref="AutomationRunbookResource.ReplaceContentRunbookDraftAsync"/>.
+    ///   3. POST publish so the draft becomes the live version.
+    ///
+    /// This deliberately avoids <see cref="AutomationContentLink"/> because the Automation control plane fetches the
+    /// URL from outside the customer VNet and cannot route through storage private endpoints - which makes content
+    /// links fail with "Validation errors while reading content link" whenever the storage account has public network
+    /// access disabled. The draft-content path is pure ARM control plane and works regardless of storage network ACLs.
     /// </summary>
-    public abstract class RunbookUploadTask<METADATA> : InstallTaskInAzResourceGroup<METADATA>
+    public abstract class RunbookUploadTask : InstallTaskInAzResourceGroup<RunbookFileLocalLocations>
     {
         public const string CONFIG_PARAM_FILE_LOCATION = "FileName";
-        public const string CONFIG_PARAM_FILE_HASH_SHA256 = "SHA256";
         public const string CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME = "AutomationAccount";
+
+        const int MAX_ATTEMPTS = 3;
+        static readonly TimeSpan RETRY_DELAY = TimeSpan.FromSeconds(5);
+
         public RunbookUploadTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags) : base(config, logger, azureLocation, tags)
         {
         }
 
-        public override async Task<METADATA> ExecuteTaskReturnResult(object contextArg)
+        public override async Task<RunbookFileLocalLocations> ExecuteTaskReturnResult(object contextArg)
         {
-            var context = base.EnsureContextArgType<METADATA>(contextArg);
-            var automationAccount = Container.GetAutomationAccounts().Where(s => s.Data.Name == _config[CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME]).SingleOrDefault();
+            var context = base.EnsureContextArgType<RunbookFileLocalLocations>(contextArg);
+
+            var automationAccount = Container.GetAutomationAccounts().SingleOrDefault(s => s.Data.Name == _config[CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME]);
             if (automationAccount == null)
             {
                 throw new UnexpectedInstallException($"Automation account '{_config[CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME]}' not found.");
             }
-            else
+
+            var localPath = _config[CONFIG_PARAM_FILE_LOCATION];
+            if (string.IsNullOrEmpty(localPath) || !File.Exists(localPath))
             {
-                var fileUrl = _config[CONFIG_PARAM_FILE_LOCATION];
+                throw new UnexpectedInstallException($"Runbook source PowerShell file '{localPath}' not found for runbook '{_config.ResourceName}'.");
+            }
 
-                Console.WriteLine($"Uploading runbook with hash '{_config[CONFIG_PARAM_FILE_HASH_SHA256]}' from '{fileUrl}'.");
+            _logger.LogInformation($"Uploading runbook '{_config.ResourceName}' from '{localPath}' via Automation draft-content API.");
 
-                var retry = true;
-                var retryCount = 0;
-                while (retry)
+            for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)
+            {
+                try
                 {
+                    // 1. Create/update the runbook metadata with an empty draft (no PublishContentLink).
+                    //    Setting Draft = new AutomationRunbookDraft() tells the API to allocate a fresh empty draft
+                    //    that we'll then PUT bytes into via the next call.
                     var newRunbookInfo = new AutomationRunbookCreateOrUpdateContent(new AutomationRunbookType("PowerShell72"))
                     {
                         Location = base.AzureLocation,
                         Name = _config.ResourceName,
-                        PublishContentLink = new AutomationContentLink
-                        {
-                            Uri = new Uri(fileUrl),
-                            ContentHash = new AutomationContentHash("SHA256", _config[CONFIG_PARAM_FILE_HASH_SHA256]),
-                        },
+                        Draft = new AutomationRunbookDraft(),
                         Description = "Profiling automation script",
                     };
                     base.EnsureTagsOnNew(newRunbookInfo.Tags);
 
-                    try
+                    var createReq = await automationAccount.GetAutomationRunbooks().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newRunbookInfo);
+                    var runbook = createReq.Value;
+
+                    // 2. Upload the script body into the draft.
+                    using (var fileStream = File.OpenRead(localPath))
                     {
-                        var newRunbookReq = await automationAccount.GetAutomationRunbooks().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newRunbookInfo);
-                        var runbook = newRunbookReq.Value;
-                        _logger.LogInformation($"Created/updated runbook '{runbook.Data.Name}' successfully");
-                        retry = false;
-                        await base.EnsureTagsOnExisting(runbook.Data.Tags, runbook.GetTagResource());
+                        await runbook.ReplaceContentRunbookDraftAsync(WaitUntil.Completed, fileStream);
                     }
-                    catch (RequestFailedException ex)
-                    {
-                        if (ex.Message.Contains("Validation errors while reading content link."))
-                        {
-                            // Retry if the content link is not valid. 
-                            // This seems to happen with URLs that have SAS tokens in. Retrying works. It's not clear why.
-                            retryCount++;
-                            retry = retryCount < 5;
-                            await Task.Delay(5000);
-                        }
-                        _logger.LogError($"Attempt {1}: Failed to create/update runbook '{_config.ResourceName}' - {ex.Message}");
-                    }
+
+                    // 3. Publish the draft so it becomes the live version that Hybrid Runbook Workers can invoke.
+                    await runbook.PublishAsync(WaitUntil.Completed);
+
+                    _logger.LogInformation($"Created/updated runbook '{runbook.Data.Name}' successfully");
+                    await base.EnsureTagsOnExisting(runbook.Data.Tags, runbook.GetTagResource());
+                    return context;
+                }
+                catch (RequestFailedException ex) when (attempt < MAX_ATTEMPTS)
+                {
+                    _logger.LogWarning($"Attempt {attempt}/{MAX_ATTEMPTS}: Failed to create/update runbook '{_config.ResourceName}' - {ex.Message}. Retrying in {RETRY_DELAY.TotalSeconds:0}s...");
+                    await Task.Delay(RETRY_DELAY);
                 }
             }
-            return context;
+
+            // All attempts exhausted - fail loudly so the install doesn't silently leave the Automation account in a broken state.
+            throw new UnexpectedInstallException($"Failed to create/update runbook '{_config.ResourceName}' after {MAX_ATTEMPTS} attempts.");
         }
     }
 }

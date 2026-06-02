@@ -2,7 +2,6 @@
 using App.ControlPanel.Engine.Models;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.Resources;
-using Azure.ResourceManager.Storage;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
 using Common.Entities.Installer;
@@ -16,9 +15,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class DownloadLatestAppServiceContentInstallJob : AppServiceContentInstallJob
     {
         public DownloadLatestAppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, SoftwareReleaseConfig softwareReleaseConfig,
-            InstallerFtpConfig ftpConfig, SolutionInstallConfig config, bool downloadReleaseOnly, StorageAccountResource storageAccount,
+            InstallerFtpConfig ftpConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
             AutomationAccountResource automationAccount)
-            : base(logger, subscription, null, softwareReleaseConfig, config, ftpConfig, downloadReleaseOnly, storageAccount, automationAccount)
+            : base(logger, subscription, null, softwareReleaseConfig, config, ftpConfig, downloadReleaseOnly, automationAccount)
         {
         }
     }
@@ -26,9 +25,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class UseLocalAppServiceContentInstallJob : AppServiceContentInstallJob
     {
         public UseLocalAppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, LocalStorageInstallSourceInfo localOverrideSources,
-            InstallerFtpConfig ftpConfig, SolutionInstallConfig config, bool downloadReleaseOnly, StorageAccountResource storageAccount,
+            InstallerFtpConfig ftpConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
             AutomationAccountResource automationAccount)
-            : base(logger, subscription, localOverrideSources, null, config, ftpConfig, downloadReleaseOnly, storageAccount, automationAccount)
+            : base(logger, subscription, localOverrideSources, null, config, ftpConfig, downloadReleaseOnly, automationAccount)
         {
         }
     }
@@ -41,7 +40,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         BaseInstallTask _sourceGetTask = null;
         public AppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, LocalStorageInstallSourceInfo localOverrideSources,
             SoftwareReleaseConfig softwareReleaseConfig, SolutionInstallConfig config, InstallerFtpConfig ftpConfig, bool downloadReleaseOnly,
-            StorageAccountResource storageAccount, AutomationAccountResource automationAccount)
+            AutomationAccountResource automationAccount)
             : base(logger, config, subscription)
         {
             // If we have no local source or stable release info, we can't do much
@@ -62,7 +61,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var installTasks = new List<BaseInstallTask> { _sourceGetTask };
             if (!downloadReleaseOnly)
             {
-                installTasks.Add(new InstallAppServiceContentsTask(ftpConfig, TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, config.AzureLocation, config.Tags.ToDictionary()));
+                installTasks.Add(new InstallAppServiceContentsTask(ftpConfig, TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, config.AzureLocation, config.Tags.ToDictionary(), config.NetworkConfig));
             }
             else
             {
@@ -75,7 +74,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // Add to install tasks
                 if (automationAccount != null)
                 {
-                    installTasks.Add(new RunChildJobTask(new RunbooksInstallJob(logger, config, subscription, storageAccount, automationAccount), logger));
+                    installTasks.Add(new RunChildJobTask(new RunbooksInstallJob(logger, config, subscription, automationAccount), logger));
                 }
                 else
                 {
