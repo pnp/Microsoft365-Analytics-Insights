@@ -57,7 +57,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                         Resource = CALL_TYPE,
                         ClientState = secret,
                         ChangeType = "created",
-                        ExpirationDateTime = DateTime.Now.AddDays(2)        // the max Graph will permit - https://docs.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-beta#properties
+                        ExpirationDateTime = DateTime.UtcNow.AddDays(2)        // the max Graph will permit - https://docs.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-beta#properties
                     });
                     Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{result.Id}' for webhook at '{webAppUrl}'. Teams call records will start importing as calls end.");
                 }
@@ -76,7 +76,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     var result = await this.Client.Subscriptions[existingSubId].PatchAsync(
                         new Subscription
                         {
-                            ExpirationDateTime = DateTime.Now.AddDays(2)
+                            ExpirationDateTime = DateTime.UtcNow.AddDays(2)
                         }
                     );
                     Telemetry.LogInformation($"{LOG_TAG} Renewed subscription id '{result.Id}' for webhook at '{webAppUrl}'. New expiry: {result.ExpirationDateTime:u}.");
@@ -101,9 +101,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         {
             var action = isUpdate ? $"renew subscription '{existingSubId}'" : "create subscription";
             var statusCode = ex.ResponseStatusCode;
-            var statusLabel = Enum.IsDefined(typeof(HttpStatusCode), statusCode) ? $" {(HttpStatusCode)statusCode}" : string.Empty;
             var statusLine = statusCode > 0
-                ? $"Graph returned {statusCode}{statusLabel}."
+                ? (Enum.IsDefined(typeof(HttpStatusCode), statusCode)
+                    ? $"Graph returned {statusCode} {(HttpStatusCode)statusCode}."
+                    : $"Graph returned {statusCode}.")
                 : "Graph call failed before a status code was returned.";
             var graphError = ex.Error?.Message ?? ex.Message;
 
