@@ -6,6 +6,7 @@ using Azure.ResourceManager.AppService.Models;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
+using Common.Entities.Installer;
 using FluentFTP;
 using Microsoft.Extensions.Logging;
 using System;
@@ -23,11 +24,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class InstallAppServiceContentsTask : InstallTaskInAzResourceGroup<LocalStorageInstallSourceInfo>
     {
         private readonly InstallerFtpConfig _ftpConfig;
+        private readonly VNetConfig _networkConfig;
 
-        public InstallAppServiceContentsTask(InstallerFtpConfig ftpConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
+        public InstallAppServiceContentsTask(InstallerFtpConfig ftpConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig)
             : base(config, logger, azureLocation, tags)
         {
             _ftpConfig = ftpConfig;
+            _networkConfig = networkConfig;
         }
 
         public override async Task<LocalStorageInstallSourceInfo> ExecuteTaskReturnResult(object contextArg)
@@ -89,11 +92,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 catch (SocketException)
                 {
                     _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy})");
+                    LogPrivateNetworkGuidanceIfApplicable();
                     throw;
                 }
                 catch (IOException)
                 {
                     _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy}) and ensure app-service has 'FTP state' configured to 'FTPS only'");
+                    LogPrivateNetworkGuidanceIfApplicable();
                     throw;
                 }
 
@@ -125,6 +130,14 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var absoluteThisJobFtpDir = $"{relativeThisJobSubDir}{subDir.Name}/";
 
                 await Upload(client, subDir, absoluteThisJobFtpDir);
+            }
+        }
+
+        void LogPrivateNetworkGuidanceIfApplicable()
+        {
+            if (PrivateNetworkGuidance.IsPrivateNetworkOnly(_networkConfig))
+            {
+                _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the App Service FTP release upload", _networkConfig?.VNetName));
             }
         }
     }
