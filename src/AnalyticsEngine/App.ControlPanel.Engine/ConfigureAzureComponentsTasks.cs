@@ -5,7 +5,6 @@ using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
-using Azure.ResourceManager.Redis;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Models;
@@ -39,7 +38,7 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
-            RedisResource redis, CognitiveServicesInfo cognitiveServicesInfo,
+            RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription)
         {
             // Configure app-service connection-strings, etc
@@ -135,7 +134,7 @@ namespace App.ControlPanel.Engine
 
         async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
-            RedisResource redis,
+            RedisInstallResult redis,
             CognitiveServicesInfo cognitiveServicesInfo,
             AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
         {
@@ -179,8 +178,10 @@ namespace App.ControlPanel.Engine
             }
 
             // Connection strings
-            var redisKeys = redis.GetKeys();
-            var redisConnectionString = $"{redis.Data.HostName}:{redis.Data.SslPort},password={redisKeys.Value.PrimaryKey},ssl=True,abortConnect=False";
+            // Build the Redis connection string from the install-task result, which abstracts over
+            // both Azure Managed Redis (port 10000) and pre-existing legacy classic Azure Cache for
+            // Redis (port 6380) that the installer chose to reuse.
+            var redisConnectionString = $"{redis.HostName}:{redis.Port},password={redis.PrimaryKey},ssl=True,abortConnect=False";
 
             var storageInfo = new AzStorageConnectionInfo(storage);
             var connectionStrings = new ConnectionStringDictionary();
