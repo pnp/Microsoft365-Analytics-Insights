@@ -141,6 +141,7 @@
     <Compile Include="Models\Config\SharePointInstallConfig.cs" />
     <Compile Include="Models\SoftwareInstallSourceInfo.cs" />
     <Compile Include="InstallerTasks\SharePointWebComponentsInstallJob.cs" />
+    <Compile Include="Utils\PrivateNetworkGuidance.cs" />
     <Compile Include="Utils\SqlInstallerTasks.cs" />
     <Compile Include="Utils\AzStorageInstallerTasks.cs" />
     <Compile Include="Utils\ZipFileTasks.cs" />
