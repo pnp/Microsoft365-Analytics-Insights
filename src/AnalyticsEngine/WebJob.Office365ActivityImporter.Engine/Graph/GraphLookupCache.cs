@@ -1,5 +1,7 @@
 ﻿using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Threading.Tasks;
 
@@ -35,11 +37,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// <summary>
     /// Graph cache for users
     /// </summary>
-    public class UserLookupCache : GraphLookupCache<Microsoft.Graph.User>
+    public class UserLookupCache : GraphLookupCache<Microsoft.Graph.Models.User>
     {
         public UserLookupCache(GraphServiceClient graphClient) : base(graphClient) { }
 
-        public override async Task<Microsoft.Graph.User> Load(string id)
+        public override async Task<Microsoft.Graph.Models.User> Load(string id)
         {
             if (string.IsNullOrEmpty(id))
             {
@@ -47,12 +49,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             try
             {
-                var user = await graphClient.Users[id].Request().GetAsync();
+                var user = await graphClient.Users[id].GetAsync();
                 return user;
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
-                if (ex.Error.Code == "Request_ResourceNotFound")
+                if (ex.Error?.Code == "Request_ResourceNotFound")
                 {
                     Console.WriteLine($"Got {ex.Error.Code} finding user by ID '{id}'");
                     return null;

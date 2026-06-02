@@ -27,7 +27,7 @@ namespace WebJob.AppInsightsImporter.Engine
     {
         private readonly ILogger _debugTracer;
         private readonly int _chunkSize;
-        private readonly TextAnalyticsClient _textAnalyticsClient = null;
+        private readonly CognitiveServicesClient _cognitiveClient = null;
         private readonly AppConfig _config;
 
         public PageUpdateManager(ILogger debugTracer, AppConfig config) : this(debugTracer, 1000, config)
@@ -45,11 +45,10 @@ namespace WebJob.AppInsightsImporter.Engine
 
             // Do we have cognitive services configured?
             var cognitiveConfig = new AppConfig();
-            if (!string.IsNullOrEmpty(cognitiveConfig.CognitiveEndpoint) && !string.IsNullOrEmpty(cognitiveConfig.CognitiveKey))
-            {
-                var credentials = new AzureKeyCredential(cognitiveConfig.CognitiveKey);
-                _textAnalyticsClient = new TextAnalyticsClient(new Uri(cognitiveConfig.CognitiveEndpoint), credentials);
-            }
+            // Single wrapper for the lifetime of this manager: uses key auth when CognitiveKey
+            // is set and auto-falls back to RBAC (ClientSecretCredential) on 403
+            // AuthenticationTypeDisabled so we still work when key auth is disabled on the resource.
+            _cognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(debugTracer);
         }
 
         public async Task<List<string>> SaveAll(IEnumerable<PageUpdateEventAppInsightsQueryResult> pageUpdateEvents)
@@ -63,19 +62,33 @@ namespace WebJob.AppInsightsImporter.Engine
             await listProc.AddRange(pageUpdateEvents);
             await listProc.Flush();
 
-            // Update any URLs that have been updated
+            // Update any URLs that have been updated.
+            // Batch the URL lookup in IN-clause-friendly chunks instead of issuing one
+            // SingleOrDefaultAsync per URL - at 200k users a busy tenant easily produces
+            // thousands of updated URLs per cycle, and per-URL round-trips dominate runtime.
             var uniqueUpdatedUrls = updatedUrls.Distinct().ToList();
-            using (var db = new AnalyticsEntitiesContext())
+            if (uniqueUpdatedUrls.Count > 0)
             {
-                foreach (var u in uniqueUpdatedUrls)
+                const int URL_LOOKUP_BATCH = 1000;
+                var now = DateTime.UtcNow;
+                using (var db = new AnalyticsEntitiesContext())
                 {
-                    var url = await db.urls.Where(e => e.FullUrl == u).SingleOrDefaultAsync();
-                    if (url != null)
+                    db.Configuration.AutoDetectChangesEnabled = false;
+                    for (int i = 0; i < uniqueUpdatedUrls.Count; i += URL_LOOKUP_BATCH)
                     {
-                        url.MetadataLastRefreshed = DateTime.UtcNow;
+                        var take = Math.Min(URL_LOOKUP_BATCH, uniqueUpdatedUrls.Count - i);
+                        var batch = uniqueUpdatedUrls.GetRange(i, take);
+                        var urls = await db.urls
+                            .Where(u => batch.Contains(u.FullUrl))
+                            .ToListAsync();
+                        foreach (var u in urls)
+                        {
+                            u.MetadataLastRefreshed = now;
+                        }
                     }
+                    db.ChangeTracker.DetectChanges();
+                    await db.SaveChangesAsync();
                 }
-                await db.SaveChangesAsync();
             }
 
             _debugTracer.LogInformation($"Updated {uniqueUpdatedUrls.Count} URLs from {pageUpdateEvents.Count()} page-update events");
@@ -97,7 +110,26 @@ namespace WebJob.AppInsightsImporter.Engine
 
                 var userCache = new UserCache(context);
                 var langCache = new LanguageCache(context);
-                var urlsForPageUpdateChunk = chunk.Select(e => StringUtils.GetUrlBaseAddressIfValidUrl(e.CustomProperties?.Url)).Distinct().ToList();
+
+                // Pre-bucket the chunk by URL ONCE so the inner update loop is an O(1) dictionary
+                // lookup rather than an O(chunk) scan-with-GetUrlBaseAddressIfValidUrl-per-item.
+                // Old code: for each matched URL, ran chunk.Where(...).ToList() which re-invokes
+                // GetUrlBaseAddressIfValidUrl on every event for every URL -> O(events * urls).
+                // At 200k users and large chunk sizes this is the dominant cost.
+                var chunkByUrl = new Dictionary<string, List<PageUpdateEventAppInsightsQueryResult>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var e in chunk)
+                {
+                    var key = StringUtils.GetUrlBaseAddressIfValidUrl(e.CustomProperties?.Url);
+                    if (string.IsNullOrEmpty(key))
+                        continue;
+                    if (!chunkByUrl.TryGetValue(key, out var list))
+                    {
+                        list = new List<PageUpdateEventAppInsightsQueryResult>();
+                        chunkByUrl[key] = list;
+                    }
+                    list.Add(e);
+                }
+                var urlsForPageUpdateChunk = chunkByUrl.Keys.ToList();
 
                 // Get all URLs that have not been updated recently
                 var minusMetadataRefreshMinutes = _config.MetadataRefreshMinutes * -1;
@@ -107,7 +139,8 @@ namespace WebJob.AppInsightsImporter.Engine
 
                 foreach (var urlToUpdate in matchingUrlsNotUpdatedRecently)
                 {
-                    var correspondingPageUpdates = chunk.Where(p => StringUtils.GetUrlBaseAddressIfValidUrl(p.CustomProperties?.Url) == urlToUpdate.FullUrl).ToList();
+                    if (!chunkByUrl.TryGetValue(urlToUpdate.FullUrl, out var correspondingPageUpdates))
+                        continue;
 
                     // There can be multiple updates across several events. Compile all into one new update
                     var compiledUpdate = new PageUpdateEventAppInsightsQueryResult(correspondingPageUpdates);
@@ -168,11 +201,11 @@ namespace WebJob.AppInsightsImporter.Engine
             });
 
             // Get sentiment scores for new comments, if we have cognitive services configured
-            if (_textAnalyticsClient != null && newComments.Count > 0)
+            if (_cognitiveClient != null && newComments.Count > 0)
             {
                 var cognitiveResults = await newComments.Keys
                     .ToTextAnalysisSampleList()
-                    .GetCognitiveDataStats(_textAnalyticsClient, _debugTracer);
+                    .GetCognitiveDataStats(_cognitiveClient, _debugTracer);
 
                 if (cognitiveResults != null)
                 {

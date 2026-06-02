@@ -7,6 +7,8 @@ using Common.Entities.Entities.WebTraffic;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.IO;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -17,12 +19,31 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task CleanupHistoricalDataTests()
         {
+            // Read the cleanup script directly from src\Clean Old Data Data.sql so it's obvious which script is under test.
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 await InsertTestDataAll(db);
 
-                await db.Database.ExecuteSqlCommandAsync(Properties.Resources.Clean_Old_Data_Data);
+                await db.Database.ExecuteSqlCommandAsync(cleanupScript);
             }
+        }
+
+        // Resolves to <repoRoot>\src\Clean Old Data Data.sql relative to this source file (Tests.UnitTests\DataCleanupTests.cs).
+        private static string GetCleanOldDataSqlPath([CallerFilePath] string thisFilePath = "")
+        {
+            // thisFilePath = ...\src\AnalyticsEngine\Tests.UnitTests\DataCleanupTests.cs
+            // target       = ...\src\Clean Old Data Data.sql
+            var testsUnitTestsDir = Path.GetDirectoryName(thisFilePath);
+            var analyticsEngineDir = Path.GetDirectoryName(testsUnitTestsDir);
+            var srcDir = Path.GetDirectoryName(analyticsEngineDir);
+            var sqlPath = Path.Combine(srcDir, "Clean Old Data Data.sql");
+
+            if (!File.Exists(sqlPath))
+                throw new FileNotFoundException("Could not find cleanup SQL script.", sqlPath);
+
+            return sqlPath;
         }
 
         [TestMethod]

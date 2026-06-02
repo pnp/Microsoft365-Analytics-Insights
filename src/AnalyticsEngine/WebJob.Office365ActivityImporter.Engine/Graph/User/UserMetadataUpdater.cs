@@ -3,6 +3,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -40,8 +41,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 deltaProvider = new InProcessDeltaValueProvider(telemetry);
             }
 
-            var graphServiceClient = new GraphServiceClient(creds);
-            graphServiceClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
+            // v4 used graphClient.HttpProvider.OverallTimeout = 1h directly. HttpProvider is gone
+            // in v5+, so we build a HttpClient with the desired timeout and inject it into the
+            // GraphServiceClient. /users/delta over a 200k-tenant can comfortably exceed the
+            // default 100s timeout - the explicit 1h timeout is load-bearing.
+            var graphServiceClient = GraphServiceClientFactory.CreateWithTimeout(creds, TimeSpan.FromHours(1));
 
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _telemetry, graphServiceClient);
             InitializeHelpers();
@@ -141,13 +145,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _telemetry.LogInformation($"User import - Reloading {insertedDbUsers.Count.ToString("N0")} newly inserted users with tracking for manager relationships...");
 
-                    // Pre-compute lowercase UPNs for SQL query matching
+                    // Collect UPNs as Graph delivers them. SQL Server's default code-first
+                    // collation (Latin1_General_CI_AS) is case-insensitive, so we no longer
+                    // need to lowercase here. The reload query below compares without LOWER()
+                    // to stay SARGable against the user_name index - critical at 200k-user scale
+                    // where a non-SARGable predicate forces a full clustered-index scan.
                     var insertedUpns = new List<string>(insertedDbUsers.Count);
                     foreach (var user in insertedDbUsers)
                     {
                         if (!string.IsNullOrEmpty(user.UserPrincipalName))
                         {
-                            insertedUpns.Add(user.UserPrincipalName.ToLower());
+                            insertedUpns.Add(user.UserPrincipalName);
                         }
                     }
 
@@ -159,20 +167,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         var batchCount = Math.Min(RELOAD_BATCH_SIZE, insertedUpns.Count - i);
                         var batchUpns = insertedUpns.GetRange(i, batchCount);
+                        // No LOWER() on the column - the CI collation handles case-insensitive
+                        // matching and keeps the predicate SARGable.
                         var batchReloaded = await db.users
-                            .Where(u => batchUpns.Contains(u.UserPrincipalName.ToLower()))
+                            .Where(u => batchUpns.Contains(u.UserPrincipalName))
                             .ToListAsync();
                         reloadedUsers.AddRange(batchReloaded);
                     }
 
-                    // Update lookup dictionaries with TRACKED entities
+                    // Update lookup dictionaries with TRACKED entities.
+                    // dbUsersByUpn was built with StringComparer.OrdinalIgnoreCase so we can
+                    // key by the original UPN without lowering it - the comparer handles case.
                     foreach (var insertedUser in reloadedUsers)
                     {
-                        var upnLower = insertedUser.UserPrincipalName?.ToLower();
-                        if (!string.IsNullOrEmpty(upnLower))
+                        if (!string.IsNullOrEmpty(insertedUser.UserPrincipalName))
                         {
-                            dbUsersByUpn[upnLower] = insertedUser;
-                            await _userMetaCache.UserCache.GetOrCreateNewResource(upnLower, insertedUser);
+                            dbUsersByUpn[insertedUser.UserPrincipalName] = insertedUser;
+                            await _userMetaCache.UserCache.GetOrCreateNewResource(insertedUser.UserPrincipalName, insertedUser);
                         }
 
                         if (!string.IsNullOrEmpty(insertedUser.AzureAdId))
@@ -184,23 +195,40 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     insertedDbUsers = reloadedUsers;
                 }
 
-                // Identify users that need updating - use HashSet for O(1) lookup instead of Any()
+                // Identify users that need updating - use HashSet for O(1) lookup instead of Any().
+                // Both sets are OrdinalIgnoreCase so we keep the original UPN casing and let
+                // the comparer handle case-insensitivity (cheaper than .ToLower() at 200k scale).
                 var insertedUpnSet = new HashSet<string>(
-                    insertedDbUsers.Where(u => !string.IsNullOrEmpty(u.UserPrincipalName)).Select(u => u.UserPrincipalName.ToLower()),
+                    insertedDbUsers.Where(u => !string.IsNullOrEmpty(u.UserPrincipalName)).Select(u => u.UserPrincipalName),
                     StringComparer.OrdinalIgnoreCase);
 
                 var notInsertedUpns = new HashSet<string>(allActiveGraphUsers.Count, StringComparer.OrdinalIgnoreCase);
                 foreach (var graphUser in allActiveGraphUsers)
                 {
-                    if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && !insertedUpnSet.Contains(graphUser.UserPrincipalName.ToLower()))
+                    if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) && !insertedUpnSet.Contains(graphUser.UserPrincipalName))
                     {
-                        notInsertedUpns.Add(graphUser.UserPrincipalName.ToLower());
+                        notInsertedUpns.Add(graphUser.UserPrincipalName);
                     }
                 }
 
-                // Clear the large list to free memory
-                allDbUsers.Clear();
-                allDbUsers = null;
+                // NOTE: we deliberately do NOT clear allDbUsers here yet when
+                // tenant-level SKUs are available. The licence refresh step below
+                // (ProcessSKUsForAllUsers) MUST iterate over the entire DB user
+                // population - not just the users returned by the current Graph
+                // delta - otherwise users whose only change in Graph is a licence
+                // assignment will never have their user_license_type_lookups
+                // rows refreshed. With a persisted delta token (e.g. Redis) this
+                // causes licence counts to drift downward run after run until
+                // they no longer match the tenant's actual licence assignments.
+                // When SKUs are not available the per-user path inside
+                // UpdateDbUserWithGraphData handles licences as part of the
+                // per-user Graph call, so we can free the list early in that
+                // branch to save memory.
+                if (skus == null)
+                {
+                    allDbUsers.Clear();
+                    allDbUsers = null;
+                }
 
                 // Update existing users.
                 // When tenant-level SKUs are available we can use the fast bulk-SQL
@@ -241,20 +269,50 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     throw;
                 }
 
-                // Combine inserted & modified db users for SKU processing
-                var allProcessedDbUsers = new List<Common.Entities.User>(insertedDbUsers.Count + notInsertedUpns.Count);
-                allProcessedDbUsers.AddRange(insertedDbUsers);
-
-                // Get existing (non-inserted) users that were updated
-                foreach (var graphUser in allActiveGraphUsers)
+                // Build the user list passed to ProcessSKUsForAllUsers.
+                //
+                // IMPORTANT: this MUST cover every user in the database, not just
+                // the users returned by the current Graph delta response. The
+                // licence refresh step deletes user_license_type_lookups rows
+                // for the supplied users and re-creates them from the per-SKU
+                // Graph queries; any user not in the supplied list keeps their
+                // stale rows forever and any new licence assignment for them is
+                // never written. When the delta token is persisted (Redis) the
+                // delta response shrinks to only users with metadata changes,
+                // so scoping the licence refresh to delta users causes the
+                // tenant-wide licence counts to drift downward over time.
+                //
+                // We build the list from allDbUsers (every existing DB user
+                // loaded at the start of this run) plus insertedDbUsers (users
+                // freshly created in this run), de-duplicated by primary key
+                // because AddSkuForUsers turns it into a UPN-keyed dictionary.
+                List<Common.Entities.User> allDbUsersForLicenseRefresh = null;
+                if (skus != null)
                 {
-                    var upn = graphUser.UserPrincipalName;
-                    if (!string.IsNullOrEmpty(upn) &&
-                        dbUsersByUpn.TryGetValue(upn, out var dbUser) &&
-                        !insertedUpnSet.Contains(upn.ToLower()))
+                    var combinedById = new Dictionary<int, Common.Entities.User>(
+                        (allDbUsers?.Count ?? 0) + insertedDbUsers.Count);
+
+                    if (allDbUsers != null)
                     {
-                        allProcessedDbUsers.Add(dbUser);
+                        foreach (var u in allDbUsers)
+                        {
+                            if (u.ID > 0)
+                            {
+                                combinedById[u.ID] = u;
+                            }
+                        }
                     }
+
+                    foreach (var u in insertedDbUsers)
+                    {
+                        if (u.ID > 0)
+                        {
+                            combinedById[u.ID] = u;
+                        }
+                    }
+
+                    allDbUsersForLicenseRefresh = new List<Common.Entities.User>(combinedById.Values);
+                    _telemetry.LogInformation($"User import - licence refresh will cover {allDbUsersForLicenseRefresh.Count.ToString("N0")} DB users (entire population, not just delta).");
                 }
 
                 // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
@@ -263,7 +321,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // No re-attach loop needed: AddSkuForUsers now uses FK IDs (UserId)
                     // instead of the User navigation property, so the entities do not
                     // need to be tracked by EF.
-                    await _licenseProcessor.ProcessSKUsForAllUsers(skus, allProcessedDbUsers, db);
+                    await _licenseProcessor.ProcessSKUsForAllUsers(skus, allDbUsersForLicenseRefresh, db);
                     _telemetry.LogInformation($"User import - updated user license information from {skus.Count.ToString("N0")} tenant SKUs");
 
                     db.ChangeTracker.DetectChanges();
@@ -272,11 +330,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
+                // All insert/metadata/license work succeeded. Now and ONLY now is it
+                // safe to persist the new Graph delta token. If any of the previous
+                // steps had thrown, control would have left this method via the
+                // exception and the previously-persisted delta would still be in
+                // effect, so the failed users will be retried on the next import
+                // cycle instead of being skipped because Graph already considers
+                // them "seen".
+                await _userLoader.CommitDeltaTokenAsync();
+
                 // Final cleanup
                 dbUsersByUpn.Clear();
                 dbUsersByAadId.Clear();
                 allActiveGraphUsers.Clear();
-                allProcessedDbUsers.Clear();
+                allDbUsersForLicenseRefresh?.Clear();
+                allDbUsers?.Clear();
             }
         }
 

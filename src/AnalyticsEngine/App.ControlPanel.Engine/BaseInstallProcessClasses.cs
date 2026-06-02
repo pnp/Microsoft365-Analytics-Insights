@@ -47,8 +47,13 @@ namespace App.ControlPanel.Engine
                 }
                 catch (SqlException ex)
                 {
-                    _logger.LogError($"Error testing SQL connection: '{ex.Message}. " +
-                        $"Verify network connectivity to server");
+                    _logger.LogError($"Error testing SQL connection to '{sqlConnectionInfo.DataSource}': '{ex.Message}'. " +
+                        $"Verify network connectivity to server.");
+
+                    if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+                    {
+                        _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the SQL connectivity test and database schema initialisation", Config.NetworkConfig?.VNetName));
+                    }
 
                     return false;
                 }

@@ -1,6 +1,7 @@
 using Common.Entities;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -36,7 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Process SKUs for all users in batches
         /// </summary>
         public async Task ProcessSKUsForAllUsers(
-            IGraphServiceSubscribedSkusCollectionPage skus,
+            List<SubscribedSku> skus,
             List<Common.Entities.User> graphFoundDbUsers,
             AnalyticsEntitiesContext db)
         {
@@ -57,9 +58,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (userIds.Count > 0)
             {
                 const int SQL_BATCH_SIZE = 10000;
+                // GetRange instead of Skip().Take() - Skip() on a List walks past every prior
+                // element, so chunking N ids in slices of K costs O(N^2/K). At 200k users this
+                // is ~2M wasted iterations just for the slicing.
                 for (int i = 0; i < userIds.Count; i += SQL_BATCH_SIZE)
                 {
-                    var batchIds = userIds.Skip(i).Take(SQL_BATCH_SIZE).ToList();
+                    var batchCount = Math.Min(SQL_BATCH_SIZE, userIds.Count - i);
+                    var batchIds = userIds.GetRange(i, batchCount);
                     var idList = string.Join(",", batchIds);
                     await db.Database.ExecuteSqlCommandAsync(
                         $"DELETE FROM dbo.user_license_type_lookups WHERE user_id IN ({idList})");
@@ -73,13 +78,36 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     user.LicenseLookups.Clear();
             }
 
+            // Build the UPN dictionary ONCE for the whole tenant and reuse for every SKU.
+            // Previous code rebuilt this 200k-entry dictionary inside AddSkuForUsers on every
+            // SKU iteration - 30 SKUs * 200k users = 6M unnecessary string allocations.
+            // OrdinalIgnoreCase comparer makes .ToLower() on keys redundant.
+            var dbUsersByUpn = new Dictionary<string, Common.Entities.User>(
+                graphFoundDbUsers.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var u in graphFoundDbUsers)
+            {
+                if (!string.IsNullOrEmpty(u.UserPrincipalName))
+                {
+                    dbUsersByUpn[u.UserPrincipalName] = u;
+                }
+            }
+
+            // Track which (LicenseType-display-name, user_id) pairs have already been queued
+            // in this import run so we never try to insert two rows that would violate the
+            // IX_license_type_id_user_id unique index. Two SKU part numbers (e.g.
+            // RIGHTSMANAGEMENT and RIGHTSMANAGEMENT_CE) can resolve to the same display name
+            // and therefore the same LicenseType, so without this guard the second SKU's
+            // SaveChanges fails with "Cannot insert duplicate key row in object
+            // 'dbo.user_license_type_lookups'".
+            var assignedLicenses = new HashSet<(string licenseName, int userId)>();
+
             foreach (var sku in skus)
             {
                 // Load users with this SKU
                 var allUsersWithSku = await _userLoader.LoadUsersBySku(sku.SkuId.Value);
 
-                // Update all
-                await AddSkuForUsers(graphFoundDbUsers, allUsersWithSku, sku, db);
+                // Update all - reuse the hoisted dbUsersByUpn dictionary.
+                await AddSkuForUsers(dbUsersByUpn, allUsersWithSku, sku, db, assignedLicenses);
 
                 // Clear the SKU users list to free memory
                 allUsersWithSku.Clear();
@@ -94,24 +122,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// Add SKU licenses for specific users
+        /// Add SKU licenses for specific users. The <paramref name="dbUsersByUpn"/> dictionary
+        /// is built once per import in <see cref="ProcessSKUsForAllUsers"/> and reused across
+        /// all SKUs - rebuilding it per SKU at 200k users x ~30 SKUs costs millions of
+        /// unnecessary string allocations.
         /// </summary>
         public async Task AddSkuForUsers(
-            List<Common.Entities.User> graphFoundDbUsers,
-            List<Microsoft.Graph.User> usersWithSku,
+            Dictionary<string, Common.Entities.User> dbUsersByUpn,
+            List<Microsoft.Graph.Models.User> usersWithSku,
             SubscribedSku sku,
-            AnalyticsEntitiesContext db)
+            AnalyticsEntitiesContext db,
+            HashSet<(string licenseName, int userId)> assignedLicenses = null)
         {
-            // Create dictionary for O(1) lookup of DB users by UPN
-            var dbUsersByUpn = graphFoundDbUsers
-                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName))
-                .ToDictionary(u => u.UserPrincipalName.ToLower(), u => u, StringComparer.OrdinalIgnoreCase);
-
             var relevantDbUsers = new List<Common.Entities.User>();
             foreach (var graphUser in usersWithSku)
             {
+                // dbUsersByUpn is OrdinalIgnoreCase so we can look up with the original UPN
+                // (no .ToLower() allocation per Graph user).
                 if (!string.IsNullOrEmpty(graphUser.UserPrincipalName) &&
-                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName.ToLower(), out var dbUser))
+                    dbUsersByUpn.TryGetValue(graphUser.UserPrincipalName, out var dbUser))
                 {
                     relevantDbUsers.Add(dbUser);
                 }
@@ -122,6 +151,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Get license type once for all users
             var licence = await GetLicenseType(sku.SkuPartNumber);
 
+            int duplicatesSkipped = 0;
+
             // Process in batches
             for (int i = 0; i < relevantDbUsers.Count; i += SKU_BATCH_SIZE)
             {
@@ -131,6 +162,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 foreach (var dbUser in batch)
                 {
+                    // Two different SKU part numbers can resolve to the same product
+                    // display name (and therefore the same LicenseType). The
+                    // user_license_type_lookups table has a UNIQUE index on
+                    // (license_type_id, user_id), so we must skip duplicates here
+                    // instead of letting SaveChanges throw.
+                    if (assignedLicenses != null &&
+                        !assignedLicenses.Add((licence.Name, dbUser.ID)))
+                    {
+                        duplicatesSkipped++;
+                        continue;
+                    }
+
                     // Use FK ID directly so the User entity does not need to be
                     // tracked by EF, avoiding the costly re-attach loop for large
                     // user counts.  The License navigation property is kept because
@@ -150,8 +193,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 list.Clear();
             }
 
-            // Clear dictionaries and lists to free memory
-            dbUsersByUpn.Clear();
+            if (duplicatesSkipped > 0)
+            {
+                _telemetry.LogInformation($"User import - Skipped {duplicatesSkipped.ToString("N0")} duplicate license lookups for SKU '{sku.SkuPartNumber}' (display-name '{licence.Name}' already assigned via another SKU).");
+            }
+
+            // Clear list to free memory. Do NOT clear dbUsersByUpn here - it is owned by
+            // ProcessSKUsForAllUsers and reused across SKUs.
             relevantDbUsers.Clear();
         }
 
@@ -179,9 +227,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Remove old lookups & re-add
                 db.UserLicenseTypeLookups.RemoveRange(dbUser.LicenseLookups.Where(l => l.IsSavedToDB));
+
+                // Dedupe by LicenseType display name: two SKU part numbers can resolve
+                // to the same LicenseType, and the user_license_type_lookups table has
+                // a UNIQUE index on (license_type_id, user_id).
+                var addedLicenseNames = new HashSet<string>();
                 foreach (var userPlan in userServicePlans)
                 {
-                    if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence))
+                    if (licenseTypesDict.TryGetValue(userPlan.SkuPartNumber, out var licence) &&
+                        addedLicenseNames.Add(licence.Name))
                     {
                         dbUser.LicenseLookups.Add(new UserLicenseTypeLookup { License = licence, User = dbUser });
                     }

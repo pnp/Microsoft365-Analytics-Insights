@@ -1,4 +1,4 @@
-﻿using Azure.Messaging.ServiceBus;
+using Azure.Messaging.ServiceBus;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
@@ -6,6 +6,7 @@ using Common.Entities.Models;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Microsoft.SharePoint.Client;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -95,7 +96,7 @@ namespace Tests.UnitTests
                         new ChatMessageReaction { ReactionType = "Like", User = new ChatMessageReactionIdentitySet { User = user }, CreatedDateTime = DateTime.Now }
                     }
                 };
-                msgRoot.Replies = new ChatMessageRepliesCollectionPage {
+                msgRoot.Replies = new List<ChatMessage> {
                     new ChatMessage
                     {
                         Id = Guid.NewGuid().ToString(),
