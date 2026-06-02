@@ -251,7 +251,7 @@
             this.lblGUIAzureHeaderRedis.Name = "lblGUIAzureHeaderRedis";
             this.lblGUIAzureHeaderRedis.Size = new System.Drawing.Size(156, 19);
             this.lblGUIAzureHeaderRedis.TabIndex = 161;
-            this.lblGUIAzureHeaderRedis.Text = "Azure Cache for Redis";
+            this.lblGUIAzureHeaderRedis.Text = "Azure Managed Redis";
             // 
             // txtRedisName
             // 

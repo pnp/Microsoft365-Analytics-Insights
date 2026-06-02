@@ -5,7 +5,6 @@ using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Network;
-using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using Azure.ResourceManager.Storage;
@@ -308,11 +307,23 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "sites", subnetId, logger, tagDic);
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.azurewebsites.net", vnetId, appPeName, logger, tagDic);
 
-                // Redis
+                // Redis - Managed Redis is created with a new private endpoint and DNS zone here.
+                // If RedisInstallTask detected and reused a pre-existing legacy classic
+                // Azure Cache for Redis, RedisPrivateEndpointInstallTask / RedisPrivateDnsZoneInstallTask
+                // will log a warning and skip — the legacy resource retains its own networking.
                 var redisPeName = peNames.GetNameOrDefault(peNames.Redis, $"pe-{config.RedisName}-redis");
-                AddPrivateEndpointTask(redisPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Cache/redisEnterprise/{config.RedisName}",
-                    "redisEnterprise", subnetId, logger, tagDic);
-                if (deployDns) AddPrivateDnsZoneTask("privatelink.redisenterprise.cache.azure.net", vnetId, redisPeName, logger, tagDic);
+                var redisPeConfig = TaskConfig.GetConfigForName(redisPeName)
+                    .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_TARGET_RESOURCE_ID, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Cache/redisEnterprise/{config.RedisName}")
+                    .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_GROUP_ID, "redisEnterprise")
+                    .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_SUBNET_ID, subnetId);
+                this.AddTask(new RedisPrivateEndpointInstallTask(redisPeConfig, logger, Location, tagDic, _redisTask));
+                if (deployDns)
+                {
+                    var redisDnsConfig = TaskConfig.GetConfigForName("privatelink.redisenterprise.cache.azure.net")
+                        .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID, vnetId)
+                        .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME, redisPeName);
+                    this.AddTask(new RedisPrivateDnsZoneInstallTask(redisDnsConfig, logger, Location, tagDic, _redisTask));
+                }
 
                 // Storage
                 var storagePeName = peNames.GetNameOrDefault(peNames.Storage, $"pe-{config.StorageAccountName}-blob");
@@ -379,7 +390,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public SqlDatabaseResource CreatedSqlDatabase => GetTaskResult<SqlDatabaseResource>(_sqlDatabaseTask);
         public WebSiteResource CreatedWebSiteResource => GetTaskResult<WebSiteResource>(_appServiceWebsiteTask);
         public DatabasePaaSInfo DatabasePaaSInfo => new DatabasePaaSInfo(CreatedSqlServer, CreatedSqlDatabase, _config);
-        public RedisEnterpriseDatabaseResource Redis => GetTaskResult<RedisEnterpriseDatabaseResource>(_redisTask);
+        public RedisInstallResult Redis => GetTaskResult<RedisInstallResult>(_redisTask);
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
         public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);
         public CognitiveServicesInfo CognitiveServicesInfo => _cognitiveServicesInstallTask != null ? GetTaskResult<CognitiveServicesInfo>(_cognitiveServicesInstallTask) : new CognitiveServicesInfo();
