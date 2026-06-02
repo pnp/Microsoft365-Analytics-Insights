@@ -38,7 +38,10 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
             this.WebUrl = p.CustomProperties?.WebUrl;
         }
 
-        [Column("url")]
+        // Must match dbo.urls.full_url (varchar(1700), see migration ShrinkUrlsFullUrlColumn /
+        // PR #108) so the join in "Migrate Hits Import into Hits.sql" can use IX_urls_full_url
+        // instead of an implicit nvarchar -> varchar conversion that defeats the index. See #109.
+        [Column("url", SqlTypeOverride = "varchar(1700)")]
         public string Url { get; set; }
 
         [Column("hit_timestamp")]

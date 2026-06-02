@@ -296,6 +296,14 @@
     <Compile Include="Migrations\202606011010001_RemoveDataverseTables.Designer.cs">
       <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202606011710001_ShrinkUrlsFullUrlColumn.cs" />
+    <Compile Include="Migrations\202606011710001_ShrinkUrlsFullUrlColumn.Designer.cs">
+      <DependentUpon>202606011710001_ShrinkUrlsFullUrlColumn.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202606011739254_UrlFullUrlVarcharMapping.cs" />
+    <Compile Include="Migrations\202606011739254_UrlFullUrlVarcharMapping.Designer.cs">
+      <DependentUpon>202606011739254_UrlFullUrlVarcharMapping.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -433,6 +441,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202606011010001_RemoveDataverseTables.resx">
       <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202606011710001_ShrinkUrlsFullUrlColumn.resx">
+      <DependentUpon>202606011710001_ShrinkUrlsFullUrlColumn.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202606011739254_UrlFullUrlVarcharMapping.resx">
+      <DependentUpon>202606011739254_UrlFullUrlVarcharMapping.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
