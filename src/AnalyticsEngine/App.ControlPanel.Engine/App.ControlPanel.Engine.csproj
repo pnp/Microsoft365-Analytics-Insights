@@ -75,7 +75,7 @@
     <Compile Include="BaseInstallProcessClasses.cs" />
     <Compile Include="InstallerLogs.cs" />
     <Compile Include="InstallerTasks\JobTasks\HybridWorkerGroupTask.cs" />
-    <Compile Include="InstallerTasks\JobTasks\ProfilingScriptsUploadToBlobStorageTask.cs" />
+    <Compile Include="InstallerTasks\JobTasks\ProfilingScriptsLocateTask.cs" />
     <Compile Include="InstallerTasks\JobTasks\AutomationAccountTask.cs" />
     <Compile Include="ConfigureAzureComponentsTasks.cs" />
     <Compile Include="InstallerTasks\JobTasks\RunbookCreateOrUpdateTasks.cs" />

@@ -1,8 +1,6 @@
 ﻿using App.ControlPanel.Engine.InstallerTasks.JobTasks;
-using Azure.Identity;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.Resources;
-using Azure.ResourceManager.Storage;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
 using Common.Entities.Installer;
@@ -13,34 +11,32 @@ namespace App.ControlPanel.Engine.InstallerTasks
 {
     /// <summary>
     /// Install job for the Runbooks solution.
+    ///
+    /// Locates the profiling PowerShell scripts on disk (from the extracted webjob zip) and uploads each one into the
+    /// Automation account via the runbook draft-content API. No blob storage hop, no SAS URL, no PublishContentLink -
+    /// see <see cref="JobTasks.RunbookUploadTask"/> for why we avoid the content-link path.
     /// </summary>
     public class RunbooksInstallJob : InstallJobInContainerJob<ResourceGroupResource>
     {
-        public RunbooksInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription, StorageAccountResource storageAccount,
+        public RunbooksInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription,
             AutomationAccountResource automationAccount)
             : base(logger, new ResourceGroupContainerLoader(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, subscription, config.AzureLocation, config.Tags.ToDictionary()))
         {
-            // Upload automation PS files to storage account using RBAC
-            var runtimeAccount = config.RuntimeAccountOffice365;
-            var credential = new ClientSecretCredential(runtimeAccount.DirectoryId, runtimeAccount.ClientId, runtimeAccount.Secret);
-            var storageAccountUrl = $"https://{storageAccount.Data.Name}.blob.core.windows.net";
-            var storageUploadConfig = TaskConfig.GetConfigForPropAndVal(ProfilingScriptsUploadToBlobStorageTask.CFG_STORAGE_ACCOUNT_URL, storageAccountUrl)
-                .AddSetting(ProfilingScriptsUploadToBlobStorageTask.CFG_STORAGE_NAME, storageAccount.Data.Name);
-
             var tagsDic = config.Tags.ToDictionary();
-            var automationPowerShellScriptsUploader = new ProfilingScriptsUploadToBlobStorageTask(storageUploadConfig, logger, config.AzureLocation, tagsDic, credential, storageAccount);
 
-            // Publish the runbooks
-            var commonConfig = TaskConfig.GetConfigForPropAndVal(RunbookUploadTask<RunbookFileLocalLocations>.CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME,
-                automationAccount.Data.Name);
+            // Locate the profiling PS files in the unzipped webjob package on the installer host.
+            var profilingScriptsLocate = new ProfilingScriptsLocateTask(TaskConfig.NoConfig, logger, config.AzureLocation, tagsDic);
+
+            // Publish the runbooks straight into the Automation account via the draft content API.
+            var commonConfig = TaskConfig.GetConfigForPropAndVal(RunbookUploadTask.CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME, automationAccount.Data.Name);
 
             var runbookCreateOrUpdateAggregationStatusPS = new ProfilingScriptAggregationStatusPSRunbookUploadTask(commonConfig.Clone(), logger, config.AzureLocation, tagsDic);
             var runbookCreateOrUpdateDatabaseMaintenancePS = new ProfilingScriptDatabaseMaintenancePSRunbookUploadTask(commonConfig.Clone(), logger, config.AzureLocation, tagsDic);
             var runbookCreateOrUpdateWeeklyPS = new ProfilingScriptWeeklyPSRunbookUploadTask(commonConfig.Clone(), logger, config.AzureLocation, tagsDic);
 
-            // ProfilingAutomationUploaderTask needs a LocalStorageInstallSourceInfo object
+            // First task forwards the LocalStorageInstallSourceInfo passed in from the parent job into the locate task.
             AddTask(new PassResultOnlyTask(logger));
-            AddTasks(new List<BaseInstallTask>() { automationPowerShellScriptsUploader, runbookCreateOrUpdateAggregationStatusPS, runbookCreateOrUpdateDatabaseMaintenancePS, runbookCreateOrUpdateWeeklyPS });
+            AddTasks(new List<BaseInstallTask>() { profilingScriptsLocate, runbookCreateOrUpdateAggregationStatusPS, runbookCreateOrUpdateDatabaseMaintenancePS, runbookCreateOrUpdateWeeklyPS });
         }
     }
 }
