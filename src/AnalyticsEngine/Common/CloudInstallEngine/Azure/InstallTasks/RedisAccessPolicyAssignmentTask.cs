@@ -1,5 +1,4 @@
 using Azure.Core;
-using Azure.ResourceManager.RedisEnterprise;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
@@ -11,12 +10,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
     /// Access policy assignment task for Azure Managed Redis.
     /// Azure Managed Redis uses access key authentication by default, which does not require an
     /// explicit RBAC access policy assignment. This task is therefore a passthrough that returns
-    /// the database resource unchanged.
+    /// the Redis install result unchanged.
     /// If Entra ID (AAD) authentication is required in the future, configure
     /// <c>AccessKeysAuthentication = Disabled</c> on the database and assign the appropriate
     /// built-in RBAC role (e.g. "Redis Cache Contributor") to the service principal instead.
     /// </summary>
-    public class RedisAccessPolicyAssignmentTask : InstallTaskInAzResourceGroup<RedisEnterpriseDatabaseResource>
+    public class RedisAccessPolicyAssignmentTask : InstallTaskInAzResourceGroup<RedisInstallResult>
     {
         public const string CONFIG_KEY_CLIENT_ID = "clientId";
         public const string CONFIG_KEY_CLIENT_SECRET = "clientSecret";
@@ -33,17 +32,24 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         public override string TaskName => "assign Redis access policy";
 
-        public override Task<RedisEnterpriseDatabaseResource> ExecuteTaskReturnResult(object contextArg)
+        public override Task<RedisInstallResult> ExecuteTaskReturnResult(object contextArg)
         {
-            var database = (RedisEnterpriseDatabaseResource)contextArg;
-            if (database == null)
+            var redis = contextArg as RedisInstallResult;
+            if (redis == null)
             {
-                throw new InstallException("RedisAccessPolicyAssignmentTask requires a RedisEnterpriseDatabaseResource as context");
+                throw new InstallException("RedisAccessPolicyAssignmentTask requires a RedisInstallResult as context");
+            }
+
+            if (redis.IsLegacyClassicCache)
+            {
+                _logger.LogInformation($"Skipping Redis access policy assignment: reusing legacy classic Azure Cache for Redis '{redis.ResourceName}' which already has its own access configuration from the previous install.");
+                return Task.FromResult(redis);
             }
 
             _logger.LogInformation("Azure Managed Redis uses access key authentication — no additional RBAC access policy assignment is required.");
 
-            return Task.FromResult(database);
+            return Task.FromResult(redis);
         }
     }
 }
+

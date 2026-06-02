@@ -5,10 +5,8 @@ using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
-using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
-using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
@@ -40,7 +38,7 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
-            RedisEnterpriseDatabaseResource redis, CognitiveServicesInfo cognitiveServicesInfo,
+            RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription)
         {
             // Configure app-service connection-strings, etc
@@ -136,7 +134,7 @@ namespace App.ControlPanel.Engine
 
         async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
-            RedisEnterpriseDatabaseResource redis,
+            RedisInstallResult redis,
             CognitiveServicesInfo cognitiveServicesInfo,
             AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
         {
@@ -180,12 +178,10 @@ namespace App.ControlPanel.Engine
             }
 
             // Connection strings
-            // For Azure Managed Redis: hostname is on the cluster, port and keys are on the database.
-            var clusterRef = redis.Client.GetRedisEnterpriseClusterResource(redis.Id.Parent);
-            var cluster = (await clusterRef.GetAsync()).Value;
-            var redisKeys = redis.GetKeys();
-            var redisPort = redis.Data.Port ?? RedisInstallTask.DEFAULT_TLS_PORT;
-            var redisConnectionString = $"{cluster.Data.HostName}:{redisPort},password={redisKeys.Value.PrimaryKey},ssl=True,abortConnect=False";
+            // Build the Redis connection string from the install-task result, which abstracts over
+            // both Azure Managed Redis (port 10000) and pre-existing legacy classic Azure Cache for
+            // Redis (port 6380) that the installer chose to reuse.
+            var redisConnectionString = $"{redis.HostName}:{redis.Port},password={redis.PrimaryKey},ssl=True,abortConnect=False";
 
             var storageInfo = new AzStorageConnectionInfo(storage);
             var connectionStrings = new ConnectionStringDictionary();
