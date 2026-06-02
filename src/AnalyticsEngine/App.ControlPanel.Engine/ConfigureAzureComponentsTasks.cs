@@ -53,7 +53,7 @@ namespace App.ControlPanel.Engine
             }
 
             // Get solution sources either from Azure storage or local sources
-            var solutionSources = await GetSolutionFromSource(subscription, storage, automationAccount);
+            var solutionSources = await GetSolutionFromSource(subscription, automationAccount);
 
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
@@ -113,18 +113,18 @@ namespace App.ControlPanel.Engine
             return installerExeFile;
         }
 
-        async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(SubscriptionResource subscription, StorageAccountResource storage, AutomationAccountResource automationAccount)
+        async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(SubscriptionResource subscription, AutomationAccountResource automationAccount)
         {
             AppServiceContentInstallJob appServiceContentInstallJob = null;
             if (this.Config.DownloadLatestStable)
             {
                 // Download webjobs from blob storage. Optionally install.
-                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, storage, automationAccount);
+                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, automationAccount);
             }
             else
             {
                 // Use local sources. Optionally install.
-                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, storage, automationAccount);
+                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, automationAccount);
             }
 
             // Install or just download, depending on config above

@@ -139,14 +139,29 @@ namespace App.ControlPanel.Engine
 
             var httpClient = new HttpClient();
             httpClient.Timeout = new TimeSpan(0, 5, 0);     // 5 mins
-            var response = await httpClient.GetAsync(adminSiteUrl);
-            if (response.StatusCode == System.Net.HttpStatusCode.OK || response.StatusCode == System.Net.HttpStatusCode.Moved)
+            try
             {
-                _logger.LogInformation($"Got expected response from web-app {response.StatusCode}");
+                var response = await httpClient.GetAsync(adminSiteUrl);
+                if (response.StatusCode == System.Net.HttpStatusCode.OK || response.StatusCode == System.Net.HttpStatusCode.Moved)
+                {
+                    _logger.LogInformation($"Got expected response from web-app {response.StatusCode}");
+                }
+                else
+                {
+                    _logger.LogError($"Got unexpected response from web-app {response.StatusCode} - check manually the app service is started", true);
+                }
             }
-            else
+            catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
             {
-                _logger.LogError($"Got unexpected response from web-app {response.StatusCode} - check manually the app service is started", true);
+                _logger.LogError($"Couldn't reach web-app '{adminSiteUrl}' for warm-up: {ex.Message}");
+                if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+                {
+                    _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the App Service warm-up request", Config.NetworkConfig?.VNetName));
+                }
+                else
+                {
+                    _logger.LogError("Check manually that the app service is started and reachable from this host.");
+                }
             }
         }
     }
