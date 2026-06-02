@@ -45,6 +45,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [TestCategory("Integration")]
         public async Task MessageImportTests()
         {
             var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
