@@ -84,7 +84,10 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             }
 
             // Vars
-            _logger.LogInformation($"Creating/updating automation variables for '{_config.ResourceName}'...");
+            // Re-running the installer must NOT overwrite operator-customized variable values
+            // (e.g. an operator who increased WeeksToKeep from 52 to 104). Only create when
+            // a variable with this name doesn't already exist.
+            _logger.LogInformation($"Ensuring automation variables exist for '{_config.ResourceName}'...");
             var varSqlServer = new AutomationVariableCreateOrUpdateContent(CONFIG_PARAM_NAME_SQL_SERVER)
             {
                 Value = $"\"{_config[CONFIG_PARAM_NAME_SQL_SERVER]}\"",
@@ -104,11 +107,10 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 Description = "Number of weeks to keep data"
             };
 
-            // Update variables
             var variables = automationAccount.GetAutomationVariables();
-            await UpdateVarCatchArgumentNullException(variables, CONFIG_PARAM_NAME_SQL_SERVER, varSqlServer);
-            await UpdateVarCatchArgumentNullException(variables, CONFIG_PARAM_NAME_SQL_DB, varSqlDb);
-            await UpdateVarCatchArgumentNullException(variables, CONFIG_PARAM_NAME_WEEKS_TO_KEEP, varWeeksToKeep);
+            await CreateVariableIfMissingAsync(variables, CONFIG_PARAM_NAME_SQL_SERVER, varSqlServer);
+            await CreateVariableIfMissingAsync(variables, CONFIG_PARAM_NAME_SQL_DB, varSqlDb);
+            await CreateVariableIfMissingAsync(variables, CONFIG_PARAM_NAME_WEEKS_TO_KEEP, varWeeksToKeep);
 
             // Creds
             _logger.LogInformation($"Creating/updating automation credentials for '{_config.ResourceName}'...");
@@ -117,7 +119,11 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             await automationAccount.GetAutomationCredentials().CreateOrUpdateAsync(WaitUntil.Completed, CRED_SQL_NAME, credSql);
 
             // Schedules
-            _logger.LogInformation($"Creating/updating automation schedules for '{_config.ResourceName}'...");
+            // Re-running the installer must NOT update existing schedules: doing so would reset
+            // the StartTime to a fresh "next Sunday" calculated at install time, which can disrupt
+            // schedule-runbook job bindings and confuse operators who have linked these schedules
+            // to runbooks manually. Only create when a schedule with this name doesn't already exist.
+            _logger.LogInformation($"Ensuring automation schedules exist for '{_config.ResourceName}'...");
 
             var nextSunday1pm = NextSundayAt(13, DateTimeKind.Utc);
             var nextSunday6pm = NextSundayAt(18, DateTimeKind.Utc);
@@ -127,23 +133,42 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             var nextSunday11pmSchedule = new AutomationScheduleCreateOrUpdateContent("Weekly Sunday 11pm", nextSunday11pm, AutomationScheduleFrequency.Week) { Interval = BinaryData.FromString("1") };
 
             var schedules = automationAccount.GetAutomationSchedules();
-            await schedules.CreateOrUpdateAsync(WaitUntil.Completed, nextSunday1pmSchedule.Name, nextSunday1pmSchedule);
-            await schedules.CreateOrUpdateAsync(WaitUntil.Completed, nextSunday6pmSchedule.Name, nextSunday6pmSchedule);
-            await schedules.CreateOrUpdateAsync(WaitUntil.Completed, nextSunday11pmSchedule.Name, nextSunday11pmSchedule);
+            await CreateScheduleIfMissingAsync(schedules, nextSunday1pmSchedule);
+            await CreateScheduleIfMissingAsync(schedules, nextSunday6pmSchedule);
+            await CreateScheduleIfMissingAsync(schedules, nextSunday11pmSchedule);
 
             return automationAccount;
         }
 
-        async Task UpdateVarCatchArgumentNullException(AutomationVariableCollection variables, string varName, AutomationVariableCreateOrUpdateContent varContent)
+        async Task CreateVariableIfMissingAsync(AutomationVariableCollection variables, string varName, AutomationVariableCreateOrUpdateContent varContent)
         {
+            if ((await variables.ExistsAsync(varName)).Value)
+            {
+                _logger.LogInformation($"Automation variable '{varName}' already exists in '{_config.ResourceName}' — leaving existing value untouched.");
+                return;
+            }
+
             try
             {
                 await variables.CreateOrUpdateAsync(WaitUntil.Completed, varName, varContent);
+                _logger.LogInformation($"Created automation variable '{varName}'.");
             }
             catch (ArgumentNullException)
             {
                 // Ignore. https://github.com/Azure/azure-sdk-for-net/issues/34261
             }
+        }
+
+        async Task CreateScheduleIfMissingAsync(AutomationScheduleCollection schedules, AutomationScheduleCreateOrUpdateContent scheduleContent)
+        {
+            if ((await schedules.ExistsAsync(scheduleContent.Name)).Value)
+            {
+                _logger.LogInformation($"Automation schedule '{scheduleContent.Name}' already exists in '{_config.ResourceName}' — leaving existing start time and runbook bindings untouched.");
+                return;
+            }
+
+            await schedules.CreateOrUpdateAsync(WaitUntil.Completed, scheduleContent.Name, scheduleContent);
+            _logger.LogInformation($"Created automation schedule '{scheduleContent.Name}'.");
         }
 
         public static DateTime Next(DateTime from, DayOfWeek dayOfWeek)
