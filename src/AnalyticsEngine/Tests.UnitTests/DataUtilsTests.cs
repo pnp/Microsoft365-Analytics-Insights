@@ -610,11 +610,13 @@ namespace Tests.UnitTests
         public void ImportJobSettingsTests()
         {
             Assert.IsTrue(new ImportTaskSettings().Equals(new ImportTaskSettings()));
-            var allDisabled = new ImportTaskSettings() { GraphTeams = false, GraphUsageReports = false, GraphUserApps = false, GraphUsersMetadata = false };
-            Assert.IsFalse(allDisabled.Equals(new ImportTaskSettings()));
 
-            var allDisabled2 = new ImportTaskSettings(allDisabled.ToSettingsString());
-            Assert.IsTrue(allDisabled2.Equals(allDisabled));
+            // All [ImportProp] flags default to false (opt-in). Enabling a subset must not equal a fresh default.
+            var someEnabled = new ImportTaskSettings() { GraphTeams = true, GraphUsageReports = true, GraphUserApps = true, GraphUsersMetadata = true };
+            Assert.IsFalse(someEnabled.Equals(new ImportTaskSettings()));
+
+            var someEnabled2 = new ImportTaskSettings(someEnabled.ToSettingsString());
+            Assert.IsTrue(someEnabled2.Equals(someEnabled));
 
             // Check doesn't blow up
             new ImportTaskSettings(null);

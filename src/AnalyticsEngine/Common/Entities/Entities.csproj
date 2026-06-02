@@ -284,6 +284,18 @@
     <Compile Include="Migrations\202605290817012_AddSentEmailTables.Designer.cs">
       <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.cs" />
+    <Compile Include="Migrations\202605291149290_AddAuditEventsOperationIndex.Designer.cs">
+      <DependentUpon>202605291149290_AddAuditEventsOperationIndex.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.cs" />
+    <Compile Include="Migrations\202605291207010_AddAuditEventsOperationFK.Designer.cs">
+      <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.cs" />
+    <Compile Include="Migrations\202606011010001_RemoveDataverseTables.Designer.cs">
+      <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -413,6 +425,15 @@
     <EmbeddedResource Include="Migrations\202605290817012_AddSentEmailTables.resx">
       <DependentUpon>202605290817012_AddSentEmailTables.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605291149290_AddAuditEventsOperationIndex.resx">
+      <DependentUpon>202605291149290_AddAuditEventsOperationIndex.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202605291207010_AddAuditEventsOperationFK.resx">
+      <DependentUpon>202605291207010_AddAuditEventsOperationFK.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202606011010001_RemoveDataverseTables.resx">
+      <DependentUpon>202606011010001_RemoveDataverseTables.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
     </EmbeddedResource>
@@ -466,25 +487,25 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Core">
-      <Version>1.45.0</Version>
+      <Version>1.57.0</Version>
     </PackageReference>
     <PackageReference Include="Azure.Identity">
-      <Version>1.11.4</Version>
+      <Version>1.21.0</Version>
     </PackageReference>
     <PackageReference Include="Azure.Security.KeyVault.Secrets">
-      <Version>4.5.0</Version>
+      <Version>4.11.0</Version>
     </PackageReference>
     <PackageReference Include="BCrypt.Net-Next.StrongName">
       <Version>4.0.3</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
-      <Version>6.5.1</Version>
+      <Version>6.5.2</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
-      <Version>6.0.1</Version>
+      <Version>10.0.8</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.IdentityModel.Abstractions">
-      <Version>6.35.0</Version>
+      <Version>8.14.0</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory">
       <Version>5.2.9</Version>
@@ -502,19 +523,19 @@
       <Version>3.3.19</Version>
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
-      <Version>13.0.1</Version>
+      <Version>13.0.4</Version>
     </PackageReference>
     <PackageReference Include="StackExchange.Redis">
-      <Version>2.5.43</Version>
+      <Version>2.13.17</Version>
     </PackageReference>
     <PackageReference Include="System.Diagnostics.PerformanceCounter">
-      <Version>6.0.0</Version>
+      <Version>10.0.8</Version>
     </PackageReference>
     <PackageReference Include="System.IO.Pipelines">
-      <Version>6.0.2</Version>
+      <Version>10.0.8</Version>
     </PackageReference>
     <PackageReference Include="System.Memory.Data">
-      <Version>6.0.0</Version>
+      <Version>10.0.8</Version>
     </PackageReference>
     <PackageReference Include="System.Runtime">
       <Version>4.3.1</Version>
@@ -523,22 +544,22 @@
       <Version>4.3.0</Version>
     </PackageReference>
     <PackageReference Include="System.Security.AccessControl">
-      <Version>6.0.0</Version>
+      <Version>6.0.1</Version>
     </PackageReference>
     <PackageReference Include="System.Security.Cryptography.Algorithms">
       <Version>4.3.1</Version>
     </PackageReference>
     <PackageReference Include="System.Security.Cryptography.ProtectedData">
-      <Version>7.0.1</Version>
+      <Version>10.0.8</Version>
     </PackageReference>
     <PackageReference Include="System.Security.Cryptography.X509Certificates">
       <Version>4.3.2</Version>
     </PackageReference>
     <PackageReference Include="System.Text.Json">
-      <Version>6.0.11</Version>
+      <Version>10.0.8</Version>
     </PackageReference>
     <PackageReference Include="System.Threading.Channels">
-      <Version>6.0.0</Version>
+      <Version>10.0.8</Version>
     </PackageReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

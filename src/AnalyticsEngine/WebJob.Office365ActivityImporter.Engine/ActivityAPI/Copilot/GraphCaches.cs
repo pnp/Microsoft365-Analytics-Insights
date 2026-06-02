@@ -1,5 +1,6 @@
 ﻿using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System.Threading.Tasks;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
@@ -21,7 +22,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         public override async Task<Site> Load(string id)
         {
-            return await _graphServiceClient.Sites[id].Request().GetAsync();
+            return await _graphServiceClient.Sites[id].GetAsync();
         }
     }
     public class UserGraphCache : GraphCache<User>
@@ -32,7 +33,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         public override async Task<User> Load(string id)
         {
-            return await _graphServiceClient.Users[id].Request().GetAsync();
+            return await _graphServiceClient.Users[id].GetAsync();
         }
     }
 }

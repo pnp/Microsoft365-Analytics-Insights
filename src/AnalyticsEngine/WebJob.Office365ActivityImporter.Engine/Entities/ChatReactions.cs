@@ -1,4 +1,5 @@
 ﻿using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 
 namespace WebJob.Office365ActivityImporter.Engine.Entities

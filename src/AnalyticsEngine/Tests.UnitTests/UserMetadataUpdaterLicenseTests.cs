@@ -2,6 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -62,9 +63,9 @@ namespace Tests.UnitTests
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
             var initialSku = new SubscribedSku { SkuId = initialSkuId, SkuPartNumber = initialSkuPartNumber };
-            var initialSkus = new GraphServiceSubscribedSkusCollectionPage { initialSku };
-            var usersWithInitialSku = new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } };
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>> { { initialSkuId, usersWithInitialSku } };
+            var initialSkus = new List<SubscribedSku> { initialSku };
+            var usersWithInitialSku = new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } };
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { initialSkuId, usersWithInitialSku } };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, initialSkus, fakeUsersBySku);
             var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
@@ -79,9 +80,9 @@ namespace Tests.UnitTests
             }
 
             var newSku = new SubscribedSku { SkuId = newSkuId, SkuPartNumber = newSkuPartNumber };
-            var updatedSkus = new GraphServiceSubscribedSkusCollectionPage { newSku };
-            var usersWithNewSku = new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } };
-            var updatedFakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>> { { newSkuId, usersWithNewSku } };
+            var updatedSkus = new List<SubscribedSku> { newSku };
+            var usersWithNewSku = new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } };
+            var updatedFakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { newSkuId, usersWithNewSku } };
 
             var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, updatedSkus, updatedFakeUsersBySku);
             var updaterWithNewLicense = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
@@ -124,9 +125,9 @@ namespace Tests.UnitTests
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
             var sku = new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber };
-            var skus = new GraphServiceSubscribedSkusCollectionPage { sku };
-            var usersWithSku = new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } };
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>> { { skuId, usersWithSku } };
+            var skus = new List<SubscribedSku> { sku };
+            var usersWithSku = new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } };
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { skuId, usersWithSku } };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
             var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
@@ -138,8 +139,8 @@ namespace Tests.UnitTests
                 Assert.AreEqual(1, dbUser.LicenseLookups.Count);
             }
 
-            var emptySkus = new GraphServiceSubscribedSkusCollectionPage();
-            var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, emptySkus, new Dictionary<Guid, List<Microsoft.Graph.User>>());
+            var emptySkus = new List<SubscribedSku>();
+            var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, emptySkus, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
             var updaterNoLicenses = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
             await updaterNoLicenses.InsertAndUpdateDatabaseFromExternalUsers();
 
@@ -170,9 +171,9 @@ namespace Tests.UnitTests
             }
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
-            var skus = new GraphServiceSubscribedSkusCollectionPage { new SubscribedSku { SkuId = sku1Id, SkuPartNumber = sku1PartNumber }, new SubscribedSku { SkuId = sku2Id, SkuPartNumber = sku2PartNumber } };
-            var graphUserObject = new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId };
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>> { { sku1Id, new List<Microsoft.Graph.User> { graphUserObject } }, { sku2Id, new List<Microsoft.Graph.User> { graphUserObject } } };
+            var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = sku1Id, SkuPartNumber = sku1PartNumber }, new SubscribedSku { SkuId = sku2Id, SkuPartNumber = sku2PartNumber } };
+            var graphUserObject = new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId };
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { sku1Id, new List<Microsoft.Graph.Models.User> { graphUserObject } }, { sku2Id, new List<Microsoft.Graph.Models.User> { graphUserObject } } };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
             var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
@@ -215,11 +216,11 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = user3Upn, Id = user3Id, AccountEnabled = true, Mail = user3Upn }
             };
 
-            var skus = new GraphServiceSubscribedSkusCollectionPage { new SubscribedSku { SkuId = sku1Id, SkuPartNumber = sku1PartNumber }, new SubscribedSku { SkuId = sku2Id, SkuPartNumber = sku2PartNumber } };
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = sku1Id, SkuPartNumber = sku1PartNumber }, new SubscribedSku { SkuId = sku2Id, SkuPartNumber = sku2PartNumber } };
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>>
             {
-                { sku1Id, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = user1Upn, Id = user1Id }, new Microsoft.Graph.User { UserPrincipalName = user3Upn, Id = user3Id } } },
-                { sku2Id, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = user2Upn, Id = user2Id }, new Microsoft.Graph.User { UserPrincipalName = user3Upn, Id = user3Id } } }
+                { sku1Id, new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = user1Upn, Id = user1Id }, new Microsoft.Graph.Models.User { UserPrincipalName = user3Upn, Id = user3Id } } },
+                { sku2Id, new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = user2Upn, Id = user2Id }, new Microsoft.Graph.Models.User { UserPrincipalName = user3Upn, Id = user3Id } } }
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers, skus, fakeUsersBySku);
@@ -258,8 +259,8 @@ namespace Tests.UnitTests
             }
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
-            var skus = new GraphServiceSubscribedSkusCollectionPage { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>> { { skuId, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } } } };
+            var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { skuId, new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } } } };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
             var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
@@ -271,8 +272,8 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(licenseType); licenseTypeId = licenseType.ID;
             }
 
-            var emptySkus = new GraphServiceSubscribedSkusCollectionPage();
-            var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, emptySkus, new Dictionary<Guid, List<Microsoft.Graph.User>>());
+            var emptySkus = new List<SubscribedSku>();
+            var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, emptySkus, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
             var updaterNoLicenses = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
             await updaterNoLicenses.InsertAndUpdateDatabaseFromExternalUsers();
 
@@ -353,15 +354,15 @@ namespace Tests.UnitTests
             }
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
-            var skus = new GraphServiceSubscribedSkusCollectionPage
+            var skus = new List<SubscribedSku>
             {
                 new SubscribedSku { SkuId = sku1Id, SkuPartNumber = sku1PartNumber },
                 new SubscribedSku { SkuId = sku2Id, SkuPartNumber = sku2PartNumber }
             };
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>>
             {
-                { sku1Id, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } } },
-                { sku2Id, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } } }
+                { sku1Id, new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } } },
+                { sku2Id, new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } } }
             };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
@@ -424,17 +425,17 @@ namespace Tests.UnitTests
             }
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
-            var skus = new GraphServiceSubscribedSkusCollectionPage { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
+            var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
 
             // Simulate the Graph quirk: same user returned twice for one SKU.
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>>
             {
                 {
                     skuId,
-                    new List<Microsoft.Graph.User>
+                    new List<Microsoft.Graph.Models.User>
                     {
-                        new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId },
-                        new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId }
+                        new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId },
+                        new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId }
                     }
                 }
             };
@@ -493,14 +494,14 @@ namespace Tests.UnitTests
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
 
             // Same SKU listed twice in the subscribed-SKUs response.
-            var skus = new GraphServiceSubscribedSkusCollectionPage
+            var skus = new List<SubscribedSku>
             {
                 new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber },
                 new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber }
             };
-            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+            var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>>
             {
-                { skuId, new List<Microsoft.Graph.User> { new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId } } }
+                { skuId, new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } } }
             };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
@@ -554,14 +555,14 @@ namespace Tests.UnitTests
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
 
-            // Build a fake IUserLicenseDetailsCollectionPage with two SKU part
+            // Build a fake List<LicenseDetails> with two SKU part
             // numbers that both resolve to the same display name.
-            var licenseDetailsPage = new UserLicenseDetailsCollectionPage
+            var licenseDetailsPage = new List<LicenseDetails>
             {
                 new LicenseDetails { SkuId = Guid.NewGuid(), SkuPartNumber = "RIGHTSMANAGEMENT" },
                 new LicenseDetails { SkuId = Guid.NewGuid(), SkuPartNumber = "RIGHTSMANAGEMENT_CE" }
             };
-            var fakeLicenseDetails = new Dictionary<string, IUserLicenseDetailsCollectionPage>
+            var fakeLicenseDetails = new Dictionary<string, List<LicenseDetails>>
             {
                 { userId, licenseDetailsPage }
             };
@@ -623,8 +624,8 @@ namespace Tests.UnitTests
             }
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
-            var skus = new GraphServiceSubscribedSkusCollectionPage { new SubscribedSku { SkuId = skuId, SkuPartNumber = "ENTERPRISEPACK" } };
-            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, new Dictionary<Guid, List<Microsoft.Graph.User>>());
+            var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = "ENTERPRISEPACK" } };
+            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
 
             // Seed the delta provider with an existing token, then arrange for the
             // import to throw before CommitDeltaTokenAsync would be called.
@@ -750,8 +751,8 @@ namespace Tests.UnitTests
             var userAGraph = new GraphUser { UserPrincipalName = userAUpn, Id = userAId, AccountEnabled = true, Mail = userAUpn, JobTitle = "Engineer" };
             var userBGraph = new GraphUser { UserPrincipalName = userBUpn, Id = userBId, AccountEnabled = true, Mail = userBUpn, JobTitle = "Engineer" };
 
-            var emptySkuPage = new GraphServiceSubscribedSkusCollectionPage();
-            var emptyUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>();
+            var emptySkuPage = new List<SubscribedSku>();
+            var emptyUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>>();
 
             // IMPORTANT: re-use the SAME loader instance across both runs so the
             // FakeDeltaValueProvider keeps the token persisted by run 1 - this
@@ -785,13 +786,13 @@ namespace Tests.UnitTests
             //                 surfaces in the delta response. --------
 
             var sku = new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber };
-            var skuPage = new GraphServiceSubscribedSkusCollectionPage { sku };
-            var usersWithSku = new List<Microsoft.Graph.User>
+            var skuPage = new List<SubscribedSku> { sku };
+            var usersWithSku = new List<Microsoft.Graph.Models.User>
             {
-                new Microsoft.Graph.User { UserPrincipalName = userAUpn, Id = userAId },
-                new Microsoft.Graph.User { UserPrincipalName = userBUpn, Id = userBId }
+                new Microsoft.Graph.Models.User { UserPrincipalName = userAUpn, Id = userAId },
+                new Microsoft.Graph.Models.User { UserPrincipalName = userBUpn, Id = userBId }
             };
-            var usersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>> { { skuId, usersWithSku } };
+            var usersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { skuId, usersWithSku } };
 
             // Mutate fake state in place so the same loader/delta provider is reused.
             fakeLoader.SetFakeState(

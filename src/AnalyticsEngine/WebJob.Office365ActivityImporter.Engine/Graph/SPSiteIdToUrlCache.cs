@@ -2,9 +2,12 @@
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Data.Entity;
 using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -20,9 +23,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _graphServiceClient = graphServiceClient;
         }
 
-        public override async Task<Microsoft.Graph.Site> LoadSite(string id)
+        public override async Task<Microsoft.Graph.Models.Site> LoadSite(string id)
         {
-            return await _graphServiceClient.Sites[id].Request().Select("WebUrl").GetAsync();
+            return await _graphServiceClient.Sites[id]
+                .GetAsync(rc => { rc.QueryParameters.Select = new[] { "WebUrl" }; });
         }
     }
 
@@ -41,7 +45,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _debugTracer = debugTracer;
         }
 
-        public abstract Task<Microsoft.Graph.Site> LoadSite(string id);
+        public abstract Task<Microsoft.Graph.Models.Site> LoadSite(string id);
 
         public override async Task<SPSiteIdToUrl> Load(string id)
         {
@@ -83,7 +87,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     SiteUrl = site.WebUrl
                 };
             }
-            catch (ServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            catch (ODataError ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
             {
                 _debugTracer.LogWarning($"{nameof(SPSiteIdToUrlCache)}: Site with ID '{id}' not found");
 

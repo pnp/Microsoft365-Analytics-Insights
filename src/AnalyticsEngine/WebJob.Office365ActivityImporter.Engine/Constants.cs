@@ -22,7 +22,6 @@
         public static string WORKLOAD_POWER_AUTOMATE { get { return "MicrosoftFlow"; } }
         public static string WORKLOAD_POWER_BI { get { return "PowerBI"; } }
         public static string WORKLOAD_COPILOT_STUDIO { get { return "MicrosoftCopilotStudio"; } }
-        public static string WORKLOAD_DATAVERSE { get { return "Dynamics365"; } }
 
         /// <summary>
         /// New unified Power Platform admin activity workload (RecordType 256,
@@ -232,7 +231,6 @@
         public const string STAGING_TABLE_POWER_AUTOMATE_SHARE = "debug_import_staging_power_automate_share";
         public const string STAGING_TABLE_POWER_BI = "debug_import_staging_power_bi";
         public const string STAGING_TABLE_COPILOT_STUDIO = "debug_import_staging_copilot_studio";
-        public const string STAGING_TABLE_DATAVERSE = "debug_import_staging_dataverse";
 #else
         public const string STAGING_TABLE_POWER_APP = "##import_staging_power_app";
         public const string STAGING_TABLE_POWER_APP_SHARE = "##import_staging_power_app_share";
@@ -240,7 +238,6 @@
         public const string STAGING_TABLE_POWER_AUTOMATE_SHARE = "##import_staging_power_automate_share";
         public const string STAGING_TABLE_POWER_BI = "##import_staging_power_bi";
         public const string STAGING_TABLE_COPILOT_STUDIO = "##import_staging_copilot_studio";
-        public const string STAGING_TABLE_DATAVERSE = "##import_staging_dataverse";
 #endif
     }
 }

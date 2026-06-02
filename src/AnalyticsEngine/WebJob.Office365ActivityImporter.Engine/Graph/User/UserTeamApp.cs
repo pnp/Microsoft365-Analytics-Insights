@@ -1,4 +1,5 @@
-using Microsoft.Graph;
+﻿using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Newtonsoft.Json;
 using System.Collections.Generic;
 
