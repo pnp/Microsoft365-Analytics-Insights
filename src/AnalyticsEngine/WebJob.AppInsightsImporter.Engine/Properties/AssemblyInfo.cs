@@ -13,6 +13,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("Copyright © __year__")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
+[assembly: InternalsVisibleTo("Tests.UnitTests")]
 
 // Allow Tests.UnitTests to exercise the internal connection-string parser, KQL
 // builder, and other internal helpers in this assembly.
