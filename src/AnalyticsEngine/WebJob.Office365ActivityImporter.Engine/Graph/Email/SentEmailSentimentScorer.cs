@@ -40,10 +40,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 return result;
 
             var list = messagesWithBody as IList<GraphSentMessage> ?? messagesWithBody.ToList();
+            // We slice with GetRange (not Skip().Take()) to avoid the O(N^2/K) walk that
+            // List<T>.Skip incurs when called inside a chunking loop. At per-chunk sizes
+            // up to a few thousand messages on a 200k-user tenant, this matters.
+            // Materialise into a List<T> so GetRange is available without copying.
+            var listAsList = list as List<GraphSentMessage> ?? list.ToList();
 
-            for (int i = 0; i < list.Count; i += SentimentBatchSize)
+            for (int i = 0; i < listAsList.Count; i += SentimentBatchSize)
             {
-                var slice = list.Skip(i).Take(SentimentBatchSize).ToList();
+                var take = Math.Min(SentimentBatchSize, listAsList.Count - i);
+                var slice = listAsList.GetRange(i, take);
                 var docs = new List<TextDocumentInput>(slice.Count);
 
                 foreach (var msg in slice)

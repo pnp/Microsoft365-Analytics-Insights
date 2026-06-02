@@ -13,7 +13,7 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// DB-backed tests for <see cref="PowerPlatformAuditEventManager"/>: covers the per-workload
-    /// staging + merge pipeline for Power Apps, Power Automate, Power BI, Copilot Studio and Dataverse.
+    /// staging + merge pipeline for Power Apps, Power Automate, Power BI and Copilot Studio.
     /// Follows the same shape as <c>CopilotEventManagerSaveTests</c> (real <see cref="AnalyticsEntitiesContext"/>,
     /// unique IDs per test so test runs don't interfere).
     /// </summary>
@@ -420,43 +420,6 @@ namespace Tests.UnitTests
             }
         }
 
-        // -- Dataverse ------------------------------------------------------------------------
-
-        /// <summary>
-        /// A Dataverse CreateRecord event should populate the entity lookup and the per-event metadata
-        /// including the record_id.
-        /// </summary>
-        [TestMethod]
-        public async Task Dataverse_RecordEvent_PersistsEntityAndMetadata()
-        {
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                var commonEvent = BuildCommonEvent("CreateRecord", "dv-create");
-                await PersistAuditEventAsync(db, commonEvent);
-
-                var entityName = "custom_widget_" + Guid.NewGuid().ToString("N");
-                var recordId = Guid.NewGuid().ToString();
-
-                var manager = NewManager();
-                await manager.SaveSingleDataverseEventToSqlStaging(new DataverseAuditLogContent
-                {
-                    EnvironmentName = "env-test",
-                    EntityName = entityName,
-                    RecordId = recordId
-                }, commonEvent);
-
-                await manager.CommitAllChanges();
-
-                var entityRow = await db.dataverse_entities.SingleOrDefaultAsync(e => e.Name == entityName);
-                Assert.IsNotNull(entityRow, "dataverse_entities lookup row must exist.");
-
-                var meta = await db.dataverse_events.SingleOrDefaultAsync(m => m.EventID == commonEvent.Id);
-                Assert.IsNotNull(meta);
-                Assert.AreEqual(entityRow.ID, meta.EntityId);
-                Assert.AreEqual(recordId, meta.RecordId);
-            }
-        }
-
         // -- Edge cases -----------------------------------------------------------------------
 
         /// <summary>
@@ -472,7 +435,6 @@ namespace Tests.UnitTests
                 var preFlows = await db.power_automate_flow_events.CountAsync();
                 var preBi = await db.power_bi_events.CountAsync();
                 var preCs = await db.copilot_studio_events.CountAsync();
-                var preDv = await db.dataverse_events.CountAsync();
 
                 var manager = NewManager();
 
@@ -480,7 +442,6 @@ namespace Tests.UnitTests
                 await manager.SaveSinglePowerAutomateEventToSqlStaging(null, null);
                 await manager.SaveSinglePowerBIEventToSqlStaging(null, null);
                 await manager.SaveSingleCopilotStudioEventToSqlStaging(null, null);
-                await manager.SaveSingleDataverseEventToSqlStaging(null, null);
 
                 // Should not throw - manager guards against null and the merge SQLs are no-ops on empty staging.
                 await manager.CommitAllChanges();
@@ -489,7 +450,6 @@ namespace Tests.UnitTests
                 Assert.AreEqual(preFlows, await db.power_automate_flow_events.CountAsync());
                 Assert.AreEqual(preBi, await db.power_bi_events.CountAsync());
                 Assert.AreEqual(preCs, await db.copilot_studio_events.CountAsync());
-                Assert.AreEqual(preDv, await db.dataverse_events.CountAsync());
             }
         }
 

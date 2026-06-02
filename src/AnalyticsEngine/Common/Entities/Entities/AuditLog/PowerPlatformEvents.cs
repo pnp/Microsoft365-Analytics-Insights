@@ -7,7 +7,7 @@ namespace Common.Entities.Entities.AuditLog
     #region Shared lookups
 
     /// <summary>
-    /// A Power Platform environment (shared by Power Apps, Power Automate flows, Dataverse, etc.).
+    /// A Power Platform environment (shared by Power Apps, Power Automate flows, etc.).
     /// </summary>
     [Table("power_app_environments")]
     public class PowerAppEnvironment : AbstractEFEntity
@@ -368,40 +368,6 @@ namespace Common.Entities.Entities.AuditLog
         [Column("bot_id")]
         public int? BotId { get; set; }
         public CopilotStudioBot Bot { get; set; }
-    }
-
-    #endregion
-
-    #region Dataverse
-
-    /// <summary>
-    /// A Dataverse entity / table name (Account, Contact, custom_table, ...).
-    /// </summary>
-    [Table("dataverse_entities")]
-    public class DataverseEntity : AbstractEFEntityWithName
-    {
-    }
-
-    /// <summary>
-    /// Per-event metadata for an audit_events row of workload 'Dynamics365' (Dataverse).
-    /// Captures depth-of-engagement signal (CreateRecord/UpdateRecord/DeleteRecord counts).
-    /// </summary>
-    [Table("event_meta_dataverse")]
-    public class DataverseEventMetadata : BaseOfficeEvent
-    {
-        [ForeignKey(nameof(Environment))]
-        [Column("environment_id")]
-        public int? EnvironmentId { get; set; }
-        public PowerAppEnvironment Environment { get; set; }
-
-        [ForeignKey(nameof(Entity))]
-        [Column("entity_id")]
-        public int? EntityId { get; set; }
-        public DataverseEntity Entity { get; set; }
-
-        [Column("record_id")]
-        [MaxLength(200)]
-        public string RecordId { get; set; }
     }
 
     #endregion

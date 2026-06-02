@@ -3,6 +3,8 @@ using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
@@ -78,7 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 team = await O365Team.LoadTeamFull(parentGroup, _context, _telemetry, _settings, lookupManager.Database);
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
                 _telemetry.LogError(ex, $"Couldn't load team from Group {parentGroup.DisplayName}: {ex.Message}");
             }

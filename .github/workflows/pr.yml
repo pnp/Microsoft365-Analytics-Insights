@@ -160,21 +160,3 @@ jobs:
           path: src/SPO/AITrackerInstaller.zip
           name: drop_aitracker
           if-no-files-found: error
-
-  build_reports:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-      - name: Archive Reports
-        run: |
-          Get-ChildItem '.\reports\Usage Analytics\*' `
-          -Exclude "*_base.pbit" -Include "*.pbit","Readme.txt" | Compress-Archive `
-          -Force -DestinationPath "${{ runner.temp }}\Analytics_Reports.zip"
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          path: ${{ runner.temp }}/Analytics_Reports.zip
-          name: drop_Reports
-          if-no-files-found: error
-

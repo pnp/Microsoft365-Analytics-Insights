@@ -38,8 +38,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _telemetry.LogInformation($"User import - updating {userUpnsToProcess.Count.ToString("N0")} existing users in batches...");
 
             int processedCount = 0;
+            // userUpnsToProcess is OrdinalIgnoreCase so we no longer need .ToLower() per Graph user.
             var batchedGraphUsers = allActiveGraphUsers
-                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName) && userUpnsToProcess.Contains(u.UserPrincipalName.ToLowerInvariant()))
+                .Where(u => !string.IsNullOrEmpty(u.UserPrincipalName) && userUpnsToProcess.Contains(u.UserPrincipalName))
                 .ToList();
 
             for (int i = 0; i < batchedGraphUsers.Count; i += batchSize)
@@ -78,7 +79,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 foreach (var existingGraphUser in batch)
                 {
-                    var upn = existingGraphUser.UserPrincipalName?.ToLowerInvariant();
+                    var upn = existingGraphUser.UserPrincipalName;
                     if (!string.IsNullOrEmpty(upn) && dbUsersByUpn.TryGetValue(upn, out var dbUser))
                     {
                         // Get tracked version of the user (or attach if not tracked)
@@ -246,7 +247,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             foreach (var u in allActiveGraphUsers)
             {
                 if (!string.IsNullOrEmpty(u.UserPrincipalName) &&
-                    userUpnsToProcess.Contains(u.UserPrincipalName.ToLowerInvariant()))
+                    userUpnsToProcess.Contains(u.UserPrincipalName))
                 {
                     graphUsersToUpdate.Add(u);
                 }

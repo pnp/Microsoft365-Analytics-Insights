@@ -44,7 +44,7 @@ Office 365 Management Activity API
 | `ActivityReportWebLoader` | Downloads JSON arrays from Management API content URIs |
 | `AuditLogContentDispatcher` | Routes raw `JToken` + workload string to the correct `AbstractAuditLogContent` subclass; applies per-workload operation filters |
 | `ActivityReportSqlPersistenceManager` | Applies global filters (org-URLs, user groups), stages into temp table, runs merge SQL, then invokes `ProcessExtendedProperties` per event |
-| `PowerPlatformAuditEventManager` | Stages Power Apps / Automate / BI / Copilot Studio / Dataverse rows via `InsertBatch<T>` into workload-specific staging tables; commits via merge SQL scripts |
+| `PowerPlatformAuditEventManager` | Stages Power Apps / Automate / BI / Copilot Studio rows via `InsertBatch<T>` into workload-specific staging tables; commits via merge SQL scripts |
 | `CopilotAuditEventManager` | Same pattern for M365 Copilot events (separate staging tables) |
 | `SaveSession` | EF6-backed metadata persistence (SP sites/webs/pages/files, hit lookups) |
 
@@ -72,7 +72,6 @@ Each supported workload (`Constants.cs → ActivityImportConstants.WORKLOAD_*`) 
 | `MicrosoftFlow` (legacy) | `PowerAutomateAuditLogContent` | FlowRunStarted only |
 | `PowerBI` | `PowerBIAuditLogContent` | ViewReport only |
 | `MicrosoftCopilotStudio` | `CopilotStudioAuditLogContent` | None |
-| `Dynamics365` | `DataverseAuditLogContent` | None |
 
 ---
 
@@ -150,7 +149,6 @@ Most workloads follow this pattern:
 | `insert_power_automate_share_events_from_staging_table.sql` | Flow share permissions |
 | `insert_power_bi_events_from_staging_table.sql` | Power BI: workspaces → reports → event_meta |
 | `insert_copilot_studio_events_from_staging_table.sql` | Copilot Studio: bots → event_meta |
-| `insert_dataverse_events_from_staging_table.sql` | Dataverse: entities → event_meta |
 
 ### SQL Conventions (Important)
 - Dedupe lookup-table upserts by the **unique key only** (use `GROUP BY + MAX/MIN` for other

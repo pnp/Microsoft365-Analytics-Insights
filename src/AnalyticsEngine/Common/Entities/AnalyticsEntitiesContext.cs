@@ -188,12 +188,11 @@ namespace Common.Entities
             modelBuilder.Entity<PowerAppShareEventMetadata>().HasIndex(s => new { s.EventId, s.SharedWithUserId }).IsUnique();
             modelBuilder.Entity<PowerAutomateFlowShareEventMetadata>().HasIndex(s => new { s.EventId, s.SharedWithUserId }).IsUnique();
 
-            // Power BI / Copilot Studio / Dataverse lookups
+            // Power BI / Copilot Studio lookups
             modelBuilder.Entity<PowerBIWorkspace>().HasIndex(w => w.WorkspaceId).IsUnique();
             modelBuilder.Entity<PowerBIReport>().HasIndex(r => r.ReportId).IsUnique();
             modelBuilder.Entity<PowerBIDashboard>().HasIndex(d => d.DashboardId).IsUnique();
             modelBuilder.Entity<CopilotStudioBot>().HasIndex(b => b.BotId).IsUnique();
-            modelBuilder.Entity<DataverseEntity>().HasIndex(e => e.Name).IsUnique();
 
             modelBuilder.Entity<EmailAddress>()
              .HasIndex(t => new { t.Address })
@@ -387,10 +386,6 @@ namespace Common.Entities
         // Copilot Studio
         public virtual DbSet<CopilotStudioBot> copilot_studio_bots { get; set; }
         public virtual DbSet<CopilotStudioEventMetadata> copilot_studio_events { get; set; }
-
-        // Dataverse
-        public virtual DbSet<DataverseEntity> dataverse_entities { get; set; }
-        public virtual DbSet<DataverseEventMetadata> dataverse_events { get; set; }
 
         // Sent email import - one row per sent message, recipients live in the join table.
         public virtual DbSet<EmailAddress> EmailAddresses { get; set; }

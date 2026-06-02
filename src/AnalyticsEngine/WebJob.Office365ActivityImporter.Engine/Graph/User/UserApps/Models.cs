@@ -1,5 +1,6 @@
 ﻿using DataUtils.Sql;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 
