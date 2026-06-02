@@ -6,6 +6,7 @@ using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
@@ -29,6 +30,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             this.Client = new GraphServiceClient(cred);
         }
 
+        // Graph Application permission required to subscribe to /communications/callRecords. Surfaced in error
+        // messages so operators see the exact permission to grant (matches docs/wiki - Prerequisites.md).
+        internal const string REQUIRED_GRAPH_PERMISSION = "CallRecords.Read.All";
+
+        // Grep-friendly tag so the calls-webhook lifecycle is easy to filter in App Insights traces.
+        private const string LOG_TAG = "[Calls Webhook]";
+
         public async Task CreateOrUpdateWebhook(Uri webAppUrl, string secret)
         {
             var allSubs = await this.Client.Subscriptions.GetAsync();
@@ -40,7 +48,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 .ToList();
             if (subs.Count == 0)
             {
-                Telemetry.LogInformation($"No subscription found for call-records, for URL '{webAppUrl}'. Creating...");
+                Telemetry.LogInformation($"{LOG_TAG} No subscription found for call-records, for URL '{webAppUrl}'. Creating...");
                 try
                 {
                     var result = await this.Client.Subscriptions.PostAsync(new Subscription()
@@ -51,25 +59,71 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                         ChangeType = "created",
                         ExpirationDateTime = DateTime.Now.AddDays(2)        // the max Graph will permit - https://docs.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-beta#properties
                     });
-                    Telemetry.LogInformation($"Created subscription id '{result.Id}' for webhook.");
+                    Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{result.Id}' for webhook at '{webAppUrl}'. Teams call records will start importing as calls end.");
                 }
                 catch (ODataError ex)
                 {
-                    Telemetry.LogError(ex, $"Couldn't create webhook at URL '{webAppUrl}'. Got exception: '{ex.Message}'");
+                    LogSubscriptionFailure(ex, webAppUrl, isUpdate: false);
+                    throw;
                 }
-
             }
             else
             {
                 // https://docs.microsoft.com/en-us/graph/api/subscription-update?view=graph-rest-beta&tabs=http
+                var existingSubId = subs.First().Id;
+                try
+                {
+                    var result = await this.Client.Subscriptions[existingSubId].PatchAsync(
+                        new Subscription
+                        {
+                            ExpirationDateTime = DateTime.Now.AddDays(2)
+                        }
+                    );
+                    Telemetry.LogInformation($"{LOG_TAG} Renewed subscription id '{result.Id}' for webhook at '{webAppUrl}'. New expiry: {result.ExpirationDateTime:u}.");
+                }
+                catch (ODataError ex)
+                {
+                    LogSubscriptionFailure(ex, webAppUrl, isUpdate: true, existingSubId: existingSubId);
+                    throw;
+                }
+            }
+        }
 
-                var result = await this.Client.Subscriptions[subs.First().Id].PatchAsync(
-                    new Subscription
-                    {
-                        ExpirationDateTime = DateTime.Now.AddDays(2)
-                    }
-                );
-                Telemetry.LogInformation($"Updated subscription '{result.Id}' for webhook, for URL '{webAppUrl}'.");
+        /// <summary>
+        /// Emit a single, actionable critical log so operators can immediately tell:
+        ///   (a) that the Teams calls import is broken,
+        ///   (b) what Graph returned (status + message), and
+        ///   (c) for the common 403 case, exactly which Graph Application permission to grant.
+        /// The exception is then re-thrown by the caller so Program.cs's outer catch also runs
+        /// TrackException, surfacing it in App Insights' Failures blade.
+        /// </summary>
+        private void LogSubscriptionFailure(ODataError ex, Uri webAppUrl, bool isUpdate, string existingSubId = null)
+        {
+            var action = isUpdate ? $"renew subscription '{existingSubId}'" : "create subscription";
+            var statusCode = ex.ResponseStatusCode;
+            var statusLabel = Enum.IsDefined(typeof(HttpStatusCode), statusCode) ? $" {(HttpStatusCode)statusCode}" : string.Empty;
+            var statusLine = statusCode > 0
+                ? $"Graph returned {statusCode}{statusLabel}."
+                : "Graph call failed before a status code was returned.";
+            var graphError = ex.Error?.Message ?? ex.Message;
+
+            if (statusCode == (int)HttpStatusCode.Forbidden)
+            {
+                Telemetry.LogCritical(
+                    $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
+                    $"This is almost always because the importer's Azure AD app registration is missing the " +
+                    $"'{REQUIRED_GRAPH_PERMISSION}' Application permission on Microsoft Graph, or admin consent " +
+                    $"has not been granted on it. " +
+                    $"Fix: Azure portal -> Azure AD -> App registrations -> <importer app> -> API permissions -> " +
+                    $"Add a permission -> Microsoft Graph -> Application permissions -> {REQUIRED_GRAPH_PERMISSION} -> " +
+                    $"Grant admin consent for the tenant. " +
+                    $"Until this is fixed, NO Teams call records will be imported. Graph error: '{graphError}'");
+            }
+            else
+            {
+                Telemetry.LogCritical(
+                    $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
+                    $"Until this is fixed, NO Teams call records will be imported. Graph error: '{graphError}'");
             }
         }
     }
