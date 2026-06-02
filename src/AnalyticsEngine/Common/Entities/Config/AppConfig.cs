@@ -33,8 +33,7 @@ namespace Common.Entities.Config
             var useClientCertificate = ConfigurationManager.AppSettings.Get("UseClientCertificate");
             if (!string.IsNullOrEmpty(useClientCertificate))
             {
-                var useClientCertificateBool = false;
-                bool.TryParse(useClientCertificate, out useClientCertificateBool);
+                bool.TryParse(useClientCertificate, out var useClientCertificateBool);
                 this.UseClientCertificate = useClientCertificateBool;
             }
             if (string.IsNullOrEmpty(this.AADInstance))
@@ -43,14 +42,16 @@ namespace Common.Entities.Config
             }
             this.WebAppURL = ConfigurationManager.AppSettings.Get("WebAppURL");
 
-            var ts = TimeSpan.FromDays(1);     // default
-            TimeSpan.TryParse(ConfigurationManager.AppSettings.Get("ChunkSize"), out ts);
-            this.ChunkSize = ts;
+            // Preserve default if the config value is missing or invalid (TryParse would otherwise overwrite with TimeSpan.Zero)
+            this.ChunkSize = TimeSpan.TryParse(ConfigurationManager.AppSettings.Get("ChunkSize"), out var ts)
+                ? ts
+                : TimeSpan.FromDays(1);
             this.ContentTypesString = ConfigurationManager.AppSettings.Get("ContentTypesListAsString") ?? "Audit.SharePoint";
 
-            int daysBeforeNowToDownload = 6;
-            int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out daysBeforeNowToDownload);
-            this.DaysBeforeNowToDownload = daysBeforeNowToDownload;
+            // Preserve default of 6 if config value is missing or invalid
+            this.DaysBeforeNowToDownload = int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out var daysBeforeNowToDownload)
+                ? daysBeforeNowToDownload
+                : 6;
 
             // Optional: how many days before today to start reading hits from App Insights.
             // Can be overridden via the -readHitsDaysBeforeToday command line argument.
@@ -64,10 +65,11 @@ namespace Common.Entities.Config
                 }
             }
 
-            // Time chunk overlap in minutes to prevent missing events at boundaries
-            int timeChunkOverlapMinutes = 5;
-            int.TryParse(ConfigurationManager.AppSettings.Get("TimeChunkOverlapMinutes"), out timeChunkOverlapMinutes);
-            this.TimeChunkOverlapMinutes = timeChunkOverlapMinutes;
+            // Time chunk overlap in minutes to prevent missing events at boundaries.
+            // Preserve default of 5 if config value is missing or invalid.
+            this.TimeChunkOverlapMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("TimeChunkOverlapMinutes"), out var timeChunkOverlapMinutes)
+                ? timeChunkOverlapMinutes
+                : 5;
 
 
             this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
@@ -81,26 +83,38 @@ namespace Common.Entities.Config
             this.StatsApiUrl = ConfigurationManager.AppSettings.Get("StatsApiUrl");
 
             var metadataRefreshMinutes = ConfigurationManager.AppSettings.Get("MetadataRefreshMinutes");
-            if (!string.IsNullOrEmpty(metadataRefreshMinutes))
+            if (!string.IsNullOrEmpty(metadataRefreshMinutes)
+                && int.TryParse(metadataRefreshMinutes, out var metadataRefreshMinutesInt)
+                && metadataRefreshMinutesInt >= 0)
             {
-                int metadataRefreshMinutesInt = 24 * 60; // 24 hours
-                int.TryParse(metadataRefreshMinutes, out metadataRefreshMinutesInt);
-                if (metadataRefreshMinutesInt < -1)
-                {
-                    this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
-                }
+                this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
             }
 
             // New optional flag: UseRBACForServiceBus (default false)
             var useRbacForSb = ConfigurationManager.AppSettings.Get("UseRBACForServiceBus");
             if (!string.IsNullOrEmpty(useRbacForSb))
             {
-                bool parsed = false;
-                if (bool.TryParse(useRbacForSb, out parsed))
+                if (bool.TryParse(useRbacForSb, out var parsed))
                 {
                     this.UseRBACForServiceBus = parsed;
                 }
             }
+
+            // Optional flag to bypass the "recently imported" gate for usage reports (default false).
+            // Replaces a #if DEBUG override so it can be toggled in any build.
+            var forceUsageReportsImport = ConfigurationManager.AppSettings.Get("ForceUsageReportsImport");
+            if (!string.IsNullOrEmpty(forceUsageReportsImport)
+                && bool.TryParse(forceUsageReportsImport, out var forceUsageReportsImportBool))
+            {
+                this.ForceUsageReportsImport = forceUsageReportsImportBool;
+            }
+
+            // Optional cap on simultaneous Activity API summary fetches (default 8).
+            // Prevents burst throttling when (contentTypes × timeChunks) is large.
+            this.MaxSummaryFetchConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxSummaryFetchConcurrency"), out var maxSummaryFetchConcurrency)
+                && maxSummaryFetchConcurrency > 0
+                ? maxSummaryFetchConcurrency
+                : 8;
         }
 
         public string BuildLabel { get; set; }
@@ -219,5 +233,17 @@ namespace Common.Entities.Config
         /// Default false.
         /// </summary>
         public bool UseRBACForServiceBus { get; set; } = false;
+
+        /// <summary>
+        /// When true, bypasses the "recently imported" gate for Graph usage reports and runs every invocation.
+        /// Intended for development/manual reruns. Default false.
+        /// </summary>
+        public bool ForceUsageReportsImport { get; set; } = false;
+
+        /// <summary>
+        /// Maximum simultaneous Activity API summary fetches (per importer instance).
+        /// Default 8. Lower values reduce throttling risk; higher values increase wall-clock throughput.
+        /// </summary>
+        public int MaxSummaryFetchConcurrency { get; set; } = 8;
     }
 }

@@ -30,7 +30,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         {
             get
             {
-                return this.OrderByDescending(c => c.CreationTime).Last().CreationTime;
+                // Single O(n) pass with no allocations, vs. the prior OrderByDescending().Last()
+                // which performed a full O(n log n) sort just to pick the min.
+                return this.Min(c => c.CreationTime);
             }
         }
 
@@ -41,7 +43,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         {
             get
             {
-                return this.OrderByDescending(c => c.CreationTime).First().CreationTime;
+                return this.Max(c => c.CreationTime);
             }
         }
 

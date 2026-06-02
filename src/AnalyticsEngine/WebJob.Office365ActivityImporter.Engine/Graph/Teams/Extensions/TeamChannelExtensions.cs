@@ -170,12 +170,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     // Get tab def
                     var tabDB = await lookupManager.GetOrCreateTeamTab(tab.Id, tab.DisplayName, tab.WebUrl, tabAddOn);
 
-                    // Check for tab log for today
-                    var today = DateTime.Now.Date;
+                    // Check for tab log for today (UTC: DB Date column is UTC; using local time
+                    // straddles a midnight rollover and produces duplicate per-day rows).
+                    var today = DateTime.UtcNow.Date;
+                    int todayYear = today.Year, todayMonth = today.Month, todayDay = today.Day;
                     var tabLog = await lookupManager.Database.ChannelTabLogs.SingleOrDefaultAsync(l =>
-                        l.Date.Year == today.Year &&
-                        l.Date.Month == today.Month &&
-                        l.Date.Day == today.Day &&
+                        l.Date.Year == todayYear &&
+                        l.Date.Month == todayMonth &&
+                        l.Date.Day == todayDay &&
                         l.Channel.GraphID == existingChannelSQL.GraphID &&
                         l.TabDefinition.GraphID == tab.Id
                     );

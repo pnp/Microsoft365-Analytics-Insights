@@ -10,6 +10,7 @@ using Microsoft.Graph;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
@@ -35,12 +36,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public ServiceBusClient ServiceBusClient => _sbClient;
         public static CallQueueProcessor _singleton = null;
+        private static readonly SemaphoreSlim _singletonInitLock = new SemaphoreSlim(1, 1);
         public static async Task<CallQueueProcessor> GetCallQueueProcessor(AppConfig config, string thisTenantId, ManualGraphCallClient graphCallClient)
         {
-            if (_singleton == null)
+            if (_singleton != null)
             {
-                _singleton = new CallQueueProcessor(config, thisTenantId);
-                await _singleton.Init(graphCallClient);
+                return _singleton;
+            }
+
+            await _singletonInitLock.WaitAsync();
+            try
+            {
+                if (_singleton == null)
+                {
+                    var instance = new CallQueueProcessor(config, thisTenantId);
+                    await instance.Init(graphCallClient);
+                    _singleton = instance;
+                }
+            }
+            finally
+            {
+                _singletonInitLock.Release();
             }
 
             return _singleton;
@@ -261,6 +277,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             using (var db = new AnalyticsEntitiesContext())
             {
                 callResponse = await CallRecordDTO.LoadFromGraphByID(callId, _graphCallClient, _teamsLoadContext, this._telemetry, this._thisTenantId);
+                if (callResponse == null)
+                {
+                    _telemetry.LogWarning($"Could not load call record '{callId}' from Graph. Skipping.");
+                    return null;
+                }
+
                 if (!string.IsNullOrEmpty(callResponse.OrganizerEmail))
                 {
                     await callResponse.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), _telemetry);
@@ -287,7 +309,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public void Dispose()
         {
-            DisposeAsyncCore().ConfigureAwait(false);
+            // Sync-over-async in Dispose is acceptable here: this WebJob doesn't run inside an
+            // ASP.NET request context, so there's no captured SynchronizationContext to deadlock on.
+            // The previous fire-and-forget pattern dropped the returned ValueTask, so the host
+            // could exit while ServiceBus messages were still being drained and any teardown
+            // exception was silently swallowed.
+            try
+            {
+                DisposeAsyncCore().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _telemetry?.LogError(ex, $"Error during {nameof(CallQueueProcessor)} dispose: {ex.Message}");
+            }
             GC.SuppressFinalize(this);
         }
 
@@ -302,12 +336,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     await _processor.StopProcessingAsync();
                 }
 
-                await _processor.DisposeAsync().ConfigureAwait(false);
-            }
+                // Unsubscribe handlers BEFORE disposing the processor (after disposal the
+                // event accessors can throw ObjectDisposedException) and before nulling the field.
+                _processor.ProcessMessageAsync -= ProcessSBMessagesAsync;
+                _processor.ProcessErrorAsync -= ExceptionReceivedHandler;
 
-            _processor.ProcessMessageAsync -= ProcessSBMessagesAsync;
-            _processor.ProcessErrorAsync -= ExceptionReceivedHandler;
-            _processor = null;
+                await _processor.DisposeAsync().ConfigureAwait(false);
+
+                _processor = null;
+            }
         }
 
         #endregion

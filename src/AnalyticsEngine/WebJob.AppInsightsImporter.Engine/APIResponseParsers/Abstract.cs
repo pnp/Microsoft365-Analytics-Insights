@@ -88,9 +88,10 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     record = Build(row, propDic);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // We'll just ignore I guess
+                    // Log and continue so a single malformed row doesn't drop the whole batch
+                    _debugTracer?.LogWarning($"Failed to deserialise {typeof(T).Name} row: {ex.Message}");
                 }
                 if (record != null)
                 {
