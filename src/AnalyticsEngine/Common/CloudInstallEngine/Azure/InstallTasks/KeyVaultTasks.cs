@@ -219,6 +219,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public const string CONFIG_KEY_CRED_CLIENT_ID = "clientId";
         public const string CONFIG_KEY_CRED_SECRET = "secret";
 
+        /// <summary>Backoff schedule (seconds) for retrying the secret write on a 403 — absorbs typical AAD policy propagation lag (~30–60s).</summary>
+        private static readonly int[] _retryDelaysSeconds = new[] { 10, 20, 30 };
+
         public KeyVaultSecretAddTask(TaskConfig config, ILogger logger) : base(config, logger)
         {
         }
@@ -241,18 +244,66 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var kvUri = "https://" + vault.Data.Name + ".vault.azure.net";
             var client = new SecretClient(new Uri(kvUri), new ClientSecretCredential(credTenantId, credClientId, credSecret));
 
-            try
+            // Retry on 403/Forbidden: the access policy granting the InstallerAccount Set permission was just
+            // added by KeyVaultAddSecretAllPermissionsForAppRegistrationTask in the same task batch, and AAD
+            // typically takes 30-60s to propagate before the policy is enforceable from the data plane.
+            RequestFailedException lastForbidden = null;
+            for (var attempt = 0; attempt <= _retryDelaysSeconds.Length; attempt++)
             {
-                await client.SetSecretAsync(new KeyVaultSecret(name, val));
-            }
-            catch (RequestFailedException ex) when (ex.Status == 403 && ex.ErrorCode == "Forbidden")
-            {
-                _logger.LogError($"Could not add secret '{name}' to key vault '{vault.Data.Name}': public network access is disabled. " +
-                    $"Please enable public network access on the key vault (or connect via an approved private link) and re-run the installer to update app registration secrets. " +
-                    $"Continuing installation...");
-                return vault;
+                try
+                {
+                    await client.SetSecretAsync(new KeyVaultSecret(name, val));
+                    if (attempt > 0)
+                    {
+                        _logger.LogInformation($"Secret '{name}' written to '{vault.Data.Name}' on retry attempt {attempt + 1}.");
+                    }
+                    return vault;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 403 && ex.ErrorCode == "Forbidden")
+                {
+                    lastForbidden = ex;
+                    if (attempt < _retryDelaysSeconds.Length)
+                    {
+                        var delaySeconds = _retryDelaysSeconds[attempt];
+                        _logger.LogInformation($"Key vault secret write got 403/Forbidden (attempt {attempt + 1} of {_retryDelaysSeconds.Length + 1}). " +
+                            $"This usually means the access policy added moments earlier has not yet propagated through AAD. Waiting {delaySeconds}s and retrying...");
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                    }
+                }
             }
 
+            // All retries exhausted. Re-read the vault's current PublicNetworkAccess from ARM so we can give
+            // the operator an accurate, prioritised list of likely causes instead of always blaming public access.
+            string publicAccess = null;
+            try
+            {
+                var fresh = (await vault.GetAsync()).Value;
+                publicAccess = fresh.Data.Properties?.PublicNetworkAccess;
+            }
+            catch (Exception probeEx)
+            {
+                _logger.LogWarning($"Could not re-read key vault state to diagnose 403: {probeEx.Message}");
+            }
+
+            var causes = new System.Collections.Generic.List<string>();
+            if (string.Equals(publicAccess, "Disabled", StringComparison.OrdinalIgnoreCase))
+            {
+                causes.Add($"key vault PublicNetworkAccess is '{publicAccess}' — re-enable public access on the vault (or run the installer from inside an approved private network) and re-run");
+            }
+            else
+            {
+                causes.Add("access policy / RBAC propagation lag (the policy granting the installer account 'Set' permission was added moments before this write — AAD propagation can occasionally take longer than the retry window)");
+                causes.Add("network ACL deny (vault firewall rejecting the runner IP even though publicNetworkAccess is enabled — check the vault's Networking blade)");
+                if (string.IsNullOrEmpty(publicAccess))
+                {
+                    causes.Add("public network access actually disabled (could not be confirmed — vault state read failed)");
+                }
+            }
+
+            _logger.LogError(
+                $"Could not add secret '{name}' to key vault '{vault.Data.Name}' after {_retryDelaysSeconds.Length + 1} attempts (last error: 403 Forbidden, ErrorCode='{lastForbidden?.ErrorCode}'). " +
+                $"Likely causes, in order: {string.Join("; ", causes)}. " +
+                $"App-registration secrets in the vault may now be out of date — re-run the installer once the underlying cause is resolved. Continuing installation...");
             return vault;
         }
     }

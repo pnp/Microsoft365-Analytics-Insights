@@ -94,12 +94,29 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 await base.EnsureTagsOnExisting(analytics.Data.Tags, analytics.GetTagResource());
             }
 
-            var keysResponse = await analytics.GetKeysAsync();
+            string accountKey = null;
+            try
+            {
+                var keysResponse = await analytics.GetKeysAsync();
+                accountKey = keysResponse.Value.Key1;
+            }
+            catch (RequestFailedException ex) when (ex.Status == 400 && ex.Message != null && ex.Message.IndexOf("disableLocalAuth", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // Account has properties.disableLocalAuth = true (set by a previous install, by an admin,
+                // or by Azure Policy). There are no keys to list — runtime must use RBAC instead.
+                // Return an empty Key so the App Service connection-string write below stores no key.
+                // The runtime CognitiveServicesClient (DataUtils.CognitiveExtensions) will detect the
+                // missing key and fall back to ClientSecretCredential / RBAC automatically.
+                _logger.LogWarning($"Cognitive Service '{name}' has local-auth (account keys) disabled. " +
+                    "Skipping key retrieval — the runtime will authenticate against Cognitive Services using " +
+                    "the configured runtime account (RBAC). Ensure the runtime account has the 'Cognitive Services User' " +
+                    "role on this resource.");
+            }
 
             var cognitiveServicesInfo = new CognitiveServicesInfo
             {
                 Endpoint = $"https://{analytics.Data.Location.Name}.api.cognitive.microsoft.com/",
-                Key = keysResponse.Value.Key1
+                Key = accountKey ?? string.Empty
             };
 
 
