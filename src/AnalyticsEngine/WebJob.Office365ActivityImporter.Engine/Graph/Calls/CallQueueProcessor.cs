@@ -102,8 +102,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 return;
             }
             await _auth.InitClientCredential();
-            var graphClient = new GraphServiceClient(_auth.Creds);
-            graphClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
+            var graphClient = GraphServiceClientFactory.CreateWithTimeout(_auth.Creds, TimeSpan.FromHours(1));
 
             _teamsLoadContext = new TeamsLoadContext(graphClient);
 

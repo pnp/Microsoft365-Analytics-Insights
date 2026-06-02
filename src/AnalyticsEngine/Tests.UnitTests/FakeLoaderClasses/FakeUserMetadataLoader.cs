@@ -1,4 +1,5 @@
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -12,9 +13,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
     public class FakeUserMetadataLoader : IUserMetadataLoader
     {
         private List<GraphUser> _fakeUsers;
-        private IGraphServiceSubscribedSkusCollectionPage _fakeSkus;
-        private Dictionary<Guid, List<Microsoft.Graph.User>> _fakeUsersBySku;
-        private readonly Dictionary<string, IUserLicenseDetailsCollectionPage> _fakeLicenseDetails;
+        private List<SubscribedSku> _fakeSkus;
+        private Dictionary<Guid, List<Microsoft.Graph.Models.User>> _fakeUsersBySku;
+        private readonly Dictionary<string, List<LicenseDetails>> _fakeLicenseDetails;
         private readonly FakeDeltaValueProvider _deltaProvider;
 
         // Mirrors GraphUserLoader's deferred-commit pattern so tests can verify
@@ -42,14 +43,14 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public FakeUserMetadataLoader(
             List<GraphUser> fakeUsers = null,
-            IGraphServiceSubscribedSkusCollectionPage fakeSkus = null,
-            Dictionary<Guid, List<Microsoft.Graph.User>> fakeUsersBySku = null,
-            Dictionary<string, IUserLicenseDetailsCollectionPage> fakeLicenseDetails = null)
+            List<SubscribedSku> fakeSkus = null,
+            Dictionary<Guid, List<Microsoft.Graph.Models.User>> fakeUsersBySku = null,
+            Dictionary<string, List<LicenseDetails>> fakeLicenseDetails = null)
         {
             _fakeUsers = fakeUsers ?? new List<GraphUser>();
             _fakeSkus = fakeSkus;
-            _fakeUsersBySku = fakeUsersBySku ?? new Dictionary<Guid, List<Microsoft.Graph.User>>();
-            _fakeLicenseDetails = fakeLicenseDetails ?? new Dictionary<string, IUserLicenseDetailsCollectionPage>();
+            _fakeUsersBySku = fakeUsersBySku ?? new Dictionary<Guid, List<Microsoft.Graph.Models.User>>();
+            _fakeLicenseDetails = fakeLicenseDetails ?? new Dictionary<string, List<LicenseDetails>>();
             _deltaProvider = new FakeDeltaValueProvider();
         }
 
@@ -61,12 +62,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// </summary>
         public void SetFakeState(
             List<GraphUser> fakeUsers,
-            IGraphServiceSubscribedSkusCollectionPage fakeSkus,
-            Dictionary<Guid, List<Microsoft.Graph.User>> fakeUsersBySku)
+            List<SubscribedSku> fakeSkus,
+            Dictionary<Guid, List<Microsoft.Graph.Models.User>> fakeUsersBySku)
         {
             _fakeUsers = fakeUsers ?? new List<GraphUser>();
             _fakeSkus = fakeSkus;
-            _fakeUsersBySku = fakeUsersBySku ?? new Dictionary<Guid, List<Microsoft.Graph.User>>();
+            _fakeUsersBySku = fakeUsersBySku ?? new Dictionary<Guid, List<Microsoft.Graph.Models.User>>();
         }
 
         /// <summary>
@@ -99,12 +100,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return new List<GraphUser>(_fakeUsers);
         }
 
-        public Task<IGraphServiceSubscribedSkusCollectionPage> LoadTenantSkus()
+        public Task<List<SubscribedSku>> LoadTenantSkus()
         {
             return Task.FromResult(_fakeSkus);
         }
 
-        public async Task<List<Microsoft.Graph.User>> LoadUsersBySku(Guid skuId)
+        public async Task<List<Microsoft.Graph.Models.User>> LoadUsersBySku(Guid skuId)
         {
             if (OnLoadUsersBySku != null)
             {
@@ -115,16 +116,16 @@ namespace Tests.UnitTests.FakeLoaderClasses
             {
                 return _fakeUsersBySku[skuId];
             }
-            return new List<Microsoft.Graph.User>();
+            return new List<Microsoft.Graph.Models.User>();
         }
 
-        public Task<IUserLicenseDetailsCollectionPage> LoadUserLicenseDetails(string userId)
+        public Task<List<LicenseDetails>> LoadUserLicenseDetails(string userId)
         {
             if (_fakeLicenseDetails.ContainsKey(userId))
             {
                 return Task.FromResult(_fakeLicenseDetails[userId]);
             }
-            return Task.FromResult<IUserLicenseDetailsCollectionPage>(null);
+            return Task.FromResult<List<LicenseDetails>>(null);
         }
 
         public async Task CommitDeltaTokenAsync()

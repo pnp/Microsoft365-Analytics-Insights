@@ -2,11 +2,13 @@
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models.ODataErrors;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 
@@ -54,17 +56,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             try
             {
                 await _graphClient.Users[testUserEmail].Teamwork.InstalledApps
-                    .Request().Expand("TeamsAppDefinition,TeamsApp").GetAsync();
+                    .GetAsync(rc => { rc.QueryParameters.Expand = new[] { "TeamsAppDefinition", "TeamsApp" }; });
                 permissionsConfirmed = true;
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
-                if (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                if (ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden)
                 {
                     _telemetry.LogError(ex, $"User Apps Load - access denied reading user Teams Apps. Check 'TeamsAppInstallation.ReadForUser.All' is granted.");
                     throw new AccessDeniedToTeamsAppsException();
                 }
-                else if (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                else if (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
                 {
                     _telemetry.LogError($"User Apps Load - user not found reading user Teams Apps.");
                     throw new UserNotFoundException();
@@ -88,17 +90,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             const int REPORT_EVERY = 10000;
 #endif
 
+            // Graph batch limit is 20 per request; keep MAX_REQS in sync with that.
             const int MAX_REQS = 20;
             var reqs = new Dictionary<string, UserBatchRequestKeyPair>();
-            var batchRequestContent = new BatchRequestContent();
+            var batchRequestContent = new BatchRequestContentCollection(_graphClient);
 
             int i = 0;
             foreach (var emailAddress in emailAddresses)
             {
-                var reqId = batchRequestContent.AddBatchRequestStep(_graphClient.Users[emailAddress].Teamwork.InstalledApps.Request().Expand("TeamsAppDefinition,TeamsApp"));
+                // v5+ Batch: convert the typed request builder to a RequestInformation via
+                // ToGetRequestInformation, with the query options set in the config-action lambda
+                var reqInfo = _graphClient.Users[emailAddress].Teamwork.InstalledApps
+                    .ToGetRequestInformation(rc =>
+                    {
+                        rc.QueryParameters.Expand = new[] { "TeamsAppDefinition", "TeamsApp" };
+                    });
+                var reqId = await batchRequestContent.AddBatchRequestStepAsync(reqInfo);
                 reqs.Add(emailAddress, new UserBatchRequestKeyPair { BatchRequestId = reqId, EmailAddress = emailAddress });
 
-                if (batchRequestContent.BatchRequestSteps.Count == MAX_REQS)
+                if (reqs.Count == MAX_REQS)
                 {
                     var segmentR = await ProcessBatchRequests(batchRequestContent, reqs);
                     foreach (var item in segmentR)
@@ -106,7 +116,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                         results.Add(item.Key, item.Value);
                     }
                     reqs.Clear();
-                    batchRequestContent = new BatchRequestContent();
+                    batchRequestContent = new BatchRequestContentCollection(_graphClient);
                 }
 
                 if (i > 0 && i % REPORT_EVERY == 0)
@@ -127,13 +137,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             return results;
         }
 
-        async Task<Dictionary<string, UserAppsLoadState<UserTeamApp>>> ProcessBatchRequests(BatchRequestContent batchRequestContent, Dictionary<string, UserBatchRequestKeyPair> requestsSource)
+        async Task<Dictionary<string, UserAppsLoadState<UserTeamApp>>> ProcessBatchRequests(BatchRequestContentCollection batchRequestContent, Dictionary<string, UserBatchRequestKeyPair> requestsSource)
         {
             var results = new Dictionary<string, UserAppsLoadState<UserTeamApp>>();
 
             if (requestsSource.Count == 0) return new Dictionary<string, UserAppsLoadState<UserTeamApp>>();
 
-            var returnedResponse = await _graphClient.Batch.Request().PostAsync(batchRequestContent);
+            var returnedResponse = await _graphClient.Batch.PostAsync(batchRequestContent);
 
             var throttledRequestInBatch = false;
             foreach (var r in requestsSource)
@@ -154,7 +164,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                     {
                         throttledRequestInBatch = true;
                     }
-                    else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    else if (response.StatusCode == HttpStatusCode.NotFound)
                     {
                         _telemetry.LogWarning($"User Apps Load - user with ID '{r.Key}' not found in configured tenant");
                     }
