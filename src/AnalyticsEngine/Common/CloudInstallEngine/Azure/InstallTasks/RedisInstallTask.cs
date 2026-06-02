@@ -60,7 +60,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 database = await cluster.GetRedisEnterpriseDatabaseAsync("default");
                 _logger.LogInformation($"Found existing Azure Managed Redis database on port {database.Data.Port}.");
             }
-            catch (Azure.RequestFailedException ex) when (ex.Status == 404)
+            catch (RequestFailedException ex) when (ex.Status == 404)
             {
                 _logger.LogInformation($"Creating default database for Azure Managed Redis cluster '{name}'...");
                 var dbData = new RedisEnterpriseDatabaseData
