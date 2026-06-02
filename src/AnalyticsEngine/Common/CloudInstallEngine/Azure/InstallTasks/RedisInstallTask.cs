@@ -1,7 +1,10 @@
-﻿using Azure;
+using Azure;
 using Azure.Core;
 using Azure.ResourceManager.Redis;
 using Azure.ResourceManager.Redis.Models;
+using Azure.ResourceManager.RedisEnterprise;
+using Azure.ResourceManager.RedisEnterprise.Models;
+using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,8 +12,14 @@ using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure.InstallTasks
 {
-    public class RedisInstallTask : InstallTaskInAzResourceGroup<RedisResource>
+    public class RedisInstallTask : InstallTaskInAzResourceGroup<RedisInstallResult>
     {
+        /// <summary>Azure Managed Redis always uses port 10000 for TLS connections.</summary>
+        public const int DEFAULT_TLS_PORT = 10000;
+
+        /// <summary>Classic Azure Cache for Redis uses port 6380 for TLS connections.</summary>
+        public const int LEGACY_TLS_PORT = 6380;
+
         private readonly bool _requireStandardSku;
         private readonly bool _allowPublicAccess;
 
@@ -22,67 +31,153 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         public override string TaskName => "get/create redis cache";
 
-        public async override Task<RedisResource> ExecuteTaskReturnResult(object contextArg)
+        /// <summary>
+        /// Result of the most recent run of this task. Set by <see cref="ExecuteTaskReturnResult"/>
+        /// and read by the Redis-aware private endpoint / DNS zone wrapper tasks so they can
+        /// no-op when a legacy classic Azure Cache for Redis is being reused.
+        /// </summary>
+        public RedisInstallResult LastResult { get; private set; }
+
+        public async override Task<RedisInstallResult> ExecuteTaskReturnResult(object contextArg)
         {
             var name = base._config.GetNameConfigValue();
-            var skuName = _requireStandardSku ? RedisSkuName.Standard : RedisSkuName.Basic;
-            var skuFamily = RedisSkuFamily.BasicOrStandard;
-            var desiredAccess = _allowPublicAccess ? RedisPublicNetworkAccess.Enabled : RedisPublicNetworkAccess.Disabled;
 
-            var allRedis = base.Container.GetAllRedis();
-            RedisResource redisCache = allRedis.Where(c => c.Data.Name.ToLower() == name.ToLower()).SingleOrDefault();
-
-            if (redisCache == null)
+            // Legacy detection: if a classic Azure Cache for Redis already exists with the
+            // configured name, reuse it rather than provision Azure Managed Redis alongside it.
+            // We don't store anything critical in Redis (just cached tokens), so an operator who
+            // wants to upgrade can delete the legacy resource and re-run the installer.
+            var legacy = await TryGetLegacyClassicCacheAsync(name);
+            if (legacy != null)
             {
-                var skuLabel = _requireStandardSku ? "standard" : "basic";
-                _logger.LogInformation($"Creating new redis cache '{name}' at {skuLabel} SKU (public access: {(_allowPublicAccess ? "enabled" : "disabled")}). This may take several minutes...");
+                LastResult = await ReuseLegacyClassicCacheAsync(legacy);
+                return LastResult;
+            }
 
-                var newResourceData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(skuName, skuFamily, 0))
-                {
-                    MinimumTlsVersion = RedisTlsVersion.Tls1_2,
-                    PublicNetworkAccess = desiredAccess
-                };
-                base.EnsureTagsOnNew(newResourceData.Tags);
-                var operation = await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, newResourceData);
-                _logger.LogInformation($"Created redis cache '{operation.Value.Data.Name}'.");
+            LastResult = await CreateOrGetManagedRedisAsync(name);
+            return LastResult;
+        }
 
-                return operation.Value;
+        private Task<RedisResource> TryGetLegacyClassicCacheAsync(string name)
+        {
+            var allLegacy = base.Container.GetAllRedis();
+            return Task.FromResult(allLegacy.Where(c => c.Data.Name == name).SingleOrDefault());
+        }
+
+        private async Task<RedisInstallResult> ReuseLegacyClassicCacheAsync(RedisResource legacy)
+        {
+            var name = legacy.Data.Name;
+
+            _logger.LogWarning(
+                $"Detected pre-existing classic Azure Cache for Redis '{name}' (resource type Microsoft.Cache/Redis). " +
+                "This installer now provisions Azure Managed Redis (Microsoft.Cache/redisEnterprise) for new installs, " +
+                "but the legacy cache will be reused as-is to avoid disruption. " +
+                "To upgrade to Azure Managed Redis, delete the legacy cache in the Azure portal and re-run the installer — " +
+                "a new Managed Redis cluster will be provisioned with the same name. " +
+                "Nothing critical is stored in Redis (token cache only), so deletion is safe.");
+
+            // Enforce TLS 1.2 and the configured public-network-access setting, but preserve
+            // the existing SKU to avoid downgrade errors.
+            var desiredAccess = _allowPublicAccess ? RedisPublicNetworkAccess.Enabled : RedisPublicNetworkAccess.Disabled;
+            bool needsUpdate = false;
+            var existingSku = legacy.Data.Sku;
+            var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(existingSku.Name, existingSku.Family, existingSku.Capacity))
+            {
+                MinimumTlsVersion = RedisTlsVersion.Tls1_2
+            };
+
+            if (legacy.Data.MinimumTlsVersion == null || !legacy.Data.MinimumTlsVersion.Value.ToString().Equals(RedisTlsVersion.Tls1_2.ToString()))
+            {
+                _logger.LogInformation($"Updating legacy Redis cache '{name}' to enforce TLS 1.2...");
+                needsUpdate = true;
+            }
+
+            if (legacy.Data.PublicNetworkAccess == null || legacy.Data.PublicNetworkAccess.Value != desiredAccess)
+            {
+                _logger.LogInformation($"Updating legacy Redis cache '{name}' public network access to '{desiredAccess}'...");
+                updateData.PublicNetworkAccess = desiredAccess;
+                needsUpdate = true;
+            }
+
+            if (needsUpdate)
+            {
+                await base.Container.GetAllRedis().CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
+                // Re-fetch to pick up the updated keys/host info, just in case.
+                legacy = (await base.Container.GetRedisAsync(name)).Value;
+            }
+
+            await base.EnsureTagsOnExisting(legacy.Data.Tags, legacy.GetTagResource());
+
+            var keys = await legacy.GetKeysAsync();
+            return new RedisInstallResult
+            {
+                IsLegacyClassicCache = true,
+                HostName = legacy.Data.HostName,
+                Port = legacy.Data.SslPort ?? LEGACY_TLS_PORT,
+                PrimaryKey = keys.Value.PrimaryKey,
+                ResourceId = legacy.Id.ToString(),
+                ResourceName = legacy.Data.Name,
+            };
+        }
+
+        private async Task<RedisInstallResult> CreateOrGetManagedRedisAsync(string name)
+        {
+            // BalancedB0 is the smallest/cheapest SKU (256 MB, no VNet/PE support).
+            // BalancedB1 is required when private endpoints are needed (VNet-enabled deployments).
+            var skuName = _requireStandardSku ? RedisEnterpriseSkuName.BalancedB1 : RedisEnterpriseSkuName.BalancedB0;
+            var skuLabel = _requireStandardSku ? "Balanced B1" : "Balanced B0";
+
+            var allClusters = base.Container.GetRedisEnterpriseClusters();
+            var cluster = allClusters.Where(c => c.Data.Name == name).SingleOrDefault();
+
+            if (cluster == null)
+            {
+                _logger.LogInformation($"Creating new Azure Managed Redis cluster '{name}' with {skuLabel} SKU (public access: {(_allowPublicAccess ? "enabled" : "disabled")}). This may take several minutes...");
+
+                var clusterData = new RedisEnterpriseClusterData(AzureLocation, new RedisEnterpriseSku(skuName));
+                base.EnsureTagsOnNew(clusterData.Tags);
+                var clusterOp = await allClusters.CreateOrUpdateAsync(WaitUntil.Completed, name, clusterData);
+                cluster = clusterOp.Value;
+                _logger.LogInformation($"Created Azure Managed Redis cluster '{cluster.Data.Name}'.");
             }
             else
             {
-                bool needsUpdate = false;
-                // Use the existing SKU for updates to avoid downgrade errors
-                var existingSku = redisCache.Data.Sku;
-                var updateData = new RedisCreateOrUpdateContent(AzureLocation, new RedisSku(existingSku.Name, existingSku.Family, existingSku.Capacity))
-                {
-                    MinimumTlsVersion = RedisTlsVersion.Tls1_2
-                };
-
-                // Ensure minimum TLS version is 1.2
-                if (redisCache.Data.MinimumTlsVersion == null || !redisCache.Data.MinimumTlsVersion.Value.ToString().Equals(RedisTlsVersion.Tls1_2.ToString()))
-                {
-                    _logger.LogInformation($"Updating Redis cache '{name}' to enforce TLS 1.2...");
-                    needsUpdate = true;
-                }
-
-                if (redisCache.Data.PublicNetworkAccess == null || redisCache.Data.PublicNetworkAccess.Value != desiredAccess)
-                {
-                    _logger.LogInformation($"Updating Redis cache '{name}' public network access to '{desiredAccess}'...");
-                    updateData.PublicNetworkAccess = desiredAccess;
-                    needsUpdate = true;
-                }
-
-                if (needsUpdate)
-                {
-                    await allRedis.CreateOrUpdateAsync(WaitUntil.Completed, name, updateData);
-                }
-
-                _logger.LogInformation($"Found existing Redis cache '{redisCache.Data.HostName}'.");
-                await base.EnsureTagsOnExisting(redisCache.Data.Tags, redisCache.GetTagResource());
+                _logger.LogInformation($"Found existing Azure Managed Redis cluster '{cluster.Data.HostName}'.");
+                await base.EnsureTagsOnExisting(cluster.Data.Tags, cluster.GetTagResource());
             }
 
+            // Get or create the default database
+            var databases = cluster.GetRedisEnterpriseDatabases();
+            RedisEnterpriseDatabaseResource database;
+            try
+            {
+                database = await cluster.GetRedisEnterpriseDatabaseAsync("default");
+                _logger.LogInformation($"Found existing Azure Managed Redis database on port {database.Data.Port}.");
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                _logger.LogInformation($"Creating default database for Azure Managed Redis cluster '{name}'...");
+                var dbData = new RedisEnterpriseDatabaseData
+                {
+                    ClusteringPolicy = RedisEnterpriseClusteringPolicy.OssCluster,
+                    EvictionPolicy = RedisEnterpriseEvictionPolicy.AllKeysLru,
+                    AccessKeysAuthentication = AccessKeysAuthentication.Enabled
+                };
+                var dbOp = await databases.CreateOrUpdateAsync(WaitUntil.Completed, "default", dbData);
+                database = dbOp.Value;
+                _logger.LogInformation($"Created Azure Managed Redis database on port {database.Data.Port}.");
+            }
 
-            return redisCache;
+            var keys = await database.GetKeysAsync();
+            return new RedisInstallResult
+            {
+                IsLegacyClassicCache = false,
+                HostName = cluster.Data.HostName,
+                Port = database.Data.Port ?? DEFAULT_TLS_PORT,
+                PrimaryKey = keys.Value.PrimaryKey,
+                ResourceId = cluster.Id.ToString(),
+                ResourceName = cluster.Data.Name,
+            };
         }
     }
 }
+
