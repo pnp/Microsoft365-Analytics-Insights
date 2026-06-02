@@ -76,8 +76,8 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
 
                     var endDate = DateTime.Now;
-                    var daysToRead = startDate.EachDay(endDate);
-                    _telemetry.LogInformation($"Importing hits for {daysToRead.Count()} days...");
+                    var daysToRead = startDate.EachDay(endDate).ToList();
+                    _telemetry.LogInformation($"Importing hits for {daysToRead.Count} days...");
                     var totalDays = 0;
                     var totalPageViews = 0;
                     var totalEvents = 0;
@@ -85,7 +85,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     {
                         totalDays++;
                         var dayTimer = Stopwatch.StartNew();
-                        _telemetry.LogInformation($"Importing day {totalDays}/{daysToRead.Count()}: {d.ToString("yyyy-MM-dd")}...");
+                        _telemetry.LogInformation($"Importing day {totalDays}/{daysToRead.Count}: {d.ToString("yyyy-MM-dd")}...");
 
                         // Fetch page-views and custom events for the same day in parallel.
                         // Both are independent read-only API calls with no shared state.
@@ -98,8 +98,8 @@ namespace WebJob.AppInsightsImporter.Engine
                             var eventsTask = ai.GetCustomEventsFromAppInsights(d, saveRestResponses);
                             await Task.WhenAll(pageViewsTask, eventsTask);
 
-                            pageViewsResult = pageViewsTask.Result;
-                            events = eventsTask.Result;
+                            pageViewsResult = await pageViewsTask;
+                            events = await eventsTask;
                             _telemetry.LogInformation($"API fetch completed in {sw.Elapsed.TotalSeconds:N1}s - {pageViewsResult.Rows.Count:n0} page-views, {events.Rows.Count:n0} events");
                         }
                         catch (Exception ex)

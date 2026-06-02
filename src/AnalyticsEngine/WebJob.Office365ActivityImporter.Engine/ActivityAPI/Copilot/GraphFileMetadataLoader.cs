@@ -100,17 +100,32 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_onmicrosoft_com/Documents/MyDoc.docx
                 try
                 {
-                    // Currently we can't filter by webUrl, so we have to get all items and filter client side
-                    var listItems = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items
+                    // Currently we can't filter by webUrl, so we have to get all items and filter client side.
+                    // Walk all pages so we can still resolve file context in large lists.
+                    var firstPage = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items
                         .GetAsync(rc => { rc.QueryParameters.Select = new[] { "id", "webUrl" }; });
-                    if (listItems?.Value != null)
+                    if (firstPage?.Value != null)
                     {
-                        foreach (var i in listItems.Value)
-                        {
-                            if (i.WebUrl == copilotDocContextId)
+                        ListItem matchedItem = null;
+                        var iterator = PageIterator<ListItem, ListItemCollectionResponse>.CreatePageIterator(
+                            _graphServiceClient,
+                            firstPage,
+                            i =>
                             {
-                                return new SpoDocumentFileInfo(i, site);
-                            }
+                                if (i.WebUrl == copilotDocContextId)
+                                {
+                                    matchedItem = i;
+                                    return false;
+                                }
+
+                                return true;
+                            });
+
+                        await iterator.IterateAsync();
+
+                        if (matchedItem != null)
+                        {
+                            return new SpoDocumentFileInfo(matchedItem, site);
                         }
                     }
                 }

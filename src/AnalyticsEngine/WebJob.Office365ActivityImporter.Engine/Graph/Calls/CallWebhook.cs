@@ -5,6 +5,7 @@ using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
@@ -39,14 +40,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public async Task CreateOrUpdateWebhook(Uri webAppUrl, string secret)
         {
-            var allSubs = await this.Client.Subscriptions.GetAsync();
-
             // https://docs.microsoft.com/en-us/graph/api/resources/webhooks?view=graph-rest-1.0
             const string CALL_TYPE = "/communications/callRecords";
-            var subs = (allSubs?.Value ?? new System.Collections.Generic.List<Subscription>())
-                .Where(s => s.Resource == CALL_TYPE && s.NotificationUrl == webAppUrl.ToString())
-                .ToList();
-            if (subs.Count == 0)
+
+            // Walk every subscriptions page; default Graph page size may not include the existing
+            // call-record subscription when tenant subscription count is high.
+            var matchingSubs = new List<Subscription>();
+            var firstPage = await this.Client.Subscriptions.GetAsync();
+            if (firstPage != null)
+            {
+                var iterator = PageIterator<Subscription, SubscriptionCollectionResponse>.CreatePageIterator(
+                    this.Client,
+                    firstPage,
+                    sub =>
+                    {
+                        if (sub.Resource == CALL_TYPE && sub.NotificationUrl == webAppUrl.ToString())
+                        {
+                            matchingSubs.Add(sub);
+                        }
+
+                        return true;
+                    });
+
+                await iterator.IterateAsync();
+            }
+
+            if (matchingSubs.Count == 0)
             {
                 Telemetry.LogInformation($"{LOG_TAG} No subscription found for call-records, for URL '{webAppUrl}'. Creating...");
                 try
@@ -70,7 +89,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             else
             {
                 // https://docs.microsoft.com/en-us/graph/api/subscription-update?view=graph-rest-beta&tabs=http
-                var existingSubId = subs.First().Id;
+                var existingSubId = matchingSubs.First().Id;
                 try
                 {
                     var result = await this.Client.Subscriptions[existingSubId].PatchAsync(

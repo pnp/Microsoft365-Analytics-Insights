@@ -30,7 +30,9 @@
   </Target>
   <ItemGroup>
     <Compile Remove="Generated\**" />
+    <Compile Include="AppConfigDefaultsTests.cs" />
     <Compile Include="AppInsightsAuthTests.cs" />
+    <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
@@ -107,6 +109,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="ActivityReportSetMinMaxTests.cs" />
+    <Compile Include="AppInsightsConnectionStringParserTests.cs" />
+    <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
     <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
@@ -122,9 +127,13 @@
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
     <Compile Include="LookupCacheBatchProcessingTests.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
+    <Compile Include="PageExitEventValidationTests.cs" />
     <Compile Include="PowerPlatformAuditEventManagerTests.cs" />
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
+    <Compile Include="SimplePropsDicTests.cs" />
+    <Compile Include="PageUpdateEventListParseTests.cs" />
+    <Compile Include="UserGroupsCacheTtlTests.cs" />
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="DataUtilsTests.cs" />

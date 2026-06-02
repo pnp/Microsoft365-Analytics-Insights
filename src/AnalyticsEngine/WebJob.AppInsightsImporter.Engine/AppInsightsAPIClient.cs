@@ -52,7 +52,6 @@ namespace WebJob.AppInsightsImporter.Engine
             }
 
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            client.Timeout = TimeSpan.FromMinutes(10);
 
             _logger = debugTracer;
         }
@@ -61,7 +60,10 @@ namespace WebJob.AppInsightsImporter.Engine
 
         #region Props
 
-        private HttpClient client = new HttpClient();
+        // Per-instance HttpClient. Cannot be made static because callers set the
+        // Authorization header on DefaultRequestHeaders per token refresh; sharing
+        // would race between instances. Lifetime is bounded by the importer run.
+        private HttpClient client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
 
         #endregion
 
@@ -188,7 +190,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 $" | order by timestamp asc";
 
             // API Doc: https://docs.microsoft.com/en-us/rest/api/application-insights/query/get
-            var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={adxQuery}";
+            var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(adxQuery)}";
             var response = await GetWithRetry(req);
 
             var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, "pageview");
@@ -207,7 +209,7 @@ namespace WebJob.AppInsightsImporter.Engine
             var adxQuery = $"customEvents | where " + GetWhereString(forDate) + " | order by timestamp asc";
 
             // Doc: https://dev.applicationinsights.io/reference/get-events
-            var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={adxQuery}";
+            var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(adxQuery)}";
 
             var resultsResponse = await GetWithRetry(req);
 
@@ -216,7 +218,7 @@ namespace WebJob.AppInsightsImporter.Engine
             return new CustomEventsResultCollection(result.DefaultTable, forDate, _logger);
         }
 
-        string GetWhereString(DateTime forDate)
+        internal string GetWhereString(DateTime forDate)
         {
             return $"timestamp >= todatetime('{forDate.ToString("yyyy-MM-dd HH:mm:ss")}') and timestamp < todatetime('{forDate.AddDays(1).ToString("yyyy-MM-dd HH:mm:ss")}')";
         }
@@ -253,7 +255,10 @@ namespace WebJob.AppInsightsImporter.Engine
 
             var dir = Path.Combine(Path.GetTempPath(), "AppInsightsImporter", "REST", operationType);
             Directory.CreateDirectory(dir);
-            var fileTitle = $"{DateTime.Now.ToString("yyyy-dd-M_HH-mm-ss")}.json";
+            // UTC + zero-padded month so files sort lexicographically by time. The previous
+            // "yyyy-dd-M_HH-mm-ss" format used non-padded month which collides for files with
+            // matching numeric reps (e.g. 2026-10-1 vs 2026-1-10) and sorts incorrectly.
+            var fileTitle = $"{DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss", System.Globalization.CultureInfo.InvariantCulture)}.json";
             var fileName = Path.Combine(dir, fileTitle);
 
             object responseDebug = null;
@@ -261,9 +266,9 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 responseDebug = Newtonsoft.Json.Linq.JObject.Parse(responseBody);
             }
-            catch (FormatException)
+            catch (JsonReaderException)
             {
-                // Don't care
+                // Body wasn't valid JSON; fall back to raw string output below
             }
 
             if (responseDebug == null)

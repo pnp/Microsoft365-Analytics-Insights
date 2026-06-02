@@ -40,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                         var responseBody = string.Empty;
                         if (response.Content != null)
                         {
-                            responseBody = await response.Content?.ReadAsStringAsync();
+                            responseBody = await response.Content.ReadAsStringAsync();
                         }
                         try
                         {
@@ -53,7 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                         }
 
                         // Need to wait a few seconds before a new one can be accessed
-                        System.Threading.Thread.Sleep(5000);
+                        await Task.Delay(5000);
                         Console.WriteLine($"Subscription for '{configuredContentType}' has been created.");
                     }
                     catch (HttpRequestException ex)
@@ -90,7 +90,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             foreach (var contentType in _settings.ContentTypesToRead)
             {
                 // Try and find content type in all subs
-                var sub = allSubs.Where(c => c.contentType == contentType).FirstOrDefault();
+                var sub = allSubs.FirstOrDefault(c => c.contentType == contentType);
 
                 if (sub != null)
                 {

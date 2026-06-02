@@ -11,14 +11,17 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     [Obsolete("Stats uploading is deprecated.")]
     public class WebApiStatsUploader : IStatsUploader, IDisposable
     {
-        private readonly HttpClient _httpClient;
+        // Shared HttpClient so the socket pool is reused across instances. Per-instance HttpClient
+        // is the classic socket-exhaustion pattern; even though this class is rarely instantiated
+        // there is no per-instance state on the client itself.
+        private static readonly HttpClient _httpClient = new HttpClient();
+
         private readonly string _url;
         private readonly string _statsApiSecret;
         private readonly ILogger _debugTracer;
 
         public WebApiStatsUploader(string url, string statsApiSecret, ILogger debugTracer)
         {
-            _httpClient = new HttpClient();
             _url = url;
             _statsApiSecret = statsApiSecret;
             _debugTracer = debugTracer;
@@ -26,7 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 
         public void Dispose()
         {
-            _httpClient.Dispose();
+            // _httpClient is intentionally static and shared; do not dispose here.
         }
 
         public async Task UploadToServer(AnonUsageStatsModel stats)

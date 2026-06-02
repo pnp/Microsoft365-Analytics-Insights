@@ -15,7 +15,21 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
         [JsonProperty("tables")]
         public List<AppInsightsTable> Tables { get; set; }
 
-        public AppInsightsTable DefaultTable => Tables?.Count > 0 ? Tables[0] : throw new ArgumentOutOfRangeException();
+        public AppInsightsTable DefaultTable
+        {
+            get
+            {
+                if (Tables == null)
+                {
+                    throw new InvalidOperationException("App Insights query response did not contain a 'tables' element.");
+                }
+                if (Tables.Count == 0)
+                {
+                    throw new InvalidOperationException("App Insights query response 'tables' element was empty.");
+                }
+                return Tables[0];
+            }
+        }
     }
     public class AppInsightsTable : NamedObjectAppInsightsObject
     {

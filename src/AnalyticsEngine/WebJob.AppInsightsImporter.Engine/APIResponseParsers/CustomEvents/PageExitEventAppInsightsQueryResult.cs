@@ -22,7 +22,9 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             }
         }
 
-        public override bool IsValid => this.CustomProperties?.PageRequestId != null && this.CustomProperties.ActiveTime > 0;
+        public override bool IsValid => this.CustomProperties?.PageRequestId != null
+            && this.CustomProperties.PageRequestId != System.Guid.Empty
+            && this.CustomProperties.ActiveTime > 0;
 
         public PageExitCustomProps CustomProperties { get; set; }
 

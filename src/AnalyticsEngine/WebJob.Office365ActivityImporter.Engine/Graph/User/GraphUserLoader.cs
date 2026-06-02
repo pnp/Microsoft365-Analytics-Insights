@@ -1,4 +1,4 @@
-﻿using DataUtils;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
