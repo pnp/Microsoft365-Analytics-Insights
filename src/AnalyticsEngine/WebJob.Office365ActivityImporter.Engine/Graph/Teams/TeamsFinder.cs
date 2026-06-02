@@ -1,6 +1,7 @@
 ﻿using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -9,6 +10,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 {
     public class TeamsFinder : AbstractApiLoader
     {
+        // Safety cap on paging at 200k-user scale: a single tenant should not exceed this
+        // many groups in any realistic scenario. Trips a warning rather than letting a
+        // misbehaving nextLink fill memory indefinitely.
+        private const int MAX_GROUPS = 500_000;
+
         private readonly GraphServiceClient _graphServiceClient;
 
         public TeamsFinder(AnalyticsLogger telemetry, AppConfig settings, GraphServiceClient graphServiceClient) : base(telemetry, settings)
@@ -31,7 +37,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (legacyAPIMode)
             {
-                var v1Groups = await GetGroupsAsync(_graphServiceClient.Groups.Request().Select("displayName,id,resourceProvisioningOptions"), legacyAPIMode);
+                var v1Groups = await GetGroupsAsync(rc =>
+                {
+                    rc.QueryParameters.Select = new[] { "displayName", "id", "resourceProvisioningOptions" };
+                });
 
                 foreach (var group in v1Groups)
                 {
@@ -60,7 +69,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             else
             {
                 // Beta API uses a much cleaner search for groups with a Team
-                allGroupsWithTeams = await GetGroupsAsync(_graphServiceClient.Groups.Request().Filter("resourceProvisioningOptions/Any(x:x eq 'Team')"), legacyAPIMode);
+                allGroupsWithTeams = await GetGroupsAsync(rc =>
+                {
+                    rc.QueryParameters.Filter = "resourceProvisioningOptions/Any(x:x eq 'Team')";
+                });
             }
 
             // Do the needful
@@ -82,22 +94,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             return filteredTeams;
         }
 
-        private async Task<List<Group>> GetGroupsAsync(IGraphServiceGroupsCollectionRequest pageRequest, bool legacyAPIMode)
+        private async Task<List<Group>> GetGroupsAsync(Action<Microsoft.Kiota.Abstractions.RequestConfiguration<Microsoft.Graph.Groups.GroupsRequestBuilder.GroupsRequestBuilderGetQueryParameters>> configure)
         {
+            // v5+ replaces .Request().NextPageRequest walking with PageIterator over the
+            // typed CollectionResponse.
             var allGroups = new List<Group>();
 
-            // https://docs.microsoft.com/en-us/graph/teams-list-all-teams#get-a-list-of-groups
-            var groups = await pageRequest.GetAsync();
-            if (groups.NextPageRequest != null)
-            {
-#if DEBUG
-                Console.WriteLine($"DEBUG: Another page for Groups results...");
-#endif
-                var nextGroups = await GetGroupsAsync(groups.NextPageRequest, legacyAPIMode);
-                allGroups.AddRange(nextGroups);
-            }
+            var firstPage = await _graphServiceClient.Groups.GetAsync(configure);
+            if (firstPage == null) return allGroups;
 
-            allGroups.AddRange(groups);
+            int loaded = 0;
+            var iterator = PageIterator<Group, GroupCollectionResponse>
+                .CreatePageIterator(_graphServiceClient, firstPage, group =>
+                {
+                    allGroups.Add(group);
+                    loaded++;
+                    return loaded < MAX_GROUPS;
+                });
+
+            await iterator.IterateAsync();
+
+            if (iterator.State == PagingState.Paused)
+            {
+                _telemetry.LogWarning($"TeamsFinder: hit MAX_GROUPS ({MAX_GROUPS:N0}) walking groups. Returning partial list of {allGroups.Count:N0}.");
+            }
 
             return allGroups;
         }

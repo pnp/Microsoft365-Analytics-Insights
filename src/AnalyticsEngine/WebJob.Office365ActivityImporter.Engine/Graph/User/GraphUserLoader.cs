@@ -1,6 +1,9 @@
 ﻿using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -116,15 +119,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        public async Task<IGraphServiceSubscribedSkusCollectionPage> LoadTenantSkus()
+        public async Task<List<SubscribedSku>> LoadTenantSkus()
         {
             try
             {
-                return await _graphServiceClient.SubscribedSkus.Request().GetAsync();
+                // /subscribedSkus typically returns a small number of rows (<=100) so a single
+                // GET is enough. We materialise into a List<T> so callers don't need to know
+                // about Kiota response wrappers.
+                var page = await _graphServiceClient.SubscribedSkus.GetAsync();
+                return page?.Value ?? new List<SubscribedSku>();
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
-                if (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                if (ex.ResponseStatusCode == (int)System.Net.HttpStatusCode.Forbidden)
                 {
                     _telemetry.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
                 }
@@ -139,36 +146,57 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        public async Task<List<Microsoft.Graph.User>> LoadUsersBySku(Guid skuId)
+        public async Task<List<Microsoft.Graph.Models.User>> LoadUsersBySku(Guid skuId)
         {
-            var req = _graphServiceClient.Users.Request()
-                .Select("userPrincipalName")
-                .Filter($"assignedLicenses/any(u:u/skuId eq {skuId})");
+            // Per-iteration safety cap: at 200k-user scale a runaway nextLink could allocate
+            // memory until OOM. 1M users per SKU is comfortably above any real tenant we expect
+            // to see and will trip a warning instead of silently filling memory forever.
+            const int MAX_USERS_PER_SKU = 1_000_000;
+            var allUsersWithSku = new List<Microsoft.Graph.Models.User>();
 
-            // Recursively load users 
-            var allUsersWithSku = new List<Microsoft.Graph.User>();
-            int skuPage = 1;
-            while (req != null)
+            var firstPage = await _graphServiceClient.Users.GetAsync(rc =>
             {
-                var usersWithSku = await req.GetAsync();
-                allUsersWithSku.AddRange(usersWithSku);
-                req = usersWithSku.NextPageRequest;
-                _telemetry.LogDebug($"SKU {skuId} page {skuPage}");
-                skuPage++;
+                rc.QueryParameters.Select = new[] { "userPrincipalName" };
+                rc.QueryParameters.Filter = $"assignedLicenses/any(u:u/skuId eq {skuId})";
+            });
+
+            if (firstPage == null)
+            {
+                return allUsersWithSku;
             }
+
+            int loaded = 0;
+            var iterator = PageIterator<Microsoft.Graph.Models.User, UserCollectionResponse>
+                .CreatePageIterator(_graphServiceClient, firstPage, user =>
+                {
+                    allUsersWithSku.Add(user);
+                    loaded++;
+                    return loaded < MAX_USERS_PER_SKU;
+                });
+
+            await iterator.IterateAsync();
+
+            if (iterator.State == PagingState.Paused)
+            {
+                _telemetry.LogWarning($"User import - hit MAX_USERS_PER_SKU ({MAX_USERS_PER_SKU:N0}) walking users for SKU {skuId}. Returning partial result of {allUsersWithSku.Count:N0} users.");
+            }
+
+            _telemetry.LogDebug($"SKU {skuId} loaded {allUsersWithSku.Count:N0} users");
 
             return allUsersWithSku;
         }
 
-        public async Task<IUserLicenseDetailsCollectionPage> LoadUserLicenseDetails(string userId)
+        public async Task<List<LicenseDetails>> LoadUserLicenseDetails(string userId)
         {
             try
             {
-                return await _graphServiceClient.Users[userId].LicenseDetails.Request()
-                    .Select("skuPartNumber,skuId")
-                    .GetAsync();
+                var page = await _graphServiceClient.Users[userId].LicenseDetails.GetAsync(rc =>
+                {
+                    rc.QueryParameters.Select = new[] { "skuPartNumber", "skuId" };
+                });
+                return page?.Value ?? new List<LicenseDetails>();
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
                 _telemetry.LogError(ex, $"User import - couldn't load service-plans for user ID '{userId}' - {ex.Message}");
                 return null;

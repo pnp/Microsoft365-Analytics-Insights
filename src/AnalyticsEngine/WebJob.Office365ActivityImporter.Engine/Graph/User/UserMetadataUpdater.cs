@@ -3,6 +3,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -40,8 +41,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 deltaProvider = new InProcessDeltaValueProvider(telemetry);
             }
 
-            var graphServiceClient = new GraphServiceClient(creds);
-            graphServiceClient.HttpProvider.OverallTimeout = TimeSpan.FromHours(1);
+            // v4 used graphClient.HttpProvider.OverallTimeout = 1h directly. HttpProvider is gone
+            // in v5+, so we build a HttpClient with the desired timeout and inject it into the
+            // GraphServiceClient. /users/delta over a 200k-tenant can comfortably exceed the
+            // default 100s timeout - the explicit 1h timeout is load-bearing.
+            var graphServiceClient = GraphServiceClientFactory.CreateWithTimeout(creds, TimeSpan.FromHours(1));
 
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _telemetry, graphServiceClient);
             InitializeHelpers();
