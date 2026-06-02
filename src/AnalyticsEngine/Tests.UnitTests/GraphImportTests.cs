@@ -44,6 +44,9 @@ namespace Tests.UnitTests
             Assert.IsTrue(existingLog.ChatsCount == 5);
         }
 
+#if DEBUG
+        // Live Graph integration test: requires real tenant credentials in config to run.
+        // Excluded from CI Release builds (CI does not have a test tenant). Run locally in Debug.
         [TestMethod]
         [TestCategory("Integration")]
         public async Task MessageImportTests()
@@ -135,6 +138,7 @@ namespace Tests.UnitTests
             }
 
         }
+#endif
 
         [TestMethod]
         public void TeamsCrawlConfigTests()
