@@ -121,7 +121,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     IDeltaTokenStore deltaTokenStore;
                     if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
                     {
-                        deltaTokenStore = new RedisDeltaTokenStore(_settings.ConnectionStrings.RedisConnectionString);
+                        deltaTokenStore = new RedisDeltaTokenStore(_settings.ConnectionStrings.RedisConnectionString, tenantId: _settings.TenantGUID.ToString(), clientId: _settings.ClientID, clientSecret: _settings.ClientSecret);
                     }
                     else
                     {
