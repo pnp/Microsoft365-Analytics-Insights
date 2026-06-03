@@ -61,7 +61,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             }
             else
             {
-                _logger.LogInformation($"Using existing Automation account'{automationAccount.Data.Name}'.");
+                _logger.LogInformation($"Using existing Automation account '{automationAccount.Data.Name}'.");
                 await base.EnsureTagsOnExisting(automationAccount.Data.Tags, automationAccount.GetTagResource());
 
                 if (automationAccount.Data.IsPublicNetworkAccessAllowed != _allowPublicAccess)

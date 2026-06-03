@@ -61,7 +61,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 await UnpackAndUpload(localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity), PATH_WEBJOB, true, ftpDetails, _ftpConfig);
                 _logger.LogInformation("Installing Application Insights import web-job...");
                 await UnpackAndUpload(localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights), PATH_WEBJOB, true, ftpDetails, _ftpConfig);
-                _logger.LogInformation("Installing App-Service website contents...");
+                _logger.LogInformation("Installing App Service website contents...");
                 await UnpackAndUpload(localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite), PATH_WEBSITE, false, ftpDetails, _ftpConfig);
             }
 

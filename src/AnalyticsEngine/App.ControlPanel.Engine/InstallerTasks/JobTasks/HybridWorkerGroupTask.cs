@@ -182,7 +182,41 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             }
             catch (RequestFailedException ex)
             {
-                _logger.LogError($"Cannot access VM '{vmResourceId}': {ex.Message}");
+                _logger.LogError($"Cannot access VM '{vmResourceId}': {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}).");
+                return false;
+            }
+
+            // Pre-flight: VM must be running before we attempt cleanup / restart / extension install.
+            // Without this check, all three subsequent ARM calls fail with the same 409
+            // OperationNotAllowed cascade, which dumps a lot of noise into the install log and
+            // hides the real root cause. Fail fast with a single actionable line for terminal
+            // power states (stopped/deallocated), but tolerate transient "starting" with a short
+            // retry — the VM is probably just mid-boot from a previous step.
+            var vmShortName = ShortVmName(vmResourceId);
+            string powerState = await ReadVmPowerStateAsync(vmResource, vmShortName);
+            if (powerState == null)
+            {
+                return false;
+            }
+
+            if (string.Equals(powerState, "starting", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation($"Hybrid Worker VM '{vmShortName}' is in 'starting' state; waiting up to 60s for it to finish booting before installing the extension...");
+                var deadline = DateTime.UtcNow.AddSeconds(60);
+                while (DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15));
+                    powerState = await ReadVmPowerStateAsync(vmResource, vmShortName);
+                    if (powerState == null) return false;
+                    if (!string.Equals(powerState, "starting", StringComparison.OrdinalIgnoreCase)) break;
+                }
+            }
+
+            if (!string.Equals(powerState, "running", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogError($"Hybrid Worker VM '{vmShortName}' is in '{powerState ?? "unknown"}' state. " +
+                    "The Hybrid Worker extension can only be installed on a running VM — start the VM in the Azure portal (or 'az vm start') and re-run the installer. " +
+                    "Skipping cleanup / restart / extension install for this run.");
                 return false;
             }
 
@@ -242,9 +276,13 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 await vmResource.RunCommandAsync(WaitUntil.Completed, runCommandInput);
                 _logger.LogInformation("VM cleanup script completed.");
             }
+            catch (RequestFailedException ex)
+            {
+                _logger.LogWarning($"VM cleanup script failed (will attempt extension install anyway): {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}).");
+            }
             catch (Exception ex)
             {
-                _logger.LogWarning($"VM cleanup script failed (will attempt extension install anyway): {ex.Message}");
+                _logger.LogWarning($"VM cleanup script failed (will attempt extension install anyway): {FirstLine(ex.Message)}");
             }
 
             // Restart the VM to release any file locks held by leftover processes from previous
@@ -255,12 +293,16 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 await vmResource.RestartAsync(WaitUntil.Completed);
                 _logger.LogInformation("VM restarted successfully.");
             }
+            catch (RequestFailedException ex)
+            {
+                _logger.LogWarning($"VM restart failed (will attempt extension install anyway): {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}).");
+            }
             catch (Exception ex)
             {
-                _logger.LogWarning($"VM restart failed (will attempt extension install anyway): {ex.Message}");
+                _logger.LogWarning($"VM restart failed (will attempt extension install anyway): {FirstLine(ex.Message)}");
             }
 
-            _logger.LogInformation($"Installing Hybrid Worker extension on VM '{vmResourceId}' with Automation Account registration...");
+            _logger.LogInformation($"Installing Hybrid Worker extension on VM '{vmShortName}' with Automation Account registration...");
 
             var extensionData = new VirtualMachineExtensionData(AzureLocation)
             {
@@ -280,14 +322,53 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             try
             {
                 await vmResource.GetVirtualMachineExtensions().CreateOrUpdateAsync(WaitUntil.Completed, EXTENSION_NAME, extensionData);
-                _logger.LogInformation($"Hybrid Worker extension installed/updated successfully on VM '{vmResourceId}'.");
+                _logger.LogInformation($"Hybrid Worker extension installed/updated successfully on VM '{vmShortName}'.");
                 return true;
             }
             catch (RequestFailedException ex)
             {
-                _logger.LogError($"Failed to install Hybrid Worker extension on VM: {ex.Message}");
+                _logger.LogError($"Failed to install Hybrid Worker extension on VM '{vmShortName}': {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}).");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Reads VM power state via InstanceView. Returns null and logs an error if the call fails;
+        /// otherwise returns the lowercase state string (e.g. "running", "starting", "deallocated").
+        /// </summary>
+        private async Task<string> ReadVmPowerStateAsync(VirtualMachineResource vmResource, string vmShortName)
+        {
+            try
+            {
+                var iv = await vmResource.InstanceViewAsync();
+                return iv.Value.Statuses
+                    .Where(s => s.Code != null && s.Code.StartsWith("PowerState/", StringComparison.OrdinalIgnoreCase))
+                    .Select(s => s.Code.Substring("PowerState/".Length))
+                    .FirstOrDefault();
+            }
+            catch (RequestFailedException ex)
+            {
+                _logger.LogError($"Could not read Hybrid Worker VM '{vmShortName}' power state: {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}). Cannot install extension.");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Azure.RequestFailedException.Message contains the full HTTP response (status, headers, body).
+        /// For install-log readability, keep only the first line — the actual human-readable error.
+        /// </summary>
+        private static string FirstLine(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return message;
+            var nl = message.IndexOfAny(new[] { '\r', '\n' });
+            return nl < 0 ? message : message.Substring(0, nl).TrimEnd();
+        }
+
+        private static string ShortVmName(string vmResourceId)
+        {
+            if (string.IsNullOrEmpty(vmResourceId)) return "<unknown>";
+            var idx = vmResourceId.LastIndexOf('/');
+            return idx < 0 ? vmResourceId : vmResourceId.Substring(idx + 1);
         }
 
         /// <summary>
