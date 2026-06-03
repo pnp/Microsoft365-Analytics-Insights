@@ -51,8 +51,9 @@ namespace App.ControlPanel.Frames.InstallWizard
 
         /// <summary>
         /// Toggle button visibility / enabled state to reflect whether an install is currently running.
-        /// When running: Install/Upgrade and Test Configuration are disabled and Cancel takes the
-        /// install button's slot. When idle: Install/Upgrade returns, Cancel is hidden.
+        /// When running: Install/Upgrade and Test Configuration are disabled, the Install Tasks
+        /// checkboxes are locked (so the user can't change tasks mid-run), and Cancel takes the
+        /// install button's slot. When idle: Install/Upgrade returns, Cancel is hidden, tasks editable.
         /// </summary>
         public void SetRunningState(bool running)
         {
@@ -65,6 +66,10 @@ namespace App.ControlPanel.Frames.InstallWizard
             btnRunTests.Enabled = !running;
             btnCancel.Visible = running;
             btnCancel.Enabled = running;
+            // Lock the Install Tasks checkboxes — changing them mid-run would silently desync from
+            // what the engine actually executed. Log ListView, Copy-to-clipboard, and Cancel stay
+            // enabled so the user can still read/scroll/copy progress and abort.
+            grpTasks.Enabled = !running;
         }
 
         #region Logging
