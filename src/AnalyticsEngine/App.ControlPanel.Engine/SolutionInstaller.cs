@@ -195,11 +195,15 @@ namespace App.ControlPanel.Engine
         /// </summary>
         private async Task WarmupAppServiceSite(ILogger log, string adminSiteUrl, CancellationToken ct = default(CancellationToken))
         {
-            const int totalWarmupSeconds = 120;
+            // Cold-start App Service occasionally needs >2 minutes when binaries were just deployed
+            // and the app warms up alongside the SQL/Redis private-endpoint resolution. Keep the
+            // overall budget generous and the per-request timeout short enough that a single hung
+            // request (e.g. VNet integration not yet propagated) can't eat the whole window.
+            const int totalWarmupSeconds = 180;
             log.LogInformation($"Warming up web-application '{adminSiteUrl}' (retrying on 5xx for up to {totalWarmupSeconds}s)...");
             await Task.Delay(5000, ct);     // initial 5s grace
 
-            using (var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+            using (var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
             {
                 // Per-request timeout deliberately shorter than the overall budget so a single hung
                 // request can't consume the whole 2-minute warmup window (cold-start App Service
@@ -252,7 +256,8 @@ namespace App.ControlPanel.Engine
                 }
 
                 var lastDetail = lastStatus.HasValue ? $"{(int)lastStatus.Value} {lastStatus.Value}" : lastError ?? "no response";
-                log.LogError($"Web-app warmup did not succeed within {totalWarmupSeconds}s — last response was {lastDetail}. Check manually that the App Service is started.");
+                log.LogError($"Web-app warmup did not succeed within {totalWarmupSeconds}s — last response was {lastDetail}. " +
+                    $"If the installer is running off-VNet, the App Service's hostname resolves to its private endpoint and the warm-up request can't reach it — try browsing '{adminSiteUrl}' from a machine on the VNet, or temporarily enable Public Network Access on the App Service to verify it started.");
             }
         }
     }

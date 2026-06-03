@@ -30,14 +30,15 @@ namespace CloudInstallEngine.Azure
 
         /// <summary>
         /// Gets the object ID of a service principal by authenticating with client credentials and reading the "oid" claim from the resulting JWT.
-        /// Cached per (tenantId, clientId) for the lifetime of the process.
+        /// Cached per (tenantId, clientId) for the lifetime of the process. Returns true if the value came from cache,
+        /// so callers can skip noisy per-call "Resolved X to Y" log lines on repeat lookups.
         /// </summary>
-        public static async Task<string> GetObjectIdFromClientCredentials(string tenantId, string clientId, string clientSecret)
+        public static async Task<(string ObjectId, bool WasCached)> GetObjectIdFromClientCredentialsWithCacheInfo(string tenantId, string clientId, string clientSecret)
         {
             var cacheKey = $"{tenantId ?? string.Empty}|{clientId ?? string.Empty}";
             if (_cache.TryGetValue(cacheKey, out var cached))
             {
-                return cached;
+                return (cached, true);
             }
 
             var creds = new ClientSecretCredential(tenantId, clientId, clientSecret);
@@ -51,7 +52,18 @@ namespace CloudInstallEngine.Azure
             }
 
             _cache[cacheKey] = objectIdClaim.Value;
-            return objectIdClaim.Value;
+            return (objectIdClaim.Value, false);
+        }
+
+        /// <summary>
+        /// Compatibility overload that discards the cache-hit flag. Prefer
+        /// <see cref="GetObjectIdFromClientCredentialsWithCacheInfo"/> when you want to suppress
+        /// repeat "Resolved" log lines on cache hits.
+        /// </summary>
+        public static async Task<string> GetObjectIdFromClientCredentials(string tenantId, string clientId, string clientSecret)
+        {
+            var (objectId, _) = await GetObjectIdFromClientCredentialsWithCacheInfo(tenantId, clientId, clientSecret);
+            return objectId;
         }
     }
 }

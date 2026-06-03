@@ -50,9 +50,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var clientSecret = _config.GetConfigValue(CONFIG_KEY_CLIENT_SECRET);
                 var tenantId = _config.GetConfigValue(CONFIG_KEY_TENANT_ID);
 
-                // Resolve the service principal object ID from client credentials
-                var objectIdStr = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(tenantId, clientId, clientSecret);
-                _logger.LogInformation($"Resolved client ID '{clientId}' to object ID '{objectIdStr}'");
+                // Resolve the service principal object ID from client credentials. Only log the
+                // resolution on the first lookup; subsequent role assignments for the same SP would
+                // otherwise print an identical "Resolved client ID..." line for every role.
+                var (objectIdStr, wasCached) = await ServicePrincipalResolver.GetObjectIdFromClientCredentialsWithCacheInfo(tenantId, clientId, clientSecret);
+                if (!wasCached)
+                {
+                    _logger.LogInformation($"Resolved client ID '{clientId}' to object ID '{objectIdStr}'");
+                }
 
                 if (!Guid.TryParse(objectIdStr, out principalId))
                 {

@@ -77,7 +77,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             }
             else
             {
-                _logger.LogWarning($"WARNING: Failed to configure custom actions for classic pages - custom scripts enabled? Run 'Set-SPOsite {_clientContext.Site.Url} -DenyAddAndCustomizePages 0' to enable customisations");
+                _logger.LogWarning($"Run 'Set-SPOsite {_clientContext.Site.Url} -DenyAddAndCustomizePages 0' to enable AITracker custom actions for classic pages. The site currently has custom scripts disabled, so the installer could not register the per-site custom action.");
             }
         }
 
