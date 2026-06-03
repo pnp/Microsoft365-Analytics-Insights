@@ -129,9 +129,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             _logger.LogInformation($"Adding Azure AD application with client ID '{clientId}' to key vault {vaultResource.Data.Name} for secret read & list; certificate read");
 
-            // Extract object Id by getting a token from the credentials passed
-            var objectIdValue = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(tenantId.ToString(), clientId, secret);
-            _logger.LogInformation($"Detected client ID '{clientId}' has object ID '{objectIdValue}'");
+            // Extract object Id by getting a token from the credentials passed. Only log the
+            // resolution on the first lookup; subsequent KV access-policy adds for the same SP would
+            // otherwise print an identical "Detected client ID..." line.
+            var (objectIdValue, wasCached) = await ServicePrincipalResolver.GetObjectIdFromClientCredentialsWithCacheInfo(tenantId.ToString(), clientId, secret);
+            if (!wasCached)
+            {
+                _logger.LogInformation($"Detected client ID '{clientId}' has object ID '{objectIdValue}'");
+            }
 
             await AddPolicyForConfiguredAccount(vaultResource, tenantId, objectIdValue, secretPerms, certPerms);
         }
@@ -239,10 +244,40 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var credTenantId = _config.GetConfigValue(CONFIG_KEY_CRED_TENANT_ID);
             var credSecret = _config.GetConfigValue(CONFIG_KEY_CRED_SECRET);
 
-            _logger.LogInformation($"Adding secret name '{name}' to key vault {vault.Data.Name}.");
-
             var kvUri = "https://" + vault.Data.Name + ".vault.azure.net";
             var client = new SecretClient(new Uri(kvUri), new ClientSecretCredential(credTenantId, credClientId, credSecret));
+
+            // Try to read the existing secret first. If it already matches what we'd write, there
+            // is nothing to do — skip silently. This is the common re-run case.
+            //
+            // Important: do NOT short-circuit on a 403 here. The access policy granting Get/Set was
+            // added moments earlier in the same task batch and AAD propagation lag (~30-60s) can
+            // cause this first data-plane call to 403 even on a perfectly healthy vault. The write
+            // retry loop below absorbs that lag, so fall through. We only treat 403 as "intentional"
+            // when we've separately confirmed the vault's PublicNetworkAccess is Disabled, which is
+            // handled after the write retries are exhausted.
+            try
+            {
+                var existing = await client.GetSecretAsync(name);
+                if (existing?.Value != null && string.Equals(existing.Value.Value, val, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation($"Key vault secret '{name}' in '{vault.Data.Name}' is already up-to-date; skipping write.");
+                    return vault;
+                }
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                // No existing secret — proceed to write.
+            }
+            catch (RequestFailedException)
+            {
+                // Read failed for some other reason (403 propagation lag, transient network, etc.).
+                // Don't treat this as a definitive answer — fall through to the write retry loop,
+                // which has the propagation-lag back-off + a final accurate diagnostic that
+                // distinguishes "policy-blocked public access" from "something else is wrong".
+            }
+
+            _logger.LogInformation($"Updating secret '{name}' in key vault '{vault.Data.Name}'...");
 
             // Retry on 403/Forbidden: the access policy granting the InstallerAccount Set permission was just
             // added by KeyVaultAddSecretAllPermissionsForAppRegistrationTask in the same task batch, and AAD
@@ -256,6 +291,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     if (attempt > 0)
                     {
                         _logger.LogInformation($"Secret '{name}' written to '{vault.Data.Name}' on retry attempt {attempt + 1}.");
+                    }
+                    else
+                    {
+                        _logger.LogInformation($"Updated key vault secret '{name}'.");
                     }
                     return vault;
                 }
@@ -272,8 +311,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
             }
 
-            // All retries exhausted. Re-read the vault's current PublicNetworkAccess from ARM so we can give
-            // the operator an accurate, prioritised list of likely causes instead of always blaming public access.
+            // All retries exhausted. Re-read the vault's current PublicNetworkAccess from ARM so we can
+            // distinguish "policy intentionally blocks public access" (soft warning — only matters on secret
+            // rotation) from "something else is genuinely wrong" (error worth investigating).
             string publicAccess = null;
             try
             {
@@ -285,25 +325,19 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogWarning($"Could not re-read key vault state to diagnose 403: {probeEx.Message}");
             }
 
-            var causes = new System.Collections.Generic.List<string>();
             if (string.Equals(publicAccess, "Disabled", StringComparison.OrdinalIgnoreCase))
             {
-                causes.Add($"key vault PublicNetworkAccess is '{publicAccess}' — re-enable public access on the vault (or run the installer from inside an approved private network) and re-run");
-            }
-            else
-            {
-                causes.Add("access policy / RBAC propagation lag (the policy granting the installer account 'Set' permission was added moments before this write — AAD propagation can occasionally take longer than the retry window)");
-                causes.Add("network ACL deny (vault firewall rejecting the runner IP even though publicNetworkAccess is enabled — check the vault's Networking blade)");
-                if (string.IsNullOrEmpty(publicAccess))
-                {
-                    causes.Add("public network access actually disabled (could not be confirmed — vault state read failed)");
-                }
+                // Policy-blocked write: not fatal. Only matters if the secret needed updating.
+                _logger.LogWarning($"Key vault '{vault.Data.Name}' secret '{name}' was not updated: vault PublicNetworkAccess is 'Disabled' (likely enforced by Azure policy). " +
+                    $"If the runtime app-registration secret has been rotated, run the installer from inside the private network (or temporarily allow public access) and re-run; otherwise the existing vault value is still valid and this can be ignored.");
+                return vault;
             }
 
+            // Other 403 (policy lag past retry window, network ACL deny, etc.) — surface as Error.
             _logger.LogError(
                 $"Could not add secret '{name}' to key vault '{vault.Data.Name}' after {_retryDelaysSeconds.Length + 1} attempts (last error: 403 Forbidden, ErrorCode='{lastForbidden?.ErrorCode}'). " +
-                $"Likely causes, in order: {string.Join("; ", causes)}. " +
-                $"App-registration secrets in the vault may now be out of date — re-run the installer once the underlying cause is resolved. Continuing installation...");
+                $"Likely causes: access policy / RBAC propagation lag (longer than the {(_retryDelaysSeconds.Length + 1)}-attempt retry window) or a vault firewall rule rejecting the runner IP — check the vault's Networking blade. " +
+                $"App-registration secrets in the vault may now be out of date — re-run the installer once the underlying cause is resolved.");
             return vault;
         }
     }
