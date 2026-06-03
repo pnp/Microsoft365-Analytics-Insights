@@ -180,20 +180,16 @@
             // 
             // Sits at the same location as btnInstall and is toggled via Visible in SetRunningState;
             // appears in place of Install/Upgrade during a running install.
-            // ImageAlign=MiddleRight + TextAlign=MiddleLeft + TextImageRelation=ImageBeforeText is the
-            // standard WinForms recipe for keeping icon+text grouped and centred when the text is short
-            // (otherwise the default MiddleCenter/MiddleCenter splits the button into halves and leaves
-            // a visible gap between icon and "Cancel").
+            // ImageAlign=MiddleLeft (default TextAlign=MiddleCenter, no TextImageRelation) matches
+            // btnCopyLog's layout: icon hugs the left edge, text centred in the button.
             this.btnCancel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnCancel.Image = global::App.ControlPanel.Properties.Resources.Cancel_16x;
-            this.btnCancel.ImageAlign = System.Drawing.ContentAlignment.MiddleRight;
+            this.btnCancel.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft;
             this.btnCancel.Location = new System.Drawing.Point(408, 360);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(126, 28);
             this.btnCancel.TabIndex = 91;
             this.btnCancel.Text = "Cancel";
-            this.btnCancel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
-            this.btnCancel.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
             this.btnCancel.UseVisualStyleBackColor = true;
             this.btnCancel.Visible = false;
             this.btnCancel.Click += new System.EventHandler(this.btnCancel_Click);
