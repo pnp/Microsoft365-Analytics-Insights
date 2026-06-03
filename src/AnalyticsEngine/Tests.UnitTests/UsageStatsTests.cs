@@ -232,51 +232,58 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task InMemoryStatsDatesLoader_PersistsAcrossInstancesWithinProcess()
+        public async Task InMemoryStatsDatesLoader_PersistsAcrossCallsOnSameInstance()
         {
-            // Each import cycle in WebJob.Office365ActivityImporter.Program creates a NEW
-            // IStatsDatesLoader inside the while(runAgain) loop. The in-memory loader must
-            // still report "last uploaded" across those fresh instances, otherwise the 1-day
-            // MIN_WAIT throttle in UsageStatsManager would be defeated.
-            InMemoryStatsDatesLoader.ResetForTests();
-
-            var loader1 = new InMemoryStatsDatesLoader();
-            Assert.IsNull(await loader1.GetLastUploadDt(), "Fresh loader (no prior upload this process) should return null.");
+            // Program.cs hoists a single IStatsDatesLoader instance outside the import-cycle
+            // while(runAgain) loop precisely so the in-memory fallback can throttle across
+            // cycles. This test pins that contract: a single instance must survive Register +
+            // Get round-trips.
+            var loader = new InMemoryStatsDatesLoader();
+            Assert.IsNull(await loader.GetLastUploadDt(), "Fresh loader should return null until something registers.");
 
             var before = DateTime.Now;
-            await loader1.RegisterLastUploadDt();
+            await loader.RegisterLastUploadDt();
             var after = DateTime.Now;
 
-            var loader2 = new InMemoryStatsDatesLoader();
-            var seen = await loader2.GetLastUploadDt();
-            Assert.IsNotNull(seen, "A second instance must observe the timestamp written by the first - state is process-static by design.");
+            var seen = await loader.GetLastUploadDt();
+            Assert.IsNotNull(seen, "Same-instance GetLastUploadDt must observe the just-registered timestamp.");
             Assert.IsTrue(seen.Value >= before && seen.Value <= after, $"Recorded timestamp {seen} should fall within [{before}, {after}].");
-
-            InMemoryStatsDatesLoader.ResetForTests();
-            Assert.IsNull(await new InMemoryStatsDatesLoader().GetLastUploadDt(), "ResetForTests must clear the process-static state.");
         }
 
         [TestMethod]
-        public async Task InMemoryStatsDatesLoader_HonoursMinWaitThrottle()
+        public async Task InMemoryStatsDatesLoader_FreshInstancesAreIndependent()
         {
-            // End-to-end: a freshly constructed in-memory loader handed to UsageStatsManager
-            // should let one upload through, then suppress subsequent cycles within MIN_WAIT.
-            InMemoryStatsDatesLoader.ResetForTests();
+            // Conversely, two distinct instances must NOT share state. If Program.cs ever
+            // regressed to constructing a new loader per import cycle, this guards us against
+            // the cycle-N+1 "always thinks last upload was never" behaviour.
+            var loaderA = new InMemoryStatsDatesLoader();
+            await loaderA.RegisterLastUploadDt();
+            Assert.IsNotNull(await loaderA.GetLastUploadDt());
+
+            var loaderB = new InMemoryStatsDatesLoader();
+            Assert.IsNull(await loaderB.GetLastUploadDt(),
+                "Per-instance state: a separate loader instance must NOT see the timestamp written to loaderA. " +
+                "Program.cs must construct exactly one loader for the process lifetime.");
+        }
+
+        [TestMethod]
+        public async Task InMemoryStatsDatesLoader_HonoursMinWaitThrottleAcrossCycles()
+        {
+            // End-to-end: the SAME loader instance threaded through two UsageStatsManager
+            // invocations (simulating two import cycles) should let the first through and
+            // suppress the second via MIN_WAIT.
             var tracer = AnalyticsLogger.ConsoleOnlyTracer();
             var tenantId = Guid.NewGuid();
-
             var uploader = new FakeStatsUploader(tracer, false);
 
-            // Cycle 1 - new loader, no prior upload → should upload.
-            var mgr1 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), new InMemoryStatsDatesLoader(), uploader, tracer);
+            // Single shared loader, mirroring Program.cs hoisting it outside the loop.
+            var sharedLoader = new InMemoryStatsDatesLoader();
+
+            var mgr1 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), sharedLoader, uploader, tracer);
             Assert.IsTrue(await mgr1.ProcessAndUploadStats(), "First cycle should upload.");
 
-            // Cycle 2 - fresh loader instance (simulating a new import cycle), same process →
-            // RegisterLastUploadDt from cycle 1 should still be in effect via the static field.
-            var mgr2 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), new InMemoryStatsDatesLoader(), uploader, tracer);
-            Assert.IsFalse(await mgr2.ProcessAndUploadStats(), "Second cycle must be throttled by the prior upload's timestamp.");
-
-            InMemoryStatsDatesLoader.ResetForTests();
+            var mgr2 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), sharedLoader, uploader, tracer);
+            Assert.IsFalse(await mgr2.ProcessAndUploadStats(), "Second cycle (same loader) must be throttled by cycle 1's RegisterLastUploadDt.");
         }
     }
 
