@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine
@@ -20,6 +21,13 @@ namespace CloudInstallEngine
         public bool HasRun { get; set; } = false;
         public Dictionary<BaseInstallTask, object> TaskResults { get; set; } = new Dictionary<BaseInstallTask, object>();
 
+        /// <summary>
+        /// Optional cancellation token honored between tasks. The loop calls
+        /// <c>ThrowIfCancellationRequested</c> immediately before each task is executed, so cancel
+        /// takes effect at task boundaries — in-flight Azure SDK calls are not interrupted.
+        /// </summary>
+        public CancellationToken CancellationToken { get; set; } = CancellationToken.None;
+
         protected List<List<BaseInstallTask>> _installTaskListWithChildren = new List<List<BaseInstallTask>>();
 
         public virtual async Task Install()
@@ -33,9 +41,15 @@ namespace CloudInstallEngine
             {
                 foreach (var thisTask in taskWithDependencyTasks)
                 {
+                    CancellationToken.ThrowIfCancellationRequested();
                     try
                     {
                         previousRunResult = await ProcessTask(thisTask, previousRunResult);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Surface cancellation cleanly to the caller — no error log spam.
+                        throw;
                     }
                     catch (Exception ex)
                     {

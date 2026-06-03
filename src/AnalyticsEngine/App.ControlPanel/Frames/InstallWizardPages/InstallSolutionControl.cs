@@ -46,6 +46,27 @@ namespace App.ControlPanel.Frames.InstallWizard
         public delegate void TestConfigEventHander(object sender, EventArgs eventArgs);
         public event TestConfigEventHander TestConfig;
 
+        /// <summary>Raised when the user clicks Cancel during a running install.</summary>
+        public event EventHandler CancelRequested;
+
+        /// <summary>
+        /// Toggle button visibility / enabled state to reflect whether an install is currently running.
+        /// When running: Install/Upgrade and Test Configuration are disabled and Cancel takes the
+        /// install button's slot. When idle: Install/Upgrade returns, Cancel is hidden.
+        /// </summary>
+        public void SetRunningState(bool running)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => SetRunningState(running)));
+                return;
+            }
+            btnInstall.Visible = !running;
+            btnRunTests.Enabled = !running;
+            btnCancel.Visible = running;
+            btnCancel.Enabled = running;
+        }
+
         #region Logging
 
         internal void LogItemOnUIThread(InstallLogLVI installLogLVI)
@@ -99,6 +120,13 @@ namespace App.ControlPanel.Frames.InstallWizard
         private void btnRunTests_Click(object sender, EventArgs e)
         {
             TestConfig?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void btnCancel_Click(object sender, EventArgs e)
+        {
+            // Single-shot: once clicked, disable the button until SetRunningState toggles it back.
+            btnCancel.Enabled = false;
+            CancelRequested?.Invoke(this, EventArgs.Empty);
         }
 
         internal void ClearLog()
