@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.LookupCaches;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph

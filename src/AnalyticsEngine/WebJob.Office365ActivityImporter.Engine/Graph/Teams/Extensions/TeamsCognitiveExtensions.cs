@@ -4,6 +4,7 @@ using Common.Entities.Redis;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;

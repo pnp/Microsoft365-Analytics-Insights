@@ -334,9 +334,12 @@ namespace App.ControlPanel.Engine
             _logger.LogInformation("Verifying Graph API for Teams...");
             try
             {
-                var groups = await graphClient.Groups.Request().Select("displayName,id,resourceProvisioningOptions").GetAsync();
+                var groups = await graphClient.Groups.GetAsync(rc =>
+                {
+                    rc.QueryParameters.Select = new[] { "displayName", "id", "resourceProvisioningOptions" };
+                });
                 bool channelsRead = false;
-                foreach (var group in groups)
+                foreach (var group in groups?.Value ?? new List<Microsoft.Graph.Models.Group>())
                 {
                     if (group.AdditionalData.ContainsKey("resourceProvisioningOptions"))
                     {
@@ -347,7 +350,7 @@ namespace App.ControlPanel.Engine
                             if (option.ToString().ToLower() == "team")
                             {
                                 // Load team
-                                var channels = await graphClient.Teams[group.Id].Channels.Request().GetAsync();
+                                var channels = await graphClient.Teams[group.Id].Channels.GetAsync();
                                 channelsRead = true;
                                 break;
                             }
@@ -356,7 +359,7 @@ namespace App.ControlPanel.Engine
                     if (channelsRead) break;
                 }
             }
-            catch (Microsoft.Graph.ServiceException ex)
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
             {
                 _logger.LogError($"ERROR: Got error trying to read Graph API for Teams import: '{ex.Message}'");
                 _logger.LogError("Important: ensure runtime account is correct and permissions are correctly configured to access Graph API.");
@@ -370,19 +373,20 @@ namespace App.ControlPanel.Engine
         {
             _logger.LogInformation("Verifying Graph API for user activity import...");
 
-            // WORKAROUND: for some reason, the default GraphClient call gives a Json exception. This workaround does the same call manually
-            var userActivityRequest = graphClient.Reports.GetTeamsUserActivityUserDetail("D7").Request();
-
-            var request = new HttpRequestMessage(HttpMethod.Get, userActivityRequest.RequestUrl);
-            await graphClient.AuthenticationProvider.AuthenticateRequestAsync(request);
-
+            // v5+: typed report endpoint returns the CSV report as a Stream directly, removing
+            // the need for the v4 manual HttpRequestMessage / HttpProvider workaround.
             try
             {
-                var response = await graphClient.HttpProvider.SendAsync(request);
-                response.EnsureSuccessStatusCode();
-
-                // Get the csv report data
-                var data = await response.Content.ReadAsStringAsync();
+                using (var stream = await graphClient.Reports.GetTeamsUserActivityUserDetailWithPeriod("'D7'").GetAsync())
+                {
+                    if (stream != null)
+                    {
+                        using (var reader = new StreamReader(stream))
+                        {
+                            var data = await reader.ReadToEndAsync();
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {

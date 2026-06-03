@@ -46,6 +46,32 @@ namespace App.ControlPanel.Frames.InstallWizard
         public delegate void TestConfigEventHander(object sender, EventArgs eventArgs);
         public event TestConfigEventHander TestConfig;
 
+        /// <summary>Raised when the user clicks Cancel during a running install.</summary>
+        public event EventHandler CancelRequested;
+
+        /// <summary>
+        /// Toggle button visibility / enabled state to reflect whether an install is currently running.
+        /// When running: Install/Upgrade and Test Configuration are disabled, the Install Tasks
+        /// checkboxes are locked (so the user can't change tasks mid-run), and Cancel takes the
+        /// install button's slot. When idle: Install/Upgrade returns, Cancel is hidden, tasks editable.
+        /// </summary>
+        public void SetRunningState(bool running)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => SetRunningState(running)));
+                return;
+            }
+            btnInstall.Visible = !running;
+            btnRunTests.Enabled = !running;
+            btnCancel.Visible = running;
+            btnCancel.Enabled = running;
+            // Lock the Install Tasks checkboxes — changing them mid-run would silently desync from
+            // what the engine actually executed. Log ListView, Copy-to-clipboard, and Cancel stay
+            // enabled so the user can still read/scroll/copy progress and abort.
+            grpTasks.Enabled = !running;
+        }
+
         #region Logging
 
         internal void LogItemOnUIThread(InstallLogLVI installLogLVI)
@@ -99,6 +125,13 @@ namespace App.ControlPanel.Frames.InstallWizard
         private void btnRunTests_Click(object sender, EventArgs e)
         {
             TestConfig?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void btnCancel_Click(object sender, EventArgs e)
+        {
+            // Single-shot: once clicked, disable the button until SetRunningState toggles it back.
+            btnCancel.Enabled = false;
+            CancelRequested?.Invoke(this, EventArgs.Empty);
         }
 
         internal void ClearLog()

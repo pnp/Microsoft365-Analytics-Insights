@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 
@@ -24,7 +25,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         public List<ChatMessageReaction> Reactions { get; set; } = new List<ChatMessageReaction>();
         public List<ChatMessage> Messages { get; set; } = new List<ChatMessage>();
-        public IChannelTabsCollectionPage Tabs { get; internal set; }
+        // v5+ exposes channel tabs as List<TeamsTab>; the v4 IChannelTabsCollectionPage interface
+        // is gone. PopulateNewMessagesAndReactions / SaveToSql iterate this directly.
+        public List<TeamsTab> Tabs { get; internal set; }
 
         /// <summary>
         /// Sort through messages found and decide what's new since last delta. Set on this object

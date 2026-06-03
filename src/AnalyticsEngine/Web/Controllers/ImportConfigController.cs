@@ -1,7 +1,6 @@
 ﻿using Common.Entities.Config;
 using System;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Web.Http;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -25,35 +24,56 @@ namespace Web.AnalyticsWeb.Controllers
             var bytes = Convert.FromBase64String(appInsightsStringEncoded);
             var decodedString = Encoding.UTF8.GetString(bytes);
 
-            // Match to app insights instrumentation key
-            // It's a bit of a hack, as there's usually two GUIDs in the connection string.
-            // But it's _a_ way of checking the client-side is sending to the right server-side.
+            // The App Insights connection string contains multiple GUIDs (InstrumentationKey and
+            // ApplicationId). Compare the InstrumentationKey value parsed by name from both sides,
+            // not "the first GUID found" - the prior regex-by-position approach matched whichever
+            // GUID appeared first textually and could be tricked by reordering the keys.
             var config = new AppConfig();
-            var paramPassedGuid = FindGuidInString(decodedString);
-            var configuredGuid = FindGuidInString(config.AppInsightsConnectionString);
+            var paramPassedKey = ParseInstrumentationKey(decodedString);
+            var configuredKey = ParseInstrumentationKey(config.AppInsightsConnectionString);
 
-            if (paramPassedGuid != configuredGuid)
-                throw new UnauthorizedAccessException("Invalid GUID");
+            if (paramPassedKey == Guid.Empty)
+                throw new ArgumentException("InstrumentationKey missing or invalid in supplied connection string");
+            if (configuredKey == Guid.Empty)
+                throw new InvalidOperationException("Server-side InstrumentationKey is not configured");
+
+            if (paramPassedKey != configuredKey)
+                throw new UnauthorizedAccessException("InstrumentationKey mismatch");
 
             return new ImportConfig
             {
-                Expiry = DateTime.Now.AddMinutes(config.MetadataRefreshMinutes),
+                Expiry = DateTime.UtcNow.AddMinutes(config.MetadataRefreshMinutes),
                 MetadataRefreshMinutes = config.MetadataRefreshMinutes,
             };
         }
 
-        Guid FindGuidInString(string s)
+        internal static Guid ParseInstrumentationKey(string connectionString)
         {
-            // Extract the GUID using regex
-            const string pattern = @"[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}";
-            var match = Regex.Match(s, pattern);
-            if (!match.Success)
-                throw new ArgumentException("Invalid GUID");
+            var raw = ParseConnectionStringValue(connectionString, "InstrumentationKey");
+            if (string.IsNullOrWhiteSpace(raw)) return Guid.Empty;
+            return Guid.TryParse(raw, out var g) ? g : Guid.Empty;
+        }
 
-            var guidString = match.Value;
-            var guid = new Guid(guidString);
-
-            return guid;
+        /// <summary>
+        /// Parses a named value from a semicolon-delimited connection string (e.g. App Insights).
+        /// Duplicated from AppInsightsAPIClient.ParseConnectionStringValue to avoid adding a
+        /// cross-project dependency on WebJob.AppInsightsImporter.Engine for a 12-line helper.
+        /// </summary>
+        internal static string ParseConnectionStringValue(string connectionString, string keyName)
+        {
+            if (string.IsNullOrEmpty(connectionString)) return null;
+            foreach (var part in connectionString.Split(';'))
+            {
+                var separatorIndex = part.IndexOf('=');
+                if (separatorIndex > 0)
+                {
+                    var key = part.Substring(0, separatorIndex).Trim();
+                    var value = part.Substring(separatorIndex + 1).Trim();
+                    if (key.Equals(keyName, StringComparison.OrdinalIgnoreCase))
+                        return value;
+                }
+            }
+            return null;
         }
     }
 }

@@ -6,6 +6,12 @@ namespace Common.Entities.Migrations
 
     public sealed class Configuration : DbMigrationsConfiguration<AnalyticsEntitiesContext>
     {
+        // Suppress duplicate "SQL: Runtime database X is running migration ID Y" lines within a
+        // single process. DatabaseUpgrader.CheckDbUpgraded opens two contexts back-to-back during
+        // an installer run; without this guard the migration ID is logged twice for the same
+        // upgrade, which made it look (incorrectly) like two migrations had been applied.
+        private static bool _migrationIdLogged = false;
+
         public Configuration()
         {
             AutomaticMigrationsEnabled = true;
@@ -21,6 +27,9 @@ namespace Common.Entities.Migrations
 
         public void OutputCurrentMigration(AnalyticsEntitiesContext context)
         {
+            if (_migrationIdLogged) return;
+            _migrationIdLogged = true;
+
             var query = "select top 1 MigrationId from __MigrationHistory order by LEFT(MigrationId, 15) desc";
             var migrationId = context.Database.SqlQuery<string>(query).FirstOrDefault();
             Console.WriteLine($"SQL: Runtime database {context.Database.Connection.Database} is running migration ID \"{migrationId}\".");

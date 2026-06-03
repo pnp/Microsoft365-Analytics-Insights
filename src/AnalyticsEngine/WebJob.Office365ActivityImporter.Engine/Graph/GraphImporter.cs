@@ -41,8 +41,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public async Task GetAndSaveAllGraphData(AppConfig settings)
         {
-            var auth = new GraphAppIndentityOAuthContext(_telemetry, _settings.ClientID, _settings.TenantGUID.ToString(), _settings.ClientSecret, _settings.KeyVaultUrl, _settings.UseClientCertificate);
-            var httpClient = new ManualGraphCallClient(auth, _telemetry);
+            var httpClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _telemetry);
             var userGroupsFilter = new UserGroupsFilterModel(_settings.UserGroupsFilter);
 
             var graphUserGroupsCache = new GraphUserGroupsCache(httpClient, _telemetry);
@@ -122,14 +121,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     IDeltaTokenStore deltaTokenStore;
                     if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
                     {
-                        deltaTokenStore = new RedisDeltaTokenStore(_settings.ConnectionStrings.RedisConnectionString);
+                        deltaTokenStore = new RedisDeltaTokenStore(_settings.ConnectionStrings.RedisConnectionString, tenantId: _settings.TenantGUID.ToString(), clientId: _settings.ClientID, clientSecret: _settings.ClientSecret);
                     }
                     else
                     {
                         deltaTokenStore = new InMemoryDeltaTokenStore();
                     }
 
-                    var sentEmailImporter = new SentEmailImporter(_telemetry, _settings, httpClient, deltaTokenStore, auth);
+                    var sentEmailImporter = new SentEmailImporter(_telemetry, _settings, httpClient, deltaTokenStore, _graphAppIndentityOAuthContext);
                     await sentEmailImporter.ImportSentEmails();
 
                     sentEmailsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
@@ -169,9 +168,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             var runImport = (lastImportedDate == null || DateTime.Now.Subtract(lastImportedDate.Value) > MIN_WAIT);
-#if DEBUG
-            runImport = true;
-#endif
+            if (_settings.ForceUsageReportsImport)
+            {
+                _telemetry.LogInformation("ForceUsageReportsImport=true; bypassing recently-imported gate.");
+                runImport = true;
+            }
             if (runImport)
             {
                 _telemetry.LogInformation($"Reading all activity reports from {daysBackMax} days back...");

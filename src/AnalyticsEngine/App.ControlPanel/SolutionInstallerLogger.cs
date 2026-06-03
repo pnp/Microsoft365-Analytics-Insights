@@ -9,7 +9,10 @@ using static App.ControlPanel.Frames.InstallWizard.InstallSolutionControl;
 namespace App.ControlPanel
 {
     /// <summary>
-    /// Base ILogger implementation for installer
+    /// Base ILogger implementation for installer.
+    /// Each line is prefixed with "HH:mm:ss  LEVEL  " for consistency and easier scanning.
+    /// Lines starting with "===" (phase headers / summary block) are emitted verbatim so they
+    /// stand out visually in the log pane.
     /// </summary>
     abstract class SolutionInstallerLogger : BaseAnalyticsLogger
     {
@@ -19,15 +22,44 @@ namespace App.ControlPanel
             {
                 return;
             }
-            var message = String.Empty;
+            var message = string.Empty;
             if (formatter != null)
             {
                 message += formatter(state, exception);
             }
-            var prefix = logLevel == LogLevel.Information ? string.Empty : $"{logLevel.ToString()} - ";
-            var msg = $"{prefix}{message}";
+
+            string formatted;
+            if (string.IsNullOrEmpty(message))
+            {
+                // Allow callers to emit a blank separator line.
+                formatted = string.Empty;
+            }
+            else if (message.StartsWith("=== ") && message.EndsWith(" ==="))
+            {
+                // Visual section header / summary block: pass through unprefixed.
+                // Tight match on the leading + trailing sentinel so an Azure SDK error that
+                // coincidentally contains "=== " doesn't get its timestamp/level stripped.
+                formatted = message;
+            }
+            else
+            {
+                formatted = $"{DateTime.Now:HH:mm:ss}  {LevelLabel(logLevel)}  {message}";
+            }
+
             var isErr = logLevel > LogLevel.Warning;
-            AddToSolutionLog(msg, isErr);
+            AddToSolutionLog(formatted, isErr);
+        }
+
+        private static string LevelLabel(LogLevel level)
+        {
+            switch (level)
+            {
+                case LogLevel.Information: return "INFO ";
+                case LogLevel.Warning: return "WARN ";
+                case LogLevel.Error: return "ERROR";
+                case LogLevel.Critical: return "FATAL";
+                default: return level.ToString().PadRight(5).Substring(0, 5);
+            }
         }
 
         protected abstract void AddToSolutionLog(string msg, bool isErr);
@@ -79,3 +111,4 @@ namespace App.ControlPanel
         }
     }
 }
+

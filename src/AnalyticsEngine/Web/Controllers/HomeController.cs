@@ -18,7 +18,8 @@ namespace Web.AnalyticsWeb.Controllers
             // Load most recent status
             var db = new AnalyticsEntitiesContext();
 
-            var cache = CacheConnectionManager.GetConnectionManager(new AppConfig().ConnectionStrings.RedisConnectionString);
+            var appConfig = new AppConfig();
+            var cache = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
             var s = await SystemStatus.LoadFrom(db, cache);
 
             return View(s);

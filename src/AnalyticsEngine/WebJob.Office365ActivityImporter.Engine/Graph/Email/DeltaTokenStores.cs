@@ -41,9 +41,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     {
         private readonly Common.Entities.Redis.CacheConnectionManager _cacheConnectionManager;
 
-        public RedisDeltaTokenStore(string redisConnectionString)
+        public RedisDeltaTokenStore(string redisConnectionString, string tenantId = null, string clientId = null, string clientSecret = null)
         {
-            _cacheConnectionManager = Common.Entities.Redis.CacheConnectionManager.GetConnectionManager(redisConnectionString);
+            _cacheConnectionManager = Common.Entities.Redis.CacheConnectionManager.GetConnectionManager(redisConnectionString, tenantId: tenantId, clientId: clientId, clientSecret: clientSecret);
         }
 
         public async Task<string> GetDeltaToken(string key)

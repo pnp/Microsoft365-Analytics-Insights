@@ -31,6 +31,12 @@ namespace WebJob.Office365ActivityImporter.Engine
         private string _defaultConnectionString = null;
         private UserGroupsFilterModel _userGroupsFilter = null;
 
+        /// <summary>
+        /// Process-wide gate that serializes writes to the staging tables. Intentionally <c>static</c> so that
+        /// multiple <see cref="ActivityReportSqlPersistenceManager"/> instances (e.g. one per content type or
+        /// per parallel batch) cannot interleave SQL inserts/merges into the shared staging schema.
+        /// Single-permit; held only for the duration of <c>CommitAll</c>'s SQL phase.
+        /// </summary>
         private static SemaphoreSlim _sqlSaveSemaphore = new SemaphoreSlim(1);      // Make sure we're only saving one thread at a time
 
         public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger telemetry, AppConfig appConfig)
@@ -179,6 +185,10 @@ namespace WebJob.Office365ActivityImporter.Engine
                     .Include(e => e.User)
                     .Where(e => ids.Contains(e.Id)).ToList();
 
+                // O(1) lookup by Id - the previous foreach (...) eventsJustSaved.Where(e => e.Id == log.Id)
+                // pattern was O(n^2) over the batch and dominated CPU for large imports.
+                var eventsJustSavedById = eventsJustSaved.ToDictionary(e => e.Id);
+
                 var spEventsJustSaved = db.sharepoint_events
                     .Include(spe => spe.AuditEvent)
                     .Where(e => ids.Contains(e.EventID)).ToList();
@@ -198,7 +208,8 @@ namespace WebJob.Office365ActivityImporter.Engine
                     }
 #endif
                     // Add metadata
-                    var changesMade = await log.ProcessExtendedProperties(saveSession, eventsJustSaved.Where(e => e.Id == log.Id).SingleOrDefault(), _telemetry);
+                    eventsJustSavedById.TryGetValue(log.Id, out var savedEvent);
+                    var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _telemetry);
                     if (changesMade)
                         changesMadeCount++;
 
@@ -283,7 +294,11 @@ namespace WebJob.Office365ActivityImporter.Engine
         [Column("type_name", true)]
         public string TypeName { get; set; }
 
-        [Column("object_id", true)]
+        // Must match dbo.urls.full_url (varchar(1700), see migration ShrinkUrlsFullUrlColumn /
+        // PR #108) so the join in "Insert Activity from Staging Table.sql" can use
+        // IX_urls_full_url instead of an implicit nvarchar -> varchar conversion that defeats
+        // the index. See #109.
+        [Column("object_id", true, SqlTypeOverride = "varchar(1700)")]
         public string ObjectId { get; set; }
 
         [Column("web_url", true)]
