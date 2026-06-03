@@ -181,7 +181,21 @@ namespace App.ControlPanel.Engine
             // Build the Redis connection string from the install-task result, which abstracts over
             // both Azure Managed Redis (port 10000) and pre-existing legacy classic Azure Cache for
             // Redis (port 6380) that the installer chose to reuse.
-            var redisConnectionString = $"{redis.HostName}:{redis.Port},password={redis.PrimaryKey},ssl=True,abortConnect=False";
+            //
+            // When the cache is RBAC-only (no access keys), we deliberately omit the password
+            // segment so that CacheConnectionManager skips its key-based attempt and authenticates
+            // via Entra ID using the runtime service principal credentials.
+            string redisConnectionString;
+            if (redis.UseRbacAuth)
+            {
+                redisConnectionString = $"{redis.HostName}:{redis.Port},ssl=True,abortConnect=False";
+                _logger.LogInformation("Redis connection string built for RBAC/Entra ID auth (no access key).");
+            }
+            else
+            {
+                redisConnectionString = $"{redis.HostName}:{redis.Port},password={redis.PrimaryKey},ssl=True,abortConnect=False";
+                _logger.LogInformation("Redis connection string built for key-based auth.");
+            }
 
             var storageInfo = new AzStorageConnectionInfo(storage);
             var connectionStrings = new ConnectionStringDictionary();
