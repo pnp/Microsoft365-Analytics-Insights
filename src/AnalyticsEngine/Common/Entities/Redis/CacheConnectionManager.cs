@@ -1,4 +1,4 @@
-﻿using Azure.Identity;
+﻿using Microsoft.Azure.StackExchangeRedis;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using StackExchange.Redis;
@@ -9,6 +9,11 @@ namespace Common.Entities.Redis
 {
     /// <summary>
     /// Wrapper class for redis connection. Tries key-based auth first, falls back to RBAC (Entra ID) if keys are disabled.
+    /// On the RBAC path the connection uses <see cref="Microsoft.Azure.StackExchangeRedis"/> which proactively refreshes
+    /// the Entra access token before it expires and re-authenticates the multiplexer on reconnect — without this the
+    /// multiplexer would silently start failing all commands ~60–90 min after process start with
+    /// <c>MicrosoftEntraAuthenticationFailure</c> on the server and <c>SocketClosed</c> / <c>RedisTimeoutException</c>
+    /// on the client.
     /// </summary>
     public class CacheConnectionManager
     {
@@ -75,11 +80,14 @@ namespace Common.Entities.Redis
 
             try
             {
-                var hostname = ExtractHostname(connectionString);
-                var muxer = ConnectWithRbac(hostname, tenantId, clientId, clientSecret);
+                // Microsoft.Azure.StackExchangeRedis ConfigureForAzure* methods are async (they acquire the
+                // initial bearer token and register handlers to refresh it before expiry). We're inside a sync
+                // singleton-init path that runs once per process under _lock — wrap in Task.Run to detach from
+                // any ASP.NET / OWIN sync context and avoid the classic sync-over-async deadlock.
+                var muxer = Task.Run(() => ConnectWithRbacAsync(connectionString, tenantId, clientId, clientSecret)).GetAwaiter().GetResult();
                 var db = muxer.GetDatabase();
                 db.Ping();
-                logger?.LogInformation("Redis connected using RBAC/Entra ID authentication with runtime account.");
+                logger?.LogInformation("Redis connected using RBAC/Entra ID authentication with runtime account (auto token refresh enabled).");
                 return new CacheConnectionManager(muxer);
             }
             catch (Exception ex)
@@ -89,60 +97,34 @@ namespace Common.Entities.Redis
             }
         }
 
-        private static string ExtractHostname(string connectionString)
+        private static async Task<ConnectionMultiplexer> ConnectWithRbacAsync(string connectionString, string tenantId, string clientId, string clientSecret)
         {
-            // Connection string format: "host:port,password=...,ssl=True,abortConnect=False"
-            // or just "host:port"
-            if (string.IsNullOrEmpty(connectionString))
-                throw new ArgumentException("Redis connection string is null or empty.");
+            // Start from the original connection string so we keep the host:port (6380 for classic Azure Cache
+            // for Redis, 10000 for Azure Managed Redis) plus any operational options the caller chose
+            // (abortConnect, clientName, etc.). Then clear the credential fields and switch to AAD auth.
+            var options = ConfigurationOptions.Parse(connectionString);
 
-            var parts = connectionString.Split(',');
-            var hostPort = parts[0].Trim();
-            // Remove port if present
-            var colonIdx = hostPort.IndexOf(':');
-            return colonIdx > 0 ? hostPort.Substring(0, colonIdx) : hostPort;
-        }
+            // Strip any stale key-based credentials parsed out of the connection string — Microsoft.Azure.StackExchangeRedis
+            // will populate User (object id) and Password (bearer token) itself and keep them fresh.
+            options.Password = null;
+            options.User = null;
 
-        private static ConnectionMultiplexer ConnectWithRbac(string hostname, string tenantId, string clientId, string clientSecret)
-        {
-            var credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
-            var token = credential.GetToken(
-                new Azure.Core.TokenRequestContext(new[] { "https://redis.azure.com/.default" }));
+            options.Ssl = true;
+            options.AbortOnConnectFail = false;
+            options.ConnectTimeout = 15000;
+            options.SyncTimeout = 15000;
+            options.AsyncTimeout = 15000;
 
-            // Extract the OID (Object ID) from the token for the username
-            string username = null;
-            var tokenParts = token.Token.Split('.');
-            if (tokenParts.Length >= 2)
-            {
-                try
-                {
-                    var payload = tokenParts[1];
-                    // Pad base64 if needed
-                    payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
-                    var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(payload));
-                    var claims = JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, object>>(json);
-                    if (claims.ContainsKey("oid"))
-                        username = claims["oid"].ToString();
-                }
-                catch
-                {
-                    // If token parsing fails, leave username null
-                }
-            }
+            // RESP3 bundles the interactive and pub/sub pipes on a single connection so both get re-authenticated
+            // on token refresh. With RESP2 the subscription pipe is closed on each token expiry (then restored),
+            // which surfaces as MicrosoftEntraTokenExpired errors on the cache metrics. Both classic Redis 6.0
+            // and Azure Managed Redis (Enterprise 7.x) support RESP3.
+            options.Protocol = RedisProtocol.Resp3;
 
-            var options = new ConfigurationOptions
-            {
-                EndPoints = { { hostname, 6380 } },
-                Ssl = true,
-                AbortOnConnectFail = false,
-                Password = token.Token,
-                User = username,
-                ConnectTimeout = 15000,
-                SyncTimeout = 15000,
-                AsyncTimeout = 15000
-            };
+            // Acquires the initial token and registers the proactive refresh + re-auth-on-reconnect handlers.
+            await options.ConfigureForAzureWithServicePrincipalAsync(clientId, tenantId, clientSecret).ConfigureAwait(false);
 
-            return ConnectionMultiplexer.Connect(options);
+            return await ConnectionMultiplexer.ConnectAsync(options).ConfigureAwait(false);
         }
 
         /// <summary>
