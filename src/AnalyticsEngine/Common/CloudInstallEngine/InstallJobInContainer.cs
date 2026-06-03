@@ -54,7 +54,10 @@ namespace CloudInstallEngine
                     catch (Exception ex)
                     {
                         Logger.LogError($"Unexpected error on stage {thisTask.TaskName}:");
-                        Logger.LogError(ex, ex.Message);
+                        // Walk the InnerException chain — the custom installer ILogger
+                        // implementations drop the Exception arg, so feeding just ex.Message
+                        // here loses FluentFTP-style "see inner exception for more info" causes.
+                        Logger.LogError(ExceptionMessages.Format(ex));
                         throw;      // Error will be logged by parent
                     }
 

@@ -1,4 +1,4 @@
-﻿using Microsoft.Azure.StackExchangeRedis;
+﻿﻿using Microsoft.Azure.StackExchangeRedis;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using StackExchange.Redis;
@@ -8,13 +8,24 @@ using System.Threading.Tasks;
 namespace Common.Entities.Redis
 {
     /// <summary>
-    /// Wrapper class for redis connection. Tries key-based auth first, falls back to RBAC (Entra ID) if keys are disabled.
-    /// On the RBAC path the connection uses <see cref="Microsoft.Azure.StackExchangeRedis"/> which proactively refreshes
-    /// the Entra access token before it expires and re-authenticates the multiplexer on reconnect — without this the
-    /// multiplexer would silently start failing all commands ~60–90 min after process start with
-    /// <c>MicrosoftEntraAuthenticationFailure</c> on the server and <c>SocketClosed</c> / <c>RedisTimeoutException</c>
-    /// on the client.
+    /// Wrapper class for redis connection. Tries key-based auth first when the connection string
+    /// includes a password; otherwise (or on failure) authenticates via Entra ID / RBAC using the
+    /// runtime service principal.
     /// </summary>
+    /// <remarks>
+    /// New Azure Managed Redis databases provisioned by this installer ship with access keys
+    /// disabled (RBAC-only) and the App Service connection string is built without a
+    /// <c>password=</c> segment, so the RBAC path becomes the primary path on fresh deployments.
+    /// Existing installs with keyed caches keep working unchanged.
+    /// <para>
+    /// The RBAC path uses <see cref="AzureCacheForRedis.ConfigureForAzureWithServicePrincipalAsync"/>
+    /// from <c>Microsoft.Azure.StackExchangeRedis</c>, which proactively refreshes the Entra
+    /// bearer token before it expires and re-authenticates the multiplexer on reconnect — without
+    /// this the multiplexer would silently start failing all commands ~60–90 min after process
+    /// start with <c>MicrosoftEntraAuthenticationFailure</c> on the server and <c>SocketClosed</c>
+    /// / <c>RedisTimeoutException</c> on the client.
+    /// </para>
+    /// </remarks>
     public class CacheConnectionManager
     {
         #region Singleton
@@ -31,8 +42,9 @@ namespace Common.Entities.Redis
         private static readonly object _lock = new object();
 
         /// <summary>
-        /// Gets or creates a singleton connection manager. Tries key-based connection string first;
-        /// if that fails (e.g. keys disabled by policy), falls back to RBAC/Entra ID token auth using the runtime account.
+        /// Gets or creates a singleton connection manager. When the connection string contains a
+        /// <c>password=</c> the key-based path is attempted first; otherwise the RBAC path is
+        /// taken straight away. RBAC requires the runtime account credentials.
         /// </summary>
         public static CacheConnectionManager GetConnectionManager(string connectionString, ILogger logger = null, string tenantId = null, string clientId = null, string clientSecret = null)
         {
@@ -52,48 +64,57 @@ namespace Common.Entities.Redis
 
         private static CacheConnectionManager CreateConnectionManager(string connectionString, ILogger logger, string tenantId, string clientId, string clientSecret)
         {
-            // Try key-based auth first
-            try
+            // Parse the caller's connection string just to inspect whether a password was provided.
+            // The connect attempts below re-parse it so they each get a clean ConfigurationOptions.
+            var parsedOptions = ConfigurationOptions.Parse(connectionString);
+            var hasPassword = !string.IsNullOrEmpty(parsedOptions.Password);
+
+            if (hasPassword)
             {
-                var keyOptions = ConfigurationOptions.Parse(connectionString);
-                keyOptions.ConnectTimeout = 15000;
-                keyOptions.SyncTimeout = 15000;
-                keyOptions.AsyncTimeout = 15000;
-                var muxer = ConnectionMultiplexer.Connect(keyOptions);
-                // Test the connection with a ping
-                var db = muxer.GetDatabase();
-                db.Ping();
-                logger?.LogInformation("Redis connected using key-based authentication.");
-                return new CacheConnectionManager(muxer);
+                try
+                {
+                    var keyOptions = ConfigurationOptions.Parse(connectionString);
+                    keyOptions.ConnectTimeout = 15000;
+                    keyOptions.SyncTimeout = 15000;
+                    keyOptions.AsyncTimeout = 15000;
+                    var muxer = ConnectionMultiplexer.Connect(keyOptions);
+                    muxer.GetDatabase().Ping();
+                    logger?.LogInformation("Redis connected using key-based authentication.");
+                    return new CacheConnectionManager(muxer);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning($"Redis key-based auth failed ({ex.Message}). Attempting RBAC/Entra ID auth...");
+                }
             }
-            catch (Exception ex)
+            else
             {
-                logger?.LogWarning($"Redis key-based auth failed ({ex.Message}). Attempting RBAC/Entra ID auth...");
+                logger?.LogInformation("Redis connection string has no password — using RBAC/Entra ID auth with runtime service principal.");
             }
 
-            // Fall back to RBAC (Entra ID) token auth using the runtime account
             if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
             {
                 throw new InvalidOperationException(
-                    "Redis key-based auth failed and RBAC fallback cannot proceed: runtime account credentials (tenantId, clientId, clientSecret) are not configured.");
+                    "Redis RBAC/Entra ID auth cannot proceed: runtime account credentials (tenantId, clientId, clientSecret) are not configured." +
+                    (hasPassword ? " Key-based auth also failed (see warning above)." : string.Empty));
             }
 
             try
             {
-                // Microsoft.Azure.StackExchangeRedis ConfigureForAzure* methods are async (they acquire the
-                // initial bearer token and register handlers to refresh it before expiry). We're inside a sync
-                // singleton-init path that runs once per process under _lock — wrap in Task.Run to detach from
-                // any ASP.NET / OWIN sync context and avoid the classic sync-over-async deadlock.
-                var muxer = Task.Run(() => ConnectWithRbacAsync(connectionString, tenantId, clientId, clientSecret)).GetAwaiter().GetResult();
-                var db = muxer.GetDatabase();
-                db.Ping();
-                logger?.LogInformation("Redis connected using RBAC/Entra ID authentication with runtime account (auto token refresh enabled).");
-                return new CacheConnectionManager(muxer);
+                // ConfigureForAzure* methods are async (they acquire the initial bearer token and register
+                // handlers to refresh it before expiry). We're inside a sync singleton-init path that runs
+                // once per process under _lock — wrap in Task.Run to detach from any ASP.NET / OWIN sync
+                // context and avoid the classic sync-over-async deadlock.
+                var rbacMuxer = Task.Run(() => ConnectWithRbacAsync(connectionString, tenantId, clientId, clientSecret)).GetAwaiter().GetResult();
+                PingWithRetryForPolicyPropagation(rbacMuxer, logger);
+                logger?.LogInformation("Redis connected using RBAC/Entra ID authentication with runtime service principal (auto token refresh enabled).");
+                return new CacheConnectionManager(rbacMuxer);
             }
             catch (Exception ex)
             {
                 throw new InvalidOperationException(
-                    $"Failed to connect to Redis with both key-based and RBAC auth. RBAC error: {ex.Message}", ex);
+                    $"Failed to connect to Redis via RBAC. RBAC error: {ex.Message}" +
+                    (hasPassword ? " (key-based auth was also attempted and failed earlier.)" : string.Empty), ex);
             }
         }
 
@@ -125,6 +146,31 @@ namespace Common.Entities.Redis
             await options.ConfigureForAzureWithServicePrincipalAsync(clientId, tenantId, clientSecret).ConfigureAwait(false);
 
             return await ConnectionMultiplexer.ConnectAsync(options).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Pings Redis after RBAC connection with a small retry budget to absorb the typical
+        /// data-plane propagation delay after a fresh <c>accessPolicyAssignment</c> create
+        /// (the installer might have created the assignment seconds before this call).
+        /// </summary>
+        private static void PingWithRetryForPolicyPropagation(ConnectionMultiplexer muxer, ILogger logger)
+        {
+            const int maxAttempts = 4;
+            var db = muxer.GetDatabase();
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    db.Ping();
+                    return;
+                }
+                catch (Exception ex) when (attempt < maxAttempts)
+                {
+                    var waitMs = 5000 * attempt;
+                    logger?.LogWarning($"Redis RBAC ping failed (attempt {attempt} of {maxAttempts}): {ex.Message}. Waiting {waitMs / 1000}s for access policy propagation and retrying...");
+                    Task.Delay(waitMs).GetAwaiter().GetResult();
+                }
+            }
         }
 
         /// <summary>
