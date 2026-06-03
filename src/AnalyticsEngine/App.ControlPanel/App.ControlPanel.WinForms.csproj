@@ -338,6 +338,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\CD_16x.png" />
+    <None Include="Resources\Cancel_16x.png" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\SQL.png" />
