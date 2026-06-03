@@ -7,6 +7,7 @@ using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 
@@ -38,29 +39,38 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task InstallOrUpdate()
         {
-            _logger.LogInformation($"Starting install. Authenticating & selecting subscription '{this.Config.Subscription.DisplayName}'...");
+            // Wrap the inbound logger so every WARN/ERROR raised during the run is captured
+            // into an end-of-run summary block. Use the underlying _logger when emitting the
+            // summary itself so its lines aren't re-captured recursively.
+            var summary = new InstallSummary();
+            var log = (ILogger)new SummaryCapturingLogger(_logger, summary);
+
+            log.LogInformation($"Starting install. Authenticating & selecting subscription '{this.Config.Subscription.DisplayName}'...");
 
             // Setup the things. Catch as specific exceptions as possible; Azure & our own exceptions
             var azureSub = BaseAnalyticsSolutionInstallJob.FromConfig(this.Config);
             try
             {
+                log.LogInformation("=== Phase: Azure backend resources ===");
                 // Get/create AppService + SQL + Redis. Binaries installed post-create.
-                var azureBackeEndCreationJob = new AzurePaaSInstallJob(_logger, Config, azureSub);
+                var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub);
                 await azureBackeEndCreationJob.Install();
 
                 // Secure resources with RBAC roles
+                log.LogInformation("=== Phase: RBAC role assignments ===");
                 try
                 {
-                    var resourceSecurityJob = new ResourceSecurityInstallJob(_logger, Config, azureSub);
+                    var resourceSecurityJob = new ResourceSecurityInstallJob(log, Config, azureSub);
                     await resourceSecurityJob.Install();
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError($"Failed to assign RBAC roles: {ex.Message}. Continuing installation...");
+                    log.LogError($"Failed to assign RBAC roles: {ex.Message}. Continuing installation...");
                 }
 
                 // Run stuff now everything in Azure is created
-                var tasks = new ConfigureAzureComponentsTasks(Config, _logger, _ftpConfig, InstalledByUsername, _softwareConfig, _configPassword);
+                log.LogInformation("=== Phase: App Service configuration & content deploy ===");
+                var tasks = new ConfigureAzureComponentsTasks(Config, log, _ftpConfig, InstalledByUsername, _softwareConfig, _configPassword);
                 await tasks.RunPostCreatePaaSTasks(
                     azureBackeEndCreationJob.CreatedWebSiteResource,
                     azureBackeEndCreationJob.DatabasePaaSInfo,
@@ -74,15 +84,17 @@ namespace App.ControlPanel.Engine
                 );
 
                 // Warm-up app-service
+                log.LogInformation("=== Phase: App Service warm-up ===");
                 var adminSiteUrl = $"https://{azureBackeEndCreationJob.CreatedWebSiteResource.Data.HostNames.First()}/";
-                await WarmupAppServiceSite(adminSiteUrl);
+                await WarmupAppServiceSite(log, adminSiteUrl);
 
-                _logger.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
+                log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
 
                 // Install Adoptify components
                 if (Config.SolutionConfig.SolutionTargeted == SolutionImportType.Adoptify)
                 {
-                    await InstallAdoptifyComponents(azureSub);
+                    log.LogInformation("=== Phase: Adoptify components ===");
+                    await InstallAdoptifyComponents(azureSub, log);
                 }
 
                 // Open admin site?
@@ -95,73 +107,122 @@ namespace App.ControlPanel.Engine
                 var needSiteFilter = Config.SolutionConfig.ImportTaskSettings.WebTraffic || Config.SolutionConfig.ImportTaskSettings.ActivityLog;
                 if (needSiteFilter && Config.SharePointConfig.TargetSites.Count == 0)
                 {
-                    _logger.LogInformation($"IMPORTANT! There are no configured SharePoint urls specified. Please add manually at least one URL to allow site data import. " +
+                    log.LogInformation($"IMPORTANT! There are no configured SharePoint urls specified. Please add manually at least one URL to allow site data import. " +
                         $"See 'Configure Filtered URLs' in deployment guide for more info.");
                 }
             }
             catch (InstallException ex)       // General API error
             {
-                _logger.LogError(ex.Message);
+                log.LogError(ex.Message);
+                PrintFinalStatus(summary);
                 return;
             }
             catch (Exception ex)            // Anything else
             {
                 // Anything else. Log error as fatal
-                _logger.LogError($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + ex.Message);
+                log.LogError($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + ex.Message);
                 Console.WriteLine(ex);
                 InstallerLogs.AddToWindowsEventLog($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + ex.Message, true);
                 InstallerLogs.AddToWindowsEventLog(ex.ToString(), true);
+                PrintFinalStatus(summary);
                 return;
             }
 
-            _logger.LogInformation("All tasks completed.");
+            PrintFinalStatus(summary);
         }
 
-        private async Task InstallAdoptifyComponents(Azure.ResourceManager.Resources.SubscriptionResource azureSub)
+        /// <summary>
+        /// Emit final completion line + structured summary block. Uses the underlying logger
+        /// (not the summary-capturing wrapper) so summary lines aren't recursively captured.
+        /// </summary>
+        private void PrintFinalStatus(InstallSummary summary)
         {
-            _logger.LogInformation($"Launching web login pop-up for existing Adoptify site '{Config.SolutionConfig.Adoptify.ExistingSiteUrl}'...");
+            if (summary.ErrorCount == 0 && summary.WarningCount == 0)
+            {
+                _logger.LogInformation("All tasks completed.");
+            }
+            else
+            {
+                _logger.LogInformation($"Completed with {summary.ErrorCount} error(s), {summary.WarningCount} warning(s). See summary below.");
+            }
+            summary.Print(_logger);
+        }
+
+        private async Task InstallAdoptifyComponents(Azure.ResourceManager.Resources.SubscriptionResource azureSub, ILogger log)
+        {
+            log.LogInformation($"Launching web login pop-up for existing Adoptify site '{Config.SolutionConfig.Adoptify.ExistingSiteUrl}'...");
             var authManager = new OfficeDevPnP.Core.AuthenticationManager();
             using (var ctx = authManager.GetWebLoginClientContext(Config.SolutionConfig.Adoptify.ExistingSiteUrl))
             {
-                var adoptifyInstallJob = new AdoptifyInstallJob(_logger, Config, azureSub, ctx);
+                var adoptifyInstallJob = new AdoptifyInstallJob(log, Config, azureSub, ctx);
 
                 // Install SPSite content and Azure components
                 await adoptifyInstallJob.Install();
 
-                _logger.LogInformation("Adoptify back-end setup complete. Remember to authorize the API connections in the portal.");
+                log.LogInformation("Adoptify back-end setup complete. Remember to authorize the API connections in the portal.");
             }
         }
 
-        private async Task WarmupAppServiceSite(string adminSiteUrl)
+        /// <summary>
+        /// Hit the admin site and retry on 5xx for ~2 minutes — the App Service has just been
+        /// (re)started and cold-start 503s for 30-90s are normal. Only declare failure once the
+        /// retry window is exhausted, or on a non-5xx unexpected response.
+        /// </summary>
+        private async Task WarmupAppServiceSite(ILogger log, string adminSiteUrl)
         {
-            _logger.LogInformation($"Warming-up web-application '{adminSiteUrl}'...");
-            await Task.Delay(5000);     // 5 seconds
+            const int totalWarmupSeconds = 120;
+            log.LogInformation($"Warming up web-application '{adminSiteUrl}' (retrying on 5xx for up to {totalWarmupSeconds}s)...");
+            await Task.Delay(5000);     // initial 5s grace
 
-            var httpClient = new HttpClient();
-            httpClient.Timeout = new TimeSpan(0, 5, 0);     // 5 mins
-            try
+            using (var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
             {
-                var response = await httpClient.GetAsync(adminSiteUrl);
-                if (response.StatusCode == System.Net.HttpStatusCode.OK || response.StatusCode == System.Net.HttpStatusCode.Moved)
+                // Per-request timeout deliberately shorter than the overall budget so a single hung
+                // request can't consume the whole 2-minute warmup window (cold-start App Service
+                // sometimes hangs the first request rather than 503-ing).
+                var deadline = DateTime.UtcNow.AddSeconds(totalWarmupSeconds);
+                int attempt = 0;
+                HttpStatusCode? lastStatus = null;
+                string lastError = null;
+
+                while (DateTime.UtcNow < deadline)
                 {
-                    _logger.LogInformation($"Got expected response from web-app {response.StatusCode}");
+                    attempt++;
+                    try
+                    {
+                        var response = await httpClient.GetAsync(adminSiteUrl);
+                        lastStatus = response.StatusCode;
+                        if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Moved || response.StatusCode == HttpStatusCode.MovedPermanently)
+                        {
+                            log.LogInformation($"Web-app warmup OK ({(int)response.StatusCode} {response.StatusCode}) on attempt {attempt}.");
+                            return;
+                        }
+                        if ((int)response.StatusCode < 500)
+                        {
+                            log.LogError($"Web-app warmup got unexpected non-success response {(int)response.StatusCode} {response.StatusCode} — check manually that the App Service is started.");
+                            return;
+                        }
+                        // 5xx — keep retrying
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        lastError = ex.Message;
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        lastError = "request timed out";
+                    }
+
+                    var remaining = deadline - DateTime.UtcNow;
+                    if (remaining <= TimeSpan.Zero) break;
+
+                    var delaySeconds = Math.Min(30, 5 * attempt);
+                    var actualDelay = TimeSpan.FromSeconds(Math.Min(delaySeconds, Math.Max(1, (int)remaining.TotalSeconds)));
+                    log.LogInformation($"Web-app warmup attempt {attempt}: {(lastStatus.HasValue ? $"{(int)lastStatus.Value} {lastStatus.Value}" : lastError ?? "no response")}. Retrying in {(int)actualDelay.TotalSeconds}s...");
+                    await Task.Delay(actualDelay);
                 }
-                else
-                {
-                    _logger.LogError($"Got unexpected response from web-app {response.StatusCode} - check manually the app service is started", true);
-                }
-            }
-            catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
-            {
-                _logger.LogError($"Couldn't reach web-app '{adminSiteUrl}' for warm-up: {ex.Message}");
-                if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
-                {
-                    _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the App Service warm-up request", Config.NetworkConfig?.VNetName));
-                }
-                else
-                {
-                    _logger.LogError("Check manually that the app service is started and reachable from this host.");
-                }
+
+                var lastDetail = lastStatus.HasValue ? $"{(int)lastStatus.Value} {lastStatus.Value}" : lastError ?? "no response";
+                log.LogError($"Web-app warmup did not succeed within {totalWarmupSeconds}s — last response was {lastDetail}. Check manually that the App Service is started.");
             }
         }
     }

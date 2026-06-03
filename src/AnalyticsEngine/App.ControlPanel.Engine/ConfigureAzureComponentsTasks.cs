@@ -63,7 +63,7 @@ namespace App.ControlPanel.Engine
             if (this.Config.TasksConfig.InstallLatestSolutionContent)
             {
                 await webApp.StartAsync();
-                _logger.LogInformation("App-service started again after release copied");
+                _logger.LogInformation("App Service started again after release copied");
             }
 
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
