@@ -8,7 +8,6 @@ using UsageReporting;
 
 namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 {
-    [Obsolete("Stats uploading is deprecated.")]
     public class WebApiStatsUploader : IStatsUploader, IDisposable
     {
         // Shared HttpClient so the socket pool is reused across instances. Per-instance HttpClient
