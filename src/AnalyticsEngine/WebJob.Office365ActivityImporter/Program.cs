@@ -252,19 +252,24 @@ namespace WebJob.Office365ActivityImporter
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
+
+                    // When Redis isn't configured we fall back to a process-static in-memory
+                    // throttle so we still get telemetry (just without cross-restart de-duping).
+                    IStatsDatesLoader statsDatesLoader;
                     if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
                     {
-                        var redisDatesAdaptor = new RedisStatsDatesLoader(configuredSettings);
-
-                        using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
-                        {
-                            var stats = new UsageStatsManager(sqlUsageBuilder, redisDatesAdaptor, statsUploader, telemetry);
-                            await stats.ProcessAndFailSilently();
-                        }
+                        statsDatesLoader = new RedisStatsDatesLoader(configuredSettings);
                     }
                     else
                     {
-                        telemetry.LogWarning("No Redis connection string found - skipping stats upload.");
+                        telemetry.LogInformation("No Redis connection string configured - using in-memory throttle for stats upload (the MIN_WAIT window resets each time the WebJob process restarts).");
+                        statsDatesLoader = new InMemoryStatsDatesLoader();
+                    }
+
+                    using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
+                    {
+                        var stats = new UsageStatsManager(sqlUsageBuilder, statsDatesLoader, statsUploader, telemetry);
+                        await stats.ProcessAndFailSilently();
                     }
                 }
 

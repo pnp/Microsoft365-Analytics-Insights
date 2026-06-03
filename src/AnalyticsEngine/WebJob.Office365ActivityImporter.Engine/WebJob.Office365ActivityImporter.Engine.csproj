@@ -194,6 +194,7 @@
     <Compile Include="RedisSingleDateLoader.cs" />
     <Compile Include="StatsUploader\AnonUsageStatsModelLoader.cs" />
     <Compile Include="StatsUploader\BaseClasses.cs" />
+    <Compile Include="StatsUploader\InMemoryStatsDatesLoader.cs" />
     <Compile Include="StatsUploader\RedisStatsDatesLoader.cs" />
     <Compile Include="StatsUploader\UsageStatsManager.cs" />
     <Compile Include="StatsUploader\SqlUsageStatsBuilder.cs" />

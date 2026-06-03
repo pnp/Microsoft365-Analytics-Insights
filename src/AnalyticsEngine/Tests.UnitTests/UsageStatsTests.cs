@@ -230,6 +230,69 @@ namespace Tests.UnitTests
             Assert.IsFalse(statsModel2.IsValidSecretForThisObject(sWrongSecret, SECRET));
 
         }
+
+        [TestMethod]
+        public async Task InMemoryStatsDatesLoader_PersistsAcrossInstancesWithinProcess()
+        {
+            // Each import cycle in WebJob.Office365ActivityImporter.Program creates a NEW
+            // IStatsDatesLoader inside the while(runAgain) loop. The in-memory loader must
+            // still report "last uploaded" across those fresh instances, otherwise the 1-day
+            // MIN_WAIT throttle in UsageStatsManager would be defeated.
+            InMemoryStatsDatesLoader.ResetForTests();
+
+            var loader1 = new InMemoryStatsDatesLoader();
+            Assert.IsNull(await loader1.GetLastUploadDt(), "Fresh loader (no prior upload this process) should return null.");
+
+            var before = DateTime.Now;
+            await loader1.RegisterLastUploadDt();
+            var after = DateTime.Now;
+
+            var loader2 = new InMemoryStatsDatesLoader();
+            var seen = await loader2.GetLastUploadDt();
+            Assert.IsNotNull(seen, "A second instance must observe the timestamp written by the first - state is process-static by design.");
+            Assert.IsTrue(seen.Value >= before && seen.Value <= after, $"Recorded timestamp {seen} should fall within [{before}, {after}].");
+
+            InMemoryStatsDatesLoader.ResetForTests();
+            Assert.IsNull(await new InMemoryStatsDatesLoader().GetLastUploadDt(), "ResetForTests must clear the process-static state.");
+        }
+
+        [TestMethod]
+        public async Task InMemoryStatsDatesLoader_HonoursMinWaitThrottle()
+        {
+            // End-to-end: a freshly constructed in-memory loader handed to UsageStatsManager
+            // should let one upload through, then suppress subsequent cycles within MIN_WAIT.
+            InMemoryStatsDatesLoader.ResetForTests();
+            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var tenantId = Guid.NewGuid();
+
+            var uploader = new FakeStatsUploader(tracer, false);
+
+            // Cycle 1 - new loader, no prior upload → should upload.
+            var mgr1 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), new InMemoryStatsDatesLoader(), uploader, tracer);
+            Assert.IsTrue(await mgr1.ProcessAndUploadStats(), "First cycle should upload.");
+
+            // Cycle 2 - fresh loader instance (simulating a new import cycle), same process →
+            // RegisterLastUploadDt from cycle 1 should still be in effect via the static field.
+            var mgr2 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), new InMemoryStatsDatesLoader(), uploader, tracer);
+            Assert.IsFalse(await mgr2.ProcessAndUploadStats(), "Second cycle must be throttled by the prior upload's timestamp.");
+
+            InMemoryStatsDatesLoader.ResetForTests();
+        }
+    }
+
+    // Always-works variant of the stats builder for end-to-end tests that don't want the
+    // first-call crash behaviour of ShittyUsageStatsReporterAdaptor.
+    internal class AlwaysWorksUsageStatsBuilder : BaseUsageStatsBuilder
+    {
+        public AlwaysWorksUsageStatsBuilder(ILogger tracer, Guid tenantId) : base(tracer, tenantId) { }
+
+        public override Task<BaseSolutionInstallConfig> GetLastAppliedSolutionConfig()
+            => Task.FromResult(new BaseSolutionInstallConfig { AllowTelemetry = true });
+
+        public override Task<AnonUsageStatsModel> LoadUsageStatsModel(BaseSolutionInstallConfig lastSettings)
+            => Task.FromResult(AnonUsageStatsModelLoader.Load(_tenantId, lastSettings));
+
+        public override Task SaveUsageStatsModelToDatabase(AnonUsageStatsModel latestStats) => Task.CompletedTask;
     }
 
     // It crashes, a lot. By design. 
