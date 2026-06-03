@@ -285,21 +285,101 @@ namespace Tests.UnitTests
             var mgr2 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), sharedLoader, uploader, tracer);
             Assert.IsFalse(await mgr2.ProcessAndUploadStats(), "Second cycle (same loader) must be throttled by cycle 1's RegisterLastUploadDt.");
         }
+
+        [TestMethod]
+        public async Task UsageStatsManager_AllowTelemetryFalse_DoesNotUpload()
+        {
+            // Tenant operators can opt out of telemetry by setting AllowTelemetry=false on the
+            // saved BaseSolutionInstallConfig. Pin that kill switch end-to-end: the manager
+            // must NOT call the uploader, and ProcessAndUploadStats must return false so the
+            // caller knows no upload happened.
+            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var tenantId = Guid.NewGuid();
+            var loader = new InMemoryStatsDatesLoader();
+            var uploader = new CountingStatsUploader();
+
+            var builder = new AlwaysWorksUsageStatsBuilder(tracer, tenantId, allowTelemetry: false);
+            var mgr = new UsageStatsManager(builder, loader, uploader, tracer);
+
+            var result = await mgr.ProcessAndUploadStats();
+
+            Assert.IsFalse(result, "AllowTelemetry=false must short-circuit to a non-uploaded result.");
+            Assert.AreEqual(0, uploader.UploadCount, "Uploader must not be invoked when telemetry is disabled.");
+            Assert.IsNull(await loader.GetLastUploadDt(), "RegisterLastUploadDt must not run when no upload happened — otherwise opt-out would silently throttle the next opt-in.");
+        }
+
+        [TestMethod]
+        public async Task WebApiStatsUploader_BlankConfig_ThrowsInvalidOperationException()
+        {
+            // The uploader contract is "no URL or no secret = configuration error, throw". This is
+            // by design: UsageStatsManager.ProcessAndFailSilently catches the throw and logs a
+            // warning, but no upload happens. Pin both halves of that contract.
+            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var model = AnonUsageStatsModelLoader.Load(Guid.NewGuid(), null);
+
+            using (var uploader = new WebApiStatsUploader(string.Empty, string.Empty, tracer))
+            {
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                    async () => await uploader.UploadToServer(model),
+                    "Empty URL + empty secret must throw — caller (ProcessAndFailSilently) relies on this to skip uploading when the operator hasn't configured StatsApiUrl/StatsApiSecret.");
+            }
+
+            using (var uploader = new WebApiStatsUploader("https://stats.example/", string.Empty, tracer))
+            {
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                    async () => await uploader.UploadToServer(model),
+                    "Empty secret alone must also throw — half-configured uploader is treated as misconfigured.");
+            }
+        }
+
+        [TestMethod]
+        public async Task UsageStatsManager_BlankUploaderConfig_FailsSilently()
+        {
+            // End-to-end: a misconfigured uploader must NOT escape ProcessAndFailSilently. The
+            // importer's main loop calls ProcessAndFailSilently exactly so transient/config
+            // failures in telemetry never break the import cycle.
+            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var tenantId = Guid.NewGuid();
+            using (var uploader = new WebApiStatsUploader(string.Empty, string.Empty, tracer))
+            {
+                var mgr = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), new InMemoryStatsDatesLoader(), uploader, tracer);
+                var result = await mgr.ProcessAndFailSilently();
+                Assert.IsFalse(result, "ProcessAndFailSilently must report failure but not throw when the uploader is misconfigured.");
+            }
+        }
     }
 
     // Always-works variant of the stats builder for end-to-end tests that don't want the
     // first-call crash behaviour of ShittyUsageStatsReporterAdaptor.
     internal class AlwaysWorksUsageStatsBuilder : BaseUsageStatsBuilder
     {
-        public AlwaysWorksUsageStatsBuilder(ILogger tracer, Guid tenantId) : base(tracer, tenantId) { }
+        private readonly bool _allowTelemetry;
+
+        public AlwaysWorksUsageStatsBuilder(ILogger tracer, Guid tenantId, bool allowTelemetry = true) : base(tracer, tenantId)
+        {
+            _allowTelemetry = allowTelemetry;
+        }
 
         public override Task<BaseSolutionInstallConfig> GetLastAppliedSolutionConfig()
-            => Task.FromResult(new BaseSolutionInstallConfig { AllowTelemetry = true });
+            => Task.FromResult(new BaseSolutionInstallConfig { AllowTelemetry = _allowTelemetry });
 
         public override Task<AnonUsageStatsModel> LoadUsageStatsModel(BaseSolutionInstallConfig lastSettings)
             => Task.FromResult(AnonUsageStatsModelLoader.Load(_tenantId, lastSettings));
 
         public override Task SaveUsageStatsModelToDatabase(AnonUsageStatsModel latestStats) => Task.CompletedTask;
+    }
+
+    // Records how many times UploadToServer was invoked. Lets tests assert that a code path
+    // genuinely skipped uploading (vs. just succeeding silently).
+    internal class CountingStatsUploader : IStatsUploader
+    {
+        public int UploadCount { get; private set; }
+
+        public Task UploadToServer(AnonUsageStatsModel stats)
+        {
+            UploadCount++;
+            return Task.CompletedTask;
+        }
     }
 
     // It crashes, a lot. By design. 
