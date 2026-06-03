@@ -18,6 +18,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
+using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
 
 namespace WebJob.Office365ActivityImporter
@@ -243,6 +244,29 @@ namespace WebJob.Office365ActivityImporter
                 // Output cycle stats
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
 
+                // Upload latest stats if not done recently. Re-enabled in this build after the
+                // Feb-2026 deprecation (commit 3485bd2) — the server endpoint is back online and we
+                // want telemetry from tenants on the latest release. The signing scheme on
+                // AnonUsageStatsModel deliberately matches the older importers so the server keeps
+                // accepting payloads from versions that pre-date this re-enable.
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
+                    if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+                    {
+                        var redisDatesAdaptor = new RedisStatsDatesLoader(configuredSettings);
+
+                        using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
+                        {
+                            var stats = new UsageStatsManager(sqlUsageBuilder, redisDatesAdaptor, statsUploader, telemetry);
+                            await stats.ProcessAndFailSilently();
+                        }
+                    }
+                    else
+                    {
+                        telemetry.LogWarning("No Redis connection string found - skipping stats upload.");
+                    }
+                }
 
                 if (runAgain)
                 {
