@@ -36,7 +36,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 return Task.FromResult(redis);
             }
 
-            _logger.LogInformation("Azure Managed Redis uses access key authentication — IP-based firewall configuration is not required.");
+            _logger.LogInformation("Azure Managed Redis does not require IP-based firewall configuration here; access is controlled by Redis auth (key-based or RBAC/Entra ID) and, optionally, private endpoints.");
 
             return Task.FromResult(redis);
         }

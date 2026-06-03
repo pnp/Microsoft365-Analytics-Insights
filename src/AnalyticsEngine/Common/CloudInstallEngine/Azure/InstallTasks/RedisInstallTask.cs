@@ -145,9 +145,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 await base.EnsureTagsOnExisting(cluster.Data.Tags, cluster.GetTagResource());
             }
 
-            // Get or create the default database
+            // Get or create the default database.
+            //
+            // For NEW databases we default to RBAC-only (AccessKeysAuthentication = Disabled)
+            // — the runtime authenticates via Entra ID / managed identity / service principal
+            // (see RedisAccessPolicyAssignmentTask and CacheConnectionManager). Key auth on a
+            // fresh deployment is left off by design so that the cache can never be reached by
+            // a leaked connection string alone.
+            //
+            // For EXISTING databases we preserve whatever access-key mode is already set:
+            // disabling keys on a running cache mid-install would instantly break any in-flight
+            // connection that still has the old keyed connection string, and existing
+            // deployments may legitimately rely on key auth.
             var databases = cluster.GetRedisEnterpriseDatabases();
             RedisEnterpriseDatabaseResource database;
+            bool isNewDatabase = false;
             try
             {
                 database = await cluster.GetRedisEnterpriseDatabaseAsync("default");
@@ -155,25 +167,52 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
-                _logger.LogInformation($"Creating default database for Azure Managed Redis cluster '{name}'...");
+                _logger.LogInformation($"Creating default database for Azure Managed Redis cluster '{name}' with access keys disabled (RBAC/Entra ID auth)...");
                 var dbData = new RedisEnterpriseDatabaseData
                 {
                     ClusteringPolicy = RedisEnterpriseClusteringPolicy.OssCluster,
                     EvictionPolicy = RedisEnterpriseEvictionPolicy.AllKeysLru,
-                    AccessKeysAuthentication = AccessKeysAuthentication.Enabled
+                    AccessKeysAuthentication = AccessKeysAuthentication.Disabled
                 };
                 var dbOp = await databases.CreateOrUpdateAsync(WaitUntil.Completed, "default", dbData);
                 database = dbOp.Value;
-                _logger.LogInformation($"Created Azure Managed Redis database on port {database.Data.Port}.");
+                isNewDatabase = true;
+                _logger.LogInformation($"Created Azure Managed Redis database on port {database.Data.Port} (RBAC-only — no access keys).");
             }
 
-            var keys = await database.GetKeysAsync();
+            // Decide auth mode for downstream tasks. Null = treat as Enabled (preserve current
+            // behaviour and never silently break an install whose runtime is already authed
+            // with keys).
+            var keysAuth = database.Data.AccessKeysAuthentication;
+            var rbacOnly = isNewDatabase
+                || (keysAuth.HasValue && keysAuth.Value == AccessKeysAuthentication.Disabled);
+
+            if (!isNewDatabase)
+            {
+                if (rbacOnly)
+                {
+                    _logger.LogInformation($"Azure Managed Redis database '{database.Data.Name}' has access keys disabled — using RBAC/Entra ID auth.");
+                }
+                else
+                {
+                    _logger.LogInformation($"Azure Managed Redis database '{database.Data.Name}' has access keys enabled — using key-based auth (existing configuration preserved).");
+                }
+            }
+
+            string primaryKey = null;
+            if (!rbacOnly)
+            {
+                var keys = await database.GetKeysAsync();
+                primaryKey = keys.Value.PrimaryKey;
+            }
+
             return new RedisInstallResult
             {
                 IsLegacyClassicCache = false,
+                UseRbacAuth = rbacOnly,
                 HostName = cluster.Data.HostName,
                 Port = database.Data.Port ?? DEFAULT_TLS_PORT,
-                PrimaryKey = keys.Value.PrimaryKey,
+                PrimaryKey = primaryKey,
                 ResourceId = cluster.Id.ToString(),
                 ResourceName = cluster.Data.Name,
             };
