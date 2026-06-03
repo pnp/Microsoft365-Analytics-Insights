@@ -9,6 +9,7 @@ using System;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine
@@ -35,9 +36,11 @@ namespace App.ControlPanel.Engine
         private readonly string _configPassword;
 
         /// <summary>
-        /// Main execution entrypoint
+        /// Main execution entrypoint. Accepts an optional <see cref="CancellationToken"/> so the UI
+        /// can request cancellation via a Cancel button. Cancellation is co-operative and takes
+        /// effect at phase / task boundaries — in-flight Azure SDK calls complete first.
         /// </summary>
-        public async Task InstallOrUpdate()
+        public async Task InstallOrUpdate(CancellationToken ct = default(CancellationToken))
         {
             // Wrap the inbound logger so every WARN/ERROR raised during the run is captured
             // into an end-of-run summary block. Use the underlying _logger when emitting the
@@ -51,23 +54,32 @@ namespace App.ControlPanel.Engine
             var azureSub = BaseAnalyticsSolutionInstallJob.FromConfig(this.Config);
             try
             {
+                ct.ThrowIfCancellationRequested();
                 log.LogInformation("=== Phase: Azure backend resources ===");
                 // Get/create AppService + SQL + Redis. Binaries installed post-create.
                 var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub);
+                azureBackeEndCreationJob.CancellationToken = ct;
                 await azureBackeEndCreationJob.Install();
 
+                ct.ThrowIfCancellationRequested();
                 // Secure resources with RBAC roles
                 log.LogInformation("=== Phase: RBAC role assignments ===");
                 try
                 {
                     var resourceSecurityJob = new ResourceSecurityInstallJob(log, Config, azureSub);
+                    resourceSecurityJob.CancellationToken = ct;
                     await resourceSecurityJob.Install();
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
                     log.LogError($"Failed to assign RBAC roles: {ex.Message}. Continuing installation...");
                 }
 
+                ct.ThrowIfCancellationRequested();
                 // Run stuff now everything in Azure is created
                 log.LogInformation("=== Phase: App Service configuration & content deploy ===");
                 var tasks = new ConfigureAzureComponentsTasks(Config, log, _ftpConfig, InstalledByUsername, _softwareConfig, _configPassword);
@@ -83,16 +95,18 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription
                 );
 
+                ct.ThrowIfCancellationRequested();
                 // Warm-up app-service
                 log.LogInformation("=== Phase: App Service warm-up ===");
                 var adminSiteUrl = $"https://{azureBackeEndCreationJob.CreatedWebSiteResource.Data.HostNames.First()}/";
-                await WarmupAppServiceSite(log, adminSiteUrl);
+                await WarmupAppServiceSite(log, adminSiteUrl, ct);
 
                 log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
 
                 // Install Adoptify components
                 if (Config.SolutionConfig.SolutionTargeted == SolutionImportType.Adoptify)
                 {
+                    ct.ThrowIfCancellationRequested();
                     log.LogInformation("=== Phase: Adoptify components ===");
                     await InstallAdoptifyComponents(azureSub, log);
                 }
@@ -110,6 +124,12 @@ namespace App.ControlPanel.Engine
                     log.LogInformation($"IMPORTANT! There are no configured SharePoint urls specified. Please add manually at least one URL to allow site data import. " +
                         $"See 'Configure Filtered URLs' in deployment guide for more info.");
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                log.LogWarning("Install cancelled by user — stopped at the next safe checkpoint.");
+                PrintFinalStatus(summary, cancelled: true);
+                return;
             }
             catch (InstallException ex)       // General API error
             {
@@ -135,9 +155,13 @@ namespace App.ControlPanel.Engine
         /// Emit final completion line + structured summary block. Uses the underlying logger
         /// (not the summary-capturing wrapper) so summary lines aren't recursively captured.
         /// </summary>
-        private void PrintFinalStatus(InstallSummary summary)
+        private void PrintFinalStatus(InstallSummary summary, bool cancelled = false)
         {
-            if (summary.ErrorCount == 0 && summary.WarningCount == 0)
+            if (cancelled)
+            {
+                _logger.LogInformation($"Install cancelled — {summary.ErrorCount} error(s), {summary.WarningCount} warning(s) before cancellation.");
+            }
+            else if (summary.ErrorCount == 0 && summary.WarningCount == 0)
             {
                 _logger.LogInformation("All tasks completed.");
             }
@@ -166,13 +190,14 @@ namespace App.ControlPanel.Engine
         /// <summary>
         /// Hit the admin site and retry on 5xx for ~2 minutes — the App Service has just been
         /// (re)started and cold-start 503s for 30-90s are normal. Only declare failure once the
-        /// retry window is exhausted, or on a non-5xx unexpected response.
+        /// retry window is exhausted, or on a non-5xx unexpected response. Honors the
+        /// <paramref name="ct"/> so the user's Cancel button short-circuits the wait.
         /// </summary>
-        private async Task WarmupAppServiceSite(ILogger log, string adminSiteUrl)
+        private async Task WarmupAppServiceSite(ILogger log, string adminSiteUrl, CancellationToken ct = default(CancellationToken))
         {
             const int totalWarmupSeconds = 120;
             log.LogInformation($"Warming up web-application '{adminSiteUrl}' (retrying on 5xx for up to {totalWarmupSeconds}s)...");
-            await Task.Delay(5000);     // initial 5s grace
+            await Task.Delay(5000, ct);     // initial 5s grace
 
             using (var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
             {
@@ -186,10 +211,11 @@ namespace App.ControlPanel.Engine
 
                 while (DateTime.UtcNow < deadline)
                 {
+                    ct.ThrowIfCancellationRequested();
                     attempt++;
                     try
                     {
-                        var response = await httpClient.GetAsync(adminSiteUrl);
+                        var response = await httpClient.GetAsync(adminSiteUrl, ct);
                         lastStatus = response.StatusCode;
                         if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Moved || response.StatusCode == HttpStatusCode.MovedPermanently)
                         {
@@ -202,6 +228,10 @@ namespace App.ControlPanel.Engine
                             return;
                         }
                         // 5xx — keep retrying
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
                     }
                     catch (HttpRequestException ex)
                     {
@@ -218,7 +248,7 @@ namespace App.ControlPanel.Engine
                     var delaySeconds = Math.Min(30, 5 * attempt);
                     var actualDelay = TimeSpan.FromSeconds(Math.Min(delaySeconds, Math.Max(1, (int)remaining.TotalSeconds)));
                     log.LogInformation($"Web-app warmup attempt {attempt}: {(lastStatus.HasValue ? $"{(int)lastStatus.Value} {lastStatus.Value}" : lastError ?? "no response")}. Retrying in {(int)actualDelay.TotalSeconds}s...");
-                    await Task.Delay(actualDelay);
+                    await Task.Delay(actualDelay, ct);
                 }
 
                 var lastDetail = lastStatus.HasValue ? $"{(int)lastStatus.Value} {lastStatus.Value}" : lastError ?? "no response";

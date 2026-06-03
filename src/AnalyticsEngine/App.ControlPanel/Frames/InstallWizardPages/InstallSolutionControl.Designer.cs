@@ -34,6 +34,7 @@
             System.Windows.Forms.ListViewItem listViewItem2 = new System.Windows.Forms.ListViewItem("Error", 0);
             this.btnRunTests = new System.Windows.Forms.Button();
             this.btnCopyLog = new System.Windows.Forms.Button();
+            this.btnCancel = new System.Windows.Forms.Button();
             this.grpTasks = new System.Windows.Forms.GroupBox();
             this.chkInstallOptionAllowUsageStats = new System.Windows.Forms.CheckBox();
             this.chkInstallOptionOpenAdminSite = new System.Windows.Forms.CheckBox();
@@ -175,6 +176,20 @@
             this.btnInstall.UseVisualStyleBackColor = true;
             this.btnInstall.Click += new System.EventHandler(this.btnInstall_Click);
             // 
+            // btnCancel
+            // 
+            // Sits at the same location as btnInstall and is toggled via Visible in SetRunningState;
+            // appears in place of Install/Upgrade during a running install.
+            this.btnCancel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnCancel.Location = new System.Drawing.Point(408, 360);
+            this.btnCancel.Name = "btnCancel";
+            this.btnCancel.Size = new System.Drawing.Size(126, 28);
+            this.btnCancel.TabIndex = 91;
+            this.btnCancel.Text = "Cancel";
+            this.btnCancel.UseVisualStyleBackColor = true;
+            this.btnCancel.Visible = false;
+            this.btnCancel.Click += new System.EventHandler(this.btnCancel_Click);
+            // 
             // lstLog
             // 
             this.lstLog.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
@@ -217,6 +232,7 @@
             this.Controls.Add(this.lblGUIInstallHeader);
             this.Controls.Add(this.pictureBox8);
             this.Controls.Add(this.btnInstall);
+            this.Controls.Add(this.btnCancel);
             this.Controls.Add(this.lstLog);
             this.Name = "InstallSolutionControl";
             this.Size = new System.Drawing.Size(537, 394);
@@ -233,6 +249,7 @@
 
         private System.Windows.Forms.Button btnRunTests;
         private System.Windows.Forms.Button btnCopyLog;
+        private System.Windows.Forms.Button btnCancel;
         private System.Windows.Forms.GroupBox grpTasks;
         private System.Windows.Forms.CheckBox chkInstallOptionAllowUsageStats;
         private System.Windows.Forms.CheckBox chkInstallOptionOpenAdminSite;
