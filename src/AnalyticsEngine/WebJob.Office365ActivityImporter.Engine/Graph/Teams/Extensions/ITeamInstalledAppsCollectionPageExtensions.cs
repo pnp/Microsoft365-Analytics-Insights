@@ -2,9 +2,11 @@
 using Common.Entities.Entities;
 using Common.Entities.Teams;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
@@ -22,33 +24,47 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             if (apps == null) return;
 
+            // Capture today once - re-reading DateTime.UtcNow per Y/M/D component would let a midnight
+            // rollover produce a predicate that matches no rows and create duplicate per-day rows.
+            var today = DateTime.UtcNow.Date;
+            int todayYear = today.Year, todayMonth = today.Month, todayDay = today.Day;
+
+            // Pre-fetch all of today's add-on logs for this team in one query to avoid N+1
+            // SingleOrDefaultAsync calls (one per installed app). Match in memory below.
+            var todaysLogsForTeam = await lookupManager.Database.TeamAddOnLogs
+                .Where(t =>
+                    t.Team.ID == dbTeam.ID &&
+                    t.Date.Year == todayYear &&
+                    t.Date.Month == todayMonth &&
+                    t.Date.Day == todayDay)
+                .ToListAsync();
+            var logsByAddOnId = todaysLogsForTeam.ToDictionary(l => l.AddOnID, l => l);
+
             foreach (var app in apps)
             {
                 var appDef = await lookupManager.GetTeamAddOnDefinition(app.TeamsAppDefinition.TeamsAppId, app.TeamsAppDefinition.DisplayName);
                 TeamAddOnLog todaysAddOnLog = null;
 
-                // See if there's already a log for this team/add-on for today
                 if (appDef.IsSavedToDB)
                 {
-                    todaysAddOnLog = await lookupManager.Database.TeamAddOnLogs
-                        .SingleOrDefaultAsync(t =>
-                        t.Team.ID == dbTeam.ID &&
-                        t.AddOnID == appDef.ID &&
-                        t.Date.Year == DateTime.Now.Year &&
-                        t.Date.Month == DateTime.Now.Month &&
-                        t.Date.Day == DateTime.Now.Day
-                    );
+                    logsByAddOnId.TryGetValue(appDef.ID, out todaysAddOnLog);
                 }
                 if (todaysAddOnLog == null)
                 {
-                    // No log for combination. Create new
                     todaysAddOnLog = new TeamAddOnLog()
                     {
                         AddOn = appDef,
                         Team = dbTeam,
-                        Date = DateTime.Now.Date
+                        Date = today
                     };
                     lookupManager.Database.TeamAddOnLogs.Add(todaysAddOnLog);
+
+                    // Track newly-added so a duplicate installation of the same add-on in
+                    // this same call resolves to the same log entity, not a second insert.
+                    if (appDef.IsSavedToDB)
+                    {
+                        logsByAddOnId[appDef.ID] = todaysAddOnLog;
+                    }
                 }
             }
         }

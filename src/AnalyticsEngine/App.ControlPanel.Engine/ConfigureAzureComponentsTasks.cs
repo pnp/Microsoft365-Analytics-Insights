@@ -5,7 +5,6 @@ using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
-using Azure.ResourceManager.Redis;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Models;
@@ -39,7 +38,7 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
-            RedisResource redis, CognitiveServicesInfo cognitiveServicesInfo,
+            RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription)
         {
             // Configure app-service connection-strings, etc
@@ -53,7 +52,7 @@ namespace App.ControlPanel.Engine
             }
 
             // Get solution sources either from Azure storage or local sources
-            var solutionSources = await GetSolutionFromSource(subscription, storage, automationAccount);
+            var solutionSources = await GetSolutionFromSource(subscription, automationAccount);
 
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
@@ -64,7 +63,7 @@ namespace App.ControlPanel.Engine
             if (this.Config.TasksConfig.InstallLatestSolutionContent)
             {
                 await webApp.StartAsync();
-                _logger.LogInformation("App-service started again after release copied");
+                _logger.LogInformation("App Service started again after release copied");
             }
 
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
@@ -113,18 +112,18 @@ namespace App.ControlPanel.Engine
             return installerExeFile;
         }
 
-        async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(SubscriptionResource subscription, StorageAccountResource storage, AutomationAccountResource automationAccount)
+        async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(SubscriptionResource subscription, AutomationAccountResource automationAccount)
         {
             AppServiceContentInstallJob appServiceContentInstallJob = null;
             if (this.Config.DownloadLatestStable)
             {
                 // Download webjobs from blob storage. Optionally install.
-                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, storage, automationAccount);
+                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, automationAccount);
             }
             else
             {
                 // Use local sources. Optionally install.
-                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, storage, automationAccount);
+                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _ftpConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, automationAccount);
             }
 
             // Install or just download, depending on config above
@@ -135,7 +134,7 @@ namespace App.ControlPanel.Engine
 
         async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
-            RedisResource redis,
+            RedisInstallResult redis,
             CognitiveServicesInfo cognitiveServicesInfo,
             AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
         {
@@ -179,8 +178,10 @@ namespace App.ControlPanel.Engine
             }
 
             // Connection strings
-            var redisKeys = redis.GetKeys();
-            var redisConnectionString = $"{redis.Data.HostName}:{redis.Data.SslPort},password={redisKeys.Value.PrimaryKey},ssl=True,abortConnect=False";
+            // Build the Redis connection string from the install-task result, which abstracts over
+            // both Azure Managed Redis (port 10000) and pre-existing legacy classic Azure Cache for
+            // Redis (port 6380) that the installer chose to reuse.
+            var redisConnectionString = $"{redis.HostName}:{redis.Port},password={redis.PrimaryKey},ssl=True,abortConnect=False";
 
             var storageInfo = new AzStorageConnectionInfo(storage);
             var connectionStrings = new ConnectionStringDictionary();

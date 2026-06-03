@@ -2,6 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -155,17 +156,17 @@ namespace Tests.UnitTests
                     Mail = graphUserUpn,
                 };
 
-                var skus = new GraphServiceSubscribedSkusCollectionPage
+                var skus = new List<SubscribedSku>
                 {
                     new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber }
                 };
 
                 // Note: SKU-member payload uses the OTHER casing
-                var usersWithSku = new List<Microsoft.Graph.User>
+                var usersWithSku = new List<Microsoft.Graph.Models.User>
                 {
-                    new Microsoft.Graph.User { UserPrincipalName = skuMemberUpn, Id = userId }
+                    new Microsoft.Graph.Models.User { UserPrincipalName = skuMemberUpn, Id = userId }
                 };
-                var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+                var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>>
                 {
                     { skuId, usersWithSku }
                 };
@@ -242,16 +243,16 @@ namespace Tests.UnitTests
             try
             {
                 var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
-                var skus = new GraphServiceSubscribedSkusCollectionPage
+                var skus = new List<SubscribedSku>
                 {
                     new SubscribedSku { SkuId = sku1Id, SkuPartNumber = sku1Part },
                     new SubscribedSku { SkuId = sku2Id, SkuPartNumber = sku2Part },
                 };
-                var skuMember = new Microsoft.Graph.User { UserPrincipalName = userUpn, Id = userId };
-                var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.User>>
+                var skuMember = new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId };
+                var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>>
                 {
-                    { sku1Id, new List<Microsoft.Graph.User> { skuMember } },
-                    { sku2Id, new List<Microsoft.Graph.User> { skuMember } },
+                    { sku1Id, new List<Microsoft.Graph.Models.User> { skuMember } },
+                    { sku2Id, new List<Microsoft.Graph.Models.User> { skuMember } },
                 };
 
                 var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);

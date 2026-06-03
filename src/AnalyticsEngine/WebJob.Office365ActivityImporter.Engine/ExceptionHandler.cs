@@ -15,26 +15,23 @@ namespace WebJob.Office365ActivityImporter.Engine
             {
                 return false;
             }
-            Console.WriteLine($"Got ${nameof(HttpRequestException)}. Error = " + ex.Message);
+            Console.WriteLine($"Got {nameof(HttpRequestException)}. Error = " + ex.Message);
             if (ex.InnerException != null) telemetry.LogError(ex, "Inner exception = " + ex.InnerException.Message);
 
-            if (response != null)
+            string errBody = string.Empty;
+            try
             {
-                string errBody = string.Empty;
-                try
-                {
-                    errBody = response.Content.ReadAsStringAsync().Result;
-                    telemetry.LogError("Error Body = " + errBody);
-                }
-                catch (ObjectDisposedException)
-                {
-                    return false;
-                }
+                errBody = response.Content.ReadAsStringAsync().Result;
+                telemetry.LogError("Error Body = " + errBody);
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
 
-                if (errBody.Contains("Too many requests"))
-                {
-                    return true;
-                }
+            if (errBody.Contains("Too many requests"))
+            {
+                return true;
             }
 
             return false;

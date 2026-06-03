@@ -5,6 +5,7 @@ using Azure.ResourceManager.Network.Models;
 using Azure.ResourceManager.PrivateDns;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure.InstallTasks
@@ -17,6 +18,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
     {
         public const string CONFIG_KEY_VNET_ID = "vnetId";
         public const string CONFIG_KEY_PE_NAME = "privateEndpointName";
+
+        // ARM reads should normally return in a few seconds. When they take longer than this
+        // we emit a WARN so unexpectedly-slow ARM calls are visible in the install log.
+        private const int SlowArmReadWarningSeconds = 20;
 
         public PrivateDnsZoneInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
             : base(config, logger, azureLocation, tags)
@@ -33,6 +38,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             // 1. Get or create the Private DNS Zone
             PrivateDnsZoneResource dnsZone = null;
+            var sw = Stopwatch.StartNew();
             try
             {
                 var response = await Container.GetPrivateDnsZoneAsync(zoneName);
@@ -42,6 +48,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 // Not found
             }
+            WarnIfSlow(sw, $"reading private DNS zone '{zoneName}'");
 
             if (dnsZone == null)
             {
@@ -61,6 +68,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // 2. Get or create VNet link
             var linkName = $"{zoneName}-vnet-link";
             VirtualNetworkLinkResource vnetLink = null;
+            sw.Restart();
             try
             {
                 var response = await dnsZone.GetVirtualNetworkLinkAsync(linkName);
@@ -70,6 +78,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 // Not found
             }
+            WarnIfSlow(sw, $"reading VNet link '{linkName}'");
 
             if (vnetLink == null)
             {
@@ -93,6 +102,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var peResource = Container.GetPrivateEndpoints().Get(peName).Value;
             var zoneGroupName = $"{peName}-zonegroup";
             PrivateDnsZoneGroupResource zoneGroup = null;
+            sw.Restart();
             try
             {
                 var response = await peResource.GetPrivateDnsZoneGroupAsync(zoneGroupName);
@@ -102,6 +112,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 // Not found
             }
+            WarnIfSlow(sw, $"reading DNS zone group '{zoneGroupName}'");
 
             if (zoneGroup == null)
             {
@@ -125,6 +136,15 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             return dnsZone;
+        }
+
+        private void WarnIfSlow(Stopwatch sw, string operation)
+        {
+            sw.Stop();
+            if (sw.Elapsed.TotalSeconds >= SlowArmReadWarningSeconds)
+            {
+                _logger.LogWarning($"ARM operation '{operation}' took {(int)sw.Elapsed.TotalSeconds}s — slower than expected ({SlowArmReadWarningSeconds}s threshold). Could indicate ARM regional latency or throttling.");
+            }
         }
     }
 }

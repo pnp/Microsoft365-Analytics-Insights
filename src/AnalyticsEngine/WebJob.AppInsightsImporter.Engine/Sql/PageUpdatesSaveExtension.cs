@@ -40,7 +40,11 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
         public override async Task<FileMetadataFieldName> Load(string id)
         {
-            return await _context.FileMetadataFields.Where(e => e.Name == id.ToLower()).FirstOrDefaultAsync();
+            // Hoist ToLowerInvariant out of the EF query — LINQ-to-Entities can translate
+            // String.ToLower() but NOT String.ToLowerInvariant() and throws NotSupportedException
+            // at execution time if it appears inside an IQueryable expression tree.
+            var lookupName = id?.ToLowerInvariant();
+            return await _context.FileMetadataFields.Where(e => e.Name == lookupName).FirstOrDefaultAsync();
         }
     }
 

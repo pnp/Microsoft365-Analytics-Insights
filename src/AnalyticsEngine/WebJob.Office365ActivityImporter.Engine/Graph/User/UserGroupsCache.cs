@@ -10,15 +10,49 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
 {
     /// <summary>
     /// Abstract cache for Entra ID group memberships for users by UPN.
+    /// Entries are evicted in bulk after <see cref="CacheTtl"/> elapses to bound memory growth
+    /// in long-running WebJob processes (group memberships rarely change inside a single import run).
     /// </summary>
     public abstract class UserGroupsCache
     {
         protected readonly ILogger _logger;
-        private readonly ConcurrentDictionary<string, List<string>> _userGroupsCache = new ConcurrentDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        private ConcurrentDictionary<string, List<string>> _userGroupsCache = new ConcurrentDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// How long cached group memberships are kept before the cache is bulk-cleared.
+        /// One hour matches the typical import-cycle cadence and prevents unbounded growth
+        /// in tenants with hundreds of thousands of unique UPNs. Virtual so tests can shorten it.
+        /// </summary>
+        protected internal virtual TimeSpan CacheTtl => TimeSpan.FromHours(1);
+
+        private DateTime _lastClearedUtc = DateTime.UtcNow;
+        private readonly object _evictionLock = new object();
 
         protected UserGroupsCache(ILogger logger)
         {
             _logger = logger;
+        }
+
+        /// <summary>
+        /// Test hook: count of entries currently in the cache. Internal so tests can
+        /// verify eviction behaviour without exposing the underlying dictionary.
+        /// </summary>
+        internal int CachedEntryCount => _userGroupsCache.Count;
+
+        private void EvictIfStale()
+        {
+            if (DateTime.UtcNow - _lastClearedUtc < CacheTtl) return;
+            lock (_evictionLock)
+            {
+                if (DateTime.UtcNow - _lastClearedUtc < CacheTtl) return;
+                var oldCount = _userGroupsCache.Count;
+                _userGroupsCache = new ConcurrentDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                _lastClearedUtc = DateTime.UtcNow;
+                if (oldCount > 0)
+                {
+                    _logger?.LogInformation($"UserGroupsCache TTL elapsed: cleared {oldCount} cached UPN entries.");
+                }
+            }
         }
 
         /// <summary>
@@ -28,6 +62,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
         {
             if (string.IsNullOrWhiteSpace(upn))
                 throw new ArgumentNullException(nameof(upn));
+
+            EvictIfStale();
 
             if (_userGroupsCache.TryGetValue(upn, out var cachedGroups))
                 return cachedGroups;

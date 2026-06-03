@@ -38,6 +38,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         public string AppIdentity { get; set; }
 
+        /// <summary>
+        /// The Azure region of the Copilot service that handled the interaction. From the
+        /// CopilotInteractionAuditRecord schema (https://learn.microsoft.com/office/office-365-management-api/copilot-schema).
+        /// </summary>
+        public string ClientRegion { get; set; }
+
+        /// <summary>
+        /// Version of the Copilot audit log schema for this record.
+        /// </summary>
+        public string CopilotLogVersion { get; set; }
+
         public static CopilotAuditLogContent FromJson(string json)
         {
             var thisAuditLogReport = JsonConvert.DeserializeObject<CopilotAuditLogContent>(json);
@@ -139,12 +150,41 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// The name of the target custom engine agent. Present when the interaction involves a custom engine agent.
         /// </summary>
         public string TargetAgentName { get; set; }
+
+        /// <summary>
+        /// Identifier of the Copilot conversation thread the interaction belongs to.
+        /// </summary>
+        public string ThreadId { get; set; }
+
+        /// <summary>
+        /// Identifiers of the messages that participated in the interaction.
+        /// </summary>
+        public List<string> MessageIds { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Information about AI system plugins invoked during the interaction.
+        /// </summary>
+        public List<AISystemPlugin> AISystemPlugin { get; set; } = new List<AISystemPlugin>();
+    }
+
+    /// <summary>
+    /// Schema element describing an AI system plugin invoked during a Copilot interaction.
+    /// </summary>
+    public class AISystemPlugin
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
     }
 
     public class Context
     {
         public string Id { get; set; } = null;
         public string Type { get; set; } = null;
+
+        /// <summary>
+        /// Identifier of the container the context belongs to (e.g. a Teams team or SharePoint container).
+        /// </summary>
+        public string ContainerId { get; set; }
     }
 
 
@@ -155,5 +195,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public string SensitivityLabelId { get; set; } = null;
         public string Type { get; set; } = null;
         public string SiteUrl { get; set; }
+
+        /// <summary>
+        /// Unique identifier of the SharePoint list item backing this resource, when applicable.
+        /// </summary>
+        [JsonProperty("listItemUniqueId")]
+        public string ListItemUniqueId { get; set; }
+
+        /// <summary>
+        /// The action performed against the resource during the Copilot interaction (e.g. Read).
+        /// </summary>
+        public string Action { get; set; }
     }
 }

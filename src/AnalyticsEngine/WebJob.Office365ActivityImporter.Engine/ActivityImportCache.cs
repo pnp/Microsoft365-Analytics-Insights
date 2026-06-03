@@ -14,6 +14,12 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// </summary>
     public class ActivityImportCache
     {
+        // Single private lock guarding ProcessedIDs, NewlyIgnoredIDs and the GetIds/SaveNewlyIgnoredEvents snapshots.
+        // Replaces the previous mix of lock(this) (anti-pattern: external code can lock on the instance) and a
+        // separate static _idCheckLock that was used by SaveNewlyIgnoredEvents and therefore provided no mutual
+        // exclusion against the writer methods that used lock(this).
+        private readonly object _lock = new object();
+
         private ActivityImportCache()
         {
             ProcessedIDs = new Dictionary<int, Dictionary<Guid, DateTime>>();
@@ -134,7 +140,7 @@ namespace WebJob.Office365ActivityImporter.Engine
 
         void AddProcessedID(Guid id, DateTime processedDate)
         {
-            lock (this)
+            lock (_lock)
             {
                 this.GetCacheChunkForAuditLog(processedDate, CacheType.Processed).Add(id, processedDate);
             }
@@ -187,7 +193,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// </summary>
         public void ClearNewIgnoredIDs()
         {
-            lock (this)
+            lock (_lock)
             {
                 this.NewlyIgnoredIDs.Clear();
 
@@ -204,7 +210,7 @@ namespace WebJob.Office365ActivityImporter.Engine
 
         public bool HaveSeenInProcessedOrIgnoredEvents(Guid id)
         {
-            lock (this)
+            lock (_lock)
             {
 
                 foreach (Dictionary<Guid, DateTime> cache in this.ProcessedIDs.Values)
@@ -232,7 +238,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// </summary>
         public void RememberProcessedEvent(AbstractAuditLogContent auditLogContent)
         {
-            lock (this)
+            lock (_lock)
             {
                 Dictionary<Guid, DateTime> theCache = this.GetCacheChunkForAuditLog(auditLogContent, CacheType.Processed);
                 theCache.Add(auditLogContent.Id, auditLogContent.CreationTime);
@@ -244,15 +250,12 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// </summary>
         internal void RememberNewlyIgnoredEvent(AbstractAuditLogContent auditLogContent)
         {
-            lock (this)
+            lock (_lock)
             {
                 this.GetCacheChunkForAuditLog(auditLogContent, CacheType.NewlyIgnored).Add(auditLogContent.Id, auditLogContent.CreationTime);
                 this.GetCacheChunkForAuditLog(auditLogContent, CacheType.Processed).Add(auditLogContent.Id, auditLogContent.CreationTime);
             }
         }
-
-        // Sync for ProcessedIDs
-        private static object _idCheckLock = new object();
 
 
         internal async Task SaveNewlyIgnoredEvents(AnalyticsEntitiesContext db)
@@ -260,8 +263,10 @@ namespace WebJob.Office365ActivityImporter.Engine
             // Update ignored
             List<IgnoredEvent> ignoreList = new List<IgnoredEvent>();
 
-            // Prevent any loader threads from adding to "ignored events" cache
-            lock (_idCheckLock)
+            // Snapshot + clear of in-memory cache must be atomic so concurrent loader threads don't
+            // add events between the snapshot and the clear (causing those events to be permanently
+            // lost from both the in-memory cache and the DB save).
+            lock (_lock)
             {
                 // Save newly ignored events to table in SQL
                 foreach (var cache in this.GetIds(ActivityImportCache.CacheType.NewlyIgnored))
@@ -286,6 +291,12 @@ namespace WebJob.Office365ActivityImporter.Engine
                 if (CommonExceptionHandler.GetErrorText(ex).Contains(PRIMARY_KEY_VIOLATION))
                 {
                     await DeleteIgnoredEvents(ignoreList, db);
+
+                    // Re-insert the current batch after deleting the duplicate older rows. Without this
+                    // retry the events were silently lost (already cleared from in-memory cache, never
+                    // committed to the ignored table), causing them to be re-processed on the next run.
+                    db.ignored_audit_events.AddRange(ignoreList);
+                    await db.SaveChangesAsync();
                 }
             }
             Console.WriteLine($"Saved {ignoreList.Count.ToString("n0")} events to ignore-list.");

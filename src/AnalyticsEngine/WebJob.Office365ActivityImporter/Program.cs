@@ -18,6 +18,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
+using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
 
 namespace WebJob.Office365ActivityImporter
@@ -168,6 +169,22 @@ namespace WebJob.Office365ActivityImporter
             // Loop forever?
             var runAgain = true;
 
+            // Stats-upload "last uploaded" tracker. Instantiated ONCE here, outside the import
+            // cycle loop, because the in-memory fallback otherwise loses its last-upload timestamp
+            // every cycle (defeating the 1-day MIN_WAIT throttle on UsageStatsManager and hammering
+            // the stats endpoint). Both loader implementations are cheap to construct and hold
+            // their own connection state, so creating them once is also fine for the Redis path.
+            IStatsDatesLoader statsDatesLoader;
+            if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+            {
+                statsDatesLoader = new RedisStatsDatesLoader(configuredSettings);
+            }
+            else
+            {
+                telemetry.LogInformation("No Redis connection string configured - using in-memory throttle for stats upload (the MIN_WAIT window resets each time the WebJob process restarts).");
+                statsDatesLoader = new InMemoryStatsDatesLoader();
+            }
+
             // Run app
             while (runAgain)
             {
@@ -243,6 +260,22 @@ namespace WebJob.Office365ActivityImporter
                 // Output cycle stats
                 importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
 
+                // Upload latest stats if not done recently. Re-enabled in this build after the
+                // Feb-2026 deprecation (commit 3485bd2) — the server endpoint is back online and we
+                // want telemetry from tenants on the latest release. The signing scheme on
+                // AnonUsageStatsModel deliberately matches the older importers so the server keeps
+                // accepting payloads from versions that pre-date this re-enable.
+                // statsDatesLoader is hoisted outside this loop so the in-memory fallback retains
+                // its "last uploaded" timestamp across cycles.
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
+                    using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
+                    {
+                        var stats = new UsageStatsManager(sqlUsageBuilder, statsDatesLoader, statsUploader, telemetry);
+                        await stats.ProcessAndFailSilently();
+                    }
+                }
 
                 if (runAgain)
                 {

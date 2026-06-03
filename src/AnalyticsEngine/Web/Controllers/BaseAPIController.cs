@@ -17,7 +17,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<RefreshOAuthToken> GetCachedUserAccessTokenAsync()
         {
             var config = new AppConfig();
-            var redisConManager = CacheConnectionManager.GetConnectionManager(config.ConnectionStrings.RedisConnectionString);
+            var redisConManager = CacheConnectionManager.GetConnectionManager(config.ConnectionStrings.RedisConnectionString, tenantId: config.TenantGUID.ToString(), clientId: config.ClientID, clientSecret: config.ClientSecret);
             var authToken = await redisConManager.GetToken(ClaimsPrincipal.Current);
 
             return authToken;

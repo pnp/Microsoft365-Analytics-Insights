@@ -57,20 +57,29 @@ namespace Web.AnalyticsWeb.Controllers
                     };
                 }
 
-                // Create new SB client
+                // Create new SB client. Wrap in try/finally so client + sender are disposed
+                // even if AddChangeMsgToQueue throws - otherwise sockets leak per webhook call.
                 var sbClient = new ServiceBusClient(config.ConnectionStrings.ServiceBusConnectionString);
                 var sbConnectionProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
                 var sbSender = sbClient.CreateSender(sbConnectionProps.EntityPath);
 
                 try
                 {
-                    await CallQueueProcessor.AddChangeMsgToQueue(changes, telemetry, sbSender);
+                    try
+                    {
+                        await CallQueueProcessor.AddChangeMsgToQueue(changes, telemetry, sbSender);
+                    }
+                    catch (ServiceBusException ex)
+                    {
+                        telemetry.TrackException(ex);
+                        telemetry.LogError($"Error adding change messages to queue: {ex.Message}");
+                        return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                    }
                 }
-                catch (ServiceBusException ex)
+                finally
                 {
-                    telemetry.TrackException(ex);
-                    telemetry.LogError($"Error adding change messages to queue: {ex.Message}");
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                    await sbSender.DisposeAsync();
+                    await sbClient.DisposeAsync();
                 }
 
                 var successResponse = new HttpResponseMessage(HttpStatusCode.OK);
@@ -81,7 +90,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 telemetry.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
                 var errResponse = new HttpResponseMessage(HttpStatusCode.BadRequest);
-                errResponse.Content = new StringContent($"Could not find {nameof(ChangeNotificationCollection)} in body",
+                errResponse.Content = new StringContent($"Could not find {nameof(GraphChangeNotificationList)} in body",
                     System.Text.Encoding.UTF8, "text/plain");
                 return errResponse;
             }

@@ -69,6 +69,9 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
                     // Convert hit values 
                     const int ONE_THOUSAND = 1000;
 
+                    // TODO: the parsed CustomProperties.PageLoad value above is overwritten here and never used.
+                    // Behaviour preserved intentionally because downstream reports may already depend on this
+                    // DurationMS-based calculation. Confirm with domain owner before changing.
                     pageLoadTimeInSeconds = Math.Round(this.DurationMS / (double)(ONE_THOUSAND * 10), 2);
                 }
 

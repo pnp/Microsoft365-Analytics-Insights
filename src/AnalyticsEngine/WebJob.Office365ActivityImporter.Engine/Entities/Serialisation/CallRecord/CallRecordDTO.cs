@@ -3,6 +3,8 @@ using Common.Entities;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -36,6 +38,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             string callJsonText = string.Empty;
             var callDTO = await manualClient.GetAsyncWithThrottleRetries<CallRecordDTO>($"https://graph.microsoft.com/v1.0/communications/callRecords/{callId}?$expand=sessions($expand=segments)",
                 jsonStringAction: s => callJsonText = s);
+
+            if (callDTO == null)
+            {
+                telemetry.LogWarning($"Got null/unparseable response loading call record '{callId}'. Skipping.");
+                return null;
+            }
 
             callDTO.JsonText = callJsonText;
 
@@ -256,12 +264,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         private static async Task<string> GetEmailAddress(IdentitySetDTO callee, TeamsLoadContext teamsLoadContext, ILogger telemetry)
         {
-            Microsoft.Graph.User graphUser = null;
+            Microsoft.Graph.Models.User graphUser = null;
             try
             {
                 graphUser = await teamsLoadContext.UserCache.Load(callee?.User?.Id);
             }
-            catch (ServiceException ex)
+            catch (ODataError ex)
             {
                 if (ex.Message.Contains("Request_ResourceNotFound"))
                 {
