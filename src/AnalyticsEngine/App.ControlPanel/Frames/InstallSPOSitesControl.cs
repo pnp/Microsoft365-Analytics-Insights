@@ -3,7 +3,9 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using Common.Entities.Installer;
 using DataUtils;
+using Microsoft.Extensions.Logging;
 using System;
+using System.Threading;
 using System.Windows.Forms;
 using static App.ControlPanel.Frames.InstallWizard.InstallSolutionControl;
 
@@ -13,10 +15,15 @@ namespace App.ControlPanel.Frames
     {
         private BaseInstallProcess _installerEngine = null;
         private readonly InstallSPOSitesControlLogger _logger;
+        // CTS for the currently-running install/test/uninstall. Replaced on each StartBackgroundProcess
+        // so a previous run's cancellation can't affect the next one.
+        private CancellationTokenSource _runCts;
         public InstallSPOSitesControl()
         {
             InitializeComponent();
             _logger = new InstallSPOSitesControlLogger(this);
+            installSolutionControl1.CancelRequested += InstallSolutionControl1_CancelRequested;
+            tabs.Selecting += Tabs_Selecting;
             azureBaseConfigControl1.OnNeedAppRegistrationCredentials = () => GetConfigFromGUI().InstallerAccount;
             networkingConfigControl1.OnNeedAzureCredentials = () =>
             {
@@ -284,10 +291,46 @@ namespace App.ControlPanel.Frames
             {
                 this.Cursor = Cursors.Default;
             }
-            tabs.Enabled = state == AppWaitState.Ready;
+
+            // Don't disable the whole tab control — that greys out the log ListView and
+            // disables scrolling, which is exactly what the user complained about. Instead,
+            // disable each tab page except the install tab (so the user can't change config
+            // mid-run) and prevent navigation away from the install tab via the Selecting hook.
+            // The install tab itself stays enabled so log scrolling, copy-to-clipboard, and the
+            // Cancel button keep working.
+            bool isWorking = state == AppWaitState.Working;
+            foreach (TabPage tp in tabs.TabPages)
+            {
+                if (tp == tabInstall) continue;
+                tp.Enabled = !isWorking;
+            }
+            installSolutionControl1.SetRunningState(isWorking);
+            btnNext.Enabled = !isWorking && tabs.SelectedIndex < (tabs.TabCount - 1);
 
             MainForm mainForm = (MainForm)this.ParentForm;
             mainForm.SetFormLoadingState(state);
+        }
+
+        /// <summary>
+        /// Block navigation away from the install tab while a background process is running.
+        /// </summary>
+        private void Tabs_Selecting(object sender, TabControlCancelEventArgs e)
+        {
+            if (_runCts != null && !_runCts.IsCancellationRequested && e.TabPage != tabInstall)
+            {
+                e.Cancel = true;
+            }
+        }
+
+        /// <summary>
+        /// User clicked Cancel — request co-operative cancellation. The install engine checks the token
+        /// between phases / task batches; in-flight Azure SDK calls will complete before we stop.
+        /// </summary>
+        private void InstallSolutionControl1_CancelRequested(object sender, EventArgs e)
+        {
+            if (_runCts == null || _runCts.IsCancellationRequested) return;
+            _logger.LogWarning("Cancellation requested — install will stop at the next safe checkpoint. In-flight Azure operations will complete first.");
+            try { _runCts.Cancel(); } catch (ObjectDisposedException) { /* race with completion */ }
         }
 
         // ISolutionConfigurableComponent
@@ -348,6 +391,11 @@ namespace App.ControlPanel.Frames
 
             var softwareConfig = new SoftwareReleaseConfig();
 
+            // Fresh cancellation source per run. Dispose the previous one (if any) defensively;
+            // it should already be Disposed in RunWorkerCompleted but guard against unusual paths.
+            _runCts?.Dispose();
+            _runCts = new CancellationTokenSource();
+
             if (task == InstallTask.Install)
             {
                 _installerEngine = new SolutionInstaller(config, _logger, softwareConfig, FtpConfig, Environment.UserName, (this.ParentForm as MainForm).LastPassword);
@@ -400,7 +448,7 @@ namespace App.ControlPanel.Frames
                     gotSomethingToDo = true;
                     try
                     {
-                        ((SolutionInstaller)_installerEngine).InstallOrUpdate().Wait();
+                        ((SolutionInstaller)_installerEngine).InstallOrUpdate(_runCts?.Token ?? CancellationToken.None).Wait();
                     }
                     catch (AggregateException ex)
                     {
@@ -430,6 +478,10 @@ namespace App.ControlPanel.Frames
         {
             SetFormGUIState(AppWaitState.Ready);
             System.Media.SystemSounds.Beep.Play();
+
+            // Release the cancellation source — a fresh one is created per run in StartBackgroundProcess.
+            try { _runCts?.Dispose(); } catch (Exception) { }
+            _runCts = null;
         }
 
         #endregion

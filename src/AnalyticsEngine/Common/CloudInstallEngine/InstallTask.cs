@@ -55,7 +55,9 @@ namespace CloudInstallEngine
             {
                 var r = await tagResource.GetAsync();
                 await r.Value.UpdateAsync(WaitUntil.Completed, tagPatch);
-                _logger.LogInformation($"Updated resource tags");
+                // Intentionally no log line: tag updates are an implementation detail and
+                // every "Found existing X" line is already adjacent — emitting "Updated resource tags"
+                // for almost every resource only adds noise to the install log.
             }
         }
 

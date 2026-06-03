@@ -71,14 +71,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _logger.LogInformation($"Calling downloaded control-panel app to init/update database. This could take a while if the existing schema needs updating.");
 
-            var success = await SendMsgToInstaller(InstallerConstants.PARAM_INITDB, upgradeInfo.ToBase64());
-            if (!success)
+            var result = await SendMsgToInstaller(InstallerConstants.PARAM_INITDB, upgradeInfo.ToBase64());
+            if (!result.Success)
             {
-                throw new UnexpectedInstallException($"Unexpected result from downloaded control-panel app. Database initialisation will need to be done manually- see event log ID {InstallerConstants.EVENT_LOG_CATEGORY_ID}");
+                throw new UnexpectedInstallException(
+                    $"Database initialisation failed: downloaded control-panel app exited with code {result.ExitCode}. " +
+                    $"Last output: {LastNonEmptyLine(result.StandardOutput, result.StandardError) ?? "(no output captured)"}. " +
+                    $"Full details in Windows application log (event ID {InstallerConstants.EVENT_LOG_CATEGORY_ID}).");
             }
             else
             {
-                _logger.LogInformation($"Database initialisation process exited. RECOMMENDED: check Windows application log for event ID '{InstallerConstants.EVENT_LOG_CATEGORY_ID}' to verify success.");
+                var lastLine = LastNonEmptyLine(result.StandardOutput);
+                _logger.LogInformation($"Database initialisation completed (exit 0)" + (lastLine != null ? $": {lastLine}" : ".") +
+                    $" Full details in Windows application log (event ID {InstallerConstants.EVENT_LOG_CATEGORY_ID}).");
             }
         }
 
@@ -96,11 +101,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var tempFileName = Path.GetTempFileName();
             File.WriteAllText(tempFileName, status.ToBase64());
 
-            var success = await SendMsgToInstaller(InstallerConstants.PARAM_REGISTERCONFIG, tempFileName.Base64Encode());
+            var result = await SendMsgToInstaller(InstallerConstants.PARAM_REGISTERCONFIG, tempFileName.Base64Encode());
 
-            if (!success)
+            if (!result.Success)
             {
-                throw new UnexpectedInstallException($"Unexpected result from downloaded control-panel app. Configuration registration failed - see event log ID {InstallerConstants.EVENT_LOG_CATEGORY_ID}");
+                throw new UnexpectedInstallException(
+                    $"Configuration registration failed: downloaded control-panel app exited with code {result.ExitCode}. " +
+                    $"See Windows application log (event ID {InstallerConstants.EVENT_LOG_CATEGORY_ID}).");
             }
             else
             {
@@ -108,37 +115,80 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
         }
 
-        async Task<bool> SendMsgToInstaller(string param, string val)
+        private class ChildResult
+        {
+            public bool Success { get; set; }
+            public int ExitCode { get; set; }
+            public string StandardOutput { get; set; }
+            public string StandardError { get; set; }
+        }
+
+        async Task<ChildResult> SendMsgToInstaller(string param, string val)
         {
             // Test
             bool sqlTestWorked = await _verifySqlCallback(_dbInfo.ConnectionString);
             if (!sqlTestWorked)
             {
                 _logger.LogInformation("Skipping control-panel app to init/update database due to failed connectivity test. Verify your current IP address is correct in the SQL Server firewall settings", true);
-                return false;
+                return new ChildResult { Success = false, ExitCode = -1 };
             }
 
-            Console.WriteLine($"Starting '{_exeFile.FullName}' with params '{param} {val}'");
+            Console.WriteLine($"Starting '{_exeFile.FullName}' with params '{param} <args-redacted>'");
 
-            ProcessStartInfo controlPanelStartInfo = new ProcessStartInfo();
-
-            // --initdb "hash"
-            controlPanelStartInfo.Arguments = $"{param} {val}";
-            controlPanelStartInfo.FileName = _exeFile.FullName;
-            controlPanelStartInfo.WindowStyle = ProcessWindowStyle.Normal;
-            int exitCode;
-
-
-            // Run the external process & wait for it to finish
-            using (var proc = Process.Start(controlPanelStartInfo))
+            // Redirect stdout/stderr so we can echo the child's progress into the install log
+            // instead of asking the operator to dig through Windows Event Viewer.
+            var startInfo = new ProcessStartInfo
             {
-                proc.WaitForExit();
+                FileName = _exeFile.FullName,
+                Arguments = $"{param} {val}",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
 
-                // Retrieve the app's exit code
-                exitCode = proc.ExitCode;
+            var stdout = new System.Text.StringBuilder();
+            var stderr = new System.Text.StringBuilder();
 
-                return exitCode == 0;
+            using (var proc = new Process { StartInfo = startInfo, EnableRaisingEvents = true })
+            {
+                proc.OutputDataReceived += (s, e) =>
+                {
+                    if (e.Data == null) return;
+                    stdout.AppendLine(e.Data);
+                    _logger.LogInformation($"  [child] {e.Data}");
+                };
+                proc.ErrorDataReceived += (s, e) =>
+                {
+                    if (e.Data == null) return;
+                    stderr.AppendLine(e.Data);
+                    _logger.LogWarning($"  [child stderr] {e.Data}");
+                };
+                proc.Start();
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
+
+                await Task.Run(() => proc.WaitForExit());
+
+                return new ChildResult
+                {
+                    Success = proc.ExitCode == 0,
+                    ExitCode = proc.ExitCode,
+                    StandardOutput = stdout.ToString(),
+                    StandardError = stderr.ToString(),
+                };
             }
+        }
+
+        private static string LastNonEmptyLine(params string[] sources)
+        {
+            foreach (var s in sources)
+            {
+                if (string.IsNullOrEmpty(s)) continue;
+                var lines = s.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                if (lines.Length > 0) return lines[lines.Length - 1].Trim();
+            }
+            return null;
         }
 
     }
