@@ -113,7 +113,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                         string.Equals(worker.Data.VmResourceId.ToString(), vmResourceId, StringComparison.OrdinalIgnoreCase))
                     {
                         vmAlreadyRegistered = true;
-                        _logger.LogInformation($"VM '{vmResourceId}' is already registered as hybrid worker '{worker.Data.Name}' in group '{groupName}'.");
+                        _logger.LogInformation($"VM '{ShortVmName(vmResourceId)}' is already registered as hybrid worker '{worker.Data.Name}' in group '{groupName}'.");
                         break;
                     }
                 }
@@ -121,7 +121,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 if (!vmAlreadyRegistered)
                 {
                     var workerName = Guid.NewGuid().ToString();
-                    _logger.LogInformation($"Registering VM '{vmResourceId}' as hybrid worker in group '{groupName}'...");
+                    _logger.LogInformation($"Registering VM '{ShortVmName(vmResourceId)}' as hybrid worker in group '{groupName}'...");
                     var workerContent = new HybridRunbookWorkerCreateOrUpdateContent()
                     {
                         VmResourceId = new ResourceIdentifier(vmResourceId),
@@ -140,17 +140,17 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                     }
                     catch (RequestFailedException ex)
                     {
-                        _logger.LogError($"Failed to register VM as hybrid worker: {ex.Message}");
+                        _logger.LogError($"Failed to register VM as hybrid worker: {FirstLine(ex.Message)} (HTTP {ex.Status} {ex.ErrorCode}).");
                         return group;
                     }
                 }
 
-                // Now install the extension — the VM is already associated with the automation account
-                var extensionInstalled = await EnsureHybridWorkerExtensionInstalled(vmResourceId, automationAccountUrl);
-                if (!extensionInstalled)
-                {
-                    _logger.LogError("Hybrid Worker extension was not installed successfully.");
-                }
+                // Now install the extension — the VM is already associated with the automation account.
+                // EnsureHybridWorkerExtensionInstalled logs its own specific error on failure (VM not
+                // running, extension install rejected, etc.); we deliberately don't pile a generic
+                // "Hybrid Worker extension was not installed successfully." line on top because it
+                // would just duplicate the root-cause entry in the install summary.
+                await EnsureHybridWorkerExtensionInstalled(vmResourceId, automationAccountUrl);
 
                 return group;
             }
@@ -382,7 +382,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             var sdkUrl = automationAccount.Data.AutomationHybridServiceUri?.ToString();
             if (!string.IsNullOrEmpty(sdkUrl))
             {
-                _logger.LogInformation($"Using Automation Hybrid Service URL from SDK: {sdkUrl}");
+                _logger.LogDebug($"Using Automation Hybrid Service URL from SDK: {sdkUrl}");
                 return sdkUrl;
             }
 
@@ -405,7 +405,9 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
 
                     if (!string.IsNullOrEmpty(hybridUrl))
                     {
-                        _logger.LogInformation($"Retrieved Automation Hybrid Service URL via REST: {hybridUrl}");
+                        // Internal/debug detail — only useful when troubleshooting an automation
+                        // hybrid worker registration. Suppress from normal install logs.
+                        _logger.LogDebug($"Retrieved Automation Hybrid Service URL via REST: {hybridUrl}");
                         return hybridUrl;
                     }
                 }

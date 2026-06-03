@@ -129,9 +129,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             _logger.LogInformation($"Adding Azure AD application with client ID '{clientId}' to key vault {vaultResource.Data.Name} for secret read & list; certificate read");
 
-            // Extract object Id by getting a token from the credentials passed
-            var objectIdValue = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(tenantId.ToString(), clientId, secret);
-            _logger.LogInformation($"Detected client ID '{clientId}' has object ID '{objectIdValue}'");
+            // Extract object Id by getting a token from the credentials passed. Only log the
+            // resolution on the first lookup; subsequent KV access-policy adds for the same SP would
+            // otherwise print an identical "Detected client ID..." line.
+            var (objectIdValue, wasCached) = await ServicePrincipalResolver.GetObjectIdFromClientCredentialsWithCacheInfo(tenantId.ToString(), clientId, secret);
+            if (!wasCached)
+            {
+                _logger.LogInformation($"Detected client ID '{clientId}' has object ID '{objectIdValue}'");
+            }
 
             await AddPolicyForConfiguredAccount(vaultResource, tenantId, objectIdValue, secretPerms, certPerms);
         }
