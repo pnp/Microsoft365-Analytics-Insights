@@ -139,10 +139,12 @@ namespace App.ControlPanel.Engine
             }
             catch (Exception ex)            // Anything else
             {
-                // Anything else. Log error as fatal
-                log.LogError($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + ex.Message);
+                // Anything else. Log error as fatal — include the full InnerException chain
+                // (the installer ILogger drops the Exception arg, so without this the inner
+                // cause of e.g. FluentFTP "see inner exception for more info" is lost).
+                log.LogError($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + CloudInstallEngine.ExceptionMessages.Format(ex));
                 Console.WriteLine(ex);
-                InstallerLogs.AddToWindowsEventLog($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + ex.Message, true);
+                InstallerLogs.AddToWindowsEventLog($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + CloudInstallEngine.ExceptionMessages.Format(ex), true);
                 InstallerLogs.AddToWindowsEventLog(ex.ToString(), true);
                 PrintFinalStatus(summary);
                 return;
