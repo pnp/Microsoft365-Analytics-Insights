@@ -89,20 +89,35 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 {
                     await client.Connect();
                 }
-                catch (SocketException)
+                catch (SocketException ex)
                 {
-                    _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy})");
+                    _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy}). " +
+                        $"Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
                     LogPrivateNetworkGuidanceIfApplicable();
                     throw;
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
-                    _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy}) and ensure app-service has 'FTP state' configured to 'FTPS only'");
+                    _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy}) and ensure app-service has 'FTP state' configured to 'FTPS only'. " +
+                        $"Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
                     LogPrivateNetworkGuidanceIfApplicable();
                     throw;
                 }
 
-                await Upload(client, zipContentsDir, relativeThisJobSubDir);
+                try
+                {
+                    await Upload(client, zipContentsDir, relativeThisJobSubDir);
+                }
+                catch (Exception ex)
+                {
+                    // FluentFTP wraps the real cause in InnerException and its top-level message
+                    // is the unhelpful "An error occurred uploading file(s). See inner exception
+                    // for more info." Surface the full chain so the operator can act on it.
+                    _logger.LogError($"FTP upload to '{relativeThisJobSubDir}' on {appServiceFtp.RootUrl} failed: " +
+                        CloudInstallEngine.ExceptionMessages.Format(ex));
+                    LogPrivateNetworkGuidanceIfApplicable();
+                    throw;
+                }
 
                 await client.Disconnect();
             }
