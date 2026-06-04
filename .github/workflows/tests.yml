@@ -89,7 +89,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # 2.0.0
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5
@@ -100,7 +100,7 @@ jobs:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
       - name: Config substitution - Unit tests
-        uses: microsoft/variable-substitution@6287962da9e5b6e68778dc51e840caa03ca84495 # 1.0.0
+        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
           files: '${{ env.Solution_Directory }}\App.Release.config'
       - name: Start Redis
