@@ -13,18 +13,19 @@ namespace CloudInstallEngine.Azure.InstallTasks
     /// <see cref="RedisInstallTask"/> reused a pre-existing classic Azure Cache for
     /// Redis — that resource already has its own DNS configuration from the previous install,
     /// and creating a Managed-Redis DNS zone alongside it would not point to anything useful.
-    /// Otherwise delegates to a standard <see cref="PrivateDnsZoneInstallTask"/>.
+    /// Otherwise derives the private DNS zone name from <see cref="RedisInstallResult"/> at
+    /// execution time (so the zone always matches the Redis kind we actually got — e.g.
+    /// <c>privatelink.redis.azure.net</c> for Azure Managed Redis) and delegates to a
+    /// standard <see cref="PrivateDnsZoneInstallTask"/>.
     /// </summary>
     public class RedisPrivateDnsZoneInstallTask : InstallTaskInAzResourceGroup<PrivateDnsZoneResource>
     {
         private readonly RedisInstallTask _redisTask;
-        private readonly PrivateDnsZoneInstallTask _innerTask;
 
         public RedisPrivateDnsZoneInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, RedisInstallTask redisTask)
             : base(config, logger, azureLocation, tags)
         {
             _redisTask = redisTask;
-            _innerTask = new PrivateDnsZoneInstallTask(config, logger, azureLocation, tags);
         }
 
         public override string TaskName => "get/create Redis private DNS zone";
@@ -44,8 +45,25 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 return null;
             }
 
-            _innerTask.Container = base.Container;
-            return await _innerTask.ExecuteTaskReturnResult(contextArg);
+            if (string.IsNullOrEmpty(_redisTask.LastResult.PrivateDnsZoneName))
+            {
+                throw new InstallException(
+                    "RedisPrivateDnsZoneInstallTask cannot deploy a DNS zone: the Redis install task did not populate " +
+                    $"{nameof(RedisInstallResult.PrivateDnsZoneName)} on its result.");
+            }
+
+            var vnetId = _config.GetConfigValue(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID);
+            var peName = _config.GetConfigValue(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME);
+
+            var innerConfig = TaskConfig.GetConfigForName(_redisTask.LastResult.PrivateDnsZoneName)
+                .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID, vnetId)
+                .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME, peName);
+
+            var innerTask = new PrivateDnsZoneInstallTask(innerConfig, _logger, AzureLocation, Tags)
+            {
+                Container = base.Container,
+            };
+            return await innerTask.ExecuteTaskReturnResult(contextArg);
         }
     }
 }

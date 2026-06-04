@@ -311,15 +311,16 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // If RedisInstallTask detected and reused a pre-existing legacy classic
                 // Azure Cache for Redis, RedisPrivateEndpointInstallTask / RedisPrivateDnsZoneInstallTask
                 // will log a warning and skip — the legacy resource retains its own networking.
+                // The Private Link group ID, target resource ID, and DNS zone name are NOT hardcoded
+                // here: the Redis-aware wrappers derive them from RedisInstallTask.LastResult at
+                // execution time, so the values always match the Redis kind we actually got.
                 var redisPeName = peNames.GetNameOrDefault(peNames.Redis, $"pe-{config.RedisName}-redis");
                 var redisPeConfig = TaskConfig.GetConfigForName(redisPeName)
-                    .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_TARGET_RESOURCE_ID, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Cache/redisEnterprise/{config.RedisName}")
-                    .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_GROUP_ID, "redisEnterprise")
                     .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_SUBNET_ID, subnetId);
                 this.AddTask(new RedisPrivateEndpointInstallTask(redisPeConfig, logger, Location, tagDic, _redisTask));
                 if (deployDns)
                 {
-                    var redisDnsConfig = TaskConfig.GetConfigForName("privatelink.redisenterprise.cache.azure.net")
+                    var redisDnsConfig = TaskConfig.NoConfig
                         .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID, vnetId)
                         .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME, redisPeName);
                     this.AddTask(new RedisPrivateDnsZoneInstallTask(redisDnsConfig, logger, Location, tagDic, _redisTask));

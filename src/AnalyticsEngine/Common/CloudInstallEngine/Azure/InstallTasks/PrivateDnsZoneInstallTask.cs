@@ -6,6 +6,7 @@ using Azure.ResourceManager.PrivateDns;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure.InstallTasks
@@ -132,7 +133,47 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                _logger.LogInformation($"Found existing DNS zone group '{zoneGroup.Data.Name}' on private endpoint '{peName}'.");
+                // Reconcile: if the existing zone group references a different (wrong) private DNS zone
+                // (e.g. an older installer pointed the PE at 'privatelink.redisenterprise.cache.azure.net'
+                // instead of 'privatelink.redis.azure.net'), recreate it. Without this, the bad config is
+                // sticky: A records never auto-register into the right zone and VNet-integrated clients
+                // keep resolving the public IP.
+                var configuredZoneIds = zoneGroup.Data.PrivateDnsZoneConfigs == null
+                    ? new List<string>()
+                    : zoneGroup.Data.PrivateDnsZoneConfigs
+                        .Where(c => c?.PrivateDnsZoneId != null)
+                        .Select(c => c.PrivateDnsZoneId.ToString())
+                        .ToList();
+                var pointsAtIntendedZone = configuredZoneIds
+                    .Any(id => string.Equals(id, dnsZone.Id.ToString(), System.StringComparison.OrdinalIgnoreCase));
+
+                if (!pointsAtIntendedZone)
+                {
+                    var existingSummary = configuredZoneIds.Count == 0
+                        ? "<none>"
+                        : string.Join(", ", configuredZoneIds);
+                    _logger.LogWarning(
+                        $"DNS zone group '{zoneGroupName}' on private endpoint '{peName}' references the wrong zone(s) [{existingSummary}] — expected '{dnsZone.Id}'. " +
+                        "Recreating so A records auto-register into the correct zone.");
+                    await zoneGroup.DeleteAsync(WaitUntil.Completed);
+
+                    var zoneGroupData = new PrivateDnsZoneGroupData()
+                    {
+                        Name = zoneGroupName,
+                    };
+                    zoneGroupData.PrivateDnsZoneConfigs.Add(new PrivateDnsZoneConfig()
+                    {
+                        Name = zoneName.Replace(".", "-"),
+                        PrivateDnsZoneId = dnsZone.Id,
+                    });
+                    var operation = await peResource.GetPrivateDnsZoneGroups().CreateOrUpdateAsync(WaitUntil.Completed, zoneGroupName, zoneGroupData);
+                    zoneGroup = operation.Value;
+                    _logger.LogInformation($"Recreated DNS zone group '{zoneGroup.Data.Name}' pointing at '{dnsZone.Data.Name}'.");
+                }
+                else
+                {
+                    _logger.LogInformation($"Found existing DNS zone group '{zoneGroup.Data.Name}' on private endpoint '{peName}'.");
+                }
             }
 
             return dnsZone;
