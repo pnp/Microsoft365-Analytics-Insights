@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using StackExchange.Redis;
 using System;
+using System.Net;
 using System.Threading.Tasks;
 
 namespace Common.Entities.Redis
@@ -89,6 +90,25 @@ namespace Common.Entities.Redis
             }
             else
             {
+                var localNoAuthOptions = ConfigurationOptions.Parse(connectionString);
+                if (HasLoopbackEndpoint(localNoAuthOptions))
+                {
+                    try
+                    {
+                        localNoAuthOptions.ConnectTimeout = 15000;
+                        localNoAuthOptions.SyncTimeout = 15000;
+                        localNoAuthOptions.AsyncTimeout = 15000;
+                        var localMuxer = ConnectionMultiplexer.Connect(localNoAuthOptions);
+                        localMuxer.GetDatabase().Ping();
+                        logger?.LogInformation("Redis connected to loopback endpoint without authentication.");
+                        return new CacheConnectionManager(localMuxer);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogWarning($"Redis loopback no-auth connect failed ({ex.Message}). Attempting RBAC/Entra ID auth...");
+                    }
+                }
+
                 logger?.LogInformation("Redis connection string has no password — using RBAC/Entra ID auth with runtime service principal.");
             }
 
@@ -146,6 +166,27 @@ namespace Common.Entities.Redis
             await options.ConfigureForAzureWithServicePrincipalAsync(clientId, tenantId, clientSecret).ConfigureAwait(false);
 
             return await ConnectionMultiplexer.ConnectAsync(options).ConfigureAwait(false);
+        }
+
+        private static bool HasLoopbackEndpoint(ConfigurationOptions options)
+        {
+            foreach (var endpoint in options.EndPoints)
+            {
+                if (endpoint is DnsEndPoint dnsEndpoint &&
+                    (string.Equals(dnsEndpoint.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(dnsEndpoint.Host, "127.0.0.1", StringComparison.Ordinal) ||
+                     string.Equals(dnsEndpoint.Host, "::1", StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
+                if (endpoint is IPEndPoint ipEndpoint && IPAddress.IsLoopback(ipEndpoint.Address))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
