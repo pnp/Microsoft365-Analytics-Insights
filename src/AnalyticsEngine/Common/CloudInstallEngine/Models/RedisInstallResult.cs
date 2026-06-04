@@ -46,5 +46,27 @@ namespace CloudInstallEngine.Models
 
         /// <summary>Short resource name (as displayed in the portal).</summary>
         public string ResourceName { get; set; }
+
+        /// <summary>
+        /// Private Link sub-resource ("group") ID for a private endpoint targeting this cache:
+        /// <c>redisEnterprise</c> for Azure Managed Redis, <c>redisCache</c> for legacy classic.
+        /// Populated for both kinds so the value is correct for the cache we actually have, but
+        /// the Redis-aware private endpoint wrapper still respects <see cref="IsLegacyClassicCache"/>
+        /// and skips itself for reused legacy caches — these values are descriptive, not a licence
+        /// for downstream tasks to provision networking for a legacy cache that was deliberately
+        /// left alone.
+        /// </summary>
+        public string PrivateLinkGroupId { get; set; }
+
+        /// <summary>
+        /// Private DNS zone name that matches the CNAME chain produced by the cache's public
+        /// FQDN: <c>privatelink.redis.azure.net</c> for Azure Managed Redis
+        /// (<c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c>) and
+        /// <c>privatelink.redis.cache.windows.net</c> for legacy classic
+        /// (<c>&lt;name&gt;.redis.cache.windows.net</c>). Populated for both kinds for the same
+        /// reason as <see cref="PrivateLinkGroupId"/>; the DNS wrapper still honours
+        /// <see cref="IsLegacyClassicCache"/> and does not deploy a zone for reused legacy caches.
+        /// </summary>
+        public string PrivateDnsZoneName { get; set; }
     }
 }

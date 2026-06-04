@@ -12,18 +12,19 @@ namespace CloudInstallEngine.Azure.InstallTasks
     /// Skips private endpoint creation (with a warning) when the associated
     /// <see cref="RedisInstallTask"/> reused a pre-existing classic Azure Cache for
     /// Redis — that resource already has its own networking from the previous install.
-    /// Otherwise delegates to a standard <see cref="PrivateEndpointInstallTask"/>.
+    /// Otherwise derives the Private Link sub-resource ("group") ID and target ARM
+    /// resource ID from <see cref="RedisInstallResult"/> at execution time (so the
+    /// values always match the Redis kind we actually got) and delegates to a
+    /// standard <see cref="PrivateEndpointInstallTask"/>.
     /// </summary>
     public class RedisPrivateEndpointInstallTask : InstallTaskInAzResourceGroup<PrivateEndpointResource>
     {
         private readonly RedisInstallTask _redisTask;
-        private readonly PrivateEndpointInstallTask _innerTask;
 
         public RedisPrivateEndpointInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, RedisInstallTask redisTask)
             : base(config, logger, azureLocation, tags)
         {
             _redisTask = redisTask;
-            _innerTask = new PrivateEndpointInstallTask(config, logger, azureLocation, tags);
         }
 
         public override string TaskName => "get/create Redis private endpoint";
@@ -44,8 +45,27 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 return null;
             }
 
-            _innerTask.Container = base.Container;
-            return await _innerTask.ExecuteTaskReturnResult(contextArg);
+            if (string.IsNullOrEmpty(_redisTask.LastResult.PrivateLinkGroupId)
+                || string.IsNullOrEmpty(_redisTask.LastResult.ResourceId))
+            {
+                throw new InstallException(
+                    "RedisPrivateEndpointInstallTask cannot build a private endpoint: the Redis install task did not populate " +
+                    $"{nameof(RedisInstallResult.PrivateLinkGroupId)} / {nameof(RedisInstallResult.ResourceId)} on its result.");
+            }
+
+            var peName = _config.GetNameConfigValue();
+            var subnetId = _config.GetConfigValue(PrivateEndpointInstallTask.CONFIG_KEY_SUBNET_ID);
+
+            var innerConfig = TaskConfig.GetConfigForName(peName)
+                .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_TARGET_RESOURCE_ID, _redisTask.LastResult.ResourceId)
+                .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_GROUP_ID, _redisTask.LastResult.PrivateLinkGroupId)
+                .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_SUBNET_ID, subnetId);
+
+            var innerTask = new PrivateEndpointInstallTask(innerConfig, _logger, AzureLocation, Tags)
+            {
+                Container = base.Container,
+            };
+            return await innerTask.ExecuteTaskReturnResult(contextArg);
         }
     }
 }
