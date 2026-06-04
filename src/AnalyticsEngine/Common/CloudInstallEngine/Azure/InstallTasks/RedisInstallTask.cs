@@ -20,6 +20,25 @@ namespace CloudInstallEngine.Azure.InstallTasks
         /// <summary>Classic Azure Cache for Redis uses port 6380 for TLS connections.</summary>
         public const int LEGACY_TLS_PORT = 6380;
 
+        /// <summary>Private Link sub-resource ("group") ID used when targeting Azure Managed Redis.</summary>
+        public const string MANAGED_REDIS_PE_GROUP_ID = "redisEnterprise";
+
+        /// <summary>
+        /// Private DNS zone that matches the CNAME chain produced by an Azure Managed Redis FQDN
+        /// (<c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c> → <c>...privatelink.redis.azure.net</c>).
+        /// Note: this is NOT <c>privatelink.redisenterprise.cache.azure.net</c> — that zone exists
+        /// historically but does not match the actual hostnames Azure Managed Redis uses today, so
+        /// a private endpoint pointed at it never auto-registers A records and VNet-integrated
+        /// clients fall through to public DNS (which the PE-only firewall then blocks).
+        /// </summary>
+        public const string MANAGED_REDIS_PRIVATE_DNS_ZONE = "privatelink.redis.azure.net";
+
+        /// <summary>Private Link sub-resource ("group") ID used when targeting classic Azure Cache for Redis.</summary>
+        public const string LEGACY_CLASSIC_PE_GROUP_ID = "redisCache";
+
+        /// <summary>Private DNS zone for classic Azure Cache for Redis (<c>&lt;name&gt;.redis.cache.windows.net</c>).</summary>
+        public const string LEGACY_CLASSIC_PRIVATE_DNS_ZONE = "privatelink.redis.cache.windows.net";
+
         private readonly bool _requireStandardSku;
         private readonly bool _allowPublicAccess;
 
@@ -116,6 +135,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 PrimaryKey = keys.Value.PrimaryKey,
                 ResourceId = legacy.Id.ToString(),
                 ResourceName = legacy.Data.Name,
+                PrivateLinkGroupId = LEGACY_CLASSIC_PE_GROUP_ID,
+                PrivateDnsZoneName = LEGACY_CLASSIC_PRIVATE_DNS_ZONE,
             };
         }
 
@@ -215,6 +236,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 PrimaryKey = primaryKey,
                 ResourceId = cluster.Id.ToString(),
                 ResourceName = cluster.Data.Name,
+                PrivateLinkGroupId = MANAGED_REDIS_PE_GROUP_ID,
+                PrivateDnsZoneName = MANAGED_REDIS_PRIVATE_DNS_ZONE,
             };
         }
     }
