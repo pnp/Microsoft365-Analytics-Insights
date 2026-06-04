@@ -174,8 +174,8 @@ namespace Common.Entities.Redis
             {
                 if (endpoint is DnsEndPoint dnsEndpoint &&
                     (string.Equals(dnsEndpoint.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(dnsEndpoint.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(dnsEndpoint.Host, "::1", StringComparison.OrdinalIgnoreCase)))
+                     string.Equals(dnsEndpoint.Host, "127.0.0.1", StringComparison.Ordinal) ||
+                     string.Equals(dnsEndpoint.Host, "::1", StringComparison.Ordinal)))
                 {
                     return true;
                 }
