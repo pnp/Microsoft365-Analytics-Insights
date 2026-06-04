@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="../AnalyticsEngine/Common/UsageReporting/UsageReporting.csproj" />
+  <Project Path="web.client/web.client.esproj">
+    <Build />
+    <Deploy />
+  </Project>
+  <Project Path="Web.Server/Web.Server.csproj" />
+</Solution>
