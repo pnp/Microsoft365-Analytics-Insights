@@ -2,6 +2,7 @@ using Azure.Identity;
 using Microsoft.Azure.Cosmos;
 using UsageReporting;
 using Web.Config;
+using Web.Dashboard;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,6 +11,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+// Backing store for the dashboard read cache (see DashboardService).
+builder.Services.AddMemoryCache();
 
 
 var config = new WebAppConfig(builder.Configuration);
@@ -41,13 +45,34 @@ var cosmosClient = new CosmosClient(config.CosmosDb.AccountEndpoint, credential)
 builder.Services.AddSingleton(s => cosmosClient);
 
 
+// One Cosmos adaptor instance serves both the writer interface (called by the importer-side
+// POST handler) and the reader interface (called by the dashboard). Registered as the concrete
+// type first, then bound to each interface via a factory so we get a single singleton, not two.
 var adapter = new CosmosTelemetrySaveAdaptor(cosmosClient, config.CosmosDb);
-builder.Services.AddSingleton(s => new StatsSaveService(adapter, s.GetService<ILogger<Program>>()));
+builder.Services.AddSingleton(adapter);
+builder.Services.AddSingleton<ITelemetrySaveAdaptor>(sp => sp.GetRequiredService<CosmosTelemetrySaveAdaptor>());
+builder.Services.AddSingleton<ITelemetryQueryAdaptor>(sp => sp.GetRequiredService<CosmosTelemetrySaveAdaptor>());
+
+builder.Services.AddSingleton(sp => new StatsSaveService(
+    sp.GetRequiredService<ITelemetrySaveAdaptor>(),
+    sp.GetRequiredService<ILogger<StatsSaveService>>()));
+
+builder.Services.AddSingleton(sp => new DashboardService(
+    sp.GetRequiredService<ITelemetryQueryAdaptor>(),
+    sp.GetRequiredService<ILogger<DashboardService>>(),
+    sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
+    config.GetMaxDashboardItems(),
+    config.GetDashboardCacheDuration()));
+
 await adapter.Init();
 
 
 var app = builder.Build();
 
+// The dashboard read endpoints (GET /api/Telemetry/stats, /clients) are intentionally
+// anonymous — the data is anonymised aggregate stats meant for a public-style dashboard.
+// Upload auth (POST /api/Telemetry) is enforced via the shared-secret signature on the
+// payload (see AnonUsageStatsModel.IsValidSecretForThisObject).
 app.UseDefaultFiles();
 app.MapStaticAssets();
 

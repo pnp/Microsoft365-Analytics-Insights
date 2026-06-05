@@ -1,58 +1,194 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 
-interface Forecast {
-    date: string;
-    temperatureC: number;
-    temperatureF: number;
-    summary: string;
+interface TableTotal {
+    tableName: string;
+    rows: number;
+    totalSpaceMB: number;
+    clientCount: number;
+}
+
+interface DashboardStats {
+    clientCount: number;
+    totalRows: number;
+    totalSpaceMB: number;
+    lastUpdated: string | null;
+    tableTotals: TableTotal[];
+}
+
+interface ClientSummary {
+    anonClientId: string;
+    generated: string | null;
+    buildVersionLabel: string | null;
+    configuredImportsEnabledDescription: string | null;
+    configuredSolutionsEnabledDescription: string | null;
+    dataPointsFromAITotal: number | null;
+    rows: number;
+    totalSpaceMB: number;
+    tableCount: number;
+}
+
+function formatNumber(n: number): string {
+    return n.toLocaleString();
+}
+
+function formatMB(mb: number): string {
+    if (mb >= 1024) {
+        return `${(mb / 1024).toFixed(2)} GB`;
+    }
+    return `${mb.toFixed(2)} MB`;
+}
+
+function formatDate(value: string | null): string {
+    if (!value) return '—';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return value;
+    return d.toLocaleString();
 }
 
 function App() {
-    const [forecasts, setForecasts] = useState<Forecast[]>();
+    const [stats, setStats] = useState<DashboardStats | null>(null);
+    const [clients, setClients] = useState<ClientSummary[] | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState<boolean>(true);
 
     useEffect(() => {
-        populateWeatherData();
+        let cancelled = false;
+
+        async function load() {
+            setLoading(true);
+            setError(null);
+            try {
+                const [statsRes, clientsRes] = await Promise.all([
+                    fetch('/api/Telemetry/stats'),
+                    fetch('/api/Telemetry/clients'),
+                ]);
+                if (!statsRes.ok) throw new Error(`stats: HTTP ${statsRes.status}`);
+                if (!clientsRes.ok) throw new Error(`clients: HTTP ${clientsRes.status}`);
+
+                const statsData: DashboardStats = await statsRes.json();
+                const clientsData: ClientSummary[] = await clientsRes.json();
+                if (cancelled) return;
+                setStats(statsData);
+                setClients(clientsData);
+            } catch (e: unknown) {
+                if (cancelled) return;
+                setError(e instanceof Error ? e.message : 'Failed to load dashboard data');
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        }
+
+        load();
+        return () => { cancelled = true; };
     }, []);
 
-    const contents = forecasts === undefined
-        ? <p><em>Loading... Please refresh once the ASP.NET backend has started. See <a href="https://aka.ms/jspsintegrationreact">https://aka.ms/jspsintegrationreact</a> for more details.</em></p>
-        : <table className="table table-striped" aria-labelledby="tableLabel">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Temp. (C)</th>
-                    <th>Temp. (F)</th>
-                    <th>Summary</th>
-                </tr>
-            </thead>
-            <tbody>
-                {forecasts.map(forecast =>
-                    <tr key={forecast.date}>
-                        <td>{forecast.date}</td>
-                        <td>{forecast.temperatureC}</td>
-                        <td>{forecast.temperatureF}</td>
-                        <td>{forecast.summary}</td>
-                    </tr>
-                )}
-            </tbody>
-        </table>;
-
     return (
-        <div>
-            <h1 id="tableLabel">Weather forecast</h1>
-            <p>This component demonstrates fetching data from the server.</p>
-            {contents}
+        <div className="dashboard">
+            <header>
+                <h1>Analytics Telemetry</h1>
+                <p className="subtitle">
+                    Anonymous usage stats reported by Microsoft 365 Analytics Insights installations.
+                </p>
+            </header>
+
+            {loading && <p><em>Loading…</em></p>}
+
+            {error && (
+                <div className="error">
+                    <strong>Could not load dashboard data:</strong> {error}
+                </div>
+            )}
+
+            {!loading && !error && stats && (
+                <>
+                    {stats.clientCount === 0 ? (
+                        <p className="empty">
+                            No telemetry has been received yet. Once an importer instance has
+                            <code> StatsApiUrl</code> + <code>StatsApiSecret</code> configured to
+                            point at this service it will start reporting in.
+                        </p>
+                    ) : (
+                        <section className="cards">
+                            <Card label="Reporting clients" value={formatNumber(stats.clientCount)} />
+                            <Card label="Total rows" value={formatNumber(stats.totalRows)} />
+                            <Card label="Total size" value={formatMB(stats.totalSpaceMB)} />
+                            <Card label="Last update" value={formatDate(stats.lastUpdated)} />
+                        </section>
+                    )}
+
+                    {stats.tableTotals.length > 0 && (
+                        <section>
+                            <h2>Tables (aggregated across clients)</h2>
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Table</th>
+                                        <th className="num">Rows</th>
+                                        <th className="num">Size</th>
+                                        <th className="num">Clients</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {stats.tableTotals.map(t => (
+                                        <tr key={t.tableName}>
+                                            <td>{t.tableName}</td>
+                                            <td className="num">{formatNumber(t.rows)}</td>
+                                            <td className="num">{formatMB(t.totalSpaceMB)}</td>
+                                            <td className="num">{t.clientCount}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </section>
+                    )}
+                </>
+            )}
+
+            {!loading && !error && clients && clients.length > 0 && (
+                <section>
+                    <h2>Clients</h2>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Anon client ID</th>
+                                <th>Last report</th>
+                                <th>Build</th>
+                                <th>Imports</th>
+                                <th>Solutions</th>
+                                <th className="num">Rows</th>
+                                <th className="num">Size</th>
+                                <th className="num">AI calls</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {clients.map(c => (
+                                <tr key={c.anonClientId}>
+                                    <td className="mono">{c.anonClientId}</td>
+                                    <td>{formatDate(c.generated)}</td>
+                                    <td>{c.buildVersionLabel ?? '—'}</td>
+                                    <td>{c.configuredImportsEnabledDescription ?? '—'}</td>
+                                    <td>{c.configuredSolutionsEnabledDescription ?? '—'}</td>
+                                    <td className="num">{formatNumber(c.rows)}</td>
+                                    <td className="num">{formatMB(c.totalSpaceMB)}</td>
+                                    <td className="num">{c.dataPointsFromAITotal != null ? formatNumber(c.dataPointsFromAITotal) : '—'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </section>
+            )}
         </div>
     );
+}
 
-    async function populateWeatherData() {
-        const response = await fetch('weatherforecast');
-        if (response.ok) {
-            const data = await response.json();
-            setForecasts(data);
-        }
-    }
+function Card({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="card">
+            <div className="card-label">{label}</div>
+            <div className="card-value">{value}</div>
+        </div>
+    );
 }
 
 export default App;

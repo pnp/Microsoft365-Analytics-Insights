@@ -1,0 +1,20 @@
+{
+    // VS 2026's JavaScript SDK requires this file to be present (even with DebuggerFlavor =
+    // LaunchSpaProxyWithoutDebugging) — otherwise the Deploy target throws
+    // "Value cannot be null. Parameter name: source" because it iterates a null
+    // `configurations` collection.
+    //
+    // The actual SPA launch happens via Microsoft.AspNetCore.SpaProxy on the Web.Server side
+    // (StartupCommand = "npm run dev", SpaProxyServerUrl = https://localhost:57674).
+    // This config is only used if you explicitly start "Launch Chrome" against the JS project.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Chrome",
+            "request": "launch",
+            "type": "chrome",
+            "url": "https://localhost:57674/",
+            "webRoot": "${workspaceFolder}"
+        }
+    ]
+}
