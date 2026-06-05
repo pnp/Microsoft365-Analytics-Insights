@@ -32,7 +32,7 @@ The table `Weekly Usage` includes true/false columns that help understand the pl
 
 Some classic KPIs can be created from this information:
 
-* Roaming Office usage
+* Roaming usage
 
     ```DAX
     Office Mobile Users =
@@ -42,8 +42,6 @@ Some classic KPIs can be created from this information:
     ) + 0
     ```
 
-* Teams Mobile Users
-
     ```DAX
     Teams Mobile Users =
     CALCULATE(
@@ -51,8 +49,6 @@ Some classic KPIs can be created from this information:
         'Weekly Usage'[Teams Used Mobile] = TRUE()
     ) + 0
     ```
-
-* Teams Total Users
 
     ```DAX
     Teams Total Users =
@@ -66,38 +62,55 @@ Some classic KPIs can be created from this information:
     )
     ```
 
-* Teams % Mobile users: `[Teams Mobile Users] / [Teams Total Users] * 100`
+    ```DAX
+    Teams % Mobile users = [Teams Mobile Users] / [Teams Total Users] * 100
+    ```
 
-```DAX
-OneDrive Active Users =
-CALCULATE(
-    DISTINCTCOUNT('Weekly Activities'[user_id]),
-    'Weekly Activities'[OneDrive Viewed/Edited] > 0 ||
-    'Weekly Activities'[OneDrive Synced] > 0 ||
-    'Weekly Activities'[OneDrive Shared Internally] > 0 ||
-    'Weekly Activities'[OneDrive Shared Externally] > 0
-) + 0
+    ```DAX
+    OneDrive Active Users =
+    CALCULATE(
+        DISTINCTCOUNT('Weekly Activities'[user_id]),
+        'Weekly Activities'[OneDrive Viewed/Edited] > 0 ||
+        'Weekly Activities'[OneDrive Synced] > 0 ||
+        'Weekly Activities'[OneDrive Shared Internally] > 0 ||
+        'Weekly Activities'[OneDrive Shared Externally] > 0
+    ) + 0
+    ```
 
-Sync Interactions =
-SUM('Weekly Activities'[Teams Calls])
-+ SUM('Weekly Activities'[Teams Team Chats])
-+ SUM('Weekly Activities'[Teams Private Chats])
+* Interaction types between users
 
-Async Interactions = SUM('Weekly Activities'[Emails Sent])
+    ```DAX
+    Sync Interactions =
+    SUM('Weekly Activities'[Teams Calls])
+    + SUM('Weekly Activities'[Teams Team Chats])
+    + SUM('Weekly Activities'[Teams Private Chats])
 
-Sync vs async interaction = 
-VAR Sync = SUM('Weekly Activities'[Teams Calls]) + SUM('Weekly Activities'[Teams Team Chats]) + SUM('Weekly Activities'[Teams Private Chats])
-VAR Async = SUM('Weekly Activities'[Emails Sent])
-RETURN 100*Sync/(Async+Sync)
+    Async Interactions = SUM('Weekly Activities'[Emails Sent])
 
-% Mobile Email Users = 
-VAR div = CALCULATE(DISTINCTCOUNT('Weekly Usage'[user_id]), 'Weekly Usage'[Office Outlook Mobile] = TRUE())
-VAR div2 = CALCULATE(DISTINCTCOUNT('Weekly Usage'[user_id]), 'Weekly Usage'[Office Outlook] = TRUE())
-RETURN div / div2 + 0
+    Sync vs async interaction = 
+    VAR Sync =
+        SUM('Weekly Activities'[Teams Calls])
+        + SUM('Weekly Activities'[Teams Team Chats])
+        + SUM('Weekly Activities'[Teams Private Chats])
+    VAR Async = SUM('Weekly Activities'[Emails Sent])
+    RETURN 100 * Sync / (Async + Sync)
+    ```
 
-M Teams Meetings Attended =
-SUM('Weekly Activities'[Teams Scheduled Onetime Meetings Attended])
-+ SUM('Weekly Activities'[Teams Scheduled Recurring Meetings Attended])
+    ```DAX
+    % Mobile Email Users = 
+    VAR div = CALCULATE(
+        DISTINCTCOUNT('Weekly Usage'[user_id]),
+        'Weekly Usage'[Office Outlook Mobile] = TRUE()
+    )
+    VAR div2 = CALCULATE(
+        DISTINCTCOUNT('Weekly Usage'[user_id]),
+        'Weekly Usage'[Office Outlook] = TRUE()
+    )
+    RETURN div / div2 + 0
+    ```
 
-
-```
+    ```DAX
+    Teams Scheduled Meetings Attended =
+    SUM('Weekly Activities'[Teams Scheduled Onetime Meetings Attended])
+    + SUM('Weekly Activities'[Teams Scheduled Recurring Meetings Attended])
+    ```
