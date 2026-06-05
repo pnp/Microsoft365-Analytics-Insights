@@ -23,6 +23,10 @@ There are several solutions built with the analytics engine:
 
 Some of these solutions require additional configuration after the analytics engine has been installed. Please review the [post-install docs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance#additional-solutions).
 
+### Related projects in this repository
+
+* [Telemetry Service](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Telemetry%20Service) — a private, MSAL-protected dashboard (with public source code under [`src/TelemetryService/`](src/TelemetryService)) that receives anonymous, opt-in usage telemetry from deployed analytics engines so the project team can see which versions, solutions and workloads are in active use. No tenant data is ever sent. Work in progress.
+
 ## Collected data
 
 >This is an excerpt of the whole details [found here](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki#data-collection-map).
