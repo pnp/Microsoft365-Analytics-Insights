@@ -8,6 +8,12 @@
 ## Project Guidelines
 - User prefers to keep the existing InsertBatch row-by-row implementation rather than replacing it with SqlBulkCopy.
 
+## Character set support (Unicode / Greek)
+- **Every data structure that can hold customer text MUST support the full Unicode range, including non-Latin scripts such as Greek.** SharePoint/OneDrive URLs, file names, titles, user/display names, search terms etc. routinely contain characters like `Καλημέρα κόσμε` (e.g. `https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.pdf`).
+- In SQL Server / EF, this means **`nvarchar`, never `varchar`** for any column that stores text originating from a customer tenant (URLs, names, paths, free text). `varchar` is single-code-page and silently corrupts characters outside that code page to `?`. This applies to entity columns, staging/temp table columns, `SqlTypeOverride` values, `Create DB.sql`, and migration `ALTER COLUMN` statements.
+- Indexing trade-off: the SQL Server non-clustered index-key limit is 1700 bytes. `nvarchar` is 2 bytes/char, so the widest indexable Unicode string column is `nvarchar(850)`. Prefer `nvarchar(850)` (not `varchar(1700)`) when a text column must be both indexed and Unicode-safe. See migration `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` and issue #122 for the canonical example (`dbo.urls.full_url`).
+- When generating C#/JSON/serialization/test data, use real non-ASCII samples (e.g. the Greek URL above) so round-trip and truncation bugs surface in tests rather than in a customer tenant.
+
 ## Performance baseline for new / epic features
 For any new feature or epic work in this solution, **assume a tenant of ~200,000 users**. Flag performance concerns proactively in reviews and design — don't wait to be asked. In particular, any new code that touches importers, batch processing, EF queries, SQL merges or Graph paging must be evaluated against this scale.
 
