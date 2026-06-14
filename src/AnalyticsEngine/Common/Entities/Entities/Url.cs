@@ -14,13 +14,15 @@ namespace Common.Entities
     public class Url : AbstractEFEntity, IUrlObject
     {
 
-        // varchar(1700) NOT NULL is the on-disk schema after migration ShrinkUrlsFullUrlColumn
-        // (PR #108). The matching EF mapping below is what makes EF emit varchar parameters
-        // instead of nvarchar, avoiding the implicit conversion that would otherwise defeat
-        // IX_urls_full_url for any EF-driven query on urls. See issue #109.
+        // nvarchar(850) NOT NULL is the on-disk schema after migration ShrinkUrlsFullUrlColumn
+        // (the column is shrunk from a (max) LOB so it can be the IX_urls_full_url index key -
+        // 850 nvarchar chars = the 1700-byte index-key limit). It MUST be nvarchar (not varchar):
+        // full_url holds SharePoint URLs that can contain any Unicode (e.g. Greek), which varchar
+        // would corrupt to '?'. The matching EF mapping below keeps EF emitting nvarchar parameters
+        // so EF-driven queries on urls can use IX_urls_full_url. See issue #122 (#108/#109).
         [Required]
-        [MaxLength(1700)]
-        [Column("full_url", TypeName = "varchar")]
+        [MaxLength(850)]
+        [Column("full_url", TypeName = "nvarchar")]
         public string FullUrl { get; set; }
 
         [Column("file_last_refreshed")]

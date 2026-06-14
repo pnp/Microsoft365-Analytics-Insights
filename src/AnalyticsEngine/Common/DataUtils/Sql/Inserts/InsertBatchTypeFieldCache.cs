@@ -51,7 +51,7 @@ namespace DataUtils.Sql.Inserts
                             // Override type definition
                             var (fileColName, propTypeIsNullable) = GetSqlFieldTypeDefAndNullability(property.PropertyType);
 
-                            // Per-property SQL type override (e.g. "varchar(1700)" on a staging join
+                            // Per-property SQL type override (e.g. "nvarchar(850)" on a staging join
                             // column that must match an indexed target column to avoid implicit
                             // conversion). Only honoured for string properties — for other CLR types
                             // the inferred type is authoritative (int, datetime2, etc.).
