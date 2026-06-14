@@ -246,5 +246,52 @@ namespace Tests.UnitTests
                 MigrateToLatest(); // leave the shared DB fully migrated for other tests
             }
         }
+
+        /// <summary>
+        /// State C, Greek-collation case: a Greek customer who reached the current stable release
+        /// stored Greek in <c>varchar(1700)</c> faithfully (their DB's Greek code page, CP1253).
+        /// Converting that column to <c>nvarchar(850)</c> - exactly what <see cref="UrlFullUrlNvarchar"/>
+        /// does - must keep the Greek byte-for-byte. Uses a self-contained temp table with an
+        /// explicit <c>Greek_CI_AS</c> collation so the result is independent of the test database's
+        /// own (Latin) collation. This is the permanent CI proof that the State C upgrade cannot
+        /// corrupt Greek that was representable to begin with.
+        /// </summary>
+        [TestMethod]
+        public void StateC_VarcharGreekCollation_ConvertsToNvarchar850_PreservingGreekUrl()
+        {
+            using (var c = new SqlConnection(ConnStr()))
+            {
+                c.Open();
+
+                void Exec(string sql, string val = null)
+                {
+                    using (var cmd = new SqlCommand(sql, c) { CommandTimeout = 0 })
+                    {
+                        if (val != null)
+                            cmd.Parameters.Add(new SqlParameter("@u", SqlDbType.NVarChar, -1) { Value = val });
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                string Read()
+                {
+                    using (var cmd = new SqlCommand("SELECT full_url FROM #c", c))
+                        return (string)cmd.ExecuteScalar();
+                }
+
+                // varchar(1700) under a Greek collation = how a Greek-collation State C DB holds full_url.
+                Exec(@"IF OBJECT_ID('tempdb..#c') IS NOT NULL DROP TABLE #c;
+                       CREATE TABLE #c (full_url varchar(1700) COLLATE Greek_CI_AS NOT NULL);");
+                Exec("INSERT INTO #c (full_url) VALUES (@u);", GreekUrl);
+
+                Assert.AreEqual(GreekUrl, Read(),
+                    "Sanity: Greek is stored intact in varchar(1700) under a Greek collation (CP1253).");
+
+                // The conversion UrlFullUrlNvarchar performs.
+                Exec("ALTER TABLE #c ALTER COLUMN full_url nvarchar(850) NOT NULL;");
+
+                Assert.AreEqual(GreekUrl, Read(),
+                    "The Greek URL must survive varchar(1700) [Greek_CI_AS] -> nvarchar(850) byte-for-byte.");
+            }
+        }
     }
 }
