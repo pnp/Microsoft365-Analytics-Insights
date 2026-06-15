@@ -19,11 +19,11 @@ namespace DataUtils.Sql
         public DbType SqlType { get; internal set; }
 
         /// <summary>
-        /// Optional explicit SQL column type (e.g. "varchar(1700)") that overrides the default
+        /// Optional explicit SQL column type (e.g. "nvarchar(850)") that overrides the default
         /// <c>[nvarchar] (max)</c> emitted for <see cref="string"/> properties by
         /// <see cref="Inserts.InsertBatchTypeFieldCache{T}"/>. Set via <see cref="ColumnAttribute.SqlTypeOverride"/>
         /// on properties whose staging-column type must match an indexed target column to avoid
-        /// implicit conversion (which defeats indexes on the join target — see PR #108 / issue #109
+        /// implicit conversion (which defeats indexes on the join target — see issue #122 / #108 / #109
         /// for <c>urls.full_url</c>).
         /// </summary>
         public string SqlTypeOverride { get; set; }
@@ -45,7 +45,7 @@ namespace DataUtils.Sql
 
         /// <summary>
         /// Optional explicit SQL column type definition for the generated staging column
-        /// (e.g. <c>"varchar(1700)"</c>). When set, overrides the type
+        /// (e.g. <c>"nvarchar(850)"</c>). When set, overrides the type
         /// <see cref="Inserts.InsertBatchTypeFieldCache{T}"/> would otherwise infer from the
         /// property's CLR type. Only meaningful for <see cref="string"/> properties today; the
         /// generator still emits <c>nvarchar(max)</c> as the default when this is null/empty.

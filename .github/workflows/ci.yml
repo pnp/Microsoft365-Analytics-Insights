@@ -99,7 +99,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v6
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@v5
@@ -117,7 +117,7 @@ jobs:
           year=$(date +%Y)
           find ./src -name AssemblyInfo.cs | xargs sed -i "s/© __year__/© $year/"
       - name: Config substitutions
-        uses: devops-actions/variable-substitution@v1.2
+        uses: devops-actions/variable-substitution@v2.0.0
         with:
           files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
 
@@ -273,7 +273,7 @@ jobs:
             echo "LABEL=Stable build ${{ env.BuildId }}" >> $GITHUB_ENV
           fi
       - name: Create release
-        uses: ncipollo/release-action@v1.14.0
+        uses: ncipollo/release-action@v1.21.0
         id: create_release
         env:
           GITHUB_TOKEN: ${{ github.token }}
