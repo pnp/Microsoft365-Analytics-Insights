@@ -79,7 +79,11 @@ jobs:
     #   - Build .Net projects
     # Test:
     #   - Run test suite
-    runs-on: windows-latest
+    # Pinned to windows-2022: the "Execute unit tests" step below uses a hardcoded
+    # vstest.console.exe path under VS2022 Enterprise. On windows-latest (now a newer image)
+    # that path no longer exists, so vstest can't be located and the job fails before any test
+    # runs. windows-2022 ships VS2022 Enterprise at that exact path. See PR #123 / issue #122.
+    runs-on: windows-2022
     needs: setup_tests
     if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
     strategy:
