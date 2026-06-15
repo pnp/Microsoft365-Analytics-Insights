@@ -5,7 +5,7 @@ namespace Common.Entities.Migrations
 
     /// <summary>
     /// Shrinks <c>dbo.urls.full_url</c> from an (n)varchar(max) LOB column to
-    /// <c>varchar(1700)</c> and adds a supporting non-clustered index
+    /// <c>nvarchar(850)</c> and adds a supporting non-clustered index
     /// <c>IX_urls_full_url</c>.
     ///
     /// Why: <c>full_url</c> is the join / de-duplication key used by the staging-table
@@ -14,38 +14,50 @@ namespace Common.Entities.Migrations
     /// <c>JOIN urls ON urls.full_url = imports.url/object_id</c>). As a <c>(n)varchar(max)</c>
     /// column it cannot be a B-tree index key, so every one of those joins is forced into a
     /// full scan of the (largest dimension) <c>urls</c> table with LOB string comparisons.
-    /// 1700 bytes is the SQL Server single-column non-clustered index key limit, so
-    /// <c>varchar(1700)</c> is the widest indexable URL column.
+    /// 1700 bytes is the SQL Server single-column non-clustered index key limit, and the column
+    /// MUST be <c>nvarchar</c> (not <c>varchar</c>) because SharePoint URLs can contain any
+    /// Unicode character (e.g. Greek) that a single-byte <c>varchar</c> code page would corrupt
+    /// to '?'. <c>nvarchar</c> is 2 bytes/char, so <c>nvarchar(850)</c> (= 1700 bytes) is the
+    /// widest indexable Unicode URL column. 850 chars comfortably exceeds SharePoint Online's
+    /// documented worst-case URL length (~486 chars). See issue #122.
+    ///
+    /// Source types this converts (all lossless): <c>nvarchar(max)</c> (legacy v1-0-5 upgrade
+    /// path and current fresh installs), <c>varchar(max)</c> (older fresh installs) and
+    /// <c>varchar(1700)</c> (databases that applied the original, now-superseded, varchar form
+    /// of this migration - see <see cref="UrlFullUrlNvarchar"/>). Widening varchar -> nvarchar
+    /// never loses data.
     ///
     /// Safety: this script runs against a wide range of customer databases, some with very
     /// large <c>urls</c> tables, so it is defensive:
     ///   * Skips silently if <c>dbo.urls</c> or <c>full_url</c> are missing.
-    ///   * Idempotent: if the column is already <c>varchar(1700)</c> and the index already
+    ///   * Idempotent: if the column is already <c>nvarchar(850)</c> and the index already
     ///     exists it is a no-op; each step (ALTER COLUMN, CREATE INDEX) is independently
     ///     guarded so a partially-applied state converges cleanly on re-run.
     ///   * FAILS FAST, before any schema change, if any row would be damaged by the shrink:
-    ///       - rows whose URL is longer than 1700 characters (would be truncated), or
-    ///       - rows whose URL contains characters that cannot be represented in the column's
-    ///         (single-byte) code page once converted from Unicode to <c>varchar</c> (would
-    ///         be silently corrupted to '?').
-    ///     In either case it lists the offending <c>id</c> + <c>full_url</c> values and raises
-    ///     a fatal error so the operator can fix the data and re-run the upgrade. Because the
-    ///     check runs before the ALTER and the migration runs outside the EF transaction
-    ///     (suppressTransaction: true), a failure leaves the database unchanged.
+    ///       - rows whose URL is longer than 850 characters (would be truncated).
+    ///     It lists the offending <c>id</c> + <c>full_url</c> values and raises a fatal error so
+    ///     the operator can fix the data and re-run the upgrade. Because the check runs before
+    ///     the ALTER and the migration runs outside the EF transaction (suppressTransaction:
+    ///     true), a failure leaves the database unchanged. (There is no lossy-conversion check
+    ///     any more: <c>nvarchar</c> represents every Unicode character, so the conversion is
+    ///     always faithful.)
     ///   * Logs row counts, edition, online/offline choice and per-step timing via
     ///     RAISERROR ... WITH NOWAIT so operators can watch live progress.
     ///
-    /// This migration does NOT change the EF entity model (<see cref="Common.Entities.Url"/>
-    /// still maps <c>FullUrl</c> as a string), so it carries the same model snapshot as the
-    /// previous migration - exactly like AddAuditEventsOperationIndex did. The actual SQL
-    /// column type is narrowed below.
+    /// This migration does NOT change the EF entity model snapshot itself; the matching
+    /// <see cref="Common.Entities.Url.FullUrl"/> nvarchar(850) mapping snapshot is refreshed by
+    /// the later <see cref="UrlFullUrlNvarchar"/> migration (which also re-runs this idempotent
+    /// converter to fix databases already on the varchar form). The actual SQL column type is
+    /// narrowed below.
     /// </summary>
     public partial class ShrinkUrlsFullUrlColumn : DbMigration
     {
         /// <summary>
         /// SQL executed by <see cref="Up"/>. Exposed as a constant so unit tests can re-run
         /// the script directly against a test database to verify the guards (idempotency,
-        /// too-long failure, lossy-conversion failure) and the success path.
+        /// too-long failure) and the success path. It is also replayed verbatim by the later
+        /// <see cref="UrlFullUrlNvarchar"/> migration to convert databases still on the
+        /// superseded varchar(1700) form.
         /// </summary>
         public const string Up_Sql = @"
 SET NOCOUNT ON;
@@ -54,7 +66,7 @@ DECLARE @migration nvarchar(100) = N'ShrinkUrlsFullUrlColumn';
 DECLARE @start datetime2(3) = SYSUTCDATETIME();
 DECLARE @stepStart datetime2(3);
 DECLARE @msg nvarchar(2000);
-DECLARE @maxLen int = 1700;
+DECLARE @maxLen int = 850;
 DECLARE @indexName sysname = N'IX_urls_full_url';
 
 SET @msg = @migration + N': starting at ' + CONVERT(nvarchar(30), @start, 121) + N' UTC.';
@@ -77,15 +89,17 @@ BEGIN
     RETURN;
 END
 
--- Current type of full_url. Both nvarchar(max) (legacy v1-0-5 upgrade path) and
--- varchar(max) (fresh installs from Create DB.sql) report max_length = -1 and need shrinking.
+-- Current type of full_url. nvarchar(max) (legacy v1-0-5 path and current fresh installs),
+-- varchar(max) (older fresh installs) all report max_length = -1; varchar(1700) (databases on
+-- the original varchar form of this migration) reports 1700. All need converting to nvarchar(850).
 DECLARE @typeName sysname, @maxLength smallint;
 SELECT @typeName = t.name, @maxLength = c.max_length
 FROM sys.columns c
 INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
 WHERE c.object_id = OBJECT_ID(N'dbo.urls') AND c.name = N'full_url';
 
-DECLARE @alreadyShrunk bit = CASE WHEN @typeName = N'varchar' AND @maxLength = @maxLen THEN 1 ELSE 0 END;
+-- nvarchar(850) stores 850 chars in 1700 bytes, so sys.columns.max_length = 1700 when already shrunk.
+DECLARE @alreadyShrunk bit = CASE WHEN @typeName = N'nvarchar' AND @maxLength = @maxLen * 2 THEN 1 ELSE 0 END;
 DECLARE @indexExists bit = CASE WHEN EXISTS (
     SELECT 1 FROM sys.indexes
     WHERE object_id = OBJECT_ID(N'dbo.urls') AND name = @indexName
@@ -93,7 +107,7 @@ DECLARE @indexExists bit = CASE WHEN EXISTS (
 
 IF @alreadyShrunk = 1 AND @indexExists = 1
 BEGIN
-    SET @msg = @migration + N': full_url is already varchar(' + CAST(@maxLen AS nvarchar(10))
+    SET @msg = @migration + N': full_url is already nvarchar(' + CAST(@maxLen AS nvarchar(10))
         + N') and [' + @indexName + N'] already exists, nothing to do.';
     RAISERROR(@msg, 0, 1) WITH NOWAIT;
     RETURN;
@@ -110,14 +124,16 @@ SET @msg = @migration + N': dbo.urls row estimate = ' + CAST(@rowCount AS nvarch
 RAISERROR(@msg, 0, 1) WITH NOWAIT;
 
 -- =========================================================================================
--- Pre-flight data checks. Only meaningful while the column is still a (max) column - once
--- it is varchar(1700) the data is already guaranteed to fit. We run these BEFORE any ALTER
--- so that, if they fail, the database is left completely unchanged and the operator can fix
--- the data and simply re-run the upgrade.
+-- Pre-flight data check. Only meaningful while the column is still a (max) or varchar(1700)
+-- column - once it is nvarchar(850) the data is already guaranteed to fit. We run this BEFORE
+-- any ALTER so that, if it fails, the database is left completely unchanged and the operator
+-- can fix the data and simply re-run the upgrade. There is no lossy-conversion check: the
+-- target is nvarchar, which represents every Unicode character (e.g. Greek), so widening from
+-- (n)varchar is always faithful.
 -- =========================================================================================
 IF @alreadyShrunk = 0
 BEGIN
-    -- 1. Rows whose URL is longer than the new limit would be silently truncated.
+    -- Rows whose URL is longer than the new limit would be silently truncated.
     DECLARE @tooLong bigint = (
         SELECT COUNT_BIG(*) FROM dbo.urls WHERE LEN(full_url) > @maxLen
     );
@@ -151,55 +167,11 @@ BEGIN
         CLOSE offenders;
         DEALLOCATE offenders;
 
-        RAISERROR('Run: SELECT id, LEN(full_url) AS length, full_url FROM dbo.urls WHERE LEN(full_url) > 1700 ORDER BY length DESC;', 0, 1) WITH NOWAIT;
+        RAISERROR('Run: SELECT id, LEN(full_url) AS length, full_url FROM dbo.urls WHERE LEN(full_url) > 850 ORDER BY length DESC;', 0, 1) WITH NOWAIT;
         RAISERROR('Fix or remove these URLs (and the hits / events that reference them) then re-run the upgrade.', 0, 1) WITH NOWAIT;
 
         -- Fatal: abort the migration without having changed anything.
         SET @msg = @migration + N': aborted - full_url values exceed ' + CAST(@maxLen AS nvarchar(10)) + N' characters.';
-        RAISERROR(@msg, 16, 1);
-        RETURN;
-    END
-
-    -- 2. Rows that fit length-wise but contain characters that cannot survive the
-    --    Unicode -> code-page conversion to varchar (e.g. CJK characters in a CP1252
-    --    database). These would be silently corrupted to '?', changing the join key.
-    DECLARE @lossy bigint = (
-        SELECT COUNT_BIG(*) FROM dbo.urls
-        WHERE LEN(full_url) <= @maxLen
-          AND full_url <> CONVERT(nvarchar(max), CONVERT(varchar(1700), full_url))
-    );
-
-    IF @lossy > 0
-    BEGIN
-        SET @msg = @migration + N': ABORTING - ' + CAST(@lossy AS nvarchar(20))
-            + N' row(s) in dbo.urls contain characters that cannot be represented in the column''s '
-            + N'code page and would be corrupted by the conversion to varchar.';
-        RAISERROR(@msg, 16, 1) WITH NOWAIT;
-
-        RAISERROR('The offending rows (showing up to 50; id, url) are:', 0, 1) WITH NOWAIT;
-
-        DECLARE @lid int, @lurl nvarchar(max);
-        DECLARE lossyOffenders CURSOR LOCAL FAST_FORWARD FOR
-            SELECT TOP (50) id, full_url
-            FROM dbo.urls
-            WHERE LEN(full_url) <= @maxLen
-              AND full_url <> CONVERT(nvarchar(max), CONVERT(varchar(1700), full_url))
-            ORDER BY id;
-        OPEN lossyOffenders;
-        FETCH NEXT FROM lossyOffenders INTO @lid, @lurl;
-        WHILE @@FETCH_STATUS = 0
-        BEGIN
-            SET @msg = N'   id=' + CAST(@lid AS nvarchar(20)) + N', url=' + LEFT(@lurl, 1500);
-            RAISERROR(@msg, 0, 1) WITH NOWAIT;
-            FETCH NEXT FROM lossyOffenders INTO @lid, @lurl;
-        END
-        CLOSE lossyOffenders;
-        DEALLOCATE lossyOffenders;
-
-        RAISERROR('Run: SELECT id, full_url FROM dbo.urls WHERE full_url <> CONVERT(nvarchar(max), CONVERT(varchar(1700), full_url));', 0, 1) WITH NOWAIT;
-        RAISERROR('These URLs contain non-code-page characters. Fix or remove them (and their hits / events) then re-run the upgrade.', 0, 1) WITH NOWAIT;
-
-        SET @msg = @migration + N': aborted - full_url values would be corrupted by the varchar conversion.';
         RAISERROR(@msg, 16, 1);
         RETURN;
     END
@@ -223,10 +195,10 @@ BEGIN
     END
 
     SET @stepStart = SYSUTCDATETIME();
-    SET @msg = @migration + N': altering full_url to varchar(' + CAST(@maxLen AS nvarchar(10)) + N') NOT NULL...';
+    SET @msg = @migration + N': altering full_url to nvarchar(' + CAST(@maxLen AS nvarchar(10)) + N') NOT NULL...';
     RAISERROR(@msg, 0, 1) WITH NOWAIT;
 
-    ALTER TABLE [dbo].[urls] ALTER COLUMN [full_url] varchar(1700) NOT NULL;
+    ALTER TABLE [dbo].[urls] ALTER COLUMN [full_url] nvarchar(850) NOT NULL;
 
     SET @msg = @migration + N': ALTER COLUMN completed in '
         + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
@@ -308,7 +280,7 @@ END
             // is released as soon as it completes, and so a pre-flight failure leaves the DB
             // untouched. Configuration.cs sets CommandTimeout = 0 (infinite) so the shrink of
             // a very large urls table will not time out.
-            Console.WriteLine("DB SCHEMA: Applying 'ShrinkUrlsFullUrlColumn'. On large urls tables the ALTER COLUMN can take a while and holds a schema lock; check the SQL session for live progress (RAISERROR ... WITH NOWAIT). If any URL is longer than 1700 chars (or not representable as varchar) the migration aborts and lists the offending id + url so you can fix the data and re-run.");
+            Console.WriteLine("DB SCHEMA: Applying 'ShrinkUrlsFullUrlColumn'. On large urls tables the ALTER COLUMN can take a while and holds a schema lock; check the SQL session for live progress (RAISERROR ... WITH NOWAIT). full_url becomes nvarchar(850) (Unicode-safe, e.g. Greek URLs). If any URL is longer than 850 chars the migration aborts and lists the offending id + url so you can fix the data and re-run.");
             Sql(Up_Sql, suppressTransaction: true);
         }
 
