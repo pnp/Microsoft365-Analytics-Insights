@@ -203,7 +203,7 @@ CREATE TABLE [dbo].[sessions] (
 -- Creating table 'urls'
 CREATE TABLE [dbo].[urls] (
     [id] int IDENTITY(1,1) NOT NULL,
-    [full_url] varchar(max)  NOT NULL
+    [full_url] nvarchar(max)  NOT NULL
 );
 
 
