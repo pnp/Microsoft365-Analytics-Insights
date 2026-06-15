@@ -10,16 +10,17 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// Tests for <see cref="ColumnAttribute.SqlTypeOverride"/> -> <see cref="ColumnSqlInfo.SqlColDefinition"/>
-    /// plumbing in <see cref="InsertBatchTypeFieldCache{T}"/>, plus regression tests that the two
-    /// production staging join columns (<c>##import_staging_hit_imports.url</c> and
+    /// plumbing in <see cref="InsertBatchTypeFieldCache{T}"/>, plus regression tests that the
+    /// production staging join columns (e.g. <c>##import_staging_hit_imports.url</c> and
     /// <c>##import_staging_event_lookups.object_id</c>) really do declare
-    /// <c>varchar(1700)</c> so that the post-PR-#108 <c>IX_urls_full_url</c> index is
-    /// usable by the staging-table merges. See issue #109.
+    /// <c>nvarchar(850)</c> so that the <c>IX_urls_full_url</c> index is usable by the
+    /// staging-table merges - and so Unicode URLs (e.g. Greek) aren't corrupted. See issue #122
+    /// (#108/#109).
     /// </summary>
     [TestClass]
     public class StagingColumnSqlTypeOverrideTests
     {
-        private const string ExpectedUrlSqlType = "varchar(1700)";
+        private const string ExpectedUrlSqlType = "nvarchar(850)";
         private const string DefaultStringSqlType = "[nvarchar] (max)";
 
         /// <summary>
@@ -68,66 +69,66 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// The App Insights hit-import staging entity's <c>url</c> column joins
-        /// <c>urls.full_url</c> in "Migrate Hits Import into Hits.sql". After PR #108
-        /// shrank <c>urls.full_url</c> to <c>varchar(1700)</c>, the staging column must be the
-        /// same type or the join falls back to an implicit conversion that ignores
-        /// <c>IX_urls_full_url</c>.
+        /// <c>urls.full_url</c> in "Migrate Hits Import into Hits.sql". <c>urls.full_url</c> is
+        /// <c>nvarchar(850)</c> (see migration ShrinkUrlsFullUrlColumn / issue #122), so the
+        /// staging column must be the same type or the join falls back to an implicit conversion
+        /// that ignores <c>IX_urls_full_url</c>.
         /// </summary>
         [TestMethod]
-        public void HitTempEntityUrlColumnIsVarchar1700()
+        public void HitTempEntityUrlColumnIsNvarchar850()
         {
             var cache = new InsertBatchTypeFieldCache<HitTempEntity>();
             var info = cache.PropertyMappingInfo.Single(p => p.SqlInfo.FieldName == "url");
 
             Assert.AreEqual(ExpectedUrlSqlType, info.SqlInfo.SqlColDefinition,
-                "##import_staging_hit_imports.url must match urls.full_url (varchar(1700)) so IX_urls_full_url is usable.");
+                "##import_staging_hit_imports.url must match urls.full_url (nvarchar(850)) so IX_urls_full_url is usable.");
         }
 
         /// <summary>
         /// The Office 365 activity staging entity's <c>object_id</c> column joins
         /// <c>urls.full_url</c> in "Insert Activity from Staging Table.sql". Same constraint
-        /// as <see cref="HitTempEntityUrlColumnIsVarchar1700"/>: must be <c>varchar(1700)</c>
-        /// post-PR-#108 to keep the index usable.
+        /// as <see cref="HitTempEntityUrlColumnIsNvarchar850"/>: must be <c>nvarchar(850)</c>
+        /// to keep the index usable.
         /// </summary>
         [TestMethod]
-        public void AuditLogTempEntityObjectIdColumnIsVarchar1700()
+        public void AuditLogTempEntityObjectIdColumnIsNvarchar850()
         {
             var cache = new InsertBatchTypeFieldCache<AuditLogTempEntity>();
             var info = cache.PropertyMappingInfo.Single(p => p.SqlInfo.FieldName == "object_id");
 
             Assert.AreEqual(ExpectedUrlSqlType, info.SqlInfo.SqlColDefinition,
-                "##import_staging_event_lookups.object_id must match urls.full_url (varchar(1700)) so IX_urls_full_url is usable.");
+                "##import_staging_event_lookups.object_id must match urls.full_url (nvarchar(850)) so IX_urls_full_url is usable.");
         }
 
         /// <summary>
         /// The AppInsights clicks staging entity's <c>url</c> column joins <c>urls.full_url</c>
-        /// in "Migrate clicks from staging.sql". Must be <c>varchar(1700)</c> for the index to
-        /// be usable. Without this, the implicit conversion of <c>urls.full_url</c> to
-        /// <c>nvarchar</c> defeats <c>IX_urls_full_url</c> on every clicks merge.
+        /// in "Migrate clicks from staging.sql". Must be <c>nvarchar(850)</c> for the index to
+        /// be usable. Without a matching type the implicit conversion defeats
+        /// <c>IX_urls_full_url</c> on every clicks merge.
         /// </summary>
         [TestMethod]
-        public void ClickTempEntityUrlColumnIsVarchar1700()
+        public void ClickTempEntityUrlColumnIsNvarchar850()
         {
             var cache = new InsertBatchTypeFieldCache<ClickTempEntity>();
             var info = cache.PropertyMappingInfo.Single(p => p.SqlInfo.FieldName == "url");
 
             Assert.AreEqual(ExpectedUrlSqlType, info.SqlInfo.SqlColDefinition,
-                "##import_staging_clicks.url must match urls.full_url (varchar(1700)) so IX_urls_full_url is usable.");
+                "##import_staging_clicks.url must match urls.full_url (nvarchar(850)) so IX_urls_full_url is usable.");
         }
 
         /// <summary>
         /// The SharePoint Copilot events staging entity's <c>url</c> column joins
         /// <c>urls.full_url</c> in "insert_sp_copilot_events_from_staging_table.sql". Same
-        /// constraint: must be <c>varchar(1700)</c> so the merge can use <c>IX_urls_full_url</c>.
+        /// constraint: must be <c>nvarchar(850)</c> so the merge can use <c>IX_urls_full_url</c>.
         /// </summary>
         [TestMethod]
-        public void SPCopilotLogTempEntityUrlColumnIsVarchar1700()
+        public void SPCopilotLogTempEntityUrlColumnIsNvarchar850()
         {
             var cache = new InsertBatchTypeFieldCache<SPCopilotLogTempEntity>();
             var info = cache.PropertyMappingInfo.Single(p => p.SqlInfo.FieldName == "url");
 
             Assert.AreEqual(ExpectedUrlSqlType, info.SqlInfo.SqlColDefinition,
-                "Copilot SP staging .url must match urls.full_url (varchar(1700)) so IX_urls_full_url is usable.");
+                "Copilot SP staging .url must match urls.full_url (nvarchar(850)) so IX_urls_full_url is usable.");
         }
 
         // ---- Local test fixtures ----
@@ -146,8 +147,9 @@ namespace Tests.UnitTests
 
         private class OverriddenNonStringEntity
         {
-            // Override should be ignored: int wins.
-            [Column("int_with_bogus_override", SqlTypeOverride = "varchar(1700)")]
+            // Override is an arbitrary string-type sentinel; it must be ignored because the
+            // property is an int (the inferred "int" type wins).
+            [Column("int_with_bogus_override", SqlTypeOverride = "nvarchar(850)")]
             public int IntWithBogusOverride { get; set; }
         }
     }

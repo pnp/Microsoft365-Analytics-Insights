@@ -79,7 +79,11 @@ jobs:
     #   - Build .Net projects
     # Test:
     #   - Run test suite
-    runs-on: windows-latest
+    # Pinned to windows-2022: the "Execute unit tests" step below uses a hardcoded
+    # vstest.console.exe path under VS2022 Enterprise. On windows-latest (now a newer image)
+    # that path no longer exists, so vstest can't be located and the job fails before any test
+    # runs. windows-2022 ships VS2022 Enterprise at that exact path. See PR #123 / issue #122.
+    runs-on: windows-2022
     needs: setup_tests
     if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
     strategy:
@@ -89,7 +93,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # 2.0.0
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5
@@ -100,7 +104,7 @@ jobs:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
       - name: Config substitution - Unit tests
-        uses: microsoft/variable-substitution@6287962da9e5b6e68778dc51e840caa03ca84495 # 1.0.0
+        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
           files: '${{ env.Solution_Directory }}\App.Release.config'
       - name: Start Redis

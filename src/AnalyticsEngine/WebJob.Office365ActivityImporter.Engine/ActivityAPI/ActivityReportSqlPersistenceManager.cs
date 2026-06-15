@@ -294,11 +294,11 @@ namespace WebJob.Office365ActivityImporter.Engine
         [Column("type_name", true)]
         public string TypeName { get; set; }
 
-        // Must match dbo.urls.full_url (varchar(1700), see migration ShrinkUrlsFullUrlColumn /
-        // PR #108) so the join in "Insert Activity from Staging Table.sql" can use
-        // IX_urls_full_url instead of an implicit nvarchar -> varchar conversion that defeats
-        // the index. See #109.
-        [Column("object_id", true, SqlTypeOverride = "varchar(1700)")]
+        // Must match dbo.urls.full_url (nvarchar(850), see migration ShrinkUrlsFullUrlColumn /
+        // issue #122) so the join in "Insert Activity from Staging Table.sql" can use
+        // IX_urls_full_url instead of an implicit type conversion that defeats the index.
+        // nvarchar (not varchar) so Unicode URLs (e.g. Greek) aren't corrupted. See #122 (#108/#109).
+        [Column("object_id", true, SqlTypeOverride = "nvarchar(850)")]
         public string ObjectId { get; set; }
 
         [Column("web_url", true)]
