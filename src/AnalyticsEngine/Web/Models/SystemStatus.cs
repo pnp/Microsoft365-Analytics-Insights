@@ -86,7 +86,7 @@ namespace Web.AnalyticsWeb.Models
                 status = new UnknownConfigSystemStatus();
             }
 
-            status.BuildLabel = System.Configuration.ConfigurationManager.AppSettings["BuildLabel"];
+            status.BuildLabel = Common.Entities.BuildConstants.BuildLabel;
 
             // DB counts
             status.HitCount = await db.hits.CountAsync();
