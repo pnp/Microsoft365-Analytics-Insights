@@ -23,7 +23,9 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
             if (p.CustomProperties.PageRequestId.HasValue)
             {
                 this.Timestamp = p.Timestamp;
-                this.Url = p.CustomProperties.HRef;
+                // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)): strip
+                // the volatile xsdata token, else reduce to the page path. See issue #122.
+                this.Url = StringUtils.EnsureUrlWithinLength(p.CustomProperties.HRef, Common.Entities.Url.FullUrlMaxLength);
                 this.Username = p.Username;
                 this.ClassNames = StringUtils.EnsureMaxLength(p.CustomProperties.ClassNames, 800);
                 this.PageRequestId = p.CustomProperties.PageRequestId.Value;

@@ -149,6 +149,124 @@ namespace DataUtils
             }
         }
 
+        internal const string XsDataParam = "xsdata=";
+
+        /// <summary>
+        /// Removes the volatile <c>xsdata</c> query parameter from <paramref name="url"/>, preserving
+        /// the rest of the URL (path, all other query parameters, and any <c>#fragment</c>). The
+        /// <c>xsdata</c> value is a large, transient Teams / SharePoint deep-link token with no
+        /// analytic value that routinely pushes SharePoint URLs past the <c>dbo.urls.full_url</c>
+        /// limit (<c>nvarchar(850)</c>, see migration ShrinkUrlsFullUrlColumn / issue #122). Matching
+        /// is case-insensitive on the parameter name and boundary-aware (only a real <c>?xsdata=</c>
+        /// or <c>&amp;xsdata=</c> parameter is removed, never an <c>xsdata</c> substring inside
+        /// another value). Returns the input unchanged when it is null/empty or has no such parameter.
+        /// Mirrors the T-SQL clean-up in ShrinkUrlsFullUrlColumn-UpgradeGuide.md.
+        /// </summary>
+        public static string RemoveXsDataParam(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return url;
+            }
+
+            var lower = url.ToLowerInvariant();
+            var sep = lower.IndexOf("?" + XsDataParam, StringComparison.Ordinal);
+            if (sep == -1)
+            {
+                sep = lower.IndexOf("&" + XsDataParam, StringComparison.Ordinal);
+            }
+            if (sep == -1)
+            {
+                return url; // No xsdata parameter present.
+            }
+
+            var sepChar = url[sep];
+            var valStart = sep + 1 + XsDataParam.Length; // First char of the xsdata value.
+
+            // The value ends at the next '&' or '#' (whichever comes first), or end-of-string.
+            var amp = url.IndexOf('&', valStart);
+            var hash = url.IndexOf('#', valStart);
+            int term;
+            if (amp == -1) term = hash;
+            else if (hash == -1) term = amp;
+            else term = Math.Min(amp, hash);
+
+            if (term == -1)
+            {
+                // xsdata is the last parameter and there is no fragment: drop the separator + value.
+                return url.Substring(0, sep);
+            }
+            if (sepChar == '?' && url[term] == '&')
+            {
+                // xsdata is the first parameter: keep '?', drop 'xsdata=...&'.
+                return url.Substring(0, sep + 1) + url.Substring(term + 1);
+            }
+            // '&' separator, or '?' separator immediately followed by a fragment: drop the parameter
+            // and keep the remainder (the following '&param' or '#fragment').
+            return url.Substring(0, sep) + url.Substring(term);
+        }
+
+        /// <summary>
+        /// Ensures <paramref name="url"/> fits the <c>dbo.urls.full_url</c> column, mirroring the
+        /// staged clean-up in ShrinkUrlsFullUrlColumn-UpgradeGuide.md so the importer can never fail
+        /// staging an over-length value into the nvarchar(850) staging columns. URLs already within
+        /// <paramref name="maxLength"/> are returned unchanged (no needless churn). Otherwise, in order:
+        /// <list type="number">
+        /// <item>the volatile <c>xsdata</c> token is removed (see <see cref="RemoveXsDataParam"/>) -
+        /// on its own this brings the large majority of oversized SharePoint URLs back under the limit;</item>
+        /// <item>if it is STILL too long (e.g. a giant <c>SafelinksUrl</c>/<c>FilterValues</c> list or
+        /// comma-merged Teams parameters), the whole query string and <c>#fragment</c> are dropped,
+        /// keeping just the page path - the only part with analytic value (this matches the "reduce to
+        /// path" step of the upgrade guide);</item>
+        /// <item>only in the pathological case where even the bare path exceeds <paramref name="maxLength"/>
+        /// is it hard-truncated as an absolute last resort.</item>
+        /// </list>
+        /// Pass <c>Common.Entities.Url.FullUrlMaxLength</c> as <paramref name="maxLength"/>.
+        /// </summary>
+        public static string EnsureUrlWithinLength(string url, int maxLength)
+        {
+            if (url == null || url.Length <= maxLength)
+            {
+                return url;
+            }
+
+            // 1. Remove the volatile xsdata token - usually enough on its own.
+            var trimmed = RemoveXsDataParam(url);
+            if (trimmed.Length <= maxLength)
+            {
+                return trimmed;
+            }
+
+            // 2. Still too long: drop the entire query string and #fragment, keeping just the page
+            //    path. Everything after '?' on these URLs is volatile Teams junk with no analytic value.
+            var path = GetUrlPath(trimmed);
+            if (path.Length <= maxLength)
+            {
+                return path;
+            }
+
+            // 3. Pathological (even the bare path is over the limit): hard-truncate as an absolute
+            //    last resort so the staging insert never overflows the column.
+            return path.Substring(0, maxLength);
+        }
+
+        static readonly char[] QueryOrFragmentStart = { '?', '#' };
+
+        /// <summary>
+        /// Returns everything in <paramref name="url"/> before the first <c>?</c> or <c>#</c> (the
+        /// page path), or the whole string if neither is present. String-based to match the T-SQL
+        /// <c>pathkey</c> logic in ShrinkUrlsFullUrlColumn-UpgradeGuide.md exactly.
+        /// </summary>
+        private static string GetUrlPath(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return url;
+            }
+            var cut = url.IndexOfAny(QueryOrFragmentStart);
+            return cut < 0 ? url : url.Substring(0, cut);
+        }
+
         /// <summary>
         /// https://contoso.sharepoint.com/sites/site/Shared Documents/
         /// to 
