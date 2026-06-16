@@ -53,6 +53,36 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// A bounded string override (e.g. <c>nvarchar(850)</c>) must expose its parsed character
+        /// limit on <see cref="ColumnSqlInfo.MaxLength"/>, so the batch insert can skip an over-width
+        /// value in memory (a single integer comparison) instead of catching a per-row SQL truncation
+        /// error. See InsertBatch over-width handling and issue #122 / #127.
+        /// </summary>
+        [TestMethod]
+        public void OverriddenStringColumnExposesParsedMaxLength()
+        {
+            var cache = new InsertBatchTypeFieldCache<OverriddenStringEntity>();
+            var info = cache.PropertyMappingInfo.Single(p => p.SqlInfo.FieldName == "overridden_string");
+
+            Assert.AreEqual(850, info.SqlInfo.MaxLength,
+                "nvarchar(850) override must parse to an 850-character limit for the in-memory width check.");
+        }
+
+        /// <summary>
+        /// An unbounded <c>nvarchar(max)</c> string column must have no parsed limit, so the
+        /// in-memory width check never trips on it (only bounded columns can truncate).
+        /// </summary>
+        [TestMethod]
+        public void DefaultMaxStringColumnHasNoParsedMaxLength()
+        {
+            var cache = new InsertBatchTypeFieldCache<DefaultStringEntity>();
+            var info = cache.PropertyMappingInfo.Single(p => p.SqlInfo.FieldName == "default_string");
+
+            Assert.IsNull(info.SqlInfo.MaxLength,
+                "nvarchar(max) default must have no length limit (no in-memory truncation).");
+        }
+
+        /// <summary>
         /// <see cref="ColumnAttribute.SqlTypeOverride"/> must be ignored for non-string CLR types -
         /// the inferred type (e.g. <c>int</c>) stays authoritative. This stops misuse from silently
         /// breaking schema generation for typed columns.

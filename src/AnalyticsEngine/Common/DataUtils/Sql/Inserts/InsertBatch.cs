@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Reflection;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -140,6 +139,7 @@ namespace DataUtils.Sql.Inserts
                 {
                     cmd.Parameters.Clear();
                     int fieldIdx = 0;
+                    var rowExceedsColumnWidth = false;
                     foreach (var fieldMapping in _batchTypeFieldCache.PropertyMappingInfo)
                     {
                         var objVal = fieldMapping.Property.GetValue(insertObj);
@@ -147,22 +147,44 @@ namespace DataUtils.Sql.Inserts
                         {
                             throw new BatchSaveException($"Couldn't insert null into batch insert field '{fieldMapping.SqlInfo.FieldName}' in table '{tempTableName}'");
                         }
+
+                        // Cheap in-memory width check, using the length parsed once when the field
+                        // cache was built, so the hot path stays a single integer comparison (no
+                        // per-row reflection or regex). A value wider than its bounded nvarchar
+                        // column can never be inserted, so flag the row and skip it below instead of
+                        // paying a doomed SQL round-trip + truncation error (8152/2628) per over-width
+                        // row. SQL Server nvarchar(n) counts UTF-16 units, exactly what string.Length
+                        // returns, so this predicts the server's truncation faithfully.
+                        if (objVal is string s && fieldMapping.SqlInfo.MaxLength.HasValue && s.Length > fieldMapping.SqlInfo.MaxLength.Value)
+                        {
+                            rowExceedsColumnWidth = true;
+                        }
+
                         cmd.ParamUp("@p" + fieldIdx, objVal, fieldMapping.SqlInfo.SqlType);
 
                         fieldIdx++;
                     }
+
+                    if (rowExceedsColumnWidth)
+                    {
+                        // Predicted over-width: skip just this row rather than aborting the whole
+                        // batch - which would discard every other row's data too and fail again on
+                        // every retry as a "poison batch". For SharePoint URLs longer than the
+                        // urls.full_url-width nvarchar(850) columns see issue #122 / #127.
+                        Interlocked.Increment(ref _rowsSkippedTooWide);
+                        _telemetry.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. Continuing with the rest of the batch.");
+                        continue;
+                    }
+
                     try
                     {
                         await cmd.ExecuteNonQueryAsync();
                     }
                     catch (SqlException ex) when (IsColumnTruncationError(ex))
                     {
-                        // A value is longer than its staging column allows (e.g. a SharePoint URL
-                        // longer than the urls.full_url-width nvarchar(850) columns - see issue
-                        // #122 / #127). This row can never be inserted, so log exactly which column
-                        // overflowed and skip just this row, rather than aborting the whole batch -
-                        // which would discard every other row's data too and fail again on every
-                        // retry as a "poison batch".
+                        // Backstop: a value was wider than its column but the in-memory check above
+                        // didn't predict it (e.g. a column whose declared width we couldn't parse).
+                        // Skip just this row so one bad value can't poison the whole batch.
                         Interlocked.Increment(ref _rowsSkippedTooWide);
                         _telemetry.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. SQL error {ex.Number}: {ex.Message}. Continuing with the rest of the batch.");
                         continue;
@@ -184,16 +206,6 @@ namespace DataUtils.Sql.Inserts
         // Azure SQL, when an inserted value is wider than its target column. Both mean the same here.
         private static bool IsColumnTruncationError(SqlException ex) => ex.Number == 8152 || ex.Number == 2628;
 
-        // Parses the declared length from a staging column definition such as "nvarchar(850)".
-        // Returns null for unbounded definitions ("nvarchar(max)") or anything without an explicit length.
-        private static int? GetDeclaredColumnLength(string sqlColDefinition)
-        {
-            if (string.IsNullOrEmpty(sqlColDefinition)) return null;
-            if (sqlColDefinition.IndexOf("max", StringComparison.OrdinalIgnoreCase) >= 0) return null;
-            var match = Regex.Match(sqlColDefinition, @"\((\d+)\)");
-            return match.Success && int.TryParse(match.Groups[1].Value, out var len) ? (int?)len : null;
-        }
-
         // Builds a privacy-conscious, single-line description of a row to help operators locate the
         // source record and the offending column when an insert fails. String VALUES are never logged
         // (they may hold customer data such as URLs, file/user names) - only the over-width column's
@@ -210,7 +222,7 @@ namespace DataUtils.Sql.Inserts
                 var val = fieldMapping.Property.GetValue(insertObj);
                 if (val is string s)
                 {
-                    var declaredLen = GetDeclaredColumnLength(fieldMapping.SqlInfo.SqlColDefinition);
+                    var declaredLen = fieldMapping.SqlInfo.MaxLength;
                     if (declaredLen.HasValue && s.Length > declaredLen.Value)
                     {
                         var part = $"column '{fieldName}' ({fieldMapping.SqlInfo.SqlColDefinition}) holds {s.Length} chars but the limit is {declaredLen.Value}";
