@@ -231,12 +231,41 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
         }
 
+        /// <summary>
+        /// Writing the runtime app-registration secret to Key Vault is best-effort: a transient
+        /// network/DNS/permission failure here must not abort an otherwise-successful install. The
+        /// existing vault value (if any) remains valid and the secret can be re-written on a later run.
+        /// </summary>
+        public override bool IsCritical => false;
+
         public override async Task<object> ExecuteTask(object contextArg)
         {
             base.EnsureContextArgType<KeyVaultResource>(contextArg);
             var vault = (KeyVaultResource)contextArg;
 
             var name = _config.GetNameConfigValue();
+            try
+            {
+                return await AddRuntimeSecretAsync(vault, name);
+            }
+            catch (Exception ex) when (IsTransportOrDnsFailure(ex, out var leafMessage))
+            {
+                // DNS/network transport failure reaching the Key Vault data-plane endpoint
+                // (e.g. "The remote name could not be resolved: '<vault>.vault.azure.net'"), as opposed
+                // to an HTTP error response. Writing the secret is best-effort (see IsCritical), so log
+                // an actionable warning and let the install continue instead of aborting everything.
+                _logger.LogWarning(
+                    $"Could not reach key vault '{vault.Data.Name}' over the network to update secret '{name}': {leafMessage} " +
+                    $"This is usually a DNS / network / firewall issue resolving '{vault.Data.Name}.vault.azure.net' from the installer host " +
+                    $"(for example when public network access is disabled and the host is not on the VNet). " +
+                    $"The secret was not written; any existing value in the vault remains valid. " +
+                    $"Re-run the installer once connectivity is restored if the secret needs updating.");
+                return vault;
+            }
+        }
+
+        private async Task<object> AddRuntimeSecretAsync(KeyVaultResource vault, string name)
+        {
             var val = _config.GetConfigValue(CONFIG_KEY_SECRET_VAL);
 
 
@@ -339,6 +368,50 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 $"Likely causes: access policy / RBAC propagation lag (longer than the {(_retryDelaysSeconds.Length + 1)}-attempt retry window) or a vault firewall rule rejecting the runner IP — check the vault's Networking blade. " +
                 $"App-registration secrets in the vault may now be out of date — re-run the installer once the underlying cause is resolved.");
             return vault;
+        }
+
+        /// <summary>
+        /// True when <paramref name="ex"/> (or any exception nested within it, including
+        /// <see cref="AggregateException.InnerExceptions"/>) is a network transport / DNS resolution
+        /// failure rather than an HTTP error response from Key Vault. Azure.Core surfaces these as a
+        /// <see cref="RequestFailedException"/> with <c>Status == 0</c> wrapping a
+        /// <see cref="System.Net.WebException"/> / <see cref="System.Net.Http.HttpRequestException"/> /
+        /// <see cref="System.Net.Sockets.SocketException"/>, and the retry policy rethrows them inside an
+        /// <see cref="AggregateException"/>.
+        /// </summary>
+        private static bool IsTransportOrDnsFailure(Exception ex, out string leafMessage)
+        {
+            leafMessage = null;
+            foreach (var node in Flatten(ex))
+            {
+                if (node is System.Net.Sockets.SocketException
+                    || node is System.Net.WebException
+                    || node is System.Net.Http.HttpRequestException
+                    || (node is RequestFailedException rfe && rfe.Status == 0))
+                {
+                    // Keep walking so the innermost (most specific) message wins.
+                    leafMessage = node.Message;
+                }
+            }
+            return leafMessage != null;
+        }
+
+        private static IEnumerable<Exception> Flatten(Exception ex)
+        {
+            if (ex == null) yield break;
+            yield return ex;
+
+            if (ex is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    foreach (var n in Flatten(inner)) yield return n;
+                }
+            }
+            else if (ex.InnerException != null)
+            {
+                foreach (var n in Flatten(ex.InnerException)) yield return n;
+            }
         }
     }
 }
