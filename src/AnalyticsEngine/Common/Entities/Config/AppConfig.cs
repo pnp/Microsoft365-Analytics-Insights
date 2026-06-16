@@ -18,7 +18,7 @@ namespace Common.Entities.Config
 
             this.AppInsightsContainerName = ConfigurationManager.AppSettings["AppInsightsContainerName"];
 
-            this.BuildLabel = ConfigurationManager.AppSettings["BuildLabel"];
+            this.BuildLabel = BuildConstants.BuildLabel;
 
             this.ClientID = ConfigurationManager.AppSettings.Get("ClientID");
             this.ClientSecret = ConfigurationManager.AppSettings.Get("ClientSecret");
