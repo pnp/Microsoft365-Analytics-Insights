@@ -248,7 +248,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 return await AddRuntimeSecretAsync(vault, name);
             }
-            catch (Exception ex) when (IsTransportOrDnsFailure(ex, out var leafMessage))
+            catch (Exception ex) when (TransportFailureDetector.IsTransportOrDnsFailure(ex, out var leafMessage))
             {
                 // DNS/network transport failure reaching the Key Vault data-plane endpoint
                 // (e.g. "The remote name could not be resolved: '<vault>.vault.azure.net'"), as opposed
@@ -368,50 +368,6 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 $"Likely causes: access policy / RBAC propagation lag (longer than the {(_retryDelaysSeconds.Length + 1)}-attempt retry window) or a vault firewall rule rejecting the runner IP — check the vault's Networking blade. " +
                 $"App-registration secrets in the vault may now be out of date — re-run the installer once the underlying cause is resolved.");
             return vault;
-        }
-
-        /// <summary>
-        /// True when <paramref name="ex"/> (or any exception nested within it, including
-        /// <see cref="AggregateException.InnerExceptions"/>) is a network transport / DNS resolution
-        /// failure rather than an HTTP error response from Key Vault. Azure.Core surfaces these as a
-        /// <see cref="RequestFailedException"/> with <c>Status == 0</c> wrapping a
-        /// <see cref="System.Net.WebException"/> / <see cref="System.Net.Http.HttpRequestException"/> /
-        /// <see cref="System.Net.Sockets.SocketException"/>, and the retry policy rethrows them inside an
-        /// <see cref="AggregateException"/>.
-        /// </summary>
-        private static bool IsTransportOrDnsFailure(Exception ex, out string leafMessage)
-        {
-            leafMessage = null;
-            foreach (var node in Flatten(ex))
-            {
-                if (node is System.Net.Sockets.SocketException
-                    || node is System.Net.WebException
-                    || node is System.Net.Http.HttpRequestException
-                    || (node is RequestFailedException rfe && rfe.Status == 0))
-                {
-                    // Keep walking so the innermost (most specific) message wins.
-                    leafMessage = node.Message;
-                }
-            }
-            return leafMessage != null;
-        }
-
-        private static IEnumerable<Exception> Flatten(Exception ex)
-        {
-            if (ex == null) yield break;
-            yield return ex;
-
-            if (ex is AggregateException agg)
-            {
-                foreach (var inner in agg.InnerExceptions)
-                {
-                    foreach (var n in Flatten(inner)) yield return n;
-                }
-            }
-            else if (ex.InnerException != null)
-            {
-                foreach (var n in Flatten(ex.InnerException)) yield return n;
-            }
         }
     }
 }
