@@ -13,6 +13,14 @@ namespace Common.Entities
     [Table("urls")]
     public class Url : AbstractEFEntity, IUrlObject
     {
+        /// <summary>
+        /// Maximum length (characters) of <see cref="FullUrl"/> / <c>dbo.urls.full_url</c>. The
+        /// column is <c>nvarchar(850)</c> after migration ShrinkUrlsFullUrlColumn (850 nvarchar
+        /// chars = the 1700-byte non-clustered index-key limit). Used to gate insert-time URL
+        /// trimming (see <see cref="DataUtils.StringUtils.EnsureUrlWithinLength"/>) so the
+        /// importer never stages a URL longer than the target column. See issue #122 (#108/#109).
+        /// </summary>
+        public const int FullUrlMaxLength = 850;
 
         // nvarchar(850) NOT NULL is the on-disk schema after migration ShrinkUrlsFullUrlColumn
         // (the column is shrunk from a (max) LOB so it can be the IX_urls_full_url index key -
@@ -21,7 +29,7 @@ namespace Common.Entities
         // would corrupt to '?'. The matching EF mapping below keeps EF emitting nvarchar parameters
         // so EF-driven queries on urls can use IX_urls_full_url. See issue #122 (#108/#109).
         [Required]
-        [MaxLength(850)]
+        [MaxLength(FullUrlMaxLength)]
         [Column("full_url", TypeName = "nvarchar")]
         public string FullUrl { get; set; }
 
