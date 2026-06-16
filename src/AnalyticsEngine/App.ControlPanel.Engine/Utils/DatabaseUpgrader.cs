@@ -16,7 +16,7 @@ namespace App.ControlPanel.Engine
         public static void CheckDbUpgraded(DatabaseUpgradeInfo initInfo, Action<string> log)
         {
             var thisAsembly = System.Reflection.Assembly.GetEntryAssembly();
-            var buildLabel = System.Configuration.ConfigurationManager.AppSettings["BuildLabel"] ?? "Unknown build";
+            var buildLabel = Common.Entities.BuildConstants.BuildLabel;
 
             log?.Invoke($"Build '{buildLabel}' - begin database upgrade.");
             log?.Invoke($"[{DateTime.Now}]: Connecting to database @ '{initInfo.ConnectionString}' with Entity Framework context initializer set to 'MigrateDatabaseToLatestVersion'...");
