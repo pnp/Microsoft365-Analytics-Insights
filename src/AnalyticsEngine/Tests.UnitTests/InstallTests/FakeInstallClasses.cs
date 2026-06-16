@@ -153,4 +153,36 @@ namespace Tests.UnitTests.InstallTests
             return Task.FromResult<object>(new object());
         }
     }
+
+    /// <summary>Task that returns a caller-supplied result object, used to test result carry-forward.</summary>
+    public class FakeResultTask : BaseInstallTask
+    {
+        private readonly object _result;
+
+        public FakeResultTask(TaskConfig config, ILogger logger, object result) : base(config, logger)
+        {
+            _result = result;
+        }
+
+        public override Task<object> ExecuteTask(object contextArg)
+        {
+            return Task.FromResult(_result);
+        }
+    }
+
+    /// <summary>Task that records the context argument it received, used to assert what was carried forward.</summary>
+    public class FakeContextCapturingTask : BaseInstallTask
+    {
+        public bool WasRun { get; private set; }
+        public object ReceivedContext { get; private set; }
+
+        public FakeContextCapturingTask(TaskConfig config, ILogger logger) : base(config, logger) { }
+
+        public override Task<object> ExecuteTask(object contextArg)
+        {
+            WasRun = true;
+            ReceivedContext = contextArg;
+            return Task.FromResult<object>(new object());
+        }
+    }
 }

@@ -4,6 +4,7 @@ using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
+using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
@@ -49,6 +50,21 @@ namespace App.ControlPanel.Engine
             WindowsVersionCheck();
             _logger.LogInformation($"Starting installation/update tests...");
 
+            // Validate the configuration itself first (names, accounts, region, etc.) so fundamental
+            // mistakes are reported before we make any Azure calls.
+            ReportConfigValidationIssues();
+
+            // When public access is disabled the data-plane checks below (DNS, Key Vault) only succeed
+            // from a host with private-network line-of-sight to the resources - tell the operator up-front.
+            if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+            {
+                _logger.LogInformation(
+                    $"Public network access is disabled for this deployment. Run 'Test Configuration' (and the install itself) " +
+                    $"from a host with private-network line-of-sight to the resources - a VM on VNet '{Config.NetworkConfig?.VNetName}' " +
+                    $"(or a peered VNet, VPN/ExpressRoute, or Azure Bastion-attached host) - otherwise public DNS may not resolve to " +
+                    $"the private endpoint IPs and the DNS / Key Vault data-plane checks below will fail.");
+            }
+
             // Check sub & az group if possible
             var (testRg, azCredsValid) = await GetResourceGroupIfValid();
             if (!azCredsValid)
@@ -69,6 +85,10 @@ namespace App.ControlPanel.Engine
             // "The remote name could not be resolved" class of failure (broken/limited DNS on the
             // installer host) up-front instead of letting it abort an install part-way through.
             await VerifyResourceDnsResolution();
+
+            // Key Vault data-plane reachability with the installer account (the exact call that failed
+            // mid-install). Only runs when the vault already exists and installer credentials are present.
+            await VerifyKeyVaultDataPlaneAccess(testRg);
 
             // Firewall tests
             if (_testConfig.IsValid)
@@ -257,8 +277,113 @@ namespace App.ControlPanel.Engine
             }
         }
 
-        #region DNS resolution checks
+        #region Configuration & Key Vault checks
 
+        /// <summary>
+        /// Run the same configuration validation the installer uses and log any issues up-front, so
+        /// fundamental mistakes (missing names, accounts, region, etc.) are reported before any Azure calls.
+        /// Logs only; never throws.
+        /// </summary>
+        void ReportConfigValidationIssues()
+        {
+            try
+            {
+                var errors = Config?.ValidatInputAndGetErrors();
+                if (errors != null && errors.Count > 0)
+                {
+                    _logger.LogError($"Configuration validation found {errors.Count} issue(s) that may block installation:");
+                    foreach (var e in errors)
+                    {
+                        _logger.LogError($"  - {e}");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Configuration validation passed - no issues found.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not run configuration validation: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Probe the Key Vault data-plane endpoint with the installer account - the exact call
+        /// (<c>KeyVaultSecretAddTask</c>) that aborts an install when DNS/network to
+        /// <c>&lt;vault&gt;.vault.azure.net</c> is broken. Only runs when the vault already exists and the
+        /// installer credentials are present, so it never false-alarms on a fresh install. Logs only; never throws.
+        /// </summary>
+        async Task VerifyKeyVaultDataPlaneAccess(ResourceGroupResource testRg)
+        {
+            if (Config == null || string.IsNullOrWhiteSpace(Config.KeyVaultName)) return;
+
+            var installerErrs = Config.InstallerAccount?.GetValidationErrors();
+            if (installerErrs == null || installerErrs.Count > 0)
+            {
+                _logger.LogInformation("Skipping Key Vault data-plane reachability check - installer account details are incomplete.");
+                return;
+            }
+
+            if (testRg == null)
+            {
+                _logger.LogInformation("Skipping Key Vault data-plane reachability check - resource group is not available.");
+                return;
+            }
+
+            KeyVaultResource vault;
+            try
+            {
+                vault = testRg.GetKeyVaults().Where(v => v.Data.Name == Config.KeyVaultName).SingleOrDefault();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not enumerate key vaults to check '{Config.KeyVaultName}': {ex.Message}");
+                return;
+            }
+
+            if (vault == null)
+            {
+                _logger.LogInformation($"Key Vault '{Config.KeyVaultName}' not found yet; skipping data-plane reachability check (it will be created during install).");
+                return;
+            }
+
+            _logger.LogInformation($"Checking Key Vault data-plane access to '{Config.KeyVaultName}' with the installer account...");
+
+            var creds = new ClientSecretCredential(Config.InstallerAccount.DirectoryId, Config.InstallerAccount.ClientId, Config.InstallerAccount.Secret);
+            var result = await KeyVaultDataPlaneProbe.TryReadAsync(Config.KeyVaultName, creds);
+
+            switch (result.Status)
+            {
+                case KeyVaultProbeStatus.Reachable:
+                    _logger.LogInformation($"Key Vault '{Config.KeyVaultName}' data-plane is reachable and the installer account can read secrets.");
+                    break;
+
+                case KeyVaultProbeStatus.TransportFailure:
+                    var transportGuidance = PrivateNetworkGuidance.IsPrivateNetworkOnly(Config)
+                        ? PrivateNetworkGuidance.BuildVmOnVNetGuidance("reaching the Key Vault", Config.NetworkConfig?.VNetName)
+                        : $"Check DNS / network / firewall connectivity from this host to '{Config.KeyVaultName}.vault.azure.net'.";
+                    _logger.LogError(
+                        $"Could not reach Key Vault '{Config.KeyVaultName}' data-plane ({result.Message}). " +
+                        $"This is the DNS/network failure that aborts secret upload during install. " + transportGuidance);
+                    break;
+
+                case KeyVaultProbeStatus.Unauthorized:
+                    _logger.LogError(
+                        $"Key Vault '{Config.KeyVaultName}' is reachable but the installer account was denied data-plane access (403): {result.Message} " +
+                        $"Ensure the installer app registration has a Key Vault access policy granting secret Get/List/Set, " +
+                        $"and that any vault firewall allows this host's IP.");
+                    break;
+
+                default:
+                    _logger.LogError($"Unexpected error checking Key Vault '{Config.KeyVaultName}' data-plane access: {result.Message}");
+                    break;
+            }
+        }
+
+        #endregion
+
+        #region DNS resolution checks
         /// <summary>Public DNS suffix for each Azure PaaS resource the installer / runtime must resolve.</summary>
         private const string DNS_SUFFIX_KEY_VAULT = ".vault.azure.net";
         private const string DNS_SUFFIX_SQL = ".database.windows.net";
