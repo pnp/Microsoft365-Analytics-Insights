@@ -149,30 +149,44 @@ namespace Tests.UnitTests
             Assert.IsTrue(shortWithXsData.Length <= max);
             Assert.AreEqual(shortWithXsData, StringUtils.EnsureUrlWithinLength(shortWithXsData, max));
 
-            // Over the limit and has xsdata -> stripped (and now fits).
+            // Over the limit and has xsdata -> stripping xsdata alone is enough; the rest is preserved.
             var longWithXsData = "https://x/a.aspx?xsdata=" + new string('Q', 100) + "&b=2";
             Assert.IsTrue(longWithXsData.Length > max);
             Assert.AreEqual("https://x/a.aspx?b=2", StringUtils.EnsureUrlWithinLength(longWithXsData, max));
 
-            // Over the limit, no xsdata -> nothing to strip, so hard-truncated to max as a last resort.
+            // Over the limit, no xsdata -> nothing to strip, so reduced to the page path (not truncated).
             var longNoXsData = "https://x/a.aspx?b=" + new string('Q', 100);
-            var truncated = StringUtils.EnsureUrlWithinLength(longNoXsData, max);
-            Assert.AreEqual(max, truncated.Length);
-            Assert.AreEqual(longNoXsData.Substring(0, max), truncated);
+            Assert.AreEqual("https://x/a.aspx", StringUtils.EnsureUrlWithinLength(longNoXsData, max));
 
-            // Over the limit AND still over after stripping xsdata -> truncated to exactly max.
+            // Over the limit AND still over after stripping xsdata -> reduced to the page path.
             var stillLong = "https://x/a.aspx?xsdata=" + new string('Q', 100) + "&" + new string('Z', 100);
-            var result2 = StringUtils.EnsureUrlWithinLength(stillLong, max);
-            Assert.AreEqual(max, result2.Length);
-            Assert.AreEqual(("https://x/a.aspx?" + new string('Z', 100)).Substring(0, max), result2);
+            Assert.AreEqual("https://x/a.aspx", StringUtils.EnsureUrlWithinLength(stillLong, max));
 
-            // Wired to the real column width: a 900-char token pushes a SharePoint URL over 850, but
-            // once removed the URL comfortably fits, so it is returned in full (not truncated).
+            // Reducing to path drops the query string AND any #fragment.
+            var withFragment = "https://x/a.aspx?notxs=" + new string('P', 100) + "#section";
+            Assert.AreEqual("https://x/a.aspx", StringUtils.EnsureUrlWithinLength(withFragment, max));
+
+            // Pathological: even the bare path exceeds the limit -> hard-truncated as an absolute last resort.
+            var longPath = "https://x/" + new string('a', 100); // no '?' or '#'
+            var truncated = StringUtils.EnsureUrlWithinLength(longPath, max);
+            Assert.AreEqual(max, truncated.Length);
+            Assert.AreEqual(longPath.Substring(0, max), truncated);
+
+            // Real column width: a 900-char xsdata token pushes a SharePoint URL over 850, but once
+            // removed it comfortably fits, so the rest (filters etc.) is kept in full - NOT reduced to path.
             var oversized = "https://contoso.sharepoint.com/sites/Marketing/a.aspx?xsdata=" + new string('Q', 900) + "&v=1";
             Assert.IsTrue(oversized.Length > Url.FullUrlMaxLength);
             var result = StringUtils.EnsureUrlWithinLength(oversized, Url.FullUrlMaxLength);
             Assert.AreEqual("https://contoso.sharepoint.com/sites/Marketing/a.aspx?v=1", result);
             Assert.IsTrue(result.Length <= Url.FullUrlMaxLength);
+
+            // Real column width: still over 850 even after xsdata (a huge SafelinksUrl) -> reduced to path.
+            var basePath = "https://contoso.sharepoint.com/sites/Marketing/Lists/Announcements/AllItems.aspx";
+            var stuck = basePath + "?xsdata=" + new string('Q', 900) + "&SafelinksUrl=" + new string('Z', 900);
+            Assert.IsTrue(stuck.Length > Url.FullUrlMaxLength);
+            var stuckResult = StringUtils.EnsureUrlWithinLength(stuck, Url.FullUrlMaxLength);
+            Assert.AreEqual(basePath, stuckResult);
+            Assert.IsTrue(stuckResult.Length <= Url.FullUrlMaxLength);
         }
 
         [TestMethod]

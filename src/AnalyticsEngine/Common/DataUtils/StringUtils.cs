@@ -207,13 +207,21 @@ namespace DataUtils
         }
 
         /// <summary>
-        /// Ensures <paramref name="url"/> fits the <c>dbo.urls.full_url</c> column. URLs already
-        /// within <paramref name="maxLength"/> are returned unchanged (so we avoid needless churn).
-        /// Otherwise the volatile <c>xsdata</c> parameter is removed (see <see cref="RemoveXsDataParam"/>);
-        /// if the result is STILL too long (e.g. a huge <c>FilterValues</c> list, or a URL with no
-        /// <c>xsdata</c> at all) it is hard-truncated to <paramref name="maxLength"/> as a last resort,
-        /// so the importer never fails staging an over-length value into the nvarchar(850) staging
-        /// column. Pass <c>Common.Entities.Url.FullUrlMaxLength</c> as <paramref name="maxLength"/>.
+        /// Ensures <paramref name="url"/> fits the <c>dbo.urls.full_url</c> column, mirroring the
+        /// staged clean-up in ShrinkUrlsFullUrlColumn-UpgradeGuide.md so the importer can never fail
+        /// staging an over-length value into the nvarchar(850) staging columns. URLs already within
+        /// <paramref name="maxLength"/> are returned unchanged (no needless churn). Otherwise, in order:
+        /// <list type="number">
+        /// <item>the volatile <c>xsdata</c> token is removed (see <see cref="RemoveXsDataParam"/>) -
+        /// on its own this brings the large majority of oversized SharePoint URLs back under the limit;</item>
+        /// <item>if it is STILL too long (e.g. a giant <c>SafelinksUrl</c>/<c>FilterValues</c> list or
+        /// comma-merged Teams parameters), the whole query string and <c>#fragment</c> are dropped,
+        /// keeping just the page path - the only part with analytic value (this matches the "reduce to
+        /// path" step of the upgrade guide);</item>
+        /// <item>only in the pathological case where even the bare path exceeds <paramref name="maxLength"/>
+        /// is it hard-truncated as an absolute last resort.</item>
+        /// </list>
+        /// Pass <c>Common.Entities.Url.FullUrlMaxLength</c> as <paramref name="maxLength"/>.
         /// </summary>
         public static string EnsureUrlWithinLength(string url, int maxLength)
         {
@@ -222,14 +230,41 @@ namespace DataUtils
                 return url;
             }
 
+            // 1. Remove the volatile xsdata token - usually enough on its own.
             var trimmed = RemoveXsDataParam(url);
-            if (trimmed.Length > maxLength)
+            if (trimmed.Length <= maxLength)
             {
-                // A degenerate URL (junk tracking params) that xsdata removal can't shrink enough:
-                // truncate so the staging insert never overflows the column.
-                trimmed = trimmed.Substring(0, maxLength);
+                return trimmed;
             }
-            return trimmed;
+
+            // 2. Still too long: drop the entire query string and #fragment, keeping just the page
+            //    path. Everything after '?' on these URLs is volatile Teams junk with no analytic value.
+            var path = GetUrlPath(trimmed);
+            if (path.Length <= maxLength)
+            {
+                return path;
+            }
+
+            // 3. Pathological (even the bare path is over the limit): hard-truncate as an absolute
+            //    last resort so the staging insert never overflows the column.
+            return path.Substring(0, maxLength);
+        }
+
+        static readonly char[] QueryOrFragmentStart = { '?', '#' };
+
+        /// <summary>
+        /// Returns everything in <paramref name="url"/> before the first <c>?</c> or <c>#</c> (the
+        /// page path), or the whole string if neither is present. String-based to match the T-SQL
+        /// <c>pathkey</c> logic in ShrinkUrlsFullUrlColumn-UpgradeGuide.md exactly.
+        /// </summary>
+        private static string GetUrlPath(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return url;
+            }
+            var cut = url.IndexOfAny(QueryOrFragmentStart);
+            return cut < 0 ? url : url.Substring(0, cut);
         }
 
         /// <summary>
