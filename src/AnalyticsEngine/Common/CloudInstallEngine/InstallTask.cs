@@ -20,6 +20,20 @@ namespace CloudInstallEngine
         public virtual async Task<object> ExecuteTask() { return await ExecuteTask(null); }
         public virtual string TaskName => this.GetType().Name;
 
+        /// <summary>
+        /// Whether a failure of this task should abort the whole install.
+        /// <para>
+        /// Defaults to <c>true</c> (the historic behaviour): if the task throws, the running
+        /// <see cref="SequentialTaskListInstallJob"/> logs the error and rethrows, stopping the install.
+        /// </para>
+        /// <para>
+        /// Tasks that are "best-effort" (e.g. writing a runtime secret to Key Vault, where a transient
+        /// network/DNS/permission failure should not abort an otherwise-successful install) can override
+        /// this to <c>false</c>. The job then logs the failure and continues with the next task.
+        /// </para>
+        /// </summary>
+        public virtual bool IsCritical => true;
+
         protected readonly TaskConfig _config;
         protected readonly ILogger _logger;
 

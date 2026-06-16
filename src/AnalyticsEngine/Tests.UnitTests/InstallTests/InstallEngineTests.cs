@@ -19,6 +19,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Tests.UnitTests.InstallTests;
@@ -168,6 +169,90 @@ namespace Tests.UnitTests
             Assert.IsNotNull(fakeJob.TaskResult.FakeCloudResourceType1);
             Assert.IsNotNull(fakeJob.TaskResult.FakeCloudResourceType2);
             Assert.IsNotNull(fakeJob.ResultingContainer);
+        }
+
+        /// <summary>
+        /// A non-critical task that fails must be logged but NOT abort the install - the next task still runs.
+        /// This is the KeyVaultSecretAddTask DNS-failure scenario from the field.
+        /// </summary>
+        [TestMethod]
+        public async Task NonCriticalTaskFailureDoesNotAbortInstall()
+        {
+            var job = new FakeSequentialJob(_logger);
+            var failing = new FakeThrowingTask(TaskConfig.NoConfig, _logger, isCritical: false);
+            var after = new FakeMarkerTask(TaskConfig.NoConfig, _logger);
+            job.AddTask(failing);
+            job.AddTask(after);
+
+            // Should complete without throwing despite the failing task.
+            await job.Install();
+
+            Assert.IsTrue(failing.WasRun, "The non-critical failing task should have run.");
+            Assert.IsTrue(after.WasRun, "A task after a non-critical failure should still run.");
+        }
+
+        /// <summary>A critical task that fails must abort the install - the next task does not run.</summary>
+        [TestMethod]
+        public async Task CriticalTaskFailureAbortsInstall()
+        {
+            var job = new FakeSequentialJob(_logger);
+            var failing = new FakeThrowingTask(TaskConfig.NoConfig, _logger, isCritical: true);
+            var after = new FakeMarkerTask(TaskConfig.NoConfig, _logger);
+            job.AddTask(failing);
+            job.AddTask(after);
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => job.Install());
+
+            Assert.IsTrue(failing.WasRun, "The critical failing task should have run.");
+            Assert.IsFalse(after.WasRun, "A task after a critical failure should NOT run.");
+        }
+
+        [TestMethod]
+        public void BuildResourceDnsTargetsIncludesEnabledResources()
+        {
+            var config = new SolutionInstallConfig
+            {
+                KeyVaultName = "myvault",
+                SQLServerName = "mysqlsvr",
+                StorageAccountName = "mystorage",
+                AppServiceWebAppName = "myapp",
+                RedisName = "mycache",
+                ServiceBusName = "mysb",
+                ServiceBusEnabled = true,
+                CognitiveServiceName = "mycog",
+                CognitiveServicesEnabled = true,
+            };
+
+            var fqdns = SolutionInstallVerifier.BuildResourceDnsTargets(config).Select(t => t.Fqdn).ToList();
+
+            CollectionAssert.Contains(fqdns, "myvault.vault.azure.net");
+            CollectionAssert.Contains(fqdns, "mysqlsvr.database.windows.net");
+            CollectionAssert.Contains(fqdns, "mystorage.blob.core.windows.net");
+            CollectionAssert.Contains(fqdns, "myapp.azurewebsites.net");
+            CollectionAssert.Contains(fqdns, "mycache.redis.cache.windows.net");
+            CollectionAssert.Contains(fqdns, "mysb.servicebus.windows.net");
+            CollectionAssert.Contains(fqdns, "mycog.cognitiveservices.azure.com");
+        }
+
+        [TestMethod]
+        public void BuildResourceDnsTargetsExcludesDisabledAndEmptyResources()
+        {
+            var config = new SolutionInstallConfig
+            {
+                KeyVaultName = "myvault",
+                SQLServerName = "",                 // empty -> excluded
+                ServiceBusName = "mysb",
+                ServiceBusEnabled = false,          // disabled -> excluded even though named
+                CognitiveServiceName = "mycog",
+                CognitiveServicesEnabled = false,   // disabled -> excluded even though named
+            };
+
+            var labels = SolutionInstallVerifier.BuildResourceDnsTargets(config).Select(t => t.Label).ToList();
+
+            CollectionAssert.Contains(labels, "Key Vault");
+            CollectionAssert.DoesNotContain(labels, "SQL Server");
+            CollectionAssert.DoesNotContain(labels, "Service Bus");
+            CollectionAssert.DoesNotContain(labels, "Cognitive Services");
         }
 
         /// <summary>
