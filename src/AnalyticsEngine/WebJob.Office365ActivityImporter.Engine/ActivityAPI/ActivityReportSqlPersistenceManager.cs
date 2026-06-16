@@ -244,8 +244,8 @@ namespace WebJob.Office365ActivityImporter.Engine
             this.OperationName = abtractLog.Operation;
             this.TimeStamp = abtractLog.CreationTime;
             this.TypeName = abtractLog.ItemType;
-            // Strip the volatile xsdata deep-link token when the object id (a SharePoint URL) would
-            // otherwise exceed the urls.full_url column width (nvarchar(850)). See issue #122.
+            // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)): strip the
+            // volatile xsdata token, else reduce to the page path. See issue #122.
             this.ObjectId = StringUtils.EnsureUrlWithinLength(abtractLog.ObjectId, Common.Entities.Url.FullUrlMaxLength);
             this.Workload = abtractLog.Workload;
 

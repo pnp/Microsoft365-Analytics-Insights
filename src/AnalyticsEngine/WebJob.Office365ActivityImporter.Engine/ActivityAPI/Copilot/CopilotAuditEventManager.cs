@@ -165,8 +165,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     AppHost = auditRecord.CopilotEventData.AppHost,
                     FileExtension = spFileInfo?.Extension,
                     FileName = spFileInfo?.Filename,
-                    // Strip the volatile xsdata deep-link token when the URL would otherwise exceed
-                    // the urls.full_url column width (nvarchar(850)). See issue #122.
+                    // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)):
+                    // strip the volatile xsdata token, else reduce to the page path. See issue #122.
                     Url = StringUtils.EnsureUrlWithinLength(spFileInfo?.Url, Common.Entities.Url.FullUrlMaxLength),
                     UrlBase = spFileInfo?.SiteUrl,
                     AgentId = auditRecord.AgentId,
