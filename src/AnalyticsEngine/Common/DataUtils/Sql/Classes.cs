@@ -19,6 +19,15 @@ namespace DataUtils.Sql
         public DbType SqlType { get; internal set; }
 
         /// <summary>
+        /// Declared maximum length, in characters, parsed once from a bounded string column
+        /// definition such as <c>nvarchar(850)</c>. Null for unbounded (<c>nvarchar(max)</c>) or
+        /// non-length-bounded types (int, datetime2, ...). Lets <see cref="Inserts.InsertBatch{T}"/>
+        /// skip an over-width row in memory before the INSERT, instead of catching a per-row SQL
+        /// truncation error (8152/2628) on every doomed row.
+        /// </summary>
+        public int? MaxLength { get; set; }
+
+        /// <summary>
         /// Optional explicit SQL column type (e.g. "nvarchar(850)") that overrides the default
         /// <c>[nvarchar] (max)</c> emitted for <see cref="string"/> properties by
         /// <see cref="Inserts.InsertBatchTypeFieldCache{T}"/>. Set via <see cref="ColumnAttribute.SqlTypeOverride"/>
