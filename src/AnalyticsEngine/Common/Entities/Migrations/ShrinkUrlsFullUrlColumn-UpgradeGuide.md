@@ -140,7 +140,27 @@ no‑op.
 ## If the migration aborts
 
 If a customer DB has URLs longer than 850 characters, the migration **aborts before changing
-anything** and prints the offending rows. Find them with:
+anything** and prints the offending rows.
+
+### 1. How many URLs are there, and how many are oversized?
+
+First get the scale of the problem — the **total** row count and how many are actually over the
+limit (the abort only tells you about the oversized ones):
+
+```sql
+SELECT
+    COUNT(*)                                                              AS total_urls,
+    SUM(CASE WHEN LEN(full_url) > 850 THEN 1 ELSE 0 END)                  AS oversize_urls,
+    SUM(CASE WHEN LEN(full_url) > 850
+              AND (full_url LIKE N'%?xsdata=%' OR full_url LIKE N'%&xsdata=%')
+             THEN 1 ELSE 0 END)                                           AS oversize_with_xsdata,
+    SUM(CASE WHEN LEN(full_url) > 850
+              AND NOT (full_url LIKE N'%?xsdata=%' OR full_url LIKE N'%&xsdata=%')
+             THEN 1 ELSE 0 END)                                           AS oversize_other
+FROM dbo.urls;
+```
+
+Then list the offending rows themselves:
 
 ```sql
 SELECT id, LEN(full_url) AS length, full_url
@@ -149,9 +169,134 @@ WHERE LEN(full_url) > 850
 ORDER BY length DESC;
 ```
 
-Resolve each offending URL (and the `hits` / `event_meta_sharepoint` rows that reference it via
-`url_id`) — e.g. delete the obsolete records or shorten the stored URL — then re‑run the upgrade.
-The migration is idempotent, so re‑running after a fix simply continues.
+In practice most of the `oversize_with_xsdata` rows can be fixed automatically (next section). Any
+`oversize_other` rows (over 850 even without an `xsdata` parameter) must be resolved by hand —
+delete the obsolete records or shorten the stored URL (and the `hits` / `event_meta_sharepoint`
+rows that reference them via `url_id`) — then re‑run the upgrade. The migration is idempotent, so
+re‑running after a fix simply continues.
 
 > There is no longer a "not representable as varchar" abort: the target is `nvarchar`, which holds
 > every Unicode character, so Greek (and any other script) is preserved rather than rejected.
+
+---
+
+## Cleaning up oversized Teams deep‑link (`xsdata`) URLs
+
+A large share of real‑world oversized URLs are SharePoint links opened from Microsoft Teams. Teams
+appends a big, **transient** `xsdata=` token (plus `sdata`, `ovuser`, `clickparams`, …) to the URL.
+The `xsdata` value alone is typically **600–1100 characters** of opaque base64 and carries **no
+analytic value** — it just records *how* the link was opened. Example (line‑wrapped for clarity):
+
+```
+https://contoso.sharepoint.com/sites/Marketing/Lists/Announcements/AllItems.aspx
+    ?xsdata=<opaque base64 token, ~700 chars>&sdata=…&ovuser=…&clickparams=…&viewid=…
+```
+
+Removing just the `xsdata` parameter brings these URLs back under 850 characters in the vast
+majority of cases (observed: real samples of **1213–1515** chars drop to **601–935** chars). The
+remainder of the URL — path, all other query parameters and any `#fragment` — is preserved.
+
+> **Note** — going forward the importers no longer store these tokens: when a URL exceeds the
+> column limit (`Url.FullUrlMaxLength` = 850) the activity / click / Copilot import paths strip the
+> `xsdata` parameter **at insert time** — and, as a last resort, hard‑truncate to 850 if the URL is
+> *still* too long — via `StringUtils.EnsureUrlWithinLength`. This clean‑up script is for databases
+> that already accumulated oversized rows before that change.
+
+### 2. Clean up the oversized `xsdata` URLs (transaction defaults to ROLLBACK)
+
+The script below **defaults to `ROLLBACK`** so it is safe to run as a *preview*: it does all the
+work, prints how many rows it would clean and how many would still be oversized, then throws it all
+away. **Verify those numbers, then — and only then — change the final `ROLLBACK TRANSACTION;` to
+`COMMIT TRANSACTION;` and re‑run to apply the changes for real.** Back up / snapshot the database
+first, as with any data fix.
+
+It only touches rows that are **over 850 characters** and contain a real `xsdata` parameter, only
+applies the cleaned value when it **fits** (≤ 850) **and does not already exist** on another row
+(so it never creates a duplicate `full_url`), and collapses multiple oversized rows that clean to
+the same value down to one.
+
+```sql
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
+-- 1. Collect oversize URLs that carry a real xsdata parameter, with the parameter's position.
+--    Materialising into #fix first stops the query optimiser from evaluating the string-slicing
+--    below against rows that have no xsdata parameter (which would pass a negative length to
+--    LEFT/SUBSTRING). Every #fix row is guaranteed to have sep >= 1.
+IF OBJECT_ID('tempdb..#fix') IS NOT NULL DROP TABLE #fix;
+SELECT id, full_url,
+       sep = CASE WHEN CHARINDEX(N'?xsdata=', full_url) > 0 THEN CHARINDEX(N'?xsdata=', full_url)
+                  ELSE CHARINDEX(N'&xsdata=', full_url) END,
+       cleaned_url = CAST(NULL AS nvarchar(max))
+INTO #fix
+FROM dbo.urls
+WHERE LEN(full_url) > 850
+  AND (full_url LIKE N'%?xsdata=%' OR full_url LIKE N'%&xsdata=%');
+
+-- 2. Build the cleaned URL (xsdata parameter removed, everything else - including any #fragment -
+--    preserved). The value ends at the next '&' or '#', or end-of-string.
+UPDATE f
+SET cleaned_url = CASE
+        WHEN term = 0 THEN LEFT(full_url, sep - 1)
+        WHEN sepChar = N'?' AND SUBSTRING(full_url, term, 1) = N'&'
+             THEN LEFT(full_url, sep) + SUBSTRING(full_url, term + 1, 4000)
+        WHEN sepChar = N'?' AND SUBSTRING(full_url, term, 1) = N'#'
+             THEN LEFT(full_url, sep - 1) + SUBSTRING(full_url, term, 4000)
+        ELSE LEFT(full_url, sep - 1) + SUBSTRING(full_url, term, 4000)
+    END
+FROM #fix f
+CROSS APPLY (SELECT sepChar = SUBSTRING(full_url, sep, 1),
+                    endAmp  = CHARINDEX(N'&', full_url, sep + 8),
+                    endHash = CHARINDEX(N'#', full_url, sep + 8)) a
+CROSS APPLY (SELECT term = CASE WHEN a.endAmp = 0 AND a.endHash = 0 THEN 0
+                               WHEN a.endAmp = 0 THEN a.endHash
+                               WHEN a.endHash = 0 THEN a.endAmp
+                               WHEN a.endAmp < a.endHash THEN a.endAmp
+                               ELSE a.endHash END) b;
+
+-- 3. Apply: only rows that now fit (<= 850) AND whose cleaned value does not already exist on
+--    another row (so we never create a duplicate full_url). ROW_NUMBER collapses any oversize
+--    rows that clean to the same value, updating just one of them.
+;WITH ranked AS (
+    SELECT id, cleaned_url,
+           rn = ROW_NUMBER() OVER (PARTITION BY CAST(cleaned_url AS nvarchar(850)) ORDER BY id)
+    FROM #fix
+    WHERE LEN(cleaned_url) <= 850
+)
+UPDATE u
+   SET u.full_url = r.cleaned_url
+FROM dbo.urls u
+INNER JOIN ranked r ON r.id = u.id
+WHERE r.rn = 1
+  AND NOT EXISTS (SELECT 1 FROM dbo.urls e WHERE e.full_url = r.cleaned_url AND e.id <> r.id);
+
+DECLARE @cleaned int = @@ROWCOUNT;
+RAISERROR('Rows cleaned: %d', 0, 1, @cleaned) WITH NOWAIT;
+
+-- 4. What still exceeds 850 (xsdata couldn't shrink it enough, or its cleaned form already exists)?
+SELECT remaining_oversize    = COUNT(*),
+       of_which_still_xsdata = SUM(CASE WHEN full_url LIKE N'%?xsdata=%' OR full_url LIKE N'%&xsdata=%' THEN 1 ELSE 0 END)
+FROM dbo.urls WHERE LEN(full_url) > 850;
+
+DROP TABLE #fix;
+
+-- VERIFY the two result sets above, then change ROLLBACK to COMMIT and re-run to apply.
+ROLLBACK TRANSACTION;
+-- COMMIT TRANSACTION;
+```
+
+### 3. What's left after the clean‑up
+
+`remaining_oversize` counts the rows the script could **not** auto‑fix:
+
+- **Still > 850 after removing `xsdata`** — a few URLs are long because of *other* parameters (e.g.
+  a huge `FilterValues1=…` list), not `xsdata`. Removing `xsdata` isn't enough; shorten or delete
+  these by hand.
+- **Cleaned value already exists** — the de‑duplicated URL is already tracked by another `urls`
+  row, so the oversized duplicate was left untouched to avoid creating a duplicate key. Re‑point its
+  `hits` / `event_meta_sharepoint` / Copilot rows (via `url_id`) at the existing row and delete the
+  duplicate, or simply delete the oversized duplicate if its facts are redundant.
+
+Re‑run the count query from step 1 to confirm `oversize_urls` is `0`, then re‑run the upgrade. The
+migration is idempotent, so it simply continues once the data fits.

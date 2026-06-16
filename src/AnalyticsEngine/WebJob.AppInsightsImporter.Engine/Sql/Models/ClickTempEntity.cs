@@ -23,7 +23,9 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
             if (p.CustomProperties.PageRequestId.HasValue)
             {
                 this.Timestamp = p.Timestamp;
-                this.Url = p.CustomProperties.HRef;
+                // Strip the volatile xsdata deep-link token when the click href would otherwise
+                // exceed the urls.full_url column width (nvarchar(850)). See issue #122.
+                this.Url = StringUtils.EnsureUrlWithinLength(p.CustomProperties.HRef, Common.Entities.Url.FullUrlMaxLength);
                 this.Username = p.Username;
                 this.ClassNames = StringUtils.EnsureMaxLength(p.CustomProperties.ClassNames, 800);
                 this.PageRequestId = p.CustomProperties.PageRequestId.Value;

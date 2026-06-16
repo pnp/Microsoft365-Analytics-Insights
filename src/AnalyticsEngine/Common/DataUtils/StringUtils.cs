@@ -149,6 +149,89 @@ namespace DataUtils
             }
         }
 
+        internal const string XsDataParam = "xsdata=";
+
+        /// <summary>
+        /// Removes the volatile <c>xsdata</c> query parameter from <paramref name="url"/>, preserving
+        /// the rest of the URL (path, all other query parameters, and any <c>#fragment</c>). The
+        /// <c>xsdata</c> value is a large, transient Teams / SharePoint deep-link token with no
+        /// analytic value that routinely pushes SharePoint URLs past the <c>dbo.urls.full_url</c>
+        /// limit (<c>nvarchar(850)</c>, see migration ShrinkUrlsFullUrlColumn / issue #122). Matching
+        /// is case-insensitive on the parameter name and boundary-aware (only a real <c>?xsdata=</c>
+        /// or <c>&amp;xsdata=</c> parameter is removed, never an <c>xsdata</c> substring inside
+        /// another value). Returns the input unchanged when it is null/empty or has no such parameter.
+        /// Mirrors the T-SQL clean-up in ShrinkUrlsFullUrlColumn-UpgradeGuide.md.
+        /// </summary>
+        public static string RemoveXsDataParam(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                return url;
+            }
+
+            var lower = url.ToLowerInvariant();
+            var sep = lower.IndexOf("?" + XsDataParam, StringComparison.Ordinal);
+            if (sep == -1)
+            {
+                sep = lower.IndexOf("&" + XsDataParam, StringComparison.Ordinal);
+            }
+            if (sep == -1)
+            {
+                return url; // No xsdata parameter present.
+            }
+
+            var sepChar = url[sep];
+            var valStart = sep + 1 + XsDataParam.Length; // First char of the xsdata value.
+
+            // The value ends at the next '&' or '#' (whichever comes first), or end-of-string.
+            var amp = url.IndexOf('&', valStart);
+            var hash = url.IndexOf('#', valStart);
+            int term;
+            if (amp == -1) term = hash;
+            else if (hash == -1) term = amp;
+            else term = Math.Min(amp, hash);
+
+            if (term == -1)
+            {
+                // xsdata is the last parameter and there is no fragment: drop the separator + value.
+                return url.Substring(0, sep);
+            }
+            if (sepChar == '?' && url[term] == '&')
+            {
+                // xsdata is the first parameter: keep '?', drop 'xsdata=...&'.
+                return url.Substring(0, sep + 1) + url.Substring(term + 1);
+            }
+            // '&' separator, or '?' separator immediately followed by a fragment: drop the parameter
+            // and keep the remainder (the following '&param' or '#fragment').
+            return url.Substring(0, sep) + url.Substring(term);
+        }
+
+        /// <summary>
+        /// Ensures <paramref name="url"/> fits the <c>dbo.urls.full_url</c> column. URLs already
+        /// within <paramref name="maxLength"/> are returned unchanged (so we avoid needless churn).
+        /// Otherwise the volatile <c>xsdata</c> parameter is removed (see <see cref="RemoveXsDataParam"/>);
+        /// if the result is STILL too long (e.g. a huge <c>FilterValues</c> list, or a URL with no
+        /// <c>xsdata</c> at all) it is hard-truncated to <paramref name="maxLength"/> as a last resort,
+        /// so the importer never fails staging an over-length value into the nvarchar(850) staging
+        /// column. Pass <c>Common.Entities.Url.FullUrlMaxLength</c> as <paramref name="maxLength"/>.
+        /// </summary>
+        public static string EnsureUrlWithinLength(string url, int maxLength)
+        {
+            if (url == null || url.Length <= maxLength)
+            {
+                return url;
+            }
+
+            var trimmed = RemoveXsDataParam(url);
+            if (trimmed.Length > maxLength)
+            {
+                // A degenerate URL (junk tracking params) that xsdata removal can't shrink enough:
+                // truncate so the staging insert never overflows the column.
+                trimmed = trimmed.Substring(0, maxLength);
+            }
+            return trimmed;
+        }
+
         /// <summary>
         /// https://contoso.sharepoint.com/sites/site/Shared Documents/
         /// to 
