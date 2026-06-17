@@ -95,6 +95,152 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void RemoveXsDataParamTests()
+        {
+            // Null / empty / no xsdata parameter -> returned unchanged.
+            Assert.IsNull(StringUtils.RemoveXsDataParam(null));
+            Assert.AreEqual(string.Empty, StringUtils.RemoveXsDataParam(string.Empty));
+            Assert.AreEqual("https://x/a?foo=1&bar=2", StringUtils.RemoveXsDataParam("https://x/a?foo=1&bar=2"));
+
+            // xsdata as the first / middle / last / only parameter (everything else preserved).
+            Assert.AreEqual("https://x/a.aspx?sdata=z&v=1",
+                StringUtils.RemoveXsDataParam("https://x/a.aspx?xsdata=ABC&sdata=z&v=1"));
+            Assert.AreEqual("https://x/a.aspx?foo=1&bar=2",
+                StringUtils.RemoveXsDataParam("https://x/a.aspx?foo=1&xsdata=ABC&bar=2"));
+            Assert.AreEqual("https://x/a.aspx?foo=1",
+                StringUtils.RemoveXsDataParam("https://x/a.aspx?foo=1&xsdata=ABC"));
+            Assert.AreEqual("https://x/a.aspx",
+                StringUtils.RemoveXsDataParam("https://x/a.aspx?xsdata=ABC"));
+
+            // Any #fragment is preserved.
+            Assert.AreEqual("https://x/a.aspx#sec",
+                StringUtils.RemoveXsDataParam("https://x/a.aspx?xsdata=ABC#sec"));
+            Assert.AreEqual("https://x/a.aspx?b=2#sec",
+                StringUtils.RemoveXsDataParam("https://x/a.aspx?xsdata=ABC&b=2#sec"));
+            Assert.AreEqual("https://x/a?foo=1#sec",
+                StringUtils.RemoveXsDataParam("https://x/a?foo=1&xsdata=ABC#sec"));
+
+            // Case-insensitive on the parameter name.
+            Assert.AreEqual("https://x/a?b=2", StringUtils.RemoveXsDataParam("https://x/a?XSDATA=ABC&b=2"));
+
+            // Boundary-aware: 'xsdata' as a substring of another parameter name is NOT removed.
+            Assert.AreEqual("https://x/a?notxsdata=1&b=2", StringUtils.RemoveXsDataParam("https://x/a?notxsdata=1&b=2"));
+            Assert.AreEqual("https://x/a?b=1&myxsdata=2", StringUtils.RemoveXsDataParam("https://x/a?b=1&myxsdata=2"));
+
+            // Real-world shape: a long Teams deep-link token as the first parameter, followed by the
+            // usual trailing parameters. The cleaned URL keeps the rest and no longer contains xsdata.
+            var basePath = "https://contoso.sharepoint.com/sites/Marketing/Lists/Announcements/AllItems.aspx";
+            var rest = "&sdata=AAAA%3D%3D&ovuser=user%40contoso.com&viewid=00000000";
+            var oversized = basePath + "?xsdata=" + new string('Q', 900) + rest;
+            var cleaned = StringUtils.RemoveXsDataParam(oversized);
+            Assert.AreEqual(basePath + "?" + rest.TrimStart('&'), cleaned);
+            Assert.IsFalse(cleaned.ToLowerInvariant().Contains("xsdata="));
+            Assert.IsTrue(cleaned.Length < oversized.Length);
+        }
+
+        [TestMethod]
+        public void EnsureUrlWithinLengthTests()
+        {
+            const int max = 50;
+            Assert.IsNull(StringUtils.EnsureUrlWithinLength(null, max));
+
+            // Has xsdata but is within the limit -> left unchanged (no needless churn).
+            var shortWithXsData = "https://x/a?xsdata=AB&b=2"; // <= 50 chars
+            Assert.IsTrue(shortWithXsData.Length <= max);
+            Assert.AreEqual(shortWithXsData, StringUtils.EnsureUrlWithinLength(shortWithXsData, max));
+
+            // Over the limit and has xsdata -> stripping xsdata alone is enough; the rest is preserved.
+            var longWithXsData = "https://x/a.aspx?xsdata=" + new string('Q', 100) + "&b=2";
+            Assert.IsTrue(longWithXsData.Length > max);
+            Assert.AreEqual("https://x/a.aspx?b=2", StringUtils.EnsureUrlWithinLength(longWithXsData, max));
+
+            // Over the limit, no xsdata -> nothing to strip, so reduced to the page path (not truncated).
+            var longNoXsData = "https://x/a.aspx?b=" + new string('Q', 100);
+            Assert.AreEqual("https://x/a.aspx", StringUtils.EnsureUrlWithinLength(longNoXsData, max));
+
+            // Over the limit AND still over after stripping xsdata -> reduced to the page path.
+            var stillLong = "https://x/a.aspx?xsdata=" + new string('Q', 100) + "&" + new string('Z', 100);
+            Assert.AreEqual("https://x/a.aspx", StringUtils.EnsureUrlWithinLength(stillLong, max));
+
+            // Reducing to path drops the query string AND any #fragment.
+            var withFragment = "https://x/a.aspx?notxs=" + new string('P', 100) + "#section";
+            Assert.AreEqual("https://x/a.aspx", StringUtils.EnsureUrlWithinLength(withFragment, max));
+
+            // Pathological: even the bare path exceeds the limit -> hard-truncated as an absolute last resort.
+            var longPath = "https://x/" + new string('a', 100); // no '?' or '#'
+            var truncated = StringUtils.EnsureUrlWithinLength(longPath, max);
+            Assert.AreEqual(max, truncated.Length);
+            Assert.AreEqual(longPath.Substring(0, max), truncated);
+
+            // Real column width: a 900-char xsdata token pushes a SharePoint URL over 850, but once
+            // removed it comfortably fits, so the rest (filters etc.) is kept in full - NOT reduced to path.
+            var oversized = "https://contoso.sharepoint.com/sites/Marketing/a.aspx?xsdata=" + new string('Q', 900) + "&v=1";
+            Assert.IsTrue(oversized.Length > Url.FullUrlMaxLength);
+            var result = StringUtils.EnsureUrlWithinLength(oversized, Url.FullUrlMaxLength);
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/Marketing/a.aspx?v=1", result);
+            Assert.IsTrue(result.Length <= Url.FullUrlMaxLength);
+
+            // Real column width: still over 850 even after xsdata (a huge SafelinksUrl) -> reduced to path.
+            var basePath = "https://contoso.sharepoint.com/sites/Marketing/Lists/Announcements/AllItems.aspx";
+            var stuck = basePath + "?xsdata=" + new string('Q', 900) + "&SafelinksUrl=" + new string('Z', 900);
+            Assert.IsTrue(stuck.Length > Url.FullUrlMaxLength);
+            var stuckResult = StringUtils.EnsureUrlWithinLength(stuck, Url.FullUrlMaxLength);
+            Assert.AreEqual(basePath, stuckResult);
+            Assert.IsTrue(stuckResult.Length <= Url.FullUrlMaxLength);
+        }
+
+        /// <summary>
+        /// Locks in the behaviour against the shape of the real customer URLs that aborted the
+        /// ShrinkUrlsFullUrlColumn migration: SharePoint list/page URLs opened from Microsoft Teams,
+        /// carrying a large transient xsdata token plus the usual sdata/ovuser/OR/CT/clickparams/
+        /// SafelinksUrl/Filter*/viewid tail (sometimes comma-merged). All values here are anonymised
+        /// (contoso tenant, fictional site/list, zeroed GUIDs, filler tokens) - no real tenant data.
+        /// </summary>
+        [TestMethod]
+        public void EnsureUrlWithinLength_RealWorldTeamsDeepLinkExamples()
+        {
+            const int max = 850; // Url.FullUrlMaxLength
+
+            var path = "https://contoso.sharepoint.com/sites/Marketing/Lists/Announcements/AllItems.aspx";
+            var xsdata = "xsdata=" + new string('A', 700);   // ~700-char opaque base64 deep-link token
+            var trailing =
+                "&sdata=" + new string('B', 40) +
+                "&ovuser=00000000%2D0000%2D0000%2D0000%2D000000000000%2Cuser%40contoso.com" +
+                "&OR=Teams%2DHL&CT=1677594627797" +
+                "&clickparams=" + new string('C', 80) +
+                "&FilterField1=field%5F1&FilterValue1=Manager%20Transport&FilterType1=Text" +
+                "&viewid=00000000%2D0000%2D0000%2D0000%2D000000000000";
+
+            // Case 1 (mirrors the ~99% auto-fixable rows): xsdata is the bulk of the bloat. Removing it
+            // alone brings the URL back under 850 and keeps the distinguishing params (filters, viewid).
+            var teamsUrl = path + "?" + xsdata + trailing;
+            Assert.IsTrue(teamsUrl.Length > max, "sample should exceed the column width");
+            var fixedUrl = StringUtils.EnsureUrlWithinLength(teamsUrl, max);
+            Assert.AreEqual(path + "?" + trailing.Substring(1), fixedUrl); // '?' kept, 'xsdata=...&' removed
+            Assert.IsTrue(fixedUrl.Length <= max);
+            Assert.IsFalse(fixedUrl.ToLowerInvariant().Contains("xsdata="));
+            StringAssert.Contains(fixedUrl, "viewid=");                    // distinguishing params preserved
+
+            // Case 2 (mirrors the handful of genuinely-stuck rows): still over 850 even after removing
+            // xsdata, because of a huge SafelinksUrl copy + duplicated comma-merged params. Reduced to path.
+            var safelinks = "&SafelinksUrl=" + new string('D', 700);
+            var doubled = "&OR=Teams%2DHL%2CTeams%2DHL&CT=1698908960461%2C1698908960461";
+            var stuckUrl = path + "?" + xsdata + trailing + safelinks + doubled;
+            Assert.IsTrue(StringUtils.RemoveXsDataParam(stuckUrl).Length > max, "should still exceed 850 after xsdata strip");
+            var reduced = StringUtils.EnsureUrlWithinLength(stuckUrl, max);
+            Assert.AreEqual(path, reduced);                                // whole query string dropped
+            Assert.IsTrue(reduced.Length <= max);
+
+            // Case 3: a URL ending with a bare '#' fragment marker (seen in the real data).
+            var withTrailingHash = path + "?xsdata=" + new string('A', 800) + "&viewid=00000000#";
+            Assert.IsTrue(withTrailingHash.Length > max);
+            var fixedHash = StringUtils.EnsureUrlWithinLength(withTrailingHash, max);
+            Assert.IsTrue(fixedHash.Length <= max);
+            Assert.IsFalse(fixedHash.ToLowerInvariant().Contains("xsdata="));
+            StringAssert.StartsWith(fixedHash, path);
+        }
+
+        [TestMethod]
         public void ConvertSharePointUrl()
         {
             const string expectedResult = "https://contoso.sharepoint.com/sites/site/Shared%20Documents/";

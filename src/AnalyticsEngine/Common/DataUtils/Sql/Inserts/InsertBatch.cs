@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DataUtils.Sql.Inserts
@@ -20,6 +21,10 @@ namespace DataUtils.Sql.Inserts
         private readonly string _connectionString;
         private readonly ILogger _telemetry;
         private InsertBatchTypeFieldCache<T> _batchTypeFieldCache = null;
+
+        // Count of rows dropped during the current save because a value was wider than its staging
+        // column. Written from parallel insert threads via Interlocked, reset per SaveToStagingTable.
+        private int _rowsSkippedTooWide = 0;
         public InsertBatch(string connectionString, ILogger telemetry)
         {
             _connectionString = connectionString;
@@ -40,6 +45,10 @@ namespace DataUtils.Sql.Inserts
         public async Task<int> SaveToStagingTable(int insertsPerThread, string mergeSql)
         {
             if (Rows.Count == 0) return 0;
+
+            // This instance can be reused for several saves (e.g. the Copilot manager keeps one
+            // InsertBatch per staging table and commits repeatedly), so reset the skip counter.
+            _rowsSkippedTooWide = 0;
 
             // Extract/validate schema
             var typeParameterType = typeof(T);
@@ -72,6 +81,12 @@ namespace DataUtils.Sql.Inserts
                 await loader.ProcessListInParallel(Rows,
                     async (threadListChunk, threadIndex) => await ProcessChunkAsync(tempTableName, _telemetry, threadListChunk, threadIndex),
                     threads => _telemetry.LogInformation($"Inserting {Rows.Count.ToString("n0")} records into {tempTableName}, across {threads} thread(s)..."));
+
+                // Tell operators if we dropped any rows because a value was too wide for its column.
+                if (_rowsSkippedTooWide > 0)
+                {
+                    _telemetry.LogWarning($"{_rowsSkippedTooWide.ToString("n0")} of {Rows.Count.ToString("n0")} record(s) were NOT staged into {tempTableName} because a column value was longer than that staging column allows; data for those rows is missing from this import (everything else was saved). See the 'Skipping over-width record' messages above for the offending column(s). For SharePoint URLs longer than urls.full_url (nvarchar(850)) see issue #122 / #127.");
+                }
 
                 // Merge with supplied SQL
                 if (!string.IsNullOrEmpty(mergeSql))
@@ -124,6 +139,7 @@ namespace DataUtils.Sql.Inserts
                 {
                     cmd.Parameters.Clear();
                     int fieldIdx = 0;
+                    var rowExceedsColumnWidth = false;
                     foreach (var fieldMapping in _batchTypeFieldCache.PropertyMappingInfo)
                     {
                         var objVal = fieldMapping.Property.GetValue(insertObj);
@@ -131,17 +147,51 @@ namespace DataUtils.Sql.Inserts
                         {
                             throw new BatchSaveException($"Couldn't insert null into batch insert field '{fieldMapping.SqlInfo.FieldName}' in table '{tempTableName}'");
                         }
+
+                        // Cheap in-memory width check, using the length parsed once when the field
+                        // cache was built, so the hot path stays a single integer comparison (no
+                        // per-row reflection or regex). A value wider than its bounded nvarchar
+                        // column can never be inserted, so flag the row and skip it below instead of
+                        // paying a doomed SQL round-trip + truncation error (8152/2628) per over-width
+                        // row. SQL Server nvarchar(n) counts UTF-16 units, exactly what string.Length
+                        // returns, so this predicts the server's truncation faithfully.
+                        if (objVal is string s && fieldMapping.SqlInfo.MaxLength.HasValue && s.Length > fieldMapping.SqlInfo.MaxLength.Value)
+                        {
+                            rowExceedsColumnWidth = true;
+                        }
+
                         cmd.ParamUp("@p" + fieldIdx, objVal, fieldMapping.SqlInfo.SqlType);
 
                         fieldIdx++;
                     }
+
+                    if (rowExceedsColumnWidth)
+                    {
+                        // Predicted over-width: skip just this row rather than aborting the whole
+                        // batch - which would discard every other row's data too and fail again on
+                        // every retry as a "poison batch". For SharePoint URLs longer than the
+                        // urls.full_url-width nvarchar(850) columns see issue #122 / #127.
+                        Interlocked.Increment(ref _rowsSkippedTooWide);
+                        _telemetry.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. Continuing with the rest of the batch.");
+                        continue;
+                    }
+
                     try
                     {
                         await cmd.ExecuteNonQueryAsync();
                     }
+                    catch (SqlException ex) when (IsColumnTruncationError(ex))
+                    {
+                        // Backstop: a value was wider than its column but the in-memory check above
+                        // didn't predict it (e.g. a column whose declared width we couldn't parse).
+                        // Skip just this row so one bad value can't poison the whole batch.
+                        Interlocked.Increment(ref _rowsSkippedTooWide);
+                        _telemetry.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. SQL error {ex.Number}: {ex.Message}. Continuing with the rest of the batch.");
+                        continue;
+                    }
                     catch (SqlException ex)
                     {
-                        _telemetry.LogCritical($"Failed to insert record into {tempTableName} - {sqlInsert}: {ex.Message}");
+                        _telemetry.LogCritical($"Failed to insert record into {tempTableName} - {sqlInsert} | row: {BuildRowDiagnostic(insertObj, false)} | SQL error {ex.Number}: {ex.Message}");
                         throw;
                     }
                 }
@@ -149,6 +199,46 @@ namespace DataUtils.Sql.Inserts
                 Console.Write($"Done:#{chunkIdx}...");
 #endif
             }
+        }
+
+        // SQL Server raises 8152 ("String or binary data would be truncated.") on all versions, and
+        // 2628 (the verbose variant that also names the table/column/value) on SQL Server 2019+ and
+        // Azure SQL, when an inserted value is wider than its target column. Both mean the same here.
+        private static bool IsColumnTruncationError(SqlException ex) => ex.Number == 8152 || ex.Number == 2628;
+
+        // Builds a privacy-conscious, single-line description of a row to help operators locate the
+        // source record and the offending column when an insert fails. String VALUES are never logged
+        // (they may hold customer data such as URLs, file/user names) - only the over-width column's
+        // name, declared width and actual length, plus a short prefix sample when requested so the
+        // value can be recognised. Guid/DateTime/number/bool fields (e.g. log_id, time_stamp) are
+        // logged in full as they are non-sensitive keys for finding the record.
+        private string BuildRowDiagnostic(T insertObj, bool includeOverWidthSample)
+        {
+            const int SAMPLE_CHARS = 64;
+            var parts = new List<string>();
+            foreach (var fieldMapping in _batchTypeFieldCache.PropertyMappingInfo)
+            {
+                var fieldName = fieldMapping.SqlInfo.FieldName;
+                var val = fieldMapping.Property.GetValue(insertObj);
+                if (val is string s)
+                {
+                    var declaredLen = fieldMapping.SqlInfo.MaxLength;
+                    if (declaredLen.HasValue && s.Length > declaredLen.Value)
+                    {
+                        var part = $"column '{fieldName}' ({fieldMapping.SqlInfo.SqlColDefinition}) holds {s.Length} chars but the limit is {declaredLen.Value}";
+                        if (includeOverWidthSample)
+                        {
+                            part += $" (starts with \"{s.Substring(0, Math.Min(SAMPLE_CHARS, s.Length))}…\")";
+                        }
+                        parts.Add(part);
+                    }
+                }
+                else if (val != null)
+                {
+                    parts.Add($"{fieldName}={val}");
+                }
+            }
+            return parts.Count > 0 ? string.Join(", ", parts) : "(no over-width column detected; see SQL error detail)";
         }
 
         private async Task DropAndCreateStagingTable(SqlConnection opConnection, string tableName, List<ColumnSqlInfo> fields)

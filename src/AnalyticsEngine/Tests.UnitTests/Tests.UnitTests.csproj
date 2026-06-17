@@ -119,6 +119,7 @@
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
     <Compile Include="DuplicateUrlTests.cs" />
+    <Compile Include="InsertBatchOverWidthTests.cs" />
     <Compile Include="AppInsightsImportTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />

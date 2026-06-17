@@ -4,6 +4,7 @@ using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
+using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
@@ -15,6 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Threading.Tasks;
@@ -48,6 +50,21 @@ namespace App.ControlPanel.Engine
             WindowsVersionCheck();
             _logger.LogInformation($"Starting installation/update tests...");
 
+            // Validate the configuration itself first (names, accounts, region, etc.) so fundamental
+            // mistakes are reported before we make any Azure calls.
+            ReportConfigValidationIssues();
+
+            // When public access is disabled the data-plane checks below (DNS, Key Vault) only succeed
+            // from a host with private-network line-of-sight to the resources - tell the operator up-front.
+            if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+            {
+                _logger.LogInformation(
+                    $"Public network access is disabled for this deployment. Run 'Test Configuration' (and the install itself) " +
+                    $"from a host with private-network line-of-sight to the resources - a VM on VNet '{Config.NetworkConfig?.VNetName}' " +
+                    $"(or a peered VNet, VPN/ExpressRoute, or Azure Bastion-attached host) - otherwise public DNS may not resolve to " +
+                    $"the private endpoint IPs and the DNS / Key Vault data-plane checks below will fail.");
+            }
+
             // Check sub & az group if possible
             var (testRg, azCredsValid) = await GetResourceGroupIfValid();
             if (!azCredsValid)
@@ -63,6 +80,15 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation($"Resource-group found with name {Config.ResourceGroupName}.");
                 }
             }
+
+            // DNS resolution checks for the configured Azure resource hostnames. Catches the
+            // "The remote name could not be resolved" class of failure (broken/limited DNS on the
+            // installer host) up-front instead of letting it abort an install part-way through.
+            await VerifyResourceDnsResolution();
+
+            // Key Vault data-plane reachability with the installer account (the exact call that failed
+            // mid-install). Only runs when the vault already exists and installer credentials are present.
+            await VerifyKeyVaultDataPlaneAccess(testRg);
 
             // Firewall tests
             if (_testConfig.IsValid)
@@ -251,6 +277,259 @@ namespace App.ControlPanel.Engine
             }
         }
 
+        #region Configuration & Key Vault checks
+
+        /// <summary>
+        /// Run the same configuration validation the installer uses and log any issues up-front, so
+        /// fundamental mistakes (missing names, accounts, region, etc.) are reported before any Azure calls.
+        /// Logs only; never throws.
+        /// </summary>
+        void ReportConfigValidationIssues()
+        {
+            try
+            {
+                var errors = Config?.ValidatInputAndGetErrors();
+                if (errors != null && errors.Count > 0)
+                {
+                    _logger.LogError($"Configuration validation found {errors.Count} issue(s) that may block installation:");
+                    foreach (var e in errors)
+                    {
+                        _logger.LogError($"  - {e}");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Configuration validation passed - no issues found.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not run configuration validation: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Probe the Key Vault data-plane endpoint with the installer account - the exact call
+        /// (<c>KeyVaultSecretAddTask</c>) that aborts an install when DNS/network to
+        /// <c>&lt;vault&gt;.vault.azure.net</c> is broken. Only runs when the vault already exists and the
+        /// installer credentials are present, so it never false-alarms on a fresh install. Logs only; never throws.
+        /// </summary>
+        async Task VerifyKeyVaultDataPlaneAccess(ResourceGroupResource testRg)
+        {
+            if (Config == null || string.IsNullOrWhiteSpace(Config.KeyVaultName)) return;
+
+            var installerErrs = Config.InstallerAccount?.GetValidationErrors();
+            if (installerErrs == null || installerErrs.Count > 0)
+            {
+                _logger.LogInformation("Skipping Key Vault data-plane reachability check - installer account details are incomplete.");
+                return;
+            }
+
+            if (testRg == null)
+            {
+                _logger.LogInformation("Skipping Key Vault data-plane reachability check - resource group is not available.");
+                return;
+            }
+
+            KeyVaultResource vault;
+            try
+            {
+                vault = testRg.GetKeyVaults().Where(v => v.Data.Name == Config.KeyVaultName).SingleOrDefault();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not enumerate key vaults to check '{Config.KeyVaultName}': {ex.Message}");
+                return;
+            }
+
+            if (vault == null)
+            {
+                _logger.LogInformation($"Key Vault '{Config.KeyVaultName}' not found yet; skipping data-plane reachability check (it will be created during install).");
+                return;
+            }
+
+            _logger.LogInformation($"Checking Key Vault data-plane access to '{Config.KeyVaultName}' with the installer account...");
+
+            var creds = new ClientSecretCredential(Config.InstallerAccount.DirectoryId, Config.InstallerAccount.ClientId, Config.InstallerAccount.Secret);
+            var result = await KeyVaultDataPlaneProbe.TryReadAsync(Config.KeyVaultName, creds);
+
+            switch (result.Status)
+            {
+                case KeyVaultProbeStatus.Reachable:
+                    _logger.LogInformation($"Key Vault '{Config.KeyVaultName}' data-plane is reachable and the installer account can read secrets.");
+                    break;
+
+                case KeyVaultProbeStatus.TransportFailure:
+                    var transportGuidance = PrivateNetworkGuidance.IsPrivateNetworkOnly(Config)
+                        ? PrivateNetworkGuidance.BuildVmOnVNetGuidance("reaching the Key Vault", Config.NetworkConfig?.VNetName)
+                        : $"Check DNS / network / firewall connectivity from this host to '{Config.KeyVaultName}.vault.azure.net'.";
+                    _logger.LogError(
+                        $"Could not reach Key Vault '{Config.KeyVaultName}' data-plane ({result.Message}). " +
+                        $"This is the DNS/network failure that aborts secret upload during install. " + transportGuidance);
+                    break;
+
+                case KeyVaultProbeStatus.Unauthorized:
+                    _logger.LogError(
+                        $"Key Vault '{Config.KeyVaultName}' is reachable but the installer account was denied data-plane access (403): {result.Message} " +
+                        $"Ensure the installer app registration has a Key Vault access policy granting secret Get/List/Set, " +
+                        $"and that any vault firewall allows this host's IP.");
+                    break;
+
+                default:
+                    _logger.LogError($"Unexpected error checking Key Vault '{Config.KeyVaultName}' data-plane access: {result.Message}");
+                    break;
+            }
+        }
+
+        #endregion
+
+        #region DNS resolution checks
+        /// <summary>Public DNS suffix for each Azure PaaS resource the installer / runtime must resolve.</summary>
+        private const string DNS_SUFFIX_KEY_VAULT = ".vault.azure.net";
+        private const string DNS_SUFFIX_SQL = ".database.windows.net";
+        private const string DNS_SUFFIX_STORAGE_BLOB = ".blob.core.windows.net";
+        private const string DNS_SUFFIX_APP_SERVICE = ".azurewebsites.net";
+        private const string DNS_SUFFIX_REDIS = ".redis.cache.windows.net";
+        private const string DNS_SUFFIX_SERVICE_BUS = ".servicebus.windows.net";
+        private const string DNS_SUFFIX_COGNITIVE = ".cognitiveservices.azure.com";
+
+        /// <summary>
+        /// Control host the installer always needs to resolve (ARM management plane). If even this fails,
+        /// the installer host has no working DNS for Azure at all (broken DNS / no internet / proxy issue).
+        /// </summary>
+        private const string DNS_CONTROL_HOST = "management.azure.com";
+
+        /// <summary>Max time to wait for a single DNS lookup before treating it as a failure.</summary>
+        private static readonly TimeSpan _dnsLookupTimeout = TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// Resolve the public hostnames of the configured Azure resources so DNS / network problems on the
+        /// installer host - the cause of "The remote name could not be resolved: '&lt;x&gt;.vault.azure.net'"
+        /// install failures - are caught up-front rather than mid-install. Logs only; never throws.
+        /// </summary>
+        async Task VerifyResourceDnsResolution()
+        {
+            _logger.LogInformation("Checking DNS resolution for configured Azure resource hostnames...");
+
+            // First confirm the host can resolve Azure DNS at all. management.azure.com always exists, so a
+            // failure here means broken DNS / no connectivity / proxy issue - every data-plane call will fail.
+            var (controlOk, controlError) = await TryResolveHost(DNS_CONTROL_HOST);
+            if (!controlOk)
+            {
+                _logger.LogError(
+                    $"The installer host cannot resolve Azure DNS names (failed to resolve '{DNS_CONTROL_HOST}': {controlError}). " +
+                    $"Installation will fail until DNS / network / proxy connectivity is fixed on this machine.");
+            }
+
+            var targets = BuildResourceDnsTargets(Config);
+            if (targets.Count == 0)
+            {
+                _logger.LogInformation("No named Azure resources configured to DNS-check.");
+                return;
+            }
+
+            var privateOnly = PrivateNetworkGuidance.IsPrivateNetworkOnly(Config);
+
+            foreach (var target in targets)
+            {
+                var (ok, error) = await TryResolveHost(target.Fqdn);
+                if (ok)
+                {
+                    _logger.LogInformation($"DNS OK: {target.Label} '{target.Fqdn}' resolved.");
+                    continue;
+                }
+
+                if (!controlOk)
+                {
+                    // Root cause already reported above; don't repeat the per-resource guidance.
+                    _logger.LogError($"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}).");
+                }
+                else if (privateOnly)
+                {
+                    // Public access disabled: the host must be on the VNet to resolve the private endpoint IP.
+                    _logger.LogError(
+                        $"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}). " +
+                        PrivateNetworkGuidance.BuildVmOnVNetGuidance($"reaching the {target.Label}", Config.NetworkConfig?.VNetName));
+                }
+                else
+                {
+                    // Public access path: if the resource already exists this is a real DNS / network problem
+                    // that will break the install; if it has not been created yet, it is expected.
+                    _logger.LogError(
+                        $"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}). " +
+                        $"If this resource has not been created yet this is expected and can be ignored; " +
+                        $"if it already exists, the installer host cannot reach it and data-plane steps " +
+                        $"(e.g. Key Vault secret upload) will fail.");
+                }
+            }
+
+            _logger.LogInformation("DNS resolution checks complete.");
+        }
+
+        /// <summary>
+        /// Build the list of (resource, public-FQDN) DNS targets for every resource that is both enabled
+        /// and has a name configured. Pure string logic so it is unit-testable without any network access.
+        /// </summary>
+        public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config)
+        {
+            var targets = new List<ResourceDnsTarget>();
+            if (config == null) return targets;
+
+            void Add(string label, string name, string suffix)
+            {
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    targets.Add(new ResourceDnsTarget(label, name.Trim() + suffix));
+                }
+            }
+
+            Add("Key Vault", config.KeyVaultName, DNS_SUFFIX_KEY_VAULT);
+            Add("SQL Server", config.SQLServerName, DNS_SUFFIX_SQL);
+            Add("Storage account", config.StorageAccountName, DNS_SUFFIX_STORAGE_BLOB);
+            Add("App Service", config.AppServiceWebAppName, DNS_SUFFIX_APP_SERVICE);
+            Add("Redis cache", config.RedisName, DNS_SUFFIX_REDIS);
+            if (config.ServiceBusEnabled)
+            {
+                Add("Service Bus", config.ServiceBusName, DNS_SUFFIX_SERVICE_BUS);
+            }
+            if (config.CognitiveServicesEnabled)
+            {
+                Add("Cognitive Services", config.CognitiveServiceName, DNS_SUFFIX_COGNITIVE);
+            }
+
+            return targets;
+        }
+
+        /// <summary>
+        /// Resolve a host name with a timeout. Returns (true, null) on success and (false, message) on
+        /// failure or timeout. Never throws.
+        /// </summary>
+        static async Task<(bool ok, string error)> TryResolveHost(string host)
+        {
+            try
+            {
+                var lookup = Dns.GetHostAddressesAsync(host);
+                var completed = await Task.WhenAny(lookup, Task.Delay(_dnsLookupTimeout));
+                if (completed != lookup)
+                {
+                    return (false, $"DNS lookup timed out after {_dnsLookupTimeout.TotalSeconds:0}s");
+                }
+
+                var addresses = await lookup;   // also re-throws any lookup exception
+                if (addresses != null && addresses.Length > 0)
+                {
+                    return (true, null);
+                }
+                return (false, "no IP addresses returned");
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+        }
+
+        #endregion
+
         void WindowsVersionCheck()
         {
             var os = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
@@ -434,5 +713,24 @@ namespace App.ControlPanel.Engine
 
             _logger.LogInformation("Successfully verified user activity settings.");
         }
+    }
+
+    /// <summary>
+    /// A configured Azure resource and the public hostname that must resolve for the installer / runtime
+    /// to reach it. Built by <see cref="SolutionInstallVerifier.BuildResourceDnsTargets"/>.
+    /// </summary>
+    public class ResourceDnsTarget
+    {
+        public ResourceDnsTarget(string label, string fqdn)
+        {
+            Label = label;
+            Fqdn = fqdn;
+        }
+
+        /// <summary>Human-readable resource description, e.g. "Key Vault".</summary>
+        public string Label { get; }
+
+        /// <summary>Public fully-qualified hostname, e.g. "myvault.vault.azure.net".</summary>
+        public string Fqdn { get; }
     }
 }

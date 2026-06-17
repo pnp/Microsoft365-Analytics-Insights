@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 
 namespace DataUtils.Sql.Inserts
 {
@@ -65,6 +66,16 @@ namespace DataUtils.Sql.Inserts
                             }
                             fieldInfo.Nullable = attribute.Nullable ? true : propTypeIsNullable;
                             fieldInfo.SqlType = SqlHelper.GetDbType(property.PropertyType);
+
+                            // Parse the bounded length once here (not per row) so the hot insert
+                            // loop can skip an over-width value with a single integer comparison
+                            // instead of a per-row SQL truncation error. Only meaningful for string
+                            // columns; inferred numeric/date types have no character length to enforce.
+                            if (property.PropertyType == typeof(string))
+                            {
+                                fieldInfo.MaxLength = ParseDeclaredLength(fieldInfo.SqlColDefinition);
+                            }
+
                             _fieldInfoPropertyInfoCache.Add(new InsertBatchPropertyMapping { Property = property, SqlInfo = fieldInfo });
                         }
                     }
@@ -116,6 +127,16 @@ namespace DataUtils.Sql.Inserts
                 return ("uniqueidentifier", false);
             }
             return ("[nvarchar] (max)", false);
+        }
+
+        // Parses the declared length from a column definition such as "nvarchar(850)" -> 850.
+        // Returns null for unbounded ("nvarchar(max)") or definitions without an explicit length.
+        private static int? ParseDeclaredLength(string sqlColDefinition)
+        {
+            if (string.IsNullOrEmpty(sqlColDefinition)) return null;
+            if (sqlColDefinition.IndexOf("max", StringComparison.OrdinalIgnoreCase) >= 0) return null;
+            var match = Regex.Match(sqlColDefinition, @"\((\d+)\)");
+            return match.Success && int.TryParse(match.Groups[1].Value, out var len) ? (int?)len : null;
         }
     }
 
