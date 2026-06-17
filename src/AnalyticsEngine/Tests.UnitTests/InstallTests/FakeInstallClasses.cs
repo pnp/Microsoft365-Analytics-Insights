@@ -113,4 +113,76 @@ namespace Tests.UnitTests.InstallTests
         // Read a prop to check we have a not-null container in tasks
         public Guid RandomId { get; set; }
     }
+
+    /// <summary>Concrete <see cref="SequentialTaskListInstallJob"/> so the task-loop can be unit-tested directly.</summary>
+    public class FakeSequentialJob : SequentialTaskListInstallJob
+    {
+        public FakeSequentialJob(ILogger logger) : base(logger) { }
+    }
+
+    /// <summary>Task that always throws. <see cref="IsCritical"/> is configurable to test abort-vs-continue behaviour.</summary>
+    public class FakeThrowingTask : BaseInstallTask
+    {
+        private readonly bool _isCritical;
+        public bool WasRun { get; private set; }
+
+        public FakeThrowingTask(TaskConfig config, ILogger logger, bool isCritical) : base(config, logger)
+        {
+            _isCritical = isCritical;
+        }
+
+        public override bool IsCritical => _isCritical;
+
+        public override Task<object> ExecuteTask(object contextArg)
+        {
+            WasRun = true;
+            throw new InvalidOperationException("Simulated task failure for testing");
+        }
+    }
+
+    /// <summary>Task that records whether it ran, used to assert downstream tasks still execute (or not).</summary>
+    public class FakeMarkerTask : BaseInstallTask
+    {
+        public bool WasRun { get; private set; }
+
+        public FakeMarkerTask(TaskConfig config, ILogger logger) : base(config, logger) { }
+
+        public override Task<object> ExecuteTask(object contextArg)
+        {
+            WasRun = true;
+            return Task.FromResult<object>(new object());
+        }
+    }
+
+    /// <summary>Task that returns a caller-supplied result object, used to test result carry-forward.</summary>
+    public class FakeResultTask : BaseInstallTask
+    {
+        private readonly object _result;
+
+        public FakeResultTask(TaskConfig config, ILogger logger, object result) : base(config, logger)
+        {
+            _result = result;
+        }
+
+        public override Task<object> ExecuteTask(object contextArg)
+        {
+            return Task.FromResult(_result);
+        }
+    }
+
+    /// <summary>Task that records the context argument it received, used to assert what was carried forward.</summary>
+    public class FakeContextCapturingTask : BaseInstallTask
+    {
+        public bool WasRun { get; private set; }
+        public object ReceivedContext { get; private set; }
+
+        public FakeContextCapturingTask(TaskConfig config, ILogger logger) : base(config, logger) { }
+
+        public override Task<object> ExecuteTask(object contextArg)
+        {
+            WasRun = true;
+            ReceivedContext = contextArg;
+            return Task.FromResult<object>(new object());
+        }
+    }
 }

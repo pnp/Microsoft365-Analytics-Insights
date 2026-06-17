@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
+using DataUtils;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
@@ -207,8 +208,15 @@ namespace WebJob.Office365ActivityImporter.Engine
                         Console.Write($"{Math.Round(percentDone, 0)}%...");
                     }
 #endif
-                    // Add metadata
-                    eventsJustSavedById.TryGetValue(log.Id, out var savedEvent);
+                    // Add metadata. If the event isn't in eventsJustSavedById it wasn't persisted
+                    // (e.g. its staging row was skipped because a column value exceeded the staging
+                    // column width - see InsertBatch over-width handling), so there's no row to
+                    // attach metadata to. Skip it rather than risk a NullReferenceException.
+                    if (!eventsJustSavedById.TryGetValue(log.Id, out var savedEvent))
+                    {
+                        metaSaveIdx++;
+                        continue;
+                    }
                     var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _telemetry);
                     if (changesMade)
                         changesMadeCount++;
@@ -243,7 +251,9 @@ namespace WebJob.Office365ActivityImporter.Engine
             this.OperationName = abtractLog.Operation;
             this.TimeStamp = abtractLog.CreationTime;
             this.TypeName = abtractLog.ItemType;
-            this.ObjectId = abtractLog.ObjectId;
+            // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)): strip the
+            // volatile xsdata token, else reduce to the page path. See issue #122.
+            this.ObjectId = StringUtils.EnsureUrlWithinLength(abtractLog.ObjectId, Common.Entities.Url.FullUrlMaxLength);
             this.Workload = abtractLog.Workload;
 
 
