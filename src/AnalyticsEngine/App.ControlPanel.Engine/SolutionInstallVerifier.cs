@@ -648,6 +648,34 @@ namespace App.ControlPanel.Engine
             _logger.LogInformation("Successfully verified Graph API for Teams.");
         }
 
+        // Graph usage-report aggregation period for the Teams user-activity verification call.
+        // MUST be the bare OData value ("D7"): the typed Kiota builder
+        // Reports.GetTeamsUserActivityUserDetailWithPeriod(period) wraps the value in single quotes
+        // itself when composing getTeamsUserActivityUserDetail(period='...'). Passing a pre-quoted
+        // "'D7'" produces period=''D7'', which Graph's OData parser rejects ("Syntax error at
+        // position 13 in 'period=''D7'''"). See issue #133.
+        internal const string TeamsUserActivityReportPeriod = "D7";
+
+        /// <summary>
+        /// Reads the Teams user-activity usage report via the typed Graph SDK - the exact call the
+        /// installer "Test Configuration" verification exercises. Extracted so the OData period
+        /// quoting is covered by an integration test (issue #133).
+        /// </summary>
+        internal static async Task<string> ReadTeamsUserActivityReportAsync(Microsoft.Graph.GraphServiceClient graphClient)
+        {
+            using (var stream = await graphClient.Reports.GetTeamsUserActivityUserDetailWithPeriod(TeamsUserActivityReportPeriod).GetAsync())
+            {
+                if (stream == null)
+                {
+                    return null;
+                }
+                using (var reader = new StreamReader(stream))
+                {
+                    return await reader.ReadToEndAsync();
+                }
+            }
+        }
+
         async Task VerifyUserActivityImport(Microsoft.Graph.GraphServiceClient graphClient, TeamsUserUsageLoader teamsUserUsageLoader)
         {
             _logger.LogInformation("Verifying Graph API for user activity import...");
@@ -656,16 +684,7 @@ namespace App.ControlPanel.Engine
             // the need for the v4 manual HttpRequestMessage / HttpProvider workaround.
             try
             {
-                using (var stream = await graphClient.Reports.GetTeamsUserActivityUserDetailWithPeriod("'D7'").GetAsync())
-                {
-                    if (stream != null)
-                    {
-                        using (var reader = new StreamReader(stream))
-                        {
-                            var data = await reader.ReadToEndAsync();
-                        }
-                    }
-                }
+                await ReadTeamsUserActivityReportAsync(graphClient);
             }
             catch (Exception ex)
             {
