@@ -90,16 +90,6 @@ namespace Common.Entities.Config
                 this.MetadataRefreshMinutes = metadataRefreshMinutesInt;
             }
 
-            // New optional flag: UseRBACForServiceBus (default false)
-            var useRbacForSb = ConfigurationManager.AppSettings.Get("UseRBACForServiceBus");
-            if (!string.IsNullOrEmpty(useRbacForSb))
-            {
-                if (bool.TryParse(useRbacForSb, out var parsed))
-                {
-                    this.UseRBACForServiceBus = parsed;
-                }
-            }
-
             // Optional flag to bypass the "recently imported" gate for usage reports (default false).
             // Replaces a #if DEBUG override so it can be toggled in any build.
             var forceUsageReportsImport = ConfigurationManager.AppSettings.Get("ForceUsageReportsImport");
@@ -227,12 +217,6 @@ namespace Common.Entities.Config
         /// Optional filter for user groups
         /// </summary>
         public string UserGroupsFilter { get; set; }
-
-        /// <summary>
-        /// When true, use RBAC (AAD) auth to connect to Service Bus instead of SAS connection string.
-        /// Default false.
-        /// </summary>
-        public bool UseRBACForServiceBus { get; set; } = false;
 
         /// <summary>
         /// When true, bypasses the "recently imported" gate for Graph usage reports and runs every invocation.
