@@ -59,7 +59,8 @@ namespace Web.AnalyticsWeb.Controllers
 
                 // Create new SB client. Wrap in try/finally so client + sender are disposed
                 // even if AddChangeMsgToQueue throws - otherwise sockets leak per webhook call.
-                var sbClient = new ServiceBusClient(config.ConnectionStrings.ServiceBusConnectionString);
+                // Authenticate with Entra ID RBAC (runtime service principal), never a SAS key. See issue #138.
+                var sbClient = CallQueueProcessor.CreateRbacServiceBusClient(config);
                 var sbConnectionProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
                 var sbSender = sbClient.CreateSender(sbConnectionProps.EntityPath);
 

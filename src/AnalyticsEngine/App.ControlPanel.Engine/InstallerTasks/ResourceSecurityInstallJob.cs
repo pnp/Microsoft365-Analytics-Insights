@@ -16,6 +16,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly RoleAssignmentTask _storageBlobDataContributorRoleTask;
         private readonly RoleAssignmentTask _redisCacheContributorRoleTask;
         private readonly RoleAssignmentTask _cognitiveServicesUserRoleTask;
+        private readonly RoleAssignmentTask _serviceBusDataOwnerRoleTask;
 
         public ResourceSecurityInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription) : base(logger, config, subscription)
         {
@@ -68,6 +69,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 _cognitiveServicesUserRoleTask = new RoleAssignmentTask(cognitiveServicesUserConfig, logger, Location, tagDic);
                 this.AddTask(_cognitiveServicesUserRoleTask);
             }
+
+            // Assign "Azure Service Bus Data Owner" to the runtime account for data-plane access
+            // (send from the calls webhook + receive in the importer) now that Service Bus authenticates
+            // with RBAC instead of a SAS key. Without it the runtime SP gets 401, and with namespace local
+            // auth disabled SAS would fail anyway. Only when Service Bus is part of the install. See issue #138.
+            if (config.ServiceBusEnabled)
+            {
+                var serviceBusDataOwnerConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Azure Service Bus Data Owner")
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                    .AddSetting(RoleAssignmentTask.CONFIG_KEY_PRINCIPAL_TYPE, "ServicePrincipal");
+
+                _serviceBusDataOwnerRoleTask = new RoleAssignmentTask(serviceBusDataOwnerConfig, logger, Location, tagDic);
+                this.AddTask(_serviceBusDataOwnerRoleTask);
+            }
         }
 
         public RoleAssignmentResource AppInsightsReaderRole => GetTaskResult<RoleAssignmentResource>(_appInsightsReaderRoleTask);
@@ -75,5 +92,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public RoleAssignmentResource RedisCacheContributorRole => GetTaskResult<RoleAssignmentResource>(_redisCacheContributorRoleTask);
         public RoleAssignmentResource CognitiveServicesUserRole =>
             _cognitiveServicesUserRoleTask == null ? null : GetTaskResult<RoleAssignmentResource>(_cognitiveServicesUserRoleTask);
+        public RoleAssignmentResource ServiceBusDataOwnerRole =>
+            _serviceBusDataOwnerRoleTask == null ? null : GetTaskResult<RoleAssignmentResource>(_serviceBusDataOwnerRoleTask);
     }
 }
