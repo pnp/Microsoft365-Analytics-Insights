@@ -163,6 +163,7 @@
     <Compile Include="GraphImportTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
+    <Compile Include="InstallTests\TeamsUserActivityReportUrlTests.cs" />
     <Compile Include="InstallTests\SpoInstallTests.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\Resources.Designer.cs">
