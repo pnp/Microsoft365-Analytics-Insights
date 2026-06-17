@@ -53,12 +53,23 @@ namespace CloudInstallEngine
                     }
                     catch (Exception ex)
                     {
-                        Logger.LogError($"Unexpected error on stage {thisTask.TaskName}:");
-                        // Walk the InnerException chain — the custom installer ILogger
-                        // implementations drop the Exception arg, so feeding just ex.Message
-                        // here loses FluentFTP-style "see inner exception for more info" causes.
-                        Logger.LogError(ExceptionMessages.Format(ex));
-                        throw;      // Error will be logged by parent
+                        if (!thisTask.IsCritical)
+                        {
+                            // Best-effort task: log the failure but let the install continue. The
+                            // assignment above threw, so previousRunResult still holds the prior task's
+                            // result and is carried forward to downstream tasks that chain on it.
+                            Logger.LogError($"Non-critical stage {thisTask.TaskName} failed; continuing installation. Error:");
+                            Logger.LogError(ExceptionMessages.Format(ex));
+                        }
+                        else
+                        {
+                            Logger.LogError($"Unexpected error on stage {thisTask.TaskName}:");
+                            // Walk the InnerException chain — the custom installer ILogger
+                            // implementations drop the Exception arg, so feeding just ex.Message
+                            // here loses FluentFTP-style "see inner exception for more info" causes.
+                            Logger.LogError(ExceptionMessages.Format(ex));
+                            throw;      // Error will be logged by parent
+                        }
                     }
 
                     // Remember result

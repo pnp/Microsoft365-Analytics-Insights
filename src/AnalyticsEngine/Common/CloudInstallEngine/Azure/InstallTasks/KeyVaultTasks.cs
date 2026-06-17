@@ -231,12 +231,41 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
         }
 
+        /// <summary>
+        /// Writing the runtime app-registration secret to Key Vault is best-effort: a transient
+        /// network/DNS/permission failure here must not abort an otherwise-successful install. The
+        /// existing vault value (if any) remains valid and the secret can be re-written on a later run.
+        /// </summary>
+        public override bool IsCritical => false;
+
         public override async Task<object> ExecuteTask(object contextArg)
         {
             base.EnsureContextArgType<KeyVaultResource>(contextArg);
             var vault = (KeyVaultResource)contextArg;
 
             var name = _config.GetNameConfigValue();
+            try
+            {
+                return await AddRuntimeSecretAsync(vault, name);
+            }
+            catch (Exception ex) when (TransportFailureDetector.IsTransportOrDnsFailure(ex, out var leafMessage))
+            {
+                // DNS/network transport failure reaching the Key Vault data-plane endpoint
+                // (e.g. "The remote name could not be resolved: '<vault>.vault.azure.net'"), as opposed
+                // to an HTTP error response. Writing the secret is best-effort (see IsCritical), so log
+                // an actionable warning and let the install continue instead of aborting everything.
+                _logger.LogWarning(
+                    $"Could not reach key vault '{vault.Data.Name}' over the network to update secret '{name}': {leafMessage} " +
+                    $"This is usually a DNS / network / firewall issue resolving '{vault.Data.Name}.vault.azure.net' from the installer host " +
+                    $"(for example when public network access is disabled and the host is not on the VNet). " +
+                    $"The secret was not written; any existing value in the vault remains valid. " +
+                    $"Re-run the installer once connectivity is restored if the secret needs updating.");
+                return vault;
+            }
+        }
+
+        private async Task<object> AddRuntimeSecretAsync(KeyVaultResource vault, string name)
+        {
             var val = _config.GetConfigValue(CONFIG_KEY_SECRET_VAL);
 
 
