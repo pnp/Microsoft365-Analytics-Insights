@@ -70,41 +70,39 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _auth = new GraphAppIndentityOAuthContext(_telemetry, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
             this._thisTenantId = thisTenantId;
 
-            // If RBAC is enabled, build ServiceBusClient using AAD credential
-            if (config.UseRBACForServiceBus)
+            // Always authenticate to Service Bus with Entra ID RBAC (the runtime service principal) -
+            // never a SAS key. The namespace + queue are still read from the existing ServiceBus
+            // connection string's Endpoint, so existing installs keep their current config; the shared
+            // access key in it is ignored. The runtime SP needs the "Azure Service Bus Data Owner" role
+            // on the namespace (assigned by the installer). See issue #138.
+            _telemetry.LogInformation("Initializing ServiceBusClient using Entra ID RBAC (no SAS keys).");
+            var sbProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
+            _sbClient = CreateRbacServiceBusClient(config);
+            _processor = _sbClient.CreateProcessor(sbProps.EntityPath, new ServiceBusProcessorOptions
             {
-                _telemetry.LogInformation("Initializing ServiceBusClient using RBAC (ClientSecretCredential).");
-                var credential = new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
-                // Extract fully qualified namespace from connection string (Endpoint=sb://namespace.servicebus.windows.net/;...)
-                var sbProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
-                var fullyQualifiedNamespace = sbProps.FullyQualifiedNamespace; // e.g. namespace.servicebus.windows.net
-                _sbClient = new ServiceBusClient(fullyQualifiedNamespace, credential);
-                _processor = _sbClient.CreateProcessor(sbProps.EntityPath, new ServiceBusProcessorOptions
-                {
-                    MaxConcurrentCalls = 10,
-                    PrefetchCount = 0,
-                    ReceiveMode = ServiceBusReceiveMode.PeekLock,
-                    MaxAutoLockRenewalDuration = TimeSpan.FromHours(24),        // Queue should be configured for 5 minute lock timeout
-                    AutoCompleteMessages = false                                // Messages are completed only when the migrator has succeeded to migrate the file
-                });
-            }
-            else
-            {
-                // Legacy SAS connection string approach
-                _sbClient = new ServiceBusClient(config.ConnectionStrings.ServiceBusConnectionString);
-                var sbConnectionInfo = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
-                _processor = _sbClient.CreateProcessor(sbConnectionInfo.EntityPath, new ServiceBusProcessorOptions
-                {
-                    MaxConcurrentCalls = 10,
-                    PrefetchCount = 0,
-                    ReceiveMode = ServiceBusReceiveMode.PeekLock,
-                    MaxAutoLockRenewalDuration = TimeSpan.FromHours(24),        // Queue should be configured for 5 minute lock timeout
-                    AutoCompleteMessages = false                                // Messages are completed only when the migrator has succeeded to migrate the file
-                });
-            }
+                MaxConcurrentCalls = 10,
+                PrefetchCount = 0,
+                ReceiveMode = ServiceBusReceiveMode.PeekLock,
+                MaxAutoLockRenewalDuration = TimeSpan.FromHours(24),        // Queue should be configured for 5 minute lock timeout
+                AutoCompleteMessages = false                                // Messages are completed only when the migrator has succeeded to migrate the file
+            });
         }
 
         #endregion
+
+        /// <summary>
+        /// Builds a <see cref="ServiceBusClient"/> that authenticates with Entra ID RBAC (the runtime
+        /// service principal via <see cref="ClientSecretCredential"/>) - never a SAS key. The fully
+        /// qualified namespace is read from the configured Service Bus connection string's Endpoint; the
+        /// shared access key in that string is ignored. The runtime service principal needs the
+        /// "Azure Service Bus Data Owner" role on the namespace (assigned by the installer). See issue #138.
+        /// </summary>
+        public static ServiceBusClient CreateRbacServiceBusClient(AppConfig config)
+        {
+            var sbProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
+            var credential = new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
+            return new ServiceBusClient(sbProps.FullyQualifiedNamespace, credential);
+        }
 
         public async Task Init()
         {
@@ -296,7 +294,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         Task ExceptionReceivedHandler(ProcessErrorEventArgs args)
         {
             _telemetry.LogError(args.Exception, args.Exception.Message);
-            _telemetry.LogError($"ServiceBus processor encountered an exception '{args.Exception.Message}'.");
+            // Log the full exception (type + message + stack) as text too: the AppInsights ILogger
+            // adapter formats only the message and drops the Exception argument above, so otherwise the
+            // stack never reaches the trace logs (why a bare 401 showed up with "no exception logged").
+            _telemetry.LogError($"ServiceBus processor encountered an exception: {args.Exception}");
 
             _telemetry.LogError("Exception context for troubleshooting:");
             _telemetry.LogError($"- Namespace: {args.FullyQualifiedNamespace}");

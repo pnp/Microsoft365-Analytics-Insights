@@ -33,7 +33,6 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
             config.WebAppURL = "https://fake-webapp.azurewebsites.net";
             config.BuildLabel = "stress-test";
             config.MetadataRefreshMinutes = 24 * 60; // 24 hours
-            config.UseRBACForServiceBus = false;
 
             // Create minimal connection strings using same technique
             var connStrings = (AppConnectionStrings)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(AppConnectionStrings));
