@@ -3,9 +3,11 @@ using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
+using Tests.FakeDataGen.Seeding;
 using Tests.FakeDataGen.StressTests.FakeLoaders;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 
@@ -80,7 +82,7 @@ namespace Tests.FakeDataGen.StressTests
                 var totalSw = Stopwatch.StartNew();
 
                 // 1) Seed users so SentEmailImporter.LoadUsersWithMailAsync finds mailboxes to scan.
-                int seededUsers = SeedUsers(dbFactory, userCount);
+                int seededUsers = SeedUsers(dbFactory, connectionString, userCount);
                 _memoryMonitor.UpdatePeak();
 
                 // 2) Build importer wired up with the fake loader + null sentiment scorer.
@@ -152,11 +154,34 @@ namespace Tests.FakeDataGen.StressTests
 
         #region DB helpers
 
-        private static int SeedUsers(Func<AnalyticsEntitiesContext> dbFactory, int userCount)
+        private static int SeedUsers(Func<AnalyticsEntitiesContext> dbFactory, string connectionString, int userCount)
         {
             Console.WriteLine($"Seeding {userCount:N0} fake users...");
             var sw = Stopwatch.StartNew();
             int inserted = 0;
+
+            // Seed the shared metadata lookup tables (departments, job titles, companies, states,
+            // countries, office + usage locations) up front and load their ids, so every seeded
+            // user can be given realistic metadata FKs. Without this the importer's users have a
+            // null department/job-title (etc.) and any report that slices sent email by department
+            // or job title is empty. Uses the same idempotent helper and catalogue as the other
+            // stress tests so all of them populate identical metadata.
+            var random = new Random(123);
+            List<int> departmentIds, jobTitleIds, companyIds, stateIds, countryIds, officeIds, usageIds;
+            using (var conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+                UserMetadataSeeder.EnsureMetadataLookups(conn);
+                departmentIds = UserMetadataSeeder.LoadLookupIds(conn, "user_departments");
+                jobTitleIds = UserMetadataSeeder.LoadLookupIds(conn, "user_job_titles");
+                companyIds = UserMetadataSeeder.LoadLookupIds(conn, "user_company_name");
+                stateIds = UserMetadataSeeder.LoadLookupIds(conn, "user_state_or_province");
+                countryIds = UserMetadataSeeder.LoadLookupIds(conn, "user_country_or_region");
+                officeIds = UserMetadataSeeder.LoadLookupIds(conn, "user_office_locations");
+                usageIds = UserMetadataSeeder.LoadLookupIds(conn, "user_usage_locations");
+            }
+            Console.WriteLine($"  Metadata lookups ready ({departmentIds.Count} departments, " +
+                              $"{jobTitleIds.Count} job titles) - assigning random metadata to seeded users.");
 
             using (var db = dbFactory())
             {
@@ -183,7 +208,14 @@ namespace Tests.FakeDataGen.StressTests
                     {
                         UserPrincipalName = upn,
                         Mail = upn,
-                        AzureAdId = Guid.NewGuid().ToString()
+                        AzureAdId = Guid.NewGuid().ToString(),
+                        DepartmentId = PickOrNull(departmentIds, random),
+                        JobTitleId = PickOrNull(jobTitleIds, random),
+                        CompanyNameId = PickOrNull(companyIds, random),
+                        StateOrProvinceId = PickOrNull(stateIds, random),
+                        UserCountryId = PickOrNull(countryIds, random),
+                        OfficeLocationId = PickOrNull(officeIds, random),
+                        UsageLocationId = PickOrNull(usageIds, random)
                     });
 
                     if (pending.Count >= batch)
@@ -216,6 +248,16 @@ namespace Tests.FakeDataGen.StressTests
             {
                 return db.users.Count(u => u.UserPrincipalName.StartsWith("stress-user"));
             }
+        }
+
+        /// <summary>
+        /// Picks a random id from a lookup id list, or null when the list is empty so the user's
+        /// FK column is left NULL rather than pointing at a non-existent row.
+        /// </summary>
+        private static int? PickOrNull(IList<int> ids, Random random)
+        {
+            if (ids == null || ids.Count == 0) return null;
+            return ids[random.Next(ids.Count)];
         }
 
         private static long CountStressRows(Func<AnalyticsEntitiesContext> dbFactory)
