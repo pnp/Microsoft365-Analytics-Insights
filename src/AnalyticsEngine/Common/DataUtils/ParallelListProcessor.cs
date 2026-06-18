@@ -96,15 +96,36 @@ namespace DataUtils
                 // Throttle threads to max
                 await _sem.WaitAsync();
 
-                // Load chunk via delegate and release semaphore when done
-                var newTask = processListChunkDelegate(threadListChunk, threadIndex)
-                    .ContinueWith(_ => _sem.Release());
-
-                _tasks.Add(newTask);
+                // Track the actual WORK task (not a fire-and-forget release continuation) so any
+                // exception a chunk throws is surfaced by the Task.WhenAll below. The previous
+                // ContinueWith(_ => _sem.Release()) added the always-succeeding continuation to
+                // _tasks instead of the work, so every chunk exception was silently swallowed and
+                // callers (and operators) never found out a chunk had broken.
+                _tasks.Add(RunChunkAsync(processListChunkDelegate, threadListChunk, threadIndex));
             }
 
-            // Block for all threads
+            // Block for all threads. A faulted chunk re-throws here (unwrapped, so callers' typed
+            // catches still work) instead of being lost.
             await Task.WhenAll(_tasks);
+        }
+
+        /// <summary>
+        /// Runs a single chunk and always releases its throttle slot afterwards (success or failure).
+        /// Exceptions are deliberately allowed to propagate so the chunk's task faults and the awaiting
+        /// <see cref="Task.WhenAll(Task[])"/> re-throws them - the previous implementation released the
+        /// semaphore in a fire-and-forget ContinueWith and tracked that (always-successful) continuation
+        /// rather than the work, which silently swallowed every chunk exception.
+        /// </summary>
+        private async Task RunChunkAsync(Func<List<T>, int, Task> processListChunkDelegate, List<T> chunk, int threadIndex)
+        {
+            try
+            {
+                await processListChunkDelegate(chunk, threadIndex);
+            }
+            finally
+            {
+                _sem.Release();
+            }
         }
     }
 }
