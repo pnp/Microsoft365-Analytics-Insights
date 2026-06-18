@@ -163,6 +163,9 @@ namespace Tests.UnitTests
                 Assert.IsTrue(teamsMetrics.Contains("Teams Private Chats"), "Should contain Teams Private Chats metric");
                 Assert.IsTrue(teamsMetrics.Contains("Teams Team Chats"), "Should contain Teams Team Chats metric");
                 Assert.IsTrue(teamsMetrics.Contains("Teams Calls"), "Should contain Teams Calls metric");
+
+                // The deprecated "Teams Meetings" metric (Graph meetingCount) must no longer be reported
+                Assert.IsFalse(teamsMetrics.Contains("Teams Meetings"), "Should not contain the deprecated Teams Meetings metric");
             }
         }
 
