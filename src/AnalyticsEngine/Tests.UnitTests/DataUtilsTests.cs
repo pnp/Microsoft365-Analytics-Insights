@@ -66,6 +66,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ParallelCallsForSingleReturnListHander_PropagatesChunkExceptions()
+        {
+            // A faulting chunk must surface to the caller, not be silently swallowed (see the
+            // ParallelListProcessor fix). Previously chunk exceptions vanished and callers were told
+            // everything succeeded.
+            var p = new ParallelCallsForSingleReturnListHander<int, string>();
+            Func<List<int>, Task<List<string>>> faulting = (chunk) => throw new InvalidOperationException("boom");
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                p.CallAndCompileToSingleList(new List<int> { 1, 2, 3 }, faulting, 1));
+            Assert.AreEqual("boom", ex.Message);
+        }
+
+        [TestMethod]
         public void GetUrlBaseAddressIfValidUrl()
         {
             // Test GetUrlBaseAddress
@@ -933,6 +946,20 @@ namespace Tests.UnitTests
             await ParallelListProcessorTest(1);     // Single thing to do 
             await ParallelListProcessorTest(103);   // Odd number
             await ParallelListProcessorTest(1000);   // Big number
+        }
+
+        [TestMethod]
+        public async Task ParallelListProcessor_PropagatesChunkExceptions()
+        {
+            // Regression guard: a chunk that throws must surface the exception to the caller. The old
+            // ContinueWith(_ => _sem.Release()) tracked the always-successful release continuation
+            // instead of the work, so chunk exceptions were silently swallowed and Task.WhenAll
+            // always reported success. We need to know when a parallel chunk breaks.
+            var l = new ParallelListProcessor<int>(1);
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                l.ProcessListInParallel(new List<int> { 1, 2, 3 },
+                    (chunk, threadIndex) => throw new InvalidOperationException("boom")));
+            Assert.AreEqual("boom", ex.Message);
         }
         async Task ParallelListProcessorTest(int size)
         {
