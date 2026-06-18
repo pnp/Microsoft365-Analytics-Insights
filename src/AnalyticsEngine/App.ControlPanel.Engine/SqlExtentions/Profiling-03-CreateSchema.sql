@@ -636,7 +636,10 @@ BEGIN
 END
 GO
 
--- Remove deprecated "Teams Meetings" metric (Graph meetingCount, deprecated by Microsoft).
+-- Remove deprecated "Teams Meetings" metric. Sourced from the Graph
+-- getTeamsUserActivityUserDetail "meetingCount" property, which Microsoft deprecated and stopped
+-- populating from Feb 2023 (see RemoveTeamsMeetingsMetric-UpgradeGuide.md), so it only produced
+-- misleading / zero values.
 -- First the default constraint, then the column, then any already-aggregated rows.
 IF EXISTS (
   SELECT object_id
