@@ -66,6 +66,7 @@
     <Compile Include="StressTests\FakeLoaders\FakeActivitySubscriptionManagerForStress.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeAppConfig.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeContentMetaDataLoaderForStress.cs" />
+    <Compile Include="StressTests\FakeLoaders\FakeSentEmailSentimentScorer.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeSentEmailSourceLoader.cs" />
   </ItemGroup>
   <ItemGroup>
