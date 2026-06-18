@@ -66,43 +66,51 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                 // Hack to change/ensure correct DB schema. Needs moving to a migration
                 await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
-                var hitUpdatesTimer = new JobTimer(telemetry, "Hit updates");
-                hitUpdatesTimer.Start();
-                var hitUpdatesCount = await this.SaveHitsUpdatesToSQL(telemetry, database);
-                hitUpdatesTimer.PrintElapsed();
-                if (hitUpdatesCount > 0)
-                {
-                    hitUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                }
+                // Each section runs inside its own isolation boundary (see SaveSectionSafe). A failure
+                // in one section (e.g. a page-update that trips a DbUpdateException) is logged in full
+                // but never aborts the sibling sections nor escapes to stall the whole importer.
+                var hitUpdatesCount = await SaveSectionSafe(telemetry, "Hit updates",
+                    () => this.SaveHitsUpdatesToSQL(telemetry, database));
 
-                var searchesInsertTimer = new JobTimer(telemetry, "Searches");
-                searchesInsertTimer.Start();
-                var searchesInserted = await this.SaveSearchesToSQL(telemetry, database);
-                searchesInsertTimer.PrintElapsed();
-                if (searchesInserted > 0)
-                {
-                    searchesInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                }
+                var searchesInserted = await SaveSectionSafe(telemetry, "Searches",
+                    () => this.SaveSearchesToSQL(telemetry, database));
 
-                var pageUpdatesTimer = new JobTimer(telemetry, "Page updates");
-                pageUpdatesTimer.Start();
-                var pagesUpdated = await this.SavePageUpdatesToSQL(telemetry, config);
-                pageUpdatesTimer.PrintElapsed();
-                if (pagesUpdated > 0)
-                {
-                    pageUpdatesTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                }
+                var pagesUpdated = await SaveSectionSafe(telemetry, "Page updates",
+                    () => this.SavePageUpdatesToSQL(telemetry, config));
 
-                var clicksInsertTimer = new JobTimer(telemetry, "Clicks");
-                clicksInsertTimer.Start();
-                var clicks = await this.SaveClicksToSQL(telemetry, database);
-                clicksInsertTimer.PrintElapsed();
-                if (clicks > 0)
-                {
-                    clicksInsertTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                }
+                var clicks = await SaveSectionSafe(telemetry, "Clicks",
+                    () => this.SaveClicksToSQL(telemetry, database));
 
                 telemetry.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
+            }
+        }
+
+        /// <summary>
+        /// Runs one event-save section (hit-updates / searches / page-updates / clicks) inside its own
+        /// timer and isolation boundary. A failure in one section is logged in full and reported via
+        /// TrackException, but never propagates - so a single bad section can neither abort its sibling
+        /// sections nor escape up the call stack and stall the whole importer.
+        /// </summary>
+        private static async Task<int> SaveSectionSafe(AnalyticsLogger telemetry, string sectionName, Func<Task<int>> saveAction)
+        {
+            var timer = new JobTimer(telemetry, sectionName);
+            timer.Start();
+            try
+            {
+                var count = await saveAction();
+                timer.PrintElapsed();
+                if (count > 0)
+                {
+                    timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                }
+                return count;
+            }
+            catch (Exception ex)
+            {
+                telemetry.TrackException(ex);
+                telemetry.LogError($"Failed importing '{sectionName}' section: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this section and continuing.");
+                telemetry.LogError($"Exception detail: {ex}");
+                return 0;
             }
         }
     }

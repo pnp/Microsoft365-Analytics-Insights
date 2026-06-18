@@ -5,7 +5,6 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Data.Entity;
-using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
@@ -132,13 +131,22 @@ namespace WebJob.AppInsightsImporter.Engine
                                 await events.SaveAllEventTypesToSql(_telemetry, _importConfig);
                                 _telemetry.LogInformation($"Events SQL save completed in {sw.Elapsed.TotalSeconds:N1}s");
                             }
-                            catch (SqlException ex)
+                            catch (Exception ex)
                             {
-                                _telemetry.LogError(ex, "Got SQL error: " + ex.Message);
+                                // Isolate per-day save failures. A single bad day - e.g. a page-update
+                                // event that trips a DbUpdateException - must never abort the whole
+                                // multi-day run and stall the importer's watermark indefinitely (the
+                                // SqlException-only catch used to let any other exception escape, which
+                                // permanently stuck the importer re-processing the same day). Log the
+                                // full error, record it, and carry on with the next day.
+                                _telemetry.TrackException(ex);
+                                _telemetry.LogError($"Failed saving data for day {d:yyyy-MM-dd}: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this day and continuing.");
+                                _telemetry.LogError($"Exception detail: {ex}");
                                 if (Debugger.IsAttached)
                                 {
                                     throw;
                                 }
+                                continue;
                             }
 
                             totalPageViews += pageViewsResult.Rows.Count;
