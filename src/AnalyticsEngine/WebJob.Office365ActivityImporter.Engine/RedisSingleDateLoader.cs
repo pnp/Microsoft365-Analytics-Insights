@@ -24,7 +24,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             if (!string.IsNullOrEmpty(lastVal))
             {
                 var dt = DateTime.Now;
-                if (DateTime.TryParse(lastVal, DateTimeFormatInfo.CurrentInfo, DateTimeStyles.RoundtripKind, out dt))
+                if (DateTime.TryParse(lastVal, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out dt))
                 {
                     return dt;
                 }

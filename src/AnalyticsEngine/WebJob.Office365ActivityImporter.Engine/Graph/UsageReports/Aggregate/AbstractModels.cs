@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 {
@@ -9,7 +10,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         const string DATE_FORMAT = "yyyy-MM-dd";
         [JsonProperty("reportRefreshDate")]
         public string ReportRefreshDateString { get; set; }
-        public DateTime ReportRefreshDate { get => DateTime.ParseExact(ReportRefreshDateString, DATE_FORMAT, null); set => ReportRefreshDateString = value.ToString(DATE_FORMAT); }
+        public DateTime ReportRefreshDate { get => DateTime.ParseExact(ReportRefreshDateString, DATE_FORMAT, CultureInfo.InvariantCulture); set => ReportRefreshDateString = value.ToString(DATE_FORMAT, CultureInfo.InvariantCulture); }
         public abstract string OfficeUniqueIdField { get; }
     }
 

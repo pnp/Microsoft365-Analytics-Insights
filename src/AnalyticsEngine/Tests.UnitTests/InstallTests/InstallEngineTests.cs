@@ -848,6 +848,42 @@ namespace Tests.UnitTests
             Assert.IsTrue(nextSunday4pm.Minute == 0);
             Assert.IsTrue(nextSunday4pm.Date == nextSunday.Date);
         }
+
+        [TestMethod]
+        public void TargetSolutionConfig_ValidatInputAndGetErrors()
+        {
+            // Regression: the condition used '||' ("!= en || != es"), which is always true, so an
+            // Adoptify install reported "Select a valid target language" even for valid 'en'/'es'.
+            var en = new TargetSolutionConfig
+            {
+                SolutionTargeted = SolutionImportType.Adoptify,
+                SolutionLanguageCode = TargetSolutionConfig.LANG_ENGLISH
+            };
+            Assert.AreEqual(0, en.ValidatInputAndGetErrors().Count, "Valid English Adoptify config should have no errors");
+
+            var es = new TargetSolutionConfig
+            {
+                SolutionTargeted = SolutionImportType.Adoptify,
+                SolutionLanguageCode = TargetSolutionConfig.LANG_ESPAÑOL
+            };
+            Assert.AreEqual(0, es.ValidatInputAndGetErrors().Count, "Valid Spanish Adoptify config should have no errors");
+
+            // An unsupported language for Adoptify must still be flagged.
+            var invalid = new TargetSolutionConfig
+            {
+                SolutionTargeted = SolutionImportType.Adoptify,
+                SolutionLanguageCode = "fr"
+            };
+            Assert.AreEqual(1, invalid.ValidatInputAndGetErrors().Count, "Unsupported Adoptify language should produce an error");
+
+            // Non-Adoptify targets are not language-validated.
+            var custom = new TargetSolutionConfig
+            {
+                SolutionTargeted = SolutionImportType.CustomOrInsights,
+                SolutionLanguageCode = "fr"
+            };
+            Assert.AreEqual(0, custom.ValidatInputAndGetErrors().Count, "Non-Adoptify config should not be language-validated");
+        }
     }
 
     public class AzureTestsConfigReader

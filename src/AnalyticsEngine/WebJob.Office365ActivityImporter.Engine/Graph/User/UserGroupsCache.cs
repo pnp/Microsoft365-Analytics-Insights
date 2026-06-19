@@ -68,15 +68,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
             if (_userGroupsCache.TryGetValue(upn, out var cachedGroups))
                 return cachedGroups;
 
-            List<string> groups = null;
+            List<string> groups;
             try
             {
                 groups = await LoadGroupsFromExternalAsync(upn);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                _logger.LogError($"Failed to load groups for user {upn}. Returning empty list.");
-                groups = new List<string>();
+                // Do NOT cache a failed load. Caching an empty list here would persist for the whole
+                // TTL and - because IsInGroupsFilter treats "no groups" as "matches the filter" - would
+                // silently include this user for up to an hour on a single transient Graph error.
+                // Returning an uncached empty list lets the next call retry the load.
+                _logger?.LogError(ex, $"Failed to load groups for user {upn}. Returning an empty (uncached) list so the next call retries.");
+                return new List<string>();
             }
             _userGroupsCache[upn] = groups;
             return groups;
