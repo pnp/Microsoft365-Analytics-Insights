@@ -668,6 +668,36 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void FindValueForProp()
+        {
+            // Documented case: value terminated by ';'.
+            Assert.AreEqual("SPOInsightsDev", StringUtils.FindValueForProp("Initial Catalog=SPOInsightsDev;", "initial catalog"));
+
+            // Property in the middle of the string.
+            Assert.AreEqual("myserver", StringUtils.FindValueForProp("Data Source=myserver;Initial Catalog=db;", "data source"));
+
+            // Regression: a property that is the LAST token with no trailing ';' used to throw
+            // ArgumentOutOfRangeException (IndexOf returned -1, fed straight into Substring length).
+            Assert.AreEqual("db", StringUtils.FindValueForProp("Data Source=myserver;Initial Catalog=db", "initial catalog"));
+
+            // Case-insensitive property-name match.
+            Assert.AreEqual("db", StringUtils.FindValueForProp("DATA SOURCE=srv;INITIAL CATALOG=db", "initial catalog"));
+
+            // Real ManageDataControl usage: a connection string with no trailing ';' for both props.
+            const string connStr = "Data Source=tcp:contoso.database.windows.net;Initial Catalog=AnalyticsDb";
+            Assert.AreEqual("tcp:contoso.database.windows.net", StringUtils.FindValueForProp(connStr, "data source"));
+            Assert.AreEqual("AnalyticsDb", StringUtils.FindValueForProp(connStr, "initial catalog"));
+
+            // Missing property -> empty string (previously threw / returned garbage).
+            Assert.AreEqual(string.Empty, StringUtils.FindValueForProp("Data Source=srv;", "initial catalog"));
+
+            // Null / empty inputs -> empty string rather than throwing.
+            Assert.AreEqual(string.Empty, StringUtils.FindValueForProp(null, "data source"));
+            Assert.AreEqual(string.Empty, StringUtils.FindValueForProp("", "data source"));
+            Assert.AreEqual(string.Empty, StringUtils.FindValueForProp("Data Source=srv;", null));
+        }
+
+        [TestMethod]
         public void IsJson()
         {
             Assert.IsFalse(StringUtils.IsJson("false"));
