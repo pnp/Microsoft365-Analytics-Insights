@@ -40,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             // Get users with account enabled set, or without any account enabled value (exclude users with account definately disabled).
             // ...plus users with email address that's not external
             var usersWithLicenses = await _db.users.Include(u => u.LicenseLookups)
-                                .Where(u => ((u.AccountEnabled.HasValue && u.AccountEnabled.HasValue) || !u.AccountEnabled.HasValue)
+                                .Where(u => ((u.AccountEnabled.HasValue && u.AccountEnabled.Value) || !u.AccountEnabled.HasValue)
                                     && !string.IsNullOrEmpty(u.UserPrincipalName) && u.UserPrincipalName.Contains("@") && !u.UserPrincipalName.Contains("#ext#"))
                                 .ToListAsync();
 

@@ -17,9 +17,13 @@ namespace Web.AnalyticsWeb.Controllers
         // POST: api/TeamsAuthAPI
         public async Task<List<TeamAuthStatusResponse>> Post([FromBody] List<string> teamIds)
         {
-            var cache = GetConnectionManager();
-
             var response = new List<TeamAuthStatusResponse>();
+            if (teamIds == null)
+            {
+                return response;
+            }
+
+            var cache = GetConnectionManager();
 
             foreach (var teamId in teamIds)
             {
@@ -50,16 +54,26 @@ namespace Web.AnalyticsWeb.Controllers
 
             // Get redis-cached token we got on login in Startup.ConfigureAuth
             var auth = await base.GetCachedUserAccessTokenAsync();
-
-            var cache = GetConnectionManager();
-            foreach (var teamIdToAuth in authTeamData.TeamIdsToAuth)
+            if (auth == null || string.IsNullOrEmpty(auth.RefreshToken))
             {
-                await cache.SetTeamRefreshToken(teamIdToAuth, auth.RefreshToken);
+                return Unauthorized();
             }
 
-            foreach (var teamIdToDeAuth in authTeamData.TeamIdsToDeauth)
+            var cache = GetConnectionManager();
+            if (authTeamData.TeamIdsToAuth != null)
             {
-                await cache.RemoveTeamAuthToken(teamIdToDeAuth);
+                foreach (var teamIdToAuth in authTeamData.TeamIdsToAuth)
+                {
+                    await cache.SetTeamRefreshToken(teamIdToAuth, auth.RefreshToken);
+                }
+            }
+
+            if (authTeamData.TeamIdsToDeauth != null)
+            {
+                foreach (var teamIdToDeAuth in authTeamData.TeamIdsToDeauth)
+                {
+                    await cache.RemoveTeamAuthToken(teamIdToDeAuth);
+                }
             }
 
             return Ok();

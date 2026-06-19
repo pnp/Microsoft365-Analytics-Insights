@@ -26,7 +26,10 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
             this.DeviceName = p.DeviceModel;
             this.OS = p.ClientOS;
             this.PageRequestId = p.CustomProperties?.PageRequestId.ToString();
-            this.PageLoadTime = p.PageLoadInSeconds.ToString();
+            // Invariant culture so the decimal separator is always '.' (the staged page_load_time
+            // string is later CAST to a number in SQL). Without this, a non-US server locale writes
+            // e.g. "1,5" and the downstream conversion misparses or fails.
+            this.PageLoadTime = p.PageLoadInSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
             this.Province = p.StateOrProvince;
             this.SiteUrl = p.CustomProperties?.SiteUrl;
             this.SPRequestDuration = p.CustomProperties?.SPRequestDuration ?? 0;
