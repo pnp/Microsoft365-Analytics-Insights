@@ -14,6 +14,22 @@ namespace Tests.UnitTests
     [TestClass]
     public class SentEmailImportTests
     {
+        [TestMethod]
+        public void SentimentScorer_StripHtml_RemovesTagsAndDecodesEntities()
+        {
+            Assert.AreEqual("Hello", AzureLanguageSentEmailSentimentScorer.StripHtml("<b>Hello</b>"));
+            Assert.AreEqual("a & b", AzureLanguageSentEmailSentimentScorer.StripHtml("a &amp; b"));
+            // Non-Latin content (e.g. Greek) must be preserved through stripping/decoding.
+            Assert.AreEqual("Καλημέρα κόσμε", AzureLanguageSentEmailSentimentScorer.StripHtml("<p>Καλημέρα κόσμε</p>"));
+        }
+
+        [TestMethod]
+        public void SentimentScorer_StripHtml_NullOrEmptyPassThrough()
+        {
+            Assert.IsNull(AzureLanguageSentEmailSentimentScorer.StripHtml(null));
+            Assert.AreEqual(string.Empty, AzureLanguageSentEmailSentimentScorer.StripHtml(string.Empty));
+        }
+
         #region ImportTaskSettings Tests
 
         // NOTE: All [ImportProp] flags default to false (opt-in) so a fresh / unconfigured install
