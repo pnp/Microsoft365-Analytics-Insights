@@ -46,10 +46,10 @@ Mapping from the deprecated property to what we already collect from
 | | `scheduledRecurringMeetingsOrganizedCount` / `...AttendedCount` | `scheduled_recurring_meetings_organized_count` / `scheduled_recurring_meetings_attended_count` | `Teams Scheduled Recurring Meetings Organized` / `...Attended` |
 
 For a single "meetings the user took part in" number, use **`Teams Meetings Organized`**
-(`meetingsOrganizedCount` = ad‑hoc + scheduled one‑time + scheduled recurring organized). It counts
-a meeting once per organizer, so it avoids the multi‑attendee double counting you get from summing
-the attended metrics across users. Use **`Teams Meetings Attended`** if you want meetings the user
-joined rather than ran.
+(Graph reports `meetingsOrganizedCount` as ad‑hoc + scheduled one‑time + scheduled recurring
+organized, so you don't need to add those up yourself). It counts a meeting once per organizer, so
+it avoids the multi‑attendee double counting you get from summing the attended metrics across users.
+Use **`Teams Meetings Attended`** if you want meetings the user joined rather than ran.
 
 ## What is *not* removed
 
