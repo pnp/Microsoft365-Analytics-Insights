@@ -3,9 +3,11 @@ using Common.Entities.LookupCaches;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps;
 
 namespace Tests.UnitTests
@@ -78,6 +80,55 @@ namespace Tests.UnitTests
                 }
             }
         }
+
+        /// <summary>
+        /// Regression for the user-app paging gap: CollectAllAppPagesAsync must follow every
+        /// @odata.nextLink and return apps from all pages (a user with more installed apps than fit on
+        /// one Graph page previously lost the later pages). The page fetch is a fake "adaptor" delegate
+        /// so multi-page paging is exercised without a live tenant.
+        /// </summary>
+        [TestMethod]
+        public async Task UserApps_CollectAllAppPages_FollowsNextLinkAcrossPages()
+        {
+            var page1 = new UserTeamAppResponse { OdataNextLink = "https://graph.microsoft.com/next1", Apps = new List<UserTeamApp> { AppWithId("a1") } };
+            var page2 = new UserTeamAppResponse { OdataNextLink = "https://graph.microsoft.com/next2", Apps = new List<UserTeamApp> { AppWithId("a2"), AppWithId("a3") } };
+            var page3 = new UserTeamAppResponse { OdataNextLink = null, Apps = new List<UserTeamApp> { AppWithId("a4") } };
+
+            var pagesByLink = new Dictionary<string, UserTeamAppResponse>
+            {
+                { "https://graph.microsoft.com/next1", page2 },
+                { "https://graph.microsoft.com/next2", page3 },
+            };
+            var fetchedLinks = new List<string>();
+
+            var all = await GraphAndSqlUserAppLoader.CollectAllAppPagesAsync(page1, link =>
+            {
+                fetchedLinks.Add(link);
+                return Task.FromResult(pagesByLink[link]);
+            });
+
+            CollectionAssert.AreEqual(new[] { "a1", "a2", "a3", "a4" }, all.Select(a => a.Id).ToList());
+            CollectionAssert.AreEqual(new[] { "https://graph.microsoft.com/next1", "https://graph.microsoft.com/next2" }, fetchedLinks);
+        }
+
+        [TestMethod]
+        public async Task UserApps_CollectAllAppPages_SinglePageDoesNotFetch()
+        {
+            var only = new UserTeamAppResponse { OdataNextLink = null, Apps = new List<UserTeamApp> { AppWithId("solo") } };
+            var fetchCalled = false;
+
+            var all = await GraphAndSqlUserAppLoader.CollectAllAppPagesAsync(only, _ =>
+            {
+                fetchCalled = true;
+                return Task.FromResult<UserTeamAppResponse>(null);
+            });
+
+            Assert.IsFalse(fetchCalled, "A single page (no @odata.nextLink) must not trigger a fetch.");
+            Assert.AreEqual(1, all.Count);
+            Assert.AreEqual("solo", all[0].Id);
+        }
+
+        private static UserTeamApp AppWithId(string id) => new UserTeamApp { Id = id };
 
     }
 }
