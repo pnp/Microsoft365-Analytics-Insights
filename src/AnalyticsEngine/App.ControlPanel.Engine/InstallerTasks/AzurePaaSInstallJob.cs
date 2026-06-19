@@ -194,11 +194,33 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 .AddSetting(KeyVaultSecretAddTask.CONFIG_KEY_CRED_TENANT_ID, config.InstallerAccount.DirectoryId)
                 .AddSetting(KeyVaultSecretAddTask.CONFIG_KEY_CRED_CLIENT_ID, config.InstallerAccount.ClientId)
                 .AddSetting(KeyVaultSecretAddTask.CONFIG_KEY_CRED_SECRET, config.InstallerAccount.Secret);
-            this.AddTask(_keyVaultTask,
-                new KeyVaultAddSecretAllPermissionsForAppRegistrationTask(kvAddInstallerAccountSecretAllPolicyConfig, logger, config.AzureLocation, tagDic),
-                new KeyVaultAddSecretReadPolicyForAppRegistrationTask(kvAddRuntimeAccountSecretReadPolicyConfig, logger, config.AzureLocation, tagDic),
-                new KeyVaultAddWebAppPermissionsTask(kvAddInstallerWebAppPermissionsConfig, logger, config.AzureLocation, tagDic),
-                new KeyVaultSecretAddTask(kvSecretAddConfig, logger));
+            var kvPolicyAllTask = new KeyVaultAddSecretAllPermissionsForAppRegistrationTask(kvAddInstallerAccountSecretAllPolicyConfig, logger, config.AzureLocation, tagDic);
+            var kvPolicyReadTask = new KeyVaultAddSecretReadPolicyForAppRegistrationTask(kvAddRuntimeAccountSecretReadPolicyConfig, logger, config.AzureLocation, tagDic);
+            var kvWebAppPermissionsTask = new KeyVaultAddWebAppPermissionsTask(kvAddInstallerWebAppPermissionsConfig, logger, config.AzureLocation, tagDic);
+            var kvSecretAddTask = new KeyVaultSecretAddTask(kvSecretAddConfig, logger);
+
+            // Enable the Key Vault firewall and allow-list the installer + App Service IPs (public
+            // deployments only). It runs right after the vault is created/updated and before the secret
+            // upload so the upload's data-plane call is allowed through. Private deployments keep public
+            // access disabled and reach the vault via a private endpoint, so no IP rules are needed.
+            // See issue #136.
+            if (allowPublicAccess)
+            {
+                var kvFirewallConfig = TaskConfig.GetConfigForName(config.KeyVaultName)
+                    .AddSetting(KeyVaultFirewallConfigTask.CONFIG_KEY_APP_SERVICE_NAME, config.AppServiceWebAppName);
+                if (vnetEnabled && !string.IsNullOrWhiteSpace(config.NetworkConfig.AppServiceIntegrationSubnetName))
+                {
+                    var integrationSubnetId = $"/subscriptions/{config.Subscription.SubId}/resourceGroups/{config.ResourceGroupName}/providers/Microsoft.Network/virtualNetworks/{config.NetworkConfig.VNetName}/subnets/{config.NetworkConfig.AppServiceIntegrationSubnetName}";
+                    kvFirewallConfig.AddSetting(KeyVaultFirewallConfigTask.CONFIG_KEY_VNET_SUBNET_ID, integrationSubnetId);
+                }
+                this.AddTask(_keyVaultTask,
+                    new KeyVaultFirewallConfigTask(kvFirewallConfig, logger, Location),
+                    kvPolicyAllTask, kvPolicyReadTask, kvWebAppPermissionsTask, kvSecretAddTask);
+            }
+            else
+            {
+                this.AddTask(_keyVaultTask, kvPolicyAllTask, kvPolicyReadTask, kvWebAppPermissionsTask, kvSecretAddTask);
+            }
 
             // ServiceBus - enforce Premium for VNet (private endpoints require Premium SKU)
             // Service Bus is only required by the Teams calls import; skip provisioning when disabled.

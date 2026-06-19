@@ -52,7 +52,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 var props = new KeyVaultProperties(tenantId, new KeyVaultSku(KeyVaultSkuFamily.A, KeyVaultSkuName.Standard))
                 {
-                    PublicNetworkAccess = _allowPublicAccess ? "Enabled" : "Disabled"
+                    PublicNetworkAccess = _allowPublicAccess ? "Enabled" : "Disabled",
+                    // Enable the vault firewall up-front so the create itself complies with Azure
+                    // policies that require it (e.g. "Azure Key Vault should have firewall enabled or
+                    // public network access disabled"). KeyVaultFirewallConfigTask then allow-lists the
+                    // installer + App Service IPs so the vault stays reachable. See issue #136.
+                    NetworkRuleSet = KeyVaultFirewallConfigTask.BuildFirewallRuleSet(null, null, null)
                 };
                 var newKeyVaultInfo = new KeyVaultCreateOrUpdateContent(AzureLocation, props);
                 EnsureTagsOnNew(newKeyVaultInfo.Tags);
@@ -65,16 +70,25 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Found existing key vault '{r.Data.Name}'.");
 
                 var desiredAccess = _allowPublicAccess ? "Enabled" : "Disabled";
-                if (!string.Equals(r.Data.Properties.PublicNetworkAccess, desiredAccess, StringComparison.OrdinalIgnoreCase))
+                var publicAccessChanged = !string.Equals(r.Data.Properties.PublicNetworkAccess, desiredAccess, StringComparison.OrdinalIgnoreCase);
+                var firewallEnabled = r.Data.Properties.NetworkRuleSet?.DefaultAction == KeyVaultNetworkRuleAction.Deny;
+                if (publicAccessChanged || !firewallEnabled)
                 {
-                    _logger.LogInformation($"Updating key vault '{r.Data.Name}' public network access to '{desiredAccess}'...");
-                    var props = new KeyVaultProperties(r.Data.Properties.TenantId, r.Data.Properties.Sku)
+                    _logger.LogInformation($"Updating key vault '{r.Data.Name}': public network access '{desiredAccess}', firewall default action 'Deny'...");
+
+                    // PATCH (not a full CreateOrUpdate) so existing access policies and other vault
+                    // settings are preserved while we set public access and enable the firewall. The
+                    // firewall must be enabled here (not just by KeyVaultFirewallConfigTask) so this
+                    // update itself satisfies Azure Key Vault firewall policies. See issue #136.
+                    var patch = new KeyVaultPatch
                     {
-                        PublicNetworkAccess = desiredAccess
+                        Properties = new KeyVaultPatchProperties
+                        {
+                            PublicNetworkAccess = desiredAccess,
+                            NetworkRuleSet = KeyVaultFirewallConfigTask.BuildFirewallRuleSet(r.Data.Properties.NetworkRuleSet, null, null)
+                        }
                     };
-                    var update = new KeyVaultCreateOrUpdateContent(AzureLocation, props);
-                    EnsureTagsOnNew(update.Tags);
-                    var updateResult = await Container.GetKeyVaults().CreateOrUpdateAsync(WaitUntil.Completed, name, update);
+                    var updateResult = await r.UpdateAsync(patch);
                     r = updateResult.Value;
                 }
 
