@@ -14,15 +14,15 @@ namespace Web.AnalyticsWeb.Controllers
     {
         public async Task<ActionResult> Index()
         {
-
             // Load most recent status
-            var db = new AnalyticsEntitiesContext();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var appConfig = new AppConfig();
+                var cache = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
+                var s = await SystemStatus.LoadFrom(db, cache);
 
-            var appConfig = new AppConfig();
-            var cache = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
-            var s = await SystemStatus.LoadFrom(db, cache);
-
-            return View(s);
+                return View(s);
+            }
         }
         public ActionResult CredentialsInvalid()
         {
