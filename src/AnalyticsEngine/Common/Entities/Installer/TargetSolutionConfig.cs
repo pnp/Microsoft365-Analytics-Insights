@@ -56,7 +56,7 @@ namespace Common.Entities.Installer
         public override List<string> ValidatInputAndGetErrors()
         {
             var errors = new List<string>();
-            if (SolutionTargeted == SolutionImportType.Adoptify && (SolutionLanguageCode != LANG_ENGLISH || SolutionLanguageCode != LANG_ESPAÑOL))
+            if (SolutionTargeted == SolutionImportType.Adoptify && (SolutionLanguageCode != LANG_ENGLISH && SolutionLanguageCode != LANG_ESPAÑOL))
             {
                 errors.Add("Select a valid target language");
             }

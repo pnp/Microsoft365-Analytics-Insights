@@ -2,6 +2,7 @@ using DataUtils.Sql;
 using DataUtils.Sql.Inserts;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Linq;
+using System.Text.RegularExpressions;
 using WebJob.AppInsightsImporter.Engine.Sql.Models;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
@@ -159,6 +160,27 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(ExpectedUrlSqlType, info.SqlInfo.SqlColDefinition,
                 "Copilot SP staging .url must match urls.full_url (nvarchar(850)) so IX_urls_full_url is usable.");
+        }
+
+        /// <summary>
+        /// The App Insights "searches" staging table (created from the Create Searches Import Temp
+        /// Table.sql resource by SearchesSaveExtension) stores the authenticated user's UPN and the
+        /// search term. Both must be nvarchar - not varchar - or a non-Latin value (e.g. Greek) is
+        /// corrupted to '?'. For user_name that breaks the merge's inner join to the nvarchar
+        /// users.user_name and silently drops that user's searches. See issue #122 and the
+        /// "Character set support (Unicode / Greek)" convention.
+        /// </summary>
+        [TestMethod]
+        public void SearchesStagingUserNameAndTermAreNvarchar()
+        {
+            var ddl = WebJob.AppInsightsImporter.Engine.Properties.Resources.Create_Searches_Import_Temp_Table;
+
+            Assert.IsTrue(Regex.IsMatch(ddl, @"\[user_name\]\s*\[nvarchar\]", RegexOptions.IgnoreCase),
+                "searches staging [user_name] must be nvarchar so non-Latin UPNs (e.g. Greek) aren't corrupted to '?'.");
+            Assert.IsFalse(Regex.IsMatch(ddl, @"\[user_name\]\s*\[varchar\]", RegexOptions.IgnoreCase),
+                "searches staging [user_name] must NOT be varchar (single-code-page corrupts Unicode UPNs).");
+            Assert.IsTrue(Regex.IsMatch(ddl, @"\[search_term\]\s*\[nvarchar\]", RegexOptions.IgnoreCase),
+                "searches staging [search_term] must be nvarchar (users search in non-Latin scripts).");
         }
 
         // ---- Local test fixtures ----

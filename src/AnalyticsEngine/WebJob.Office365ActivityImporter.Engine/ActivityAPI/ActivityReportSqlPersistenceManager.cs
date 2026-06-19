@@ -5,6 +5,7 @@ using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Data;
 using System.Data.Entity;
 using System.Data.SqlClient;
@@ -114,7 +115,9 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             var listOfActivitiesSavedToSQL = new ConcurrentBag<AbstractAuditLogContent>();
             var logsToInsert = new EFInsertBatch<AuditLogTempEntity>(db, _telemetry);
-            var processedIds = new ConcurrentBag<Guid>();
+            // Sequential dedup within this set: a HashSet gives O(1) Contains. The previous
+            // ConcurrentBag.Contains was O(n) per row (an O(n^2) scan over a large activity set).
+            var processedIds = new HashSet<Guid>();
             var stats = new ImportStat() { Total = activities.Count };
 
             foreach (var abtractLog in activities)
