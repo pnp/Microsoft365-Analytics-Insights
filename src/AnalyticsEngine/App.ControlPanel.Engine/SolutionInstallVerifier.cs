@@ -81,6 +81,13 @@ namespace App.ControlPanel.Engine
                 }
             }
 
+            // Verify the installer account can create RBAC role assignments
+            // (Microsoft.Authorization/roleAssignments/write). Lacking this permission is the cause of
+            // "...does not have authorization to perform action 'Microsoft.Authorization/roleAssignments/write'
+            // over scope '/subscriptions/.../resourceGroups/...'" failures that abort an install part-way
+            // through (e.g. when the installer account only has Contributor). Logs only; never throws.
+            await VerifyInstallerCanAssignRoles(testRg, azCredsValid);
+
             // DNS resolution checks for the configured Azure resource hostnames. Catches the
             // "The remote name could not be resolved" class of failure (broken/limited DNS on the
             // installer host) up-front instead of letting it abort an install part-way through.
@@ -377,6 +384,89 @@ namespace App.ControlPanel.Engine
 
                 default:
                     _logger.LogError($"Unexpected error checking Key Vault '{Config.KeyVaultName}' data-plane access: {result.Message}");
+                    break;
+            }
+        }
+
+        #endregion
+
+        #region Azure RBAC permission checks
+
+        /// <summary>
+        /// Check the installer service principal is actually allowed to create Azure RBAC role assignments
+        /// (<c>Microsoft.Authorization/roleAssignments/write</c>) at the deployment scope - the permission whose
+        /// absence aborts an install with "...does not have authorization to perform action
+        /// 'Microsoft.Authorization/roleAssignments/write' over scope '/subscriptions/.../resourceGroups/...'".
+        /// Checks at the resource-group scope when it exists (the exact scope the install writes to), otherwise at
+        /// the subscription scope. Permissions are inherited, so a subscription-level grant is detected at the RG
+        /// scope too. Logs only; never throws.
+        /// </summary>
+        async Task VerifyInstallerCanAssignRoles(ResourceGroupResource testRg, bool azCredsValid)
+        {
+            if (!azCredsValid)
+            {
+                // No usable subscription / credentials - already reported above; nothing to check against.
+                return;
+            }
+
+            var installerErrs = Config.InstallerAccount?.GetValidationErrors();
+            if (installerErrs == null || installerErrs.Count > 0)
+            {
+                _logger.LogInformation("Skipping installer role-assignment permission check - installer account details are incomplete.");
+                return;
+            }
+
+            if (Config.Subscription == null || !Config.Subscription.IsValidSubscription)
+            {
+                _logger.LogInformation("Skipping installer role-assignment permission check - no valid subscription is configured.");
+                return;
+            }
+
+            string scopeId;
+            string scopeDescription;
+            if (testRg != null)
+            {
+                scopeId = testRg.Id.ToString();
+                scopeDescription = $"resource group '{Config.ResourceGroupName}'";
+            }
+            else
+            {
+                scopeId = $"/subscriptions/{Config.Subscription.SubId}";
+                scopeDescription = $"subscription '{Config.Subscription.DisplayName}'";
+            }
+
+            _logger.LogInformation($"Checking the installer account can create Azure role assignments on {scopeDescription}...");
+
+            var creds = new ClientSecretCredential(Config.InstallerAccount.DirectoryId, Config.InstallerAccount.ClientId, Config.InstallerAccount.Secret);
+            var result = await RbacPermissionProbe.CanAssignRolesAsync(scopeId, creds);
+
+            switch (result.Status)
+            {
+                case RbacAssignmentProbeStatus.CanAssignRoles:
+                    _logger.LogInformation($"Installer account can create role assignments on {scopeDescription} - the RBAC assignment step should succeed.");
+                    break;
+
+                case RbacAssignmentProbeStatus.CannotAssignRoles:
+                    _logger.LogError(
+                        $"The installer account ('{Config.InstallerAccount.ClientId}') does NOT have permission to create Azure role assignments " +
+                        $"(action '{RbacPermissionProbe.RoleAssignmentWriteAction}') on {scopeDescription}. " +
+                        $"The install will fail part-way through with an error like \"...does not have authorization to perform action " +
+                        $"'Microsoft.Authorization/roleAssignments/write' over scope '/subscriptions/.../resourceGroups/...'\". " +
+                        $"Grant the installer app registration the 'Owner' or 'User Access Administrator' (or 'Role Based Access Control Administrator') role " +
+                        $"on {scopeDescription} (or the subscription) and re-run. Note: 'Contributor' is NOT sufficient - it explicitly excludes role-assignment writes.");
+                    break;
+
+                case RbacAssignmentProbeStatus.TransportFailure:
+                    var guidance = PrivateNetworkGuidance.IsPrivateNetworkOnly(Config)
+                        ? PrivateNetworkGuidance.BuildVmOnVNetGuidance("checking installer role-assignment permissions", Config.NetworkConfig?.VNetName)
+                        : "Check DNS / network / firewall connectivity from this host to 'management.azure.com'.";
+                    _logger.LogError($"Could not check installer role-assignment permissions - Azure Resource Manager was unreachable ({result.Message}). " + guidance);
+                    break;
+
+                default:
+                    _logger.LogWarning(
+                        $"Could not determine whether the installer account can create role assignments on {scopeDescription}: {result.Message} " +
+                        $"Ensure the installer account has 'Owner' or 'User Access Administrator' before installing.");
                     break;
             }
         }
