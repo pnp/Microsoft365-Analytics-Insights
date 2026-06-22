@@ -164,6 +164,7 @@
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
+    <Compile Include="InstallTests\RbacPermissionProbeTests.cs" />
     <Compile Include="InstallTests\TeamsUserActivityReportUrlTests.cs" />
     <Compile Include="InstallTests\SpoInstallTests.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
