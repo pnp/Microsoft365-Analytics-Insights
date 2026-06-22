@@ -36,10 +36,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             todaysLog.PostMessages = userActivityReportPage.PostMessages;
             todaysLog.ReplyMessages = userActivityReportPage.ReplyMessages;
 
-            // ISO8601 duration strings.
-            todaysLog.AudioDurationSeconds = System.Xml.XmlConvert.ToTimeSpan(userActivityReportPage.AudioDuration).Seconds;
-            todaysLog.VideoDurationSeconds = System.Xml.XmlConvert.ToTimeSpan(userActivityReportPage.VideoDuration).Seconds;
-            todaysLog.ScreenShareDurationSeconds = System.Xml.XmlConvert.ToTimeSpan(userActivityReportPage.ScreenShareDuration).Seconds;
+            // ISO8601 duration strings. Use TotalSeconds (not .Seconds, which is only the 0-59
+            // seconds COMPONENT and silently truncated any call >= 1 minute, e.g. PT1H2M3S -> 3).
+            todaysLog.AudioDurationSeconds = (int)System.Xml.XmlConvert.ToTimeSpan(userActivityReportPage.AudioDuration).TotalSeconds;
+            todaysLog.VideoDurationSeconds = (int)System.Xml.XmlConvert.ToTimeSpan(userActivityReportPage.VideoDuration).TotalSeconds;
+            todaysLog.ScreenShareDurationSeconds = (int)System.Xml.XmlConvert.ToTimeSpan(userActivityReportPage.ScreenShareDuration).TotalSeconds;
         }
 
         protected override long CountActivity(TeamsUserActivityUserDetail activityPage)

@@ -128,7 +128,13 @@ namespace WebJob.AppInsightsImporter
             catch (Exception ex)
             {
                 telemetry.TrackException(ex);
-                telemetry.LogError($"Got uncaught exception importing & saving data from Application Insights: {ex.Message}");
+
+                // ex is normally an AggregateException from the .Wait() above, whose Message is just
+                // "One or more errors occurred." - useless on its own. Log the unwrapped inner-exception
+                // chain and the full stack so the real failure is visible in the WebJob console & traces,
+                // not only in the AppInsights 'exceptions' table.
+                telemetry.LogError($"Got uncaught exception importing & saving data from Application Insights: {CommonExceptionHandler.GetErrorText(ex)}");
+                telemetry.LogError($"Exception detail: {ex}");
 
 #if DEBUG
                 throw;

@@ -111,6 +111,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Look through Graph results & compare with already saved reports for this date
                 foreach (var reportPage in LoadedReportPages[dateTime])
                 {
+                    // A usage-report row with no user/group identifier (e.g. a Graph row with a null
+                    // userPrincipalName when report anonymisation is enabled on the tenant) can't be
+                    // matched to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in
+                    // the loop (IdInScope, the id cache and GetOrCreateLookup all assume non-null) -
+                    // otherwise one such row aborts the whole report import and does so every run.
+                    if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
+                    {
+                        Telemetry.LogWarning($"Skipping a {typeof(TReportDbType).Name} report row with no lookup identifier (null/empty user or group name).");
+                        continue;
+                    }
+
                     // Usually we're checking if the user is in scope (Entra ID group memembership for group filter)
                     var isInScope = await IdInScope(reportPage.LookupFieldValue);
                     if (!isInScope)

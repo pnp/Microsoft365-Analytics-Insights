@@ -38,6 +38,10 @@ namespace Tests.FakeDataGen.StressTests
         private static string[] Departments => SeedDataCatalogue.Departments;
         private static string[] Companies => SeedDataCatalogue.Companies;
         private static string[] JobTitles => SeedDataCatalogue.JobTitles;
+        private static string[] StatesOrProvinces => SeedDataCatalogue.StatesOrProvinces;
+        private static string[] Countries => SeedDataCatalogue.Countries;
+        private static string[] OfficeLocations => SeedDataCatalogue.OfficeLocations;
+        private static string[] UsageLocations => SeedDataCatalogue.UsageLocations;
 
         protected override StressTestResult Execute()
         {
@@ -411,19 +415,24 @@ namespace Tests.FakeDataGen.StressTests
                 // Load current license_type ids so we can randomly assign one per newly-created user.
                 var licenseTypeIds = UserMetadataSeeder.LoadLicenseTypeIds(conn);
 
-                // Insert distinct users with department, company, and job title.
-                // Track which UPNs were actually inserted (i.e. didn't already exist) so we can
-                // assign each newly-created user a single random license below.
+                // Insert distinct users with full metadata (department, company, job title,
+                // state/province, country, office + usage location). Track which UPNs were actually
+                // inserted (i.e. didn't already exist) so we can assign each newly-created user a
+                // single random license below.
                 var newlyCreatedUpns = new List<string>();
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
 IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
 BEGIN
-    INSERT INTO users (user_name, department_id, company_name_id, job_title_id)
-    SELECT @upn, d.id, c.id, j.id
-    FROM user_departments d, user_company_name c, user_job_titles j
-    WHERE d.name = @dept AND c.name = @company AND j.name = @job;
+    INSERT INTO users (user_name, department_id, company_name_id, job_title_id,
+                       state_or_province_id, country_or_region_id, office_location_id, usage_location_id)
+    SELECT @upn, d.id, c.id, j.id, s.id, co.id, o.id, u.id
+    FROM user_departments d, user_company_name c, user_job_titles j,
+         user_state_or_province s, user_country_or_region co,
+         user_office_locations o, user_usage_locations u
+    WHERE d.name = @dept AND c.name = @company AND j.name = @job
+      AND s.name = @state AND co.name = @country AND o.name = @office AND u.name = @usage;
     SELECT 1;
 END
 ELSE
@@ -432,6 +441,10 @@ ELSE
                     var pDept = cmd.Parameters.Add("@dept", System.Data.SqlDbType.NVarChar, 100);
                     var pCompany = cmd.Parameters.Add("@company", System.Data.SqlDbType.NVarChar, 100);
                     var pJob = cmd.Parameters.Add("@job", System.Data.SqlDbType.NVarChar, 100);
+                    var pState = cmd.Parameters.Add("@state", System.Data.SqlDbType.NVarChar, 100);
+                    var pCountry = cmd.Parameters.Add("@country", System.Data.SqlDbType.NVarChar, 100);
+                    var pOffice = cmd.Parameters.Add("@office", System.Data.SqlDbType.NVarChar, 100);
+                    var pUsage = cmd.Parameters.Add("@usage", System.Data.SqlDbType.NVarChar, 100);
                     var seenUsers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var ev in eventIds)
                     {
@@ -441,6 +454,10 @@ ELSE
                             pDept.Value = Departments[random.Next(Departments.Length)];
                             pCompany.Value = Companies[random.Next(Companies.Length)];
                             pJob.Value = JobTitles[random.Next(JobTitles.Length)];
+                            pState.Value = StatesOrProvinces[random.Next(StatesOrProvinces.Length)];
+                            pCountry.Value = Countries[random.Next(Countries.Length)];
+                            pOffice.Value = OfficeLocations[random.Next(OfficeLocations.Length)];
+                            pUsage.Value = UsageLocations[random.Next(UsageLocations.Length)];
                             var inserted = Convert.ToInt32(cmd.ExecuteScalar());
                             if (inserted == 1)
                             {

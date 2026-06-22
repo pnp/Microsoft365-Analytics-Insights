@@ -5,7 +5,7 @@ drop table [${STAGING_TABLE_SEARCHES}]
 CREATE TABLE [dbo].[${STAGING_TABLE_SEARCHES}](
 	[id] [int] IDENTITY(1,1) NOT NULL primary key,
 	[ai_session_id] [varchar](50) NOT NULL,
-	[user_name] [varchar](250) NOT NULL,
+	[user_name] [nvarchar](250) NOT NULL,
 	[search_term] [nvarchar](250) NOT NULL,
 	[date_time] datetime NULL
 	);

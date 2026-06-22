@@ -14,6 +14,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User
         [JsonProperty("@odata.count")]
         public int OdataCount { get; set; }
 
+        [JsonProperty("@odata.nextLink")]
+        public string OdataNextLink { get; set; }
+
         [JsonProperty("value")]
         public List<UserTeamApp> Apps { get; set; }
     }
