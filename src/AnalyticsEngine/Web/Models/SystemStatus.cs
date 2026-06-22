@@ -3,10 +3,14 @@ using Azure.Messaging.ServiceBus;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Redis;
+using DataUtils;
 using Newtonsoft.Json;
+using System;
 using System.Data.Entity;
 using System.Linq;
+using System.Runtime.Caching;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
 namespace Web.AnalyticsWeb.Models
 {
@@ -61,6 +65,18 @@ namespace Web.AnalyticsWeb.Models
         public string WebAppBaseURL { get; set; }
         public bool YammerAuth { get; set; }
 
+        /// <summary>Whether the Teams calls import is switched on for this deployment.</summary>
+        public bool CallsImportEnabled { get; set; }
+
+        /// <summary>Status of the Graph call-records webhook subscription that drives the Teams calls import.</summary>
+        public CallWebhookSubscriptionState CallWebhookState { get; set; }
+
+        /// <summary>When the call-records webhook subscription expires (only set when it is active).</summary>
+        public DateTimeOffset? CallWebhookExpiry { get; set; }
+
+        /// <summary>Extra detail for the webhook status, e.g. the error message when it couldn't be checked.</summary>
+        public string CallWebhookStatusDetail { get; set; }
+
         #endregion
 
         internal async static Task<SystemStatus> LoadFrom(AnalyticsEntitiesContext db, CacheConnectionManager cache)
@@ -104,8 +120,105 @@ namespace Web.AnalyticsWeb.Models
                 : ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString).Endpoint.ToString();
             status.CognitiveServiceEnabled = config.IsValidCognitiveConfig;
             status.WebAppBaseURL = config.WebAppURL;
+
+            await status.LoadCallWebhookStatus(config);
+
             return status;
         }
+
+        /// <summary>
+        /// Works out the state of the Teams call-records webhook subscription for display on the
+        /// homepage. If calls import is off there is nothing to check; otherwise it asks Microsoft
+        /// Graph (via the same <see cref="CallWebhook"/> the importer uses) whether a matching
+        /// subscription is currently registered, and when it expires. The Graph result is cached
+        /// briefly so we don't call Graph on every page load, and any failure is caught so a Graph
+        /// error never breaks the homepage.
+        /// </summary>
+        private async Task LoadCallWebhookStatus(AppConfig config)
+        {
+            this.CallsImportEnabled = config.ImportJobSettings != null && config.ImportJobSettings.Calls;
+
+            if (!this.CallsImportEnabled)
+            {
+                this.CallWebhookState = CallWebhookSubscriptionState.Disabled;
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(config.WebAppURL))
+            {
+                this.CallWebhookState = CallWebhookSubscriptionState.Error;
+                this.CallWebhookStatusDetail = "WebAppURL is not configured, so the webhook subscription URL can't be determined.";
+                return;
+            }
+
+            // Build the notification URL exactly as the importer web-job does when it registers the
+            // subscription, so the lookup matches the subscription Graph actually holds.
+            var webhookUrlString = config.WebAppURL + "api/CallRecordWebhook";
+
+            // A Graph call on every homepage load would be wasteful and rate-limitable, so cache the
+            // outcome for a few minutes. Errors are intentionally NOT cached, so a transient Graph
+            // failure recovers on the next page load.
+            var cacheKey = "CallWebhookStatus::" + webhookUrlString;
+            if (MemoryCache.Default.Get(cacheKey) is CachedCallWebhookStatus cached)
+            {
+                this.CallWebhookState = cached.State;
+                this.CallWebhookExpiry = cached.Expiry;
+                this.CallWebhookStatusDetail = cached.Detail;
+                return;
+            }
+
+            try
+            {
+                var telemetry = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(SystemStatus));
+                var callWebhook = new CallWebhook(config, telemetry);
+                var info = await callWebhook.GetCallRecordsSubscriptionInfo(new Uri(webhookUrlString));
+
+                if (info.Exists)
+                {
+                    this.CallWebhookState = CallWebhookSubscriptionState.Active;
+                    this.CallWebhookExpiry = info.ExpirationDateTime;
+                }
+                else
+                {
+                    this.CallWebhookState = CallWebhookSubscriptionState.Missing;
+                }
+
+                MemoryCache.Default.Set(
+                    cacheKey,
+                    new CachedCallWebhookStatus { State = this.CallWebhookState, Expiry = this.CallWebhookExpiry, Detail = this.CallWebhookStatusDetail },
+                    DateTimeOffset.UtcNow.AddMinutes(5));
+            }
+            catch (Exception ex)
+            {
+                this.CallWebhookState = CallWebhookSubscriptionState.Error;
+                this.CallWebhookStatusDetail = ex.Message;
+            }
+        }
+
+        private class CachedCallWebhookStatus
+        {
+            public CallWebhookSubscriptionState State { get; set; }
+            public DateTimeOffset? Expiry { get; set; }
+            public string Detail { get; set; }
+        }
+    }
+
+    /// <summary>
+    /// State of the Teams call-records webhook subscription, surfaced on the homepage.
+    /// </summary>
+    public enum CallWebhookSubscriptionState
+    {
+        /// <summary>Teams calls import is switched off, so no subscription is expected.</summary>
+        Disabled,
+
+        /// <summary>A matching call-records subscription is active in Microsoft Graph.</summary>
+        Active,
+
+        /// <summary>Calls import is on but no matching subscription was found (the importer registers/renews it each cycle).</summary>
+        Missing,
+
+        /// <summary>Calls import is on but the subscription status couldn't be checked (e.g. a Graph error).</summary>
+        Error,
     }
 
     public class UnknownConfigSystemStatus : SystemStatus
