@@ -12,7 +12,7 @@ namespace App.ControlPanel.Engine
         }
         public static void AddToWindowsEventLog(string msg, bool isError)
         {
-            var buildLabel = System.Configuration.ConfigurationManager.AppSettings["BuildLabel"] ?? "Unknown build";
+            var buildLabel = Common.Entities.BuildConstants.BuildLabel;
             using (var eventLog = new EventLog("Application"))
             {
                 eventLog.Source = "Application";

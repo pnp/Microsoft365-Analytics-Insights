@@ -64,7 +64,7 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
             var stats = AnonUsageStatsModelLoader.Load(_tenantId, lastSettings);
             stats.TableStats = await GetStatsFromSql();
             stats.DataPointsFromAITotal = await _db.TeamChannelStats.Where(s => s.SentimentScore.HasValue).CountAsync();
-            stats.BuildVersionLabel = System.Configuration.ConfigurationManager.AppSettings["BuildLabel"];
+            stats.BuildVersionLabel = Common.Entities.BuildConstants.BuildLabel;
             return stats;
         }
 
