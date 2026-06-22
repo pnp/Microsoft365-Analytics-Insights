@@ -50,7 +50,7 @@ namespace App.ControlPanel
             NewConfig();
 
             // Clear debug UI
-            var buildLabel = System.Configuration.ConfigurationManager.AppSettings["BuildLabel"];
+            var buildLabel = Common.Entities.BuildConstants.BuildLabel;
             this.Text = "Office 365 Advanced Analytics Engine Installation - " + buildLabel;
 #if DEBUG
             this.Text += " - DEBUG";

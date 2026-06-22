@@ -116,6 +116,10 @@ jobs:
         run: |
           year=$(date +%Y)
           find ./src -name AssemblyInfo.cs | xargs sed -i "s/© __year__/© $year/"
+      - name: Build label substitution
+        shell: bash
+        run: |
+          sed -i "s|\"DEV_BUILD\"|\"${{ env.BuildLabel }}\"|" "src/AnalyticsEngine/Common/Entities/BuildConstants.cs"
       - name: Config substitutions
         uses: devops-actions/variable-substitution@v2.0.0
         with:

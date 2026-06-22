@@ -78,6 +78,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="BaseEntity.cs" />
+    <Compile Include="BuildConstants.cs" />
     <Compile Include="Config\AppConfig.cs" />
     <Compile Include="Config\AppConnectionStrings.cs" />
     <Compile Include="Config\ImportConfig.cs" />
