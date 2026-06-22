@@ -1,13 +1,17 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.Entities.Teams;
 using DataUtils;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
@@ -121,6 +125,48 @@ namespace Tests.UnitTests
             // We should have two items, each one loaded on a seperate page
             var fakeData = await loader.LoadReportData();
             Assert.IsTrue(fakeData.Count() == 2);
+        }
+
+        /// <summary>
+        /// Regression: Teams audio/video/screen-share durations were stored with TimeSpan.Seconds
+        /// (the 0-59 seconds COMPONENT), silently truncating any duration of a minute or more
+        /// (e.g. PT45M -> 0). They must be stored as total seconds.
+        /// </summary>
+        [TestMethod]
+        public void TeamsUserUsageLoader_DurationsUseTotalSecondsNotComponent()
+        {
+            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var loader = new TestableTeamsUserUsageLoader(telemetry);
+
+            var page = new TeamsUserActivityUserDetail
+            {
+                UserPrincipalName = "duration-test@contoso.com",
+                AudioDuration = "PT1H2M3S",       // 3723s total; old .Seconds gave 3
+                VideoDuration = "PT45M",          // 2700s total; old .Seconds gave 0
+                ScreenShareDuration = "PT2M30S",  // 150s total; old .Seconds gave 30
+            };
+
+            var log = loader.Populate(page);
+
+            Assert.AreEqual(3723, log.AudioDurationSeconds, "Audio duration must be total seconds, not the 0-59 component");
+            Assert.AreEqual(2700, log.VideoDurationSeconds, "Video duration must be total seconds, not the 0-59 component");
+            Assert.AreEqual(150, log.ScreenShareDurationSeconds, "Screen-share duration must be total seconds, not the 0-59 component");
+        }
+
+        /// <summary>
+        /// Test-only subclass that reaches the protected PopulateReportSpecificMetadata without a
+        /// live Graph client (the client/cache/filter are only used during paging, not here).
+        /// </summary>
+        private class TestableTeamsUserUsageLoader : TeamsUserUsageLoader
+        {
+            public TestableTeamsUserUsageLoader(ILogger telemetry) : base(null, null, null, telemetry) { }
+
+            public GlobalTeamsUserUsageLog Populate(TeamsUserActivityUserDetail page)
+            {
+                var log = new GlobalTeamsUserUsageLog();
+                PopulateReportSpecificMetadata(log, page);
+                return log;
+            }
         }
     }
 }

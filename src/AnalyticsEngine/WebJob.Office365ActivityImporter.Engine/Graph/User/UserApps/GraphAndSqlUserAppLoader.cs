@@ -3,10 +3,12 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -40,7 +42,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             // Get users with account enabled set, or without any account enabled value (exclude users with account definately disabled).
             // ...plus users with email address that's not external
             var usersWithLicenses = await _db.users.Include(u => u.LicenseLookups)
-                                .Where(u => ((u.AccountEnabled.HasValue && u.AccountEnabled.HasValue) || !u.AccountEnabled.HasValue)
+                                .Where(u => ((u.AccountEnabled.HasValue && u.AccountEnabled.Value) || !u.AccountEnabled.HasValue)
                                     && !string.IsNullOrEmpty(u.UserPrincipalName) && u.UserPrincipalName.Contains("@") && !u.UserPrincipalName.Contains("#ext#"))
                                 .ToListAsync();
 
@@ -175,11 +177,70 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                     }
                 }
 
-                // To-do: add paging
-                results.Add(r.Key, new UserAppsLoadState<UserTeamApp> { Results = userApps?.Apps, Retry = throttledRequestInBatch });
+                // Follow @odata.nextLink so users with more installed apps than fit on one Graph page
+                // aren't silently truncated to the first page.
+                List<UserTeamApp> allApps = null;
+                if (userApps != null)
+                {
+                    allApps = await CollectAllAppPagesAsync(userApps, GetNextAppsPageAsync);
+                }
+                results.Add(r.Key, new UserAppsLoadState<UserTeamApp> { Results = allApps, Retry = throttledRequestInBatch });
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// Walks <c>@odata.nextLink</c> from a first page of a user's installed apps and returns every
+        /// app across all pages. The page fetch is a delegate so multi-page paging can be unit-tested
+        /// with a fake adaptor (no live tenant that returns more than one page is required). A safety
+        /// cap guards against a malformed / looping nextLink.
+        /// </summary>
+        internal static async Task<List<UserTeamApp>> CollectAllAppPagesAsync(
+            UserTeamAppResponse firstPage,
+            Func<string, Task<UserTeamAppResponse>> fetchNextPageAsync)
+        {
+            var apps = new List<UserTeamApp>();
+            var page = firstPage;
+
+            var safety = 1000;
+            while (page != null && safety-- > 0)
+            {
+                if (page.Apps != null)
+                {
+                    apps.AddRange(page.Apps);
+                }
+                if (string.IsNullOrEmpty(page.OdataNextLink))
+                {
+                    break;
+                }
+                page = await fetchNextPageAsync(page.OdataNextLink);
+            }
+            return apps;
+        }
+
+        /// <summary>
+        /// Fetches one further page of a user's installed apps from a Graph <c>@odata.nextLink</c>.
+        /// Virtual so tests can supply canned pages without a live Graph client.
+        /// </summary>
+        protected virtual async Task<UserTeamAppResponse> GetNextAppsPageAsync(string nextLink)
+        {
+            var requestInfo = new RequestInformation
+            {
+                HttpMethod = Method.GET,
+                URI = new Uri(nextLink),
+            };
+
+            var stream = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo);
+            if (stream == null)
+            {
+                return null;
+            }
+            using (var reader = new StreamReader(stream))
+            {
+                var body = await reader.ReadToEndAsync();
+                return JsonConvert.DeserializeObject<UserTeamAppResponse>(body);
+            }
         }
 
         public override async Task Save(Dictionary<string, List<UserTeamApp>> pendingSave)

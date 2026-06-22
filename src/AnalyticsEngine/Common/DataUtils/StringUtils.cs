@@ -284,19 +284,39 @@ namespace DataUtils
         }
 
         /// <summary>
-        /// Finds 'SPOInsightsDev' in 'Initial Catalog=SPOInsightsDev;' when propName='initial catalog'
+        /// Finds 'SPOInsightsDev' in 'Initial Catalog=SPOInsightsDev;' when propName='initial catalog'.
+        /// The value runs to the next ';' or, when the property is the last one with no trailing ';',
+        /// to the end of the string. Returns an empty string when the property is not present (or the
+        /// input is null/empty) rather than throwing.
         /// </summary>
         /// <param name="fullString"></param>
         /// <param name="propName"></param>
         public static string FindValueForProp(string fullString, string propName)
         {
-            int propStart = fullString.IndexOf(propName + "=", StringComparison.CurrentCultureIgnoreCase);
-            int propNameLength = propName.Length + "=".Length;
-            int propValStart = propStart + propNameLength;
-            int propValEnd = fullString.IndexOf(";", propValStart);
-            string returnVal = fullString.Substring(propValStart, propValEnd - propValStart);
+            if (string.IsNullOrEmpty(fullString) || string.IsNullOrEmpty(propName))
+            {
+                return string.Empty;
+            }
 
-            return returnVal;
+            int propStart = fullString.IndexOf(propName + "=", StringComparison.CurrentCultureIgnoreCase);
+            if (propStart == -1)
+            {
+                // Property not present in the string.
+                return string.Empty;
+            }
+
+            int propValStart = propStart + propName.Length + "=".Length;
+
+            // Value ends at the next ';', or - when this is the last property with no trailing ';' -
+            // at the end of the string. The old code fed the -1 from a missing ';' straight into
+            // Substring's length argument and threw ArgumentOutOfRangeException.
+            int propValEnd = fullString.IndexOf(";", propValStart, StringComparison.Ordinal);
+            if (propValEnd == -1)
+            {
+                propValEnd = fullString.Length;
+            }
+
+            return fullString.Substring(propValStart, propValEnd - propValStart);
         }
 
         static char SINGLE_QUOTE = char.Parse("\"");

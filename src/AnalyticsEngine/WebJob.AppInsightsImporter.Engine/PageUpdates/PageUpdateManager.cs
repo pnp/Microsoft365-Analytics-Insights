@@ -142,16 +142,27 @@ namespace WebJob.AppInsightsImporter.Engine
                     if (!chunkByUrl.TryGetValue(urlToUpdate.FullUrl, out var correspondingPageUpdates))
                         continue;
 
-                    // There can be multiple updates across several events. Compile all into one new update
-                    var compiledUpdate = new PageUpdateEventAppInsightsQueryResult(correspondingPageUpdates);
+                    try
+                    {
+                        // There can be multiple updates across several events. Compile all into one new update
+                        var compiledUpdate = new PageUpdateEventAppInsightsQueryResult(correspondingPageUpdates);
 
-                    var urlMetadataUpdated = await UpdateUrlMetadataWith(urlToUpdate, compiledUpdate, context, urlMetadataFieldNameCache);
+                        var urlMetadataUpdated = await UpdateUrlMetadataWith(urlToUpdate, compiledUpdate, context, urlMetadataFieldNameCache);
 
-                    var commentsOrLikesUpdated = await UpdateCommentsOrLikes(urlToUpdate, compiledUpdate, context, userCache, langCache);
+                        var commentsOrLikesUpdated = await UpdateCommentsOrLikes(urlToUpdate, compiledUpdate, context, userCache, langCache);
 
-                    lock (updatedUrls)
-                        if (urlMetadataUpdated || commentsOrLikesUpdated)
-                            updatedUrls.Add(urlToUpdate.FullUrl);
+                        lock (updatedUrls)
+                            if (urlMetadataUpdated || commentsOrLikesUpdated)
+                                updatedUrls.Add(urlToUpdate.FullUrl);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Don't let one bad page-update abort the whole chunk (up to 1000 URLs). The most
+                        // likely culprit is an uncaught DbUpdateException from a comment/like whose user or
+                        // language insert fails - which previously escaped every catch above it and stalled
+                        // the importer for months. Log the full error, skip this URL, and keep going.
+                        _debugTracer.LogError(ex, $"Failed applying page-update metadata for URL '{urlToUpdate.FullUrl}': {CommonExceptionHandler.GetErrorText(ex)}. Skipping this URL.");
+                    }
                 }
 
                 try

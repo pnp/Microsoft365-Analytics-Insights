@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Diagnostics;
+using Tests.FakeDataGen.Seeding;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
@@ -35,6 +36,7 @@ namespace Tests.FakeDataGen.StressTests
             int totalEvents = GetIntegerInput("Total copilot events to generate", 5000, 1, 1000000);
             int batchSize = GetIntegerInput("Events per commit batch", 500, 1, 100000);
             int maxResourcesPerEvent = GetIntegerInput("Max accessed resources per event", 5, 0, 50);
+            int distinctUsers = GetIntegerInput("Distinct users to seed (with departments, job titles, licenses)", 1000, 1, 200000);
             bool includeAgents = GetBooleanInput("Include agent data", true);
             bool collectGarbageEachBatch = GetBooleanInput("Force GC after each batch", false);
             bool verbose = GetBooleanInput("Verbose output", false);
@@ -58,6 +60,7 @@ namespace Tests.FakeDataGen.StressTests
             Console.WriteLine($"  Total events: {totalEvents:N0}");
             Console.WriteLine($"  Batches: {batchCount:N0} x {batchSize:N0} events");
             Console.WriteLine($"  Up to {(long)totalEvents * maxResourcesPerEvent:N0} accessed resource records");
+            Console.WriteLine($"  Distinct users: {distinctUsers:N0} (seeded with departments, job titles, company, location + licenses)");
             Console.WriteLine($"  Mode: {(commitToSql ? "Full pipeline (staging + SQL commit)" : "Staging only (in-memory)")}");
             Console.WriteLine();
             Console.WriteLine("Press any key to start test...");
@@ -75,6 +78,12 @@ namespace Tests.FakeDataGen.StressTests
                         db.Database.Initialize(force: false);
                     }
                     Console.WriteLine("Database ready.");
+
+                    // Seed a pool of users with realistic metadata (departments, job titles,
+                    // company, locations) + licenses so the audit_events committed below link to
+                    // real users and copilot reports sliced by department / job title have data.
+                    Console.WriteLine($"Seeding {distinctUsers:N0} users with metadata...");
+                    SeedUsersWithMetadata(connectionString, distinctUsers);
                 }
                 catch (Exception ex)
                 {
@@ -87,6 +96,10 @@ namespace Tests.FakeDataGen.StressTests
 
             var result = new StressTestResult { Success = true };
             var random = new Random(42); // Fixed seed for reproducibility
+
+            // UPN pool the events draw from. Matches the users seeded above (when committing to
+            // SQL) so every event links to a metadata-rich user; harmless in staging-only mode.
+            var userCatalogue = BuildUserCatalogue(distinctUsers);
 
             try
             {
@@ -106,7 +119,7 @@ namespace Tests.FakeDataGen.StressTests
 
                     try
                     {
-                        long batchEvents = RunBatch(eventsThisBatch, maxResourcesPerEvent, includeAgents, commitToSql, connectionString, random);
+                        long batchEvents = RunBatch(eventsThisBatch, maxResourcesPerEvent, includeAgents, commitToSql, connectionString, userCatalogue, random);
 
                         totalEventsProcessed += batchEvents;
                         _memoryMonitor.UpdatePeak();
@@ -171,7 +184,7 @@ namespace Tests.FakeDataGen.StressTests
         }
 
         private long RunBatch(int eventCount, int maxResourcesPerEvent, bool includeAgents,
-            bool commitToSql, string connectionString, Random random)
+            bool commitToSql, string connectionString, IReadOnlyList<string> userCatalogue, Random random)
         {
             // Use a fake connection string for staging-only mode; real one for SQL commits
             var effectiveConnectionString = commitToSql ? connectionString : "Server=fake;Database=fake;";
@@ -179,14 +192,15 @@ namespace Tests.FakeDataGen.StressTests
             var manager = new CopilotAuditEventManager(effectiveConnectionString, new FakeCopilotMetadataLoader(),
                 quietLogger);
 
-            // Build all events first, tracking their IDs for prerequisite inserts
-            var eventIds = new List<Guid>(eventCount);
+            // Build all events first, tracking their IDs + owning user UPN for prerequisite inserts
+            var eventIds = new List<(Guid Id, string Upn)>(eventCount);
             var sw = Stopwatch.StartNew();
 
             for (int i = 0; i < eventCount; i++)
             {
                 var eventId = Guid.NewGuid();
-                eventIds.Add(eventId);
+                var upn = userCatalogue[random.Next(userCatalogue.Count)];
+                eventIds.Add((eventId, upn));
 
                 var commonEvent = new CommonAuditEvent
                 {
@@ -196,7 +210,7 @@ namespace Tests.FakeDataGen.StressTests
                     User = new User
                     {
                         AzureAdId = Guid.NewGuid().ToString(),
-                        UserPrincipalName = $"stressuser{random.Next(1, 1000)}@contoso.com"
+                        UserPrincipalName = upn
                     }
                 };
 
@@ -210,7 +224,7 @@ namespace Tests.FakeDataGen.StressTests
             {
                 // Pre-insert audit_events rows so the copilot_chats FK constraint is satisfied
                 sw.Restart();
-                Console.WriteLine($"  Inserting {eventIds.Count} prerequisite audit_events rows...");
+                Console.WriteLine($"  Inserting {eventIds.Count} prerequisite audit_events rows (linked to seeded users)...");
                 InsertPrerequisiteAuditEvents(connectionString, eventIds);
                 Console.WriteLine($"  Prerequisite audit_events insert: {sw.ElapsedMilliseconds:N0}ms");
 
@@ -224,25 +238,77 @@ namespace Tests.FakeDataGen.StressTests
         }
 
         /// <summary>
-        /// Bulk-inserts minimal audit_events rows so the copilot_chats FK constraint is satisfied.
+        /// Inserts audit_events rows (each linked to its seeded, metadata-rich user) so the
+        /// copilot_chats FK constraint is satisfied and copilot data is attributed to real users.
         /// Fully synchronous to avoid async deadlocks on .NET Framework 4.8.
         /// </summary>
-        private void InsertPrerequisiteAuditEvents(string connectionString, List<Guid> eventIds)
+        private void InsertPrerequisiteAuditEvents(string connectionString, List<(Guid Id, string Upn)> eventIds)
         {
             using (var conn = new SqlConnection(connectionString))
             {
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "INSERT INTO audit_events (id, time_stamp) VALUES (@id, @ts)";
-                    var pId = cmd.Parameters.AddWithValue("@id", DBNull.Value);
-                    var pTs = cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow);
+                    // Link each audit_event to its seeded user so copilot reports sliced by
+                    // department / job title / license have real data. Users are pre-seeded in
+                    // SeedUsersWithMetadata, so the join always resolves.
+                    cmd.CommandText = @"
+INSERT INTO audit_events (id, time_stamp, user_id)
+SELECT @id, @ts, u.id
+FROM users u
+WHERE u.user_name = @upn;";
+                    var pId = cmd.Parameters.Add("@id", System.Data.SqlDbType.UniqueIdentifier);
+                    var pTs = cmd.Parameters.Add("@ts", System.Data.SqlDbType.DateTime);
+                    var pUpn = cmd.Parameters.Add("@upn", System.Data.SqlDbType.NVarChar, 400);
 
-                    foreach (var id in eventIds)
+                    foreach (var ev in eventIds)
                     {
-                        pId.Value = id;
+                        pId.Value = ev.Id;
+                        pTs.Value = DateTime.UtcNow;
+                        pUpn.Value = ev.Upn;
                         cmd.ExecuteNonQuery();
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Builds the UPN pool the stress events draw from. Matches the format used by
+        /// <see cref="UserMetadataSeeder.SeedUsers"/> so events line up with the seeded users.
+        /// </summary>
+        private static List<string> BuildUserCatalogue(int count)
+        {
+            var list = new List<string>(count);
+            for (int i = 0; i < count; i++) list.Add($"stressuser{i}@contoso.com");
+            return list;
+        }
+
+        /// <summary>
+        /// Seeds the shared metadata lookups + license catalogue, then a pool of users carrying
+        /// department, job title, company, location (and other) metadata plus random licenses, via
+        /// the same idempotent helper used by the other stress tests. Re-runnable: existing stress
+        /// users are left untouched.
+        /// </summary>
+        private static void SeedUsersWithMetadata(string connectionString, int userCount)
+        {
+            var random = new Random(123);
+            using (var conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+                UserMetadataSeeder.EnsureMetadataLookups(conn);
+                UserMetadataSeeder.EnsureLicenseTypes(conn);
+                var licenseIds = UserMetadataSeeder.LoadLicenseTypeIds(conn);
+
+                var seeded = UserMetadataSeeder.SeedUsers(conn, userCount, random);
+                Console.WriteLine($"  Seeded {seeded.Count:N0} new users with department/job-title/company/location " +
+                                  $"metadata (existing stress users left untouched).");
+
+                if (seeded.Count > 0 && licenseIds.Count > 0)
+                {
+                    var newUserIds = new List<int>(seeded.Count);
+                    foreach (var u in seeded) newUserIds.Add(u.Id);
+                    int assigned = UserMetadataSeeder.AssignRandomLicenses(conn, newUserIds, licenseIds, random, maxLicensesPerUser: 2);
+                    Console.WriteLine($"  Assigned {assigned:N0} license(s) across newly-created users.");
                 }
             }
         }

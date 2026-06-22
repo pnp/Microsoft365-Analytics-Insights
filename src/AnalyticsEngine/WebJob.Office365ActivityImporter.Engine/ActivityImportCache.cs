@@ -2,6 +2,7 @@
 using DataUtils;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities;
@@ -287,8 +288,13 @@ namespace WebJob.Office365ActivityImporter.Engine
             }
             catch (System.Data.Entity.Infrastructure.DbUpdateException ex)
             {
-                const string PRIMARY_KEY_VIOLATION = "Violation of PRIMARY KEY constraint 'PK_processed_audit_events'. Cannot insert duplicate key in object 'dbo.ignored_audit_events'";
-                if (CommonExceptionHandler.GetErrorText(ex).Contains(PRIMARY_KEY_VIOLATION))
+                // Detect duplicate-key violations by SQL error number (2601/2627) - the same robust
+                // approach used by DBLookupCache. The previous hard-coded message match never fired
+                // (it named the wrong constraint, PK_processed_audit_events, for the
+                // ignored_audit_events table), so the dedup retry was dead code AND every genuine
+                // DbUpdateException was silently swallowed.
+                var sqlException = ex.InnerException?.InnerException as SqlException;
+                if (sqlException != null && (sqlException.Number == 2601 || sqlException.Number == 2627))
                 {
                     await DeleteIgnoredEvents(ignoreList, db);
 
@@ -297,6 +303,12 @@ namespace WebJob.Office365ActivityImporter.Engine
                     // committed to the ignored table), causing them to be re-processed on the next run.
                     db.ignored_audit_events.AddRange(ignoreList);
                     await db.SaveChangesAsync();
+                }
+                else
+                {
+                    // Not a duplicate-key error - don't swallow a genuine DB failure (timeout,
+                    // deadlock, connection drop, etc.); surface it so the import fails loudly.
+                    throw;
                 }
             }
             Console.WriteLine($"Saved {ignoreList.Count.ToString("n0")} events to ignore-list.");
