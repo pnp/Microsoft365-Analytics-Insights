@@ -2,7 +2,7 @@
 
 Welcome to the **Office 365 Advanced Analytics** project home.
 
-This is an analytics engine that extracts much more analytics from M365 than is available out of the box. The core part of this solution is an ingestion engine that collects enhanced M365 usage data and stores it into a single SQL Server database. Other solutions then use this dataset to offer enhanced funcionality or reporting.
+This is an analytics engine that extracts much more analytics from M365 than is available out of the box. The core part of this solution is an ingestion engine that collects enhanced M365 usage data and stores it into a single SQL Server database. Reporting and dashboards then build on this dataset to offer enhanced functionality and insights.
 
 A list of data this engine can collect is below.
 
@@ -15,13 +15,12 @@ All the documentation is in the [wiki](https://github.com/pnp/Microsoft365-Analy
 * [Release notes](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Release%20Notes)
 * [Known issues](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Known%20Issues)
 
-There are several solutions built with the analytics engine:
+The analytics solution reports across several Microsoft 365 areas:
 
 * [Activity and Usage Analytics](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Analytics)
-* Adoptify
 * SharePoint Insights
 
-Some of these solutions require additional configuration after the analytics engine has been installed. Please review the [post-install docs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance#additional-solutions).
+Some of these areas require additional configuration after the analytics engine has been installed. Please review the [post-install docs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance#additional-solutions).
 
 ## Collected data
 
@@ -123,7 +122,7 @@ Azure SQL Database – **recommended** | Single source of reporting data. Usuall
 Azure Cache for Redis – **required**. | App caching for tokens and cognitive services lookups. | C0 Basic Pricing: <https://azure.microsoft.com/en-us/pricing/details/cache/>
 Language Cognitive Service – **optional** | Used for language, keyword, and sentiment detection. | Standard Pricing: [https://azure.microsoft.com/en-us/pricing/details/cognitive-services/language-service/\#pricing](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/language-service/#pricing)
 Service Bus – **required** for Teams call-logging. | Used to queue call notifications asynchronously. | Basic Pricing: [https://azure.microsoft.com/en-us/pricing/details/service-bus/\#pricing](https://azure.microsoft.com/en-us/pricing/details/service-bus/#pricing)
-Key vault – **required** for Adoptify only. | Used to store Graph app secrets for Adoptify. Read by logic apps. | Free - <https://azure.microsoft.com/en-us/products/key-vault>
+Key vault – **required**. | Used to store Graph app secrets used by the solution. | Free - <https://azure.microsoft.com/en-us/products/key-vault>
 Storage | Used for log & table storage if needed, and for storing any PowerShell SQL extensions needed in blob storage. | Pay-as-you-go. Normally zero costs unless detailed logging is turned on. <https://azure.microsoft.com/en-gb/pricing/details/storage/blobs/>
 Automation Account | Used to run enhanced usage profiling if wanted/enabled separately. | Likely free – the first 500 minutes per month are free. Unless datasets are very large, it’s common to not need any more. <https://azure.microsoft.com/en-us/pricing/details/automation/>
 

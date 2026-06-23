@@ -14,9 +14,6 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
             if (lastSettings != null && lastSettings.SolutionConfig != null)
             {
                 model.ConfiguredImportsEnabledDescription = lastSettings.SolutionConfig.ImportTaskSettings?.ToSettingsString();
-
-                // Just one for now
-                model.ConfiguredSolutionsEnabledDescription = Enum.GetName(typeof(SolutionImportType), lastSettings.SolutionConfig.SolutionTargeted);
             }
 
             return model;
