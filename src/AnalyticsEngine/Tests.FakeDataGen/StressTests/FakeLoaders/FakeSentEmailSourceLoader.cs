@@ -11,6 +11,11 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
     /// <see cref="GraphSentMessage"/> objects per user, without calling Microsoft Graph.
     /// Used to stress test the <c>SentEmailImporter</c> pipeline (deduplication, address
     /// resolution, sentiment scoring path, EF batching, SQL persistence).
+    ///
+    /// Each message is classified as internal or external (see <c>internalEmailPercent</c>):
+    /// internal messages address recipients on the <em>same</em> domain as the sender, external
+    /// messages address recipients on unrelated public domains, so the data has a realistic
+    /// internal/external mix.
     /// </summary>
     public class FakeSentEmailSourceLoader : ISentEmailSourceLoader
     {
@@ -45,6 +50,7 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
         private readonly int _messagesPerUser;
         private readonly int _maxRecipientsPerEmail;
         private readonly int _distinctRecipientPoolSize;
+        private readonly int _internalEmailPercent;
         private readonly bool _hasMailReadAccess;
         private readonly int _seed;
         private int _userCounter;
@@ -53,16 +59,20 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
             int messagesPerUser,
             int maxRecipientsPerEmail,
             int distinctRecipientPoolSize,
+            int internalEmailPercent = 70,
             bool hasMailReadAccess = true,
             int seed = 2024)
         {
             if (messagesPerUser < 0) throw new ArgumentOutOfRangeException(nameof(messagesPerUser));
             if (maxRecipientsPerEmail < 1) throw new ArgumentOutOfRangeException(nameof(maxRecipientsPerEmail));
             if (distinctRecipientPoolSize < 1) throw new ArgumentOutOfRangeException(nameof(distinctRecipientPoolSize));
+            if (internalEmailPercent < 0 || internalEmailPercent > 100)
+                throw new ArgumentOutOfRangeException(nameof(internalEmailPercent), "Must be between 0 and 100.");
 
             _messagesPerUser = messagesPerUser;
             _maxRecipientsPerEmail = maxRecipientsPerEmail;
             _distinctRecipientPoolSize = distinctRecipientPoolSize;
+            _internalEmailPercent = internalEmailPercent;
             _hasMailReadAccess = hasMailReadAccess;
             _seed = seed;
         }
@@ -79,9 +89,14 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
             var messages = new List<GraphSentMessage>(_messagesPerUser);
             var fromAddress = !string.IsNullOrEmpty(user?.Mail) ? user.Mail : $"stress-{userIndex}@stress.local";
             var fromName = user?.UserPrincipalName ?? fromAddress;
+            var senderDomain = GetDomain(fromAddress);
 
             for (int i = 0; i < _messagesPerUser; i++)
             {
+                // Internal emails address recipients on the sender's own domain; external ones
+                // use unrelated public domains. random.Next(100) < percent gives ~percent% internal.
+                bool isInternal = random.Next(100) < _internalEmailPercent;
+
                 var msg = new GraphSentMessage
                 {
                     // Stable id: user index + sequence => unique per user, reproducible across runs.
@@ -92,7 +107,7 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
                     {
                         EmailAddress = new GraphEmailAddress { Name = fromName, Address = fromAddress }
                     },
-                    ToRecipients = BuildRecipients(random)
+                    ToRecipients = BuildRecipients(random, isInternal, senderDomain)
                 };
 
                 if (includeBody)
@@ -118,14 +133,15 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
             });
         }
 
-        private List<GraphEmailRecipient> BuildRecipients(Random random)
+        private List<GraphEmailRecipient> BuildRecipients(Random random, bool isInternal, string senderDomain)
         {
             int count = 1 + random.Next(_maxRecipientsPerEmail);
             var list = new List<GraphEmailRecipient>(count);
             for (int i = 0; i < count; i++)
             {
                 int slot = random.Next(_distinctRecipientPoolSize);
-                var domain = DomainPool[slot % DomainPool.Length];
+                // Internal => same domain as the sender; external => an unrelated public domain.
+                var domain = isInternal ? senderDomain : DomainPool[slot % DomainPool.Length];
                 var address = $"recipient-{slot:D6}@{domain}";
                 list.Add(new GraphEmailRecipient
                 {
@@ -137,6 +153,16 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
                 });
             }
             return list;
+        }
+
+        /// <summary>
+        /// Returns the domain part (after the last '@') of an address, falling back to
+        /// <c>stress.local</c> when the address has no domain.
+        /// </summary>
+        private static string GetDomain(string address)
+        {
+            int at = address?.LastIndexOf('@') ?? -1;
+            return at >= 0 && at < address.Length - 1 ? address.Substring(at + 1) : "stress.local";
         }
     }
 }

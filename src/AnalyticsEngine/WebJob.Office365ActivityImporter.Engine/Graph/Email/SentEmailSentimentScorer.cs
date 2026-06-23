@@ -77,7 +77,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 }
                 catch (Exception ex)
                 {
-                    _telemetry.LogWarning($"Cognitive batch analysis failed for {docs.Count} message(s): {ex.Message}");
+                    // Log the full error (with stack trace) but continue: sentiment is best-effort, so
+                    // a failed batch must never fail the whole email import - the affected messages just
+                    // get no score and the rest of the run proceeds.
+                    _telemetry.LogError(ex, $"Cognitive batch sentiment analysis failed for {docs.Count} message(s); continuing without scores for this batch.");
                 }
             }
 

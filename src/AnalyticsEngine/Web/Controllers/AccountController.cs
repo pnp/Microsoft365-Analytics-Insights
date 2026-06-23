@@ -4,7 +4,7 @@ using Microsoft.Owin.Security.OpenIdConnect;
 using System.Web;
 using System.Web.Mvc;
 
-namespace WebApplication2.Controllers
+namespace Web.AnalyticsWeb.Controllers
 {
     public class AccountController : Controller
     {

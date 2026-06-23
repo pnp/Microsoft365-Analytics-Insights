@@ -57,3 +57,34 @@ When writing or reviewing such code, call this out in the PR description / revie
 4. **For a one-off schema cleanup** (e.g. dropping orphan tables that were created by an older dev-only migration that we no longer want to ship), add a defensive follow-up migration that uses `IF OBJECT_ID(...) IS NOT NULL DROP TABLE [...]` so it is safe on fresh installs *and* on databases that already have the orphan tables.
 5. **Tests fail at `AnalyticsEntitiesContext..ctor` with `AutomaticDataLossException`?** Don't enable `AutomaticMigrationDataLossAllowed = true` to make them pass — that masks the real problem and silently drops customer data. Instead, fix the snapshot so the current model matches the latest migration's Target, or add an explicit cleanup migration.
 6. **Reproducing snapshot mismatches locally**: drop `(localdb)\MSSQLLocalDB::UnitTestingAnalytics` (the default test DB per `Tests.UnitTests/App.Debug.config`) to force a fresh migration replay; that's the fastest way to surface a snapshot/model mismatch before pushing.
+
+## Installer (App.ControlPanel) UI automation & screenshots
+
+Hard-won lessons for driving / screenshotting the built installer (`AnalyticsInstaller.exe` — the `App.ControlPanel` WinForms app) with PowerShell + UI Automation. The app's UIA tree is **sparse** and many standard controls surface as pattern-less `Pane`s with no Invoke/Toggle/Value patterns, so prefer Win32 window messages over UIA patterns.
+
+### Before launching
+- **Clear Mark-of-the-Web first.** A freshly built/copied output folder carries MOTW on the exe + DLLs, so Defender SmartScreen ("Windows protected your PC") blocks the launch and *hangs* `Start-Process` on the modal warning. Run `Get-ChildItem <outputDir> -Recurse -File | Unblock-File` before launching.
+- **The workstation must be UNLOCKED.** When the session is locked, `CopyFromScreen` (screenshots) and synthetic input (`mouse_event`/`keybd_event`/`SetForegroundWindow`) silently fail — only window messages (`SendMessage`/`BM_CLICK`/`WM_SETTEXT`) get through. `LogonUI.exe` can linger after unlock, so confirm with `CopyFromScreen`/`GetForegroundWindow`, not the LogonUI process.
+
+### Navigating the UI
+- **Welcome → wizard:** tick "I accept … at my own risk" then click "Install Solution" (`btnStartInstall`) to reveal the config tabs. This is *navigation, not an install*. The tab control's HWND already exists (hidden) on the Welcome screen, so detect wizard state with `IsWindowVisible`, not mere presence.
+- **Menus need the keyboard, not synthetic mouse clicks.** `Alt`+mnemonic opens them: File = `Alt+F` then `O` ("&Open Configuration File"). "Window" / "Solution Tests Configuration" have no mnemonic — use `Alt`, arrow keys, `Enter`. Requires the window to be foreground (hence unlocked).
+- **UIA `Invoke` on a menu item that opens a modal dialog BLOCKS / times out** until that dialog closes. Drive menus by keyboard, or run the Invoke in a background job while the main script handles the dialog.
+- **Tabs are a native `SysTabControl32`.** Read the selected index with `TCM_GETCURSEL`; to switch reliably, click the first header to focus the strip then `Ctrl+Tab` (auto-scrolls and fires `SelectedIndexChanged`). There are 8 tabs by default; loading a config (or enabling Web/Audit import on Targets) reveals the 9th, **SharePoint**.
+
+### Dialogs, fields, buttons
+- **Owned windows are UIA *Descendants*, not RootElement children.** The open-config dialog (custom title **"Load Configuration Details"**, not "Open"), the **"Enter Password"** form, and every MessageBox live under the main window — find them with `TreeScope::Descendants` filtered by process id.
+- **File-name field:** put the path on the clipboard and `Ctrl+V` into the focused field, then `Enter` (its inner edit isn't reliably reachable via UIA `SetValue`).
+- **Password fields:** UIA `ValuePattern.SetValue` throws on them; use `WM_SETTEXT` to the textbox HWND, then submit via the AcceptButton (`Enter`) or `BM_CLICK`.
+- **Buttons / checkboxes:** `BM_CLICK` via `SendMessage` to the control HWND (located by window text + class "BUTTON") is the most reliable click and ignores z-order/focus.
+- **Modal-stack deadlock:** `SendMessage`/`BM_CLICK` to a control whose UI thread is in a *nested* modal loop HANGS. Only message the innermost **enabled** window. Unwind a modal stack with the keyboard (`Enter` = OK, `Esc` = Cancel) against the window whose `IsEnabled = true`.
+- Sending one key sequence then a short retry loop can open the same modal **twice** — send once and poll patiently instead.
+
+### Solution Tests Configuration
+- Window menu → "Solution Tests Configuration" → "Autodetect from installer configuration" pulls SQL/FTP details from the deployed resources, then pops an **"Autodetect Complete"** MessageBox that must be dismissed *before* "Save" will register. SQL/FTP passwords are masked (`PasswordChar`), so the window is safe to screenshot.
+
+### Capturing
+- Capture the window region via `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` (tighter than `GetWindowRect`) + `Graphics.CopyFromScreen`. Raise the window first with `SetWindowPos(HWND_TOPMOST)` — more reliable than `SetForegroundWindow` alone.
+
+### Safety
+- **"Install/Upgrade" starts a real, irreversible Azure deployment immediately** — no confirmation prompt, and it re-saves the loaded config file first. **"Test Configuration" is read-only.** When a real (non-sanitized) config is loaded, do NOT screenshot the Credentials / Azure Config tabs (real secrets) — only the tests-config window (passwords masked), the test results, and the deploy-progress log are safe to capture.
