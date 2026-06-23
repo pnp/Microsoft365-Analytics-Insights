@@ -14,7 +14,7 @@ namespace Web.AnalyticsWeb.Controllers
         private static readonly HttpClient _httpClient = new HttpClient();
 
         // POST: api/SiteTokenAPI
-        // For returning to teams-permission-grant JS app the server-side generated OAuth token for user
+        // For returning to the admin-app JS app the server-side generated OAuth token for user
         public async Task<JSonToken> Post()
         {
             var auth = await base.GetCachedUserAccessTokenAsync();

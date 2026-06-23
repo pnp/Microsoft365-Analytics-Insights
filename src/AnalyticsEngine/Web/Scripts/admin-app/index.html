@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <link rel="shortcut icon" href="/favicon.ico" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#000000" />
+
+  <!-- Bootstrap 4 for UI components (kept from the original app for visual parity) -->
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css"
+    integrity="sha384-Vkoo8x4CGsO3+Hhxv8T/Q5PaXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh" crossorigin="anonymous">
+
+  <title>Microsoft 365 Advanced Analytics - Admin</title>
+
+  <!--
+    Runtime configuration injected for the SPA. The API URLs are derived from the current
+    host so the same build works in any environment. The clientId/authority are only used
+    for the client-side MSAL fallback when no server-side token is available.
+  -->
+  <script>
+    window.o365AnalyticsClientId = "f7f76557-7408-4870-b51d-7dc08770df7e";
+    window.o365AnalyticsAuthority = "https://login.microsoftonline.com/ffcdb539-892e-4eef-94f6-0d9851c479ba/";
+
+    var getUrl = window.location;
+    var baseUrl = getUrl.protocol + "//" + getUrl.host + "/";
+    window.o365AnalyticsRedirectUri = baseUrl;
+
+    window.o365AnalyticsAuthAPI = baseUrl + "api/TeamsAuthAPI";
+    window.o365AnalyticsTokenAPI = baseUrl + "api/SiteTokenAPI";
+    window.o365AnalyticsUserLookupAPI = baseUrl + "api/UserDataLookup";
+  </script>
+</head>
+
+<body>
+  <noscript>You need to enable JavaScript to run this app.</noscript>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>
