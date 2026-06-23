@@ -45,6 +45,8 @@
             this.pictureBox2 = new System.Windows.Forms.PictureBox();
             this.pictureBox1 = new System.Windows.Forms.PictureBox();
             this.lblGUITargetsHeader = new System.Windows.Forms.Label();
+            this.chkCopilot = new System.Windows.Forms.CheckBox();
+            this.chkSentEmails = new System.Windows.Forms.CheckBox();
             this.pnlSolutionSelectionContainer.SuspendLayout();
             this.grpProductCfgInsights.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).BeginInit();
@@ -70,6 +72,8 @@
             this.grpProductCfgInsights.Controls.Add(this.label2);
             this.grpProductCfgInsights.Controls.Add(this.label1);
             this.grpProductCfgInsights.Controls.Add(this.chkUserMetadata);
+            this.grpProductCfgInsights.Controls.Add(this.chkCopilot);
+            this.grpProductCfgInsights.Controls.Add(this.chkSentEmails);
             this.grpProductCfgInsights.Controls.Add(this.chkUserApps);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
@@ -83,7 +87,7 @@
             this.grpProductCfgInsights.Margin = new System.Windows.Forms.Padding(2);
             this.grpProductCfgInsights.Name = "grpProductCfgInsights";
             this.grpProductCfgInsights.Padding = new System.Windows.Forms.Padding(2);
-            this.grpProductCfgInsights.Size = new System.Drawing.Size(339, 372);
+            this.grpProductCfgInsights.Size = new System.Drawing.Size(339, 420);
             this.grpProductCfgInsights.TabIndex = 16;
             this.grpProductCfgInsights.TabStop = false;
             this.grpProductCfgInsights.Text = "Advanced Analytics and Insights Options:";
@@ -92,7 +96,7 @@
             // 
             this.label3.AutoSize = true;
             this.label3.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.label3.Location = new System.Drawing.Point(64, 277);
+            this.label3.Location = new System.Drawing.Point(64, 326);
             this.label3.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.label3.Name = "label3";
             this.label3.Size = new System.Drawing.Size(176, 20);
@@ -148,7 +152,7 @@
             // chkWeb
             // 
             this.chkWeb.AutoSize = true;
-            this.chkWeb.Location = new System.Drawing.Point(6, 330);
+            this.chkWeb.Location = new System.Drawing.Point(6, 379);
             this.chkWeb.Margin = new System.Windows.Forms.Padding(2);
             this.chkWeb.Name = "chkWeb";
             this.chkWeb.Size = new System.Drawing.Size(92, 17);
@@ -172,7 +176,7 @@
             // pictureBox3
             // 
             this.pictureBox3.Image = ((System.Drawing.Image)(resources.GetObject("pictureBox3.Image")));
-            this.pictureBox3.Location = new System.Drawing.Point(4, 269);
+            this.pictureBox3.Location = new System.Drawing.Point(4, 318);
             this.pictureBox3.Margin = new System.Windows.Forms.Padding(2);
             this.pictureBox3.Name = "pictureBox3";
             this.pictureBox3.Size = new System.Drawing.Size(56, 56);
@@ -182,7 +186,7 @@
             // chkAuditLog
             // 
             this.chkAuditLog.AutoSize = true;
-            this.chkAuditLog.Location = new System.Drawing.Point(6, 348);
+            this.chkAuditLog.Location = new System.Drawing.Point(6, 397);
             this.chkAuditLog.Margin = new System.Windows.Forms.Padding(2);
             this.chkAuditLog.Name = "chkAuditLog";
             this.chkAuditLog.Size = new System.Drawing.Size(135, 17);
@@ -235,6 +239,28 @@
             this.pictureBox1.TabIndex = 11;
             this.pictureBox1.TabStop = false;
             // 
+            // chkCopilot
+            // 
+            this.chkCopilot.AutoSize = true;
+            this.chkCopilot.Location = new System.Drawing.Point(4, 249);
+            this.chkCopilot.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilot.Name = "chkCopilot";
+            this.chkCopilot.Size = new System.Drawing.Size(120, 17);
+            this.chkCopilot.TabIndex = 23;
+            this.chkCopilot.Text = "Copilot interactions";
+            this.chkCopilot.UseVisualStyleBackColor = true;
+            // 
+            // chkSentEmails
+            // 
+            this.chkSentEmails.AutoSize = true;
+            this.chkSentEmails.Location = new System.Drawing.Point(4, 268);
+            this.chkSentEmails.Margin = new System.Windows.Forms.Padding(2);
+            this.chkSentEmails.Name = "chkSentEmails";
+            this.chkSentEmails.Size = new System.Drawing.Size(85, 17);
+            this.chkSentEmails.TabIndex = 24;
+            this.chkSentEmails.Text = "Sent emails";
+            this.chkSentEmails.UseVisualStyleBackColor = true;
+            // 
             // lblGUITargetsHeader
             // 
             this.lblGUITargetsHeader.AutoSize = true;
@@ -283,5 +309,7 @@
         private System.Windows.Forms.PictureBox pictureBox2;
         private System.Windows.Forms.PictureBox pictureBox1;
         private System.Windows.Forms.Label lblGUITargetsHeader;
+        private System.Windows.Forms.CheckBox chkCopilot;
+        private System.Windows.Forms.CheckBox chkSentEmails;
     }
 }
