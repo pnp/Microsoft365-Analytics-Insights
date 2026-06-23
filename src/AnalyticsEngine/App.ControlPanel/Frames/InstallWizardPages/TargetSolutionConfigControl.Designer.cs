@@ -58,10 +58,10 @@
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.pnlSolutionSelectionContainer.Controls.Add(this.grpProductCfgInsights);
-            this.pnlSolutionSelectionContainer.Location = new System.Drawing.Point(0, 114);
+            this.pnlSolutionSelectionContainer.Location = new System.Drawing.Point(0, 24);
             this.pnlSolutionSelectionContainer.Margin = new System.Windows.Forms.Padding(2);
             this.pnlSolutionSelectionContainer.Name = "pnlSolutionSelectionContainer";
-            this.pnlSolutionSelectionContainer.Size = new System.Drawing.Size(696, 471);
+            this.pnlSolutionSelectionContainer.Size = new System.Drawing.Size(696, 561);
             this.pnlSolutionSelectionContainer.TabIndex = 16;
             // 
             // grpProductCfgInsights
