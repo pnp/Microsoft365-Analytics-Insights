@@ -29,7 +29,9 @@ namespace App.ControlPanel.Controls
                         GraphUserApps = chkUserApps.Checked,
                         GraphUsersMetadata = chkUserMetadata.Checked,
                         Calls = chkCalls.Checked,
-                        WebTraffic = chkWeb.Checked
+                        WebTraffic = chkWeb.Checked,
+                        Copilot = chkCopilot.Checked,
+                        SentEmails = chkSentEmails.Checked
                     }
                 };
             }
@@ -50,6 +52,8 @@ namespace App.ControlPanel.Controls
             chkUserMetadata.Checked = value.ImportTaskSettings.GraphUsersMetadata;
             chkCalls.Checked = value.ImportTaskSettings.Calls;
             chkWeb.Checked = value.ImportTaskSettings.WebTraffic;
+            chkCopilot.Checked = value.ImportTaskSettings.Copilot;
+            chkSentEmails.Checked = value.ImportTaskSettings.SentEmails;
         }
 
 
