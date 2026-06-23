@@ -2,6 +2,7 @@
 using Common.Entities.Config;
 using Common.Entities.Redis;
 using System.Collections.Generic;
+using System.Net;
 using System.Runtime.Caching;
 using System.Threading.Tasks;
 using System.Web.Mvc;
@@ -28,35 +29,43 @@ namespace Web.AnalyticsWeb.Controllers
         {
             return View();
         }
-        public ActionResult TeamsAuthApp()
+        public ActionResult AdminApp()
         {
-            // Inject content from react output
+            // Serve the built admin SPA's index.html directly. This action exists (rather than
+            // letting IIS serve the static file) so the page is protected by [Authorize] / OIDC
+            // auth - a raw static file would bypass it. The SPA's hashed JS/CSS assets referenced
+            // by this index.html are then loaded as ordinary static files under
+            // /Scripts/admin-app/build/.
             var cache = MemoryCache.Default;
-            var fileContents = cache["filecontents"] as string;
+            var fileContents = cache["adminAppIndexHtml"] as string;
 
             if (fileContents == null)
             {
-                CacheItemPolicy policy = new CacheItemPolicy();
+                string indexFile = Server.MapPath("~/Scripts/admin-app/build/index.html");
 
-                List<string> filePaths = new List<string>();
-                string templateFile = Server.MapPath("~/Scripts/teams-permission-grant/build/index.html");
+                if (!System.IO.File.Exists(indexFile))
+                {
+                    return new HttpStatusCodeResult(HttpStatusCode.NotFound,
+                        "The admin app has not been built. Run 'npm run build' in Scripts/admin-app (or build the Web project).");
+                }
 
-                filePaths.Add(templateFile);
-
-                policy.ChangeMonitors.Add(new
-                HostFileChangeMonitor(filePaths));
-
-                // Fetch the file contents.  
-                fileContents = System.IO.File.ReadAllText(templateFile);
+                // Fetch the file contents.
+                fileContents = System.IO.File.ReadAllText(indexFile);
 
 #if !DEBUG
-                cache.Set("filecontents", fileContents, policy);
+                var policy = new CacheItemPolicy();
+                policy.ChangeMonitors.Add(new HostFileChangeMonitor(new List<string> { indexFile }));
+                cache.Set("adminAppIndexHtml", fileContents, policy);
 #endif
-
             }
 
-            this.ViewBag.Contents = fileContents;
-            return View();
+            return Content(fileContents, "text/html");
+        }
+
+        // Back-compat: the SPA used to live at /TeamsAuthApp when it only did Teams permission grants.
+        public ActionResult TeamsAuthApp()
+        {
+            return RedirectToAction("AdminApp");
         }
 
     }
