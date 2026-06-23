@@ -133,7 +133,7 @@
             this.chkUserMetadata.Name = "chkUserMetadata";
             this.chkUserMetadata.Size = new System.Drawing.Size(190, 17);
             this.chkUserMetadata.TabIndex = 16;
-            this.chkUserMetadata.Text = "User Azure AD extended metadata";
+            this.chkUserMetadata.Text = "User Entra ID extended metadata";
             this.chkUserMetadata.UseVisualStyleBackColor = true;
             this.chkUserMetadata.CheckedChanged += new System.EventHandler(this.chkUserMetadata_CheckedChanged);
             // 
