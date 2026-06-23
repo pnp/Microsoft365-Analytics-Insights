@@ -45,6 +45,46 @@
         </td>
     </tr>
     <tr>
+        <td class="header">Teams Calls Import</td>
+        <td>
+            @if (Model.CallsImportEnabled)
+            {
+                <span>Enabled</span>
+            }
+            else
+            {
+                <span>Disabled - Teams call records are not being imported</span>
+            }
+        </td>
+    </tr>
+    <tr>
+        <td class="header">Calls Webhook Subscription</td>
+        <td>
+            @if (Model.CallWebhookState == Web.AnalyticsWeb.Models.CallWebhookSubscriptionState.Active)
+            {
+                <span style="color: green; font-weight: bold;">Active</span>
+                if (Model.CallWebhookExpiry.HasValue)
+                {
+                    <text> &ndash; renews automatically; current subscription expires @Model.CallWebhookExpiry.Value.UtcDateTime.ToString("u") (UTC)</text>
+                }
+            }
+            else if (Model.CallWebhookState == Web.AnalyticsWeb.Models.CallWebhookSubscriptionState.Missing)
+            {
+                <span style="color: #b00; font-weight: bold;">No active subscription found</span>
+                <div>The importer web-job registers and renews this on every import cycle. If it stays missing, check the importer web-job is running and that its app registration has the <code>CallRecords.Read.All</code> Microsoft Graph application permission.</div>
+            }
+            else if (Model.CallWebhookState == Web.AnalyticsWeb.Models.CallWebhookSubscriptionState.Error)
+            {
+                <span style="color: #b00; font-weight: bold;">Couldn't check</span>
+                <div>@Model.CallWebhookStatusDetail</div>
+            }
+            else
+            {
+                <span>Not applicable - Teams calls import is disabled</span>
+            }
+        </td>
+    </tr>
+    <tr>
         <td class="header">SQL Server</td>
         <td>
             @Model.WebAppConfigSQL
