@@ -37,6 +37,7 @@ namespace Web.AnalyticsWeb.Controllers
         private const string CatTeamsReactions = "teams-reactions";
         private const string CatCallsOrganised = "calls-organised";
         private const string CatCallSessions = "call-sessions";
+        private const string CatCallFeedback = "call-feedback";
         private const string CatPageLikes = "page-likes";
         private const string CatPageComments = "page-comments";
         private const string CatAppInstalls = "app-installs";
@@ -50,6 +51,19 @@ namespace Web.AnalyticsWeb.Controllers
         private const string CatPowerAppShares = "powerapp-shares";
         private const string CatFlowShares = "flow-shares";
 
+        // Audit sub-types: each is a child of audit_events (linked via event_id), so they break the
+        // single "audit-events" total down by workload (Copilot, SharePoint, Power Platform, ...).
+        private const string CatCopilot = "copilot-interactions";
+        private const string CatAuditSharePoint = "audit-sharepoint";
+        private const string CatAuditExchange = "audit-exchange";
+        private const string CatAuditEntra = "audit-entra";
+        private const string CatAuditGeneral = "audit-general";
+        private const string CatAuditStream = "audit-stream";
+        private const string CatPowerAppEvents = "powerapp-events";
+        private const string CatFlowEvents = "flow-events";
+        private const string CatPowerBiEvents = "powerbi-events";
+        private const string CatCopilotStudioEvents = "copilot-studio-events";
+
         private sealed class CategoryMeta
         {
             public string Key;
@@ -62,6 +76,11 @@ namespace Web.AnalyticsWeb.Controllers
             public string UserColumn;
             /// <summary>Web hits link to a user indirectly via sessions, so they need a nested query.</summary>
             public bool IndirectViaSession;
+            /// <summary>
+            /// Audit sub-type tables (copilot_chats, event_meta_*) link to a user via
+            /// event_id -&gt; audit_events.user_id, so they need a join through audit_events.
+            /// </summary>
+            public bool ViaAuditEvent;
             /// <summary>Import-workload flags (ImportTaskSettings property names) that feed this category.</summary>
             public string[] WorkloadFlags = new string[0];
         }
@@ -105,9 +124,39 @@ namespace Web.AnalyticsWeb.Controllers
         // Ordered list that drives both the summary and the detail label lookup.
         private static readonly CategoryMeta[] CategoryMetas =
         {
-            new CategoryMeta { Key = CatAuditEvents, Label = "Audit events", SupportsDetail = true,
+            new CategoryMeta { Key = CatAuditEvents, Label = "Audit events (all, total)", SupportsDetail = true,
                 Table = "audit_events", UserColumn = "user_id", WorkloadFlags = new[] { Wf.AuditLog, Wf.Copilot },
-                Description = "SharePoint, Exchange, Entra ID, Copilot, Power Platform and other audit activity." },
+                Description = "Total of all audit activity. The workload-specific rows below (Copilot, SharePoint, Power Platform, ...) break this down; their sum can be less than the total as some events have no workload-specific metadata." },
+            new CategoryMeta { Key = CatCopilot, Label = "Copilot interactions", SupportsDetail = true,
+                Table = "copilot_chats", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
+                Description = "Microsoft 365 Copilot interactions (delivered via the Audit.General feed)." },
+            new CategoryMeta { Key = CatAuditSharePoint, Label = "SharePoint / OneDrive audit", SupportsDetail = true,
+                Table = "event_meta_sharepoint", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.AuditLog },
+                Description = "SharePoint and OneDrive audit events (file access, sharing, etc.)." },
+            new CategoryMeta { Key = CatAuditExchange, Label = "Exchange audit", SupportsDetail = true,
+                Table = "event_meta_exchange", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.AuditLog },
+                Description = "Exchange / mailbox audit events." },
+            new CategoryMeta { Key = CatAuditEntra, Label = "Entra ID audit", SupportsDetail = true,
+                Table = "event_meta_azure_ad", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.AuditLog },
+                Description = "Entra ID (Azure AD) audit events." },
+            new CategoryMeta { Key = CatAuditGeneral, Label = "General audit", SupportsDetail = true,
+                Table = "event_meta_general", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
+                Description = "Other 'general' workload audit events (Audit.General feed)." },
+            new CategoryMeta { Key = CatAuditStream, Label = "Stream events", SupportsDetail = true,
+                Table = "event_meta_stream", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
+                Description = "Microsoft Stream audit events." },
+            new CategoryMeta { Key = CatPowerAppEvents, Label = "Power Apps events", SupportsDetail = true,
+                Table = "event_meta_power_app", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
+                Description = "Power Apps launch / usage events (Audit.General feed)." },
+            new CategoryMeta { Key = CatFlowEvents, Label = "Power Automate events", SupportsDetail = true,
+                Table = "event_meta_power_automate_flow", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
+                Description = "Power Automate flow run events (Audit.General feed)." },
+            new CategoryMeta { Key = CatPowerBiEvents, Label = "Power BI events", SupportsDetail = true,
+                Table = "event_meta_power_bi", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
+                Description = "Power BI audit events (Audit.General feed)." },
+            new CategoryMeta { Key = CatCopilotStudioEvents, Label = "Copilot Studio events", SupportsDetail = true,
+                Table = "event_meta_copilot_studio", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
+                Description = "Copilot Studio (bot) audit events (Audit.General feed)." },
             new CategoryMeta { Key = CatSentEmails, Label = "Sent emails", SupportsDetail = true,
                 Table = "sent_emails", UserColumn = "user_id", WorkloadFlags = new[] { Wf.SentEmails },
                 Description = "Messages sent from the user's mailbox." },
@@ -129,6 +178,9 @@ namespace Web.AnalyticsWeb.Controllers
             new CategoryMeta { Key = CatCallSessions, Label = "Call sessions attended", SupportsDetail = true,
                 Table = "call_sessions", UserColumn = "attendee_user_id", WorkloadFlags = new[] { Wf.Calls },
                 Description = "Teams call sessions the user attended." },
+            new CategoryMeta { Key = CatCallFeedback, Label = "Call feedback", SupportsDetail = false,
+                Table = "call_feedback", UserColumn = "user_id", WorkloadFlags = new[] { Wf.Calls },
+                Description = "Call quality feedback recorded for the user." },
             new CategoryMeta { Key = CatPageLikes, Label = "Page likes", SupportsDetail = true,
                 Table = "page_likes", UserColumn = "user_id", WorkloadFlags = new[] { Wf.WebTraffic },
                 Description = "SharePoint page likes by the user." },
@@ -178,6 +230,14 @@ namespace Web.AnalyticsWeb.Controllers
                     "WHERE session_id IN (\r\n" +
                     "    SELECT id FROM sessions\r\n" +
                     $"    WHERE user_id = (SELECT id FROM users WHERE user_name = '{literal}'));";
+            }
+
+            if (meta.ViaAuditEvent)
+            {
+                return
+                    $"SELECT COUNT(*) FROM {meta.Table} c\r\n" +
+                    "INNER JOIN audit_events e ON c.event_id = e.id\r\n" +
+                    $"WHERE e.user_id = (SELECT id FROM users WHERE user_name = '{literal}');";
             }
 
             return
@@ -387,6 +447,8 @@ namespace Web.AnalyticsWeb.Controllers
                     return db.CallRecords.Where(c => c.OrganizerID == userId).CountAsync();
                 case CatCallSessions:
                     return db.CallSessions.Where(s => s.AttendeeUserID == userId).CountAsync();
+                case CatCallFeedback:
+                    return db.CallFeedback.Where(f => f.UserID == userId).CountAsync();
                 case CatPageLikes:
                     return db.UrlLikes.Where(l => l.UserID == userId).CountAsync();
                 case CatPageComments:
@@ -411,6 +473,26 @@ namespace Web.AnalyticsWeb.Controllers
                     return db.power_app_share_events.Where(s => s.SharedWithUserId == userId).CountAsync();
                 case CatFlowShares:
                     return db.power_automate_flow_share_events.Where(s => s.SharedWithUserId == userId).CountAsync();
+                case CatCopilot:
+                    return db.CopilotChats.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatAuditSharePoint:
+                    return db.sharepoint_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatAuditExchange:
+                    return db.exchange_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatAuditEntra:
+                    return db.azure_ad_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatAuditGeneral:
+                    return db.general_audit_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatAuditStream:
+                    return db.StreamEvents.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatPowerAppEvents:
+                    return db.power_app_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatFlowEvents:
+                    return db.power_automate_flow_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatPowerBiEvents:
+                    return db.power_bi_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
+                case CatCopilotStudioEvents:
+                    return db.copilot_studio_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
                 default:
                     return Task.FromResult(0);
             }
@@ -565,9 +647,53 @@ namespace Web.AnalyticsWeb.Controllers
                     return await UsageDetailAsync(db.TeamsUserDeviceUsageLog.Where(x => x.UserID == userId), take);
                 case CatUsageAppPlatform:
                     return await UsageDetailAsync(db.AppPlatformUserUsageLog.Where(x => x.UserID == userId), take);
+                case CatCopilot:
+                    return await AuditChildDetailAsync(db.CopilotChats.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatAuditSharePoint:
+                    return await AuditChildDetailAsync(db.sharepoint_events.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatAuditExchange:
+                    return await AuditChildDetailAsync(db.exchange_events.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatAuditEntra:
+                    return await AuditChildDetailAsync(db.azure_ad_events.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatAuditGeneral:
+                    return await AuditChildDetailAsync(db.general_audit_events.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatAuditStream:
+                    return await AuditChildDetailAsync(db.StreamEvents.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatPowerAppEvents:
+                    return await AuditChildDetailAsync(db.power_app_events.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatFlowEvents:
+                    return await AuditChildDetailAsync(db.power_automate_flow_events.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatPowerBiEvents:
+                    return await AuditChildDetailAsync(db.power_bi_events.Where(c => c.AuditEvent.UserId == userId), take);
+                case CatCopilotStudioEvents:
+                    return await AuditChildDetailAsync(db.copilot_studio_events.Where(c => c.AuditEvent.UserId == userId), take);
                 default:
                     return new List<UserDataDetailRowModel>();
             }
+        }
+
+        /// <summary>
+        /// Shared drill-down projection for audit sub-type tables (copilot_chats, event_meta_*) that
+        /// link to a user through audit_events. Projects the parent event's timestamp + operation.
+        /// Generic because IQueryable&lt;T&gt; is invariant, so the concrete child type must flow through.
+        /// </summary>
+        private static async Task<List<UserDataDetailRowModel>> AuditChildDetailAsync<T>(IQueryable<T> query, int take)
+            where T : Common.Entities.Entities.BaseOfficeEvent
+        {
+            var raw = await query
+                .OrderByDescending(x => x.AuditEvent.TimeStamp)
+                .Take(take)
+                .Select(x => new
+                {
+                    x.AuditEvent.TimeStamp,
+                    OperationName = x.AuditEvent.Operation != null ? x.AuditEvent.Operation.Name : null,
+                })
+                .ToListAsync();
+            return raw.Select(r => new UserDataDetailRowModel
+            {
+                Timestamp = r.TimeStamp,
+                Title = r.OperationName ?? "(audit event)",
+            }).ToList();
         }
 
         /// <summary>

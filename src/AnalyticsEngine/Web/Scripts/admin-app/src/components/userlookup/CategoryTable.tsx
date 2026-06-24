@@ -82,7 +82,7 @@ export default function CategoryTable({ upn, categories, workloads }: CategoryTa
           }
         />
         <Text size={200} className={styles.hint}>
-          Hover the info icon on any row to see the SQL query behind the count (click it to copy).
+          Click the <strong>SQL</strong> button on any row to view and copy the query behind its count.
         </Text>
         <div className={styles.list}>
           {categories.map((c) => (

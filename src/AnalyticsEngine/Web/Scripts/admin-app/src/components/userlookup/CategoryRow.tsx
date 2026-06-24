@@ -3,6 +3,9 @@ import {
   Badge,
   Button,
   Tooltip,
+  Popover,
+  PopoverTrigger,
+  PopoverSurface,
   Text,
   Table,
   TableHeader,
@@ -14,7 +17,8 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import {
-  Info16Regular,
+  Code16Regular,
+  Copy16Regular,
   ChevronDown16Regular,
   ChevronRight16Regular,
 } from '@fluentui/react-icons';
@@ -57,13 +61,22 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: '4px',
   },
-  sqlTooltip: {
+  sqlBlock: {
     fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
     fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
+    userSelect: 'text',
     margin: 0,
-    maxWidth: '520px',
+    padding: '8px',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  sqlSurface: {
+    maxWidth: '560px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
   },
   detail: {
     paddingInline: '12px',
@@ -149,18 +162,26 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
         </Text>
 
         <div className={styles.actions}>
-          <Tooltip
-            relationship="description"
-            content={<pre className={styles.sqlTooltip}>{category.sqlQuery}</pre>}
-          >
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<Info16Regular />}
-              aria-label="Show the SQL query for this count (click to copy)"
-              onClick={copySql}
-            />
-          </Tooltip>
+          <Popover withArrow trapFocus>
+            <PopoverTrigger disableButtonEnhancement>
+              <Button appearance="subtle" size="small" icon={<Code16Regular />}>
+                SQL
+              </Button>
+            </PopoverTrigger>
+            <PopoverSurface>
+              <div className={styles.sqlSurface}>
+                <Text size={200} weight="semibold">
+                  SQL to reproduce this count
+                </Text>
+                <pre className={styles.sqlBlock}>{category.sqlQuery}</pre>
+                <div>
+                  <Button appearance="primary" size="small" icon={<Copy16Regular />} onClick={copySql}>
+                    Copy to clipboard
+                  </Button>
+                </div>
+              </div>
+            </PopoverSurface>
+          </Popover>
           {canDrill && (
             <Button
               appearance="subtle"
