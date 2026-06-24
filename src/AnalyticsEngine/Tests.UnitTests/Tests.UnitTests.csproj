@@ -175,6 +175,7 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="TeamsTests.cs" />
+    <Compile Include="UserDataLookupTests.cs" />
     <Compile Include="StreamTests.cs" />
     <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />

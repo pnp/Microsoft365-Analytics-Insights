@@ -22,7 +22,7 @@ import {
   ChevronDown16Regular,
   ChevronRight16Regular,
 } from '@fluentui/react-icons';
-import toast from 'react-hot-toast';
+import toast from '../toast';
 import type { UserDataCategory, UserDataDetailRow } from '../../types/userData';
 import { fetchUserDetail } from '../../api/userLookupApi';
 import Spinner from '../Spinner';

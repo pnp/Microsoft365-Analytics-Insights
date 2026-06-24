@@ -222,33 +222,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Builds a copy-pasteable COUNT query that reproduces a category's count for a UPN.</summary>
         private static string BuildCountSql(CategoryMeta meta, string upn)
         {
-            var literal = EscapeSqlLiteral(upn);
-            if (meta.IndirectViaSession)
-            {
-                return
-                    "SELECT COUNT(*) FROM hits\r\n" +
-                    "WHERE session_id IN (\r\n" +
-                    "    SELECT id FROM sessions\r\n" +
-                    $"    WHERE user_id = (SELECT id FROM users WHERE user_name = '{literal}'));";
-            }
-
-            if (meta.ViaAuditEvent)
-            {
-                return
-                    $"SELECT COUNT(*) FROM {meta.Table} c\r\n" +
-                    "INNER JOIN audit_events e ON c.event_id = e.id\r\n" +
-                    $"WHERE e.user_id = (SELECT id FROM users WHERE user_name = '{literal}');";
-            }
-
-            return
-                $"SELECT COUNT(*) FROM {meta.Table}\r\n" +
-                $"WHERE {meta.UserColumn} = (SELECT id FROM users WHERE user_name = '{literal}');";
-        }
-
-        /// <summary>Escapes a string literal for safe embedding in the displayed SQL (doubles quotes).</summary>
-        private static string EscapeSqlLiteral(string value)
-        {
-            return (value ?? string.Empty).Replace("'", "''");
+            return DataUtils.Sql.UserDataCountSql.BuildCountSql(meta.Table, meta.UserColumn, meta.IndirectViaSession, meta.ViaAuditEvent, upn);
         }
 
         private static bool WorkloadEnabled(ImportTaskSettings s, string flag)

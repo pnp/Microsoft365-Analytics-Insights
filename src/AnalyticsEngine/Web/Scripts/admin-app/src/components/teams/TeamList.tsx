@@ -11,7 +11,7 @@ import TeamListItem from './TeamListItem';
 import { TeamAuthStatusResponse, TeamAuthStatus, AuthTokenResponse } from '../../types/TeamAuthStatus';
 import ConfirmSelection from './ConfirmSelection';
 import type { Team } from '@microsoft/microsoft-graph-types';
-import toast, { Toaster } from 'react-hot-toast';
+import toast from '../toast';
 
 type TeamListProps = {
   teamsList: Array<Team>;
@@ -123,7 +123,6 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
   render() {
     return (
       <div>
-        <Toaster />
         <ConfirmSelection
           saveCallback={this.authSelectedTeams.bind(this)}
           authCount={this.state.teamIdsToAuth.length}
