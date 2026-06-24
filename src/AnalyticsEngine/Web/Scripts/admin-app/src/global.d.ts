@@ -18,6 +18,8 @@ declare global {
     o365AnalyticsAuthAPI: string;
     /** Base endpoint for the user data lookup API. */
     o365AnalyticsUserLookupAPI: string;
+    /** Endpoint for the system status (home page) API. */
+    o365AnalyticsSystemStatusAPI: string;
   }
 }
 
