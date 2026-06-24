@@ -20,6 +20,8 @@ declare global {
     o365AnalyticsUserLookupAPI: string;
     /** Endpoint for the system status (home page) API. */
     o365AnalyticsSystemStatusAPI: string;
+    /** Endpoint for the install log (config history) API. */
+    o365AnalyticsInstallLogAPI: string;
   }
 }
 

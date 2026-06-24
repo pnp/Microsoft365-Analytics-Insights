@@ -12,6 +12,7 @@ import { SignOut20Regular } from '@fluentui/react-icons';
 import HomePage from './pages/HomePage';
 import TeamsPermissionsPage from './pages/TeamsPermissionsPage';
 import UserLookupPage from './pages/UserLookupPage';
+import InstallLogPage from './pages/InstallLogPage';
 
 const useStyles = makeStyles({
   header: {
@@ -55,7 +56,9 @@ export default function App() {
     ? 'teams'
     : location.pathname.startsWith('/user-lookup')
       ? 'user-lookup'
-      : 'home';
+      : location.pathname.startsWith('/install-log')
+        ? 'install-log'
+        : 'home';
 
   const onTabSelect: SelectTabEventHandler = (_event, data) => {
     navigate(`/${data.value}`);
@@ -85,6 +88,7 @@ export default function App() {
           <Tab value="home">Home</Tab>
           <Tab value="teams">Teams Permissions</Tab>
           <Tab value="user-lookup">User Data Lookup</Tab>
+          <Tab value="install-log">Install Log</Tab>
         </TabList>
       </div>
 
@@ -94,6 +98,7 @@ export default function App() {
           <Route path="/home" element={<HomePage />} />
           <Route path="/teams" element={<TeamsPermissionsPage />} />
           <Route path="/user-lookup" element={<UserLookupPage />} />
+          <Route path="/install-log" element={<InstallLogPage />} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </main>
