@@ -1,5 +1,29 @@
-import React from 'react';
+import { Fragment } from 'react';
+import { Card, CardHeader, Subtitle2, Text, Badge, makeStyles, tokens } from '@fluentui/react-components';
 import type { UserProfile } from '../../types/userData';
+
+const useStyles = makeStyles({
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'max-content 1fr',
+    columnGap: '24px',
+    rowGap: '6px',
+    alignItems: 'baseline',
+  },
+  label: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+  },
+  value: {
+    wordBreak: 'break-word',
+  },
+  licenses: {
+    marginTop: '16px',
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+  },
+});
 
 function yesNo(value: boolean | null): string {
   if (value == null) return '—';
@@ -7,7 +31,8 @@ function yesNo(value: boolean | null): string {
 }
 
 export default function UserProfileCard({ profile }: { profile: UserProfile }) {
-  const rows: Array<[string, React.ReactNode]> = [
+  const styles = useStyles();
+  const rows: Array<[string, string]> = [
     ['UPN', profile.userPrincipalName || '—'],
     ['Mail', profile.mail || '—'],
     ['Azure AD id', profile.azureAdId || '—'],
@@ -25,35 +50,33 @@ export default function UserProfileCard({ profile }: { profile: UserProfile }) {
   ];
 
   return (
-    <div className="card" style={{ marginBottom: '1.5rem' }}>
-      <div className="card-header">
-        <strong>Profile</strong>
+    <Card>
+      <CardHeader header={<Subtitle2>Profile</Subtitle2>} />
+      <div className={styles.grid}>
+        {rows.map(([label, value]) => (
+          <Fragment key={label}>
+            <Text className={styles.label}>{label}</Text>
+            <Text className={styles.value}>{value}</Text>
+          </Fragment>
+        ))}
       </div>
-      <div className="card-body">
-        <dl className="aa-profile-grid">
-          {rows.map(([label, value]) => (
-            <React.Fragment key={label}>
-              <dt>{label}</dt>
-              <dd>{value}</dd>
-            </React.Fragment>
-          ))}
-        </dl>
-        <div style={{ marginTop: '1rem' }}>
-          <strong>Licenses ({profile.licenses.length})</strong>
-          {profile.licenses.length > 0 ? (
-            <ul style={{ marginBottom: 0 }}>
-              {profile.licenses.map((license, i) => (
-                <li key={i}>
-                  {license.name}
-                  {license.skuId ? ` (${license.skuId})` : ''}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="aa-muted">No licenses recorded.</div>
-          )}
-        </div>
+      <div>
+        <Text weight="semibold">Licenses ({profile.licenses.length})</Text>
+        {profile.licenses.length > 0 ? (
+          <div className={styles.licenses}>
+            {profile.licenses.map((license, i) => (
+              <Badge key={i} appearance="tint" color="brand">
+                {license.name}
+                {license.skuId ? ` (${license.skuId})` : ''}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <Text block style={{ color: tokens.colorNeutralForeground3 }}>
+            No licenses recorded.
+          </Text>
+        )}
       </div>
-    </div>
+    </Card>
   );
 }

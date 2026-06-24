@@ -1,68 +1,10 @@
+html,
 body {
   margin: 0;
   padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  background-color: #faf9f8;
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
-    monospace;
-}
-
-.aa-content {
-  padding: 1.25rem;
-}
-
-/* Lightweight spinner (replaces the old react-loader-spinner dependency). */
-.aa-spinner {
-  display: inline-block;
-  box-sizing: border-box;
-  border-style: solid;
-  border-radius: 50%;
-  animation: aa-spin 0.8s linear infinite;
-}
-
-@keyframes aa-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.aa-error {
-  color: #b00020;
-  font-weight: 600;
-}
-
-.aa-muted {
-  color: #6c757d;
-}
-
-/* User lookup */
-.aa-profile-grid {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.35rem 1.25rem;
-  align-items: baseline;
-}
-
-.aa-profile-grid dt {
-  font-weight: 600;
-  margin: 0;
-}
-
-.aa-profile-grid dd {
-  margin: 0;
-  word-break: break-word;
-}
-
-.aa-detail-row pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
-  max-height: 12rem;
-  overflow: auto;
+#root {
+  min-height: 100vh;
 }

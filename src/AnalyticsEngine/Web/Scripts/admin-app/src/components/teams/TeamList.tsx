@@ -1,4 +1,12 @@
 import React from 'react';
+import {
+  Table,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
+  TableBody,
+  Checkbox,
+} from '@fluentui/react-components';
 import TeamListItem from './TeamListItem';
 import { TeamAuthStatusResponse, TeamAuthStatus, AuthTokenResponse } from '../../types/TeamAuthStatus';
 import ConfirmSelection from './ConfirmSelection';
@@ -95,12 +103,11 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
     }
   }
 
-  toggleAllTeams(e: React.ChangeEvent<HTMLInputElement>) {
+  toggleAllTeams(checked: boolean) {
     this.state.userTeamsAuthState.forEach((teamSelection) => {
-      this.teamToggle(e.target.checked, teamSelection.teamId);
+      this.teamToggle(checked, teamSelection.teamId);
     });
 
-    console.log('Toggle all');
     this.forceUpdate();
   }
 
@@ -123,29 +130,21 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
           deAuthCount={this.state.teamIdsToDeauth.length}
           isBusy={!this.state.isBusy}
         />
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: 400 }}>
-                <div className="form-check">
-                  <label className="form-check-label">
-                    <input
-                      type="checkbox"
-                      className="form-check-input"
-                      onChange={(e) => this.toggleAllTeams(e)}
-                      disabled={this.state.isBusy}
-                    />
-                    Team Name
-                  </label>
-                </div>
-              </th>
-              <th style={{ width: 400 }}>Graph ID</th>
-              <th style={{ width: 200 }}>
-                <p>Authorised?</p>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table aria-label="Teams" size="small" style={{ marginBlock: '12px' }}>
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell style={{ width: 420 }}>
+                <Checkbox
+                  disabled={this.state.isBusy}
+                  onChange={(_e, data) => this.toggleAllTeams(data.checked === true)}
+                  label="Team Name"
+                />
+              </TableHeaderCell>
+              <TableHeaderCell style={{ width: 400 }}>Graph ID</TableHeaderCell>
+              <TableHeaderCell style={{ width: 140 }}>Authorised?</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {
               // Loop through user Teams data from Graph
               this.props.teamsList.map((team: Team, i: number) => {
@@ -167,8 +166,8 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
                 );
               })
             }
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         <ConfirmSelection
           saveCallback={this.authSelectedTeams.bind(this)}
           authCount={this.state.teamIdsToAuth.length}

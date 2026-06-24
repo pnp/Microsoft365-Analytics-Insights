@@ -1,41 +1,95 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import toast, { Toaster } from 'react-hot-toast';
+import {
+  Card,
+  CardHeader,
+  Title3,
+  Subtitle2,
+  Text,
+  Body1,
+  Badge,
+  Button,
+  Link,
+  Table,
+  TableBody,
+  TableRow,
+  TableCell,
+  MessageBar,
+  MessageBarBody,
+  makeStyles,
+  tokens,
+} from '@fluentui/react-components';
 import { fetchSystemStatus, testWebhook } from '../api/systemStatusApi';
 import type { SystemStatus } from '../types/systemStatus';
 import Spinner from '../components/Spinner';
 
-function WebhookSubscriptionStatus({ status }: { status: SystemStatus }) {
+const useStyles = makeStyles({
+  cards: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+    marginTop: '16px',
+  },
+  label: {
+    fontWeight: tokens.fontWeightSemibold,
+    width: '260px',
+    verticalAlign: 'top',
+  },
+  configJson: {
+    fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    margin: 0,
+    maxHeight: '320px',
+    overflow: 'auto',
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: '12px',
+    borderRadius: tokens.borderRadiusMedium,
+  },
+});
+
+function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
   switch (status.callWebhookState) {
     case 'Active':
       return (
         <span>
-          <span style={{ color: 'green', fontWeight: 'bold' }}>Active</span>
+          <Badge appearance="filled" color="success">
+            Active
+          </Badge>
           {status.callWebhookExpiry && (
-            <> &ndash; renews automatically; current subscription expires {new Date(status.callWebhookExpiry).toUTCString()}</>
+            <Text size={200} style={{ marginLeft: 8 }}>
+              renews automatically; expires {new Date(status.callWebhookExpiry).toUTCString()}
+            </Text>
           )}
         </span>
       );
     case 'Missing':
       return (
         <div>
-          <span style={{ color: '#b00', fontWeight: 'bold' }}>No active subscription found</span>
-          <div>
+          <Badge appearance="filled" color="danger">
+            No active subscription found
+          </Badge>
+          <Text size={200} block style={{ marginTop: 4 }}>
             The importer web-job registers and renews this on every import cycle. If it stays missing, check the importer
             web-job is running and that its app registration has the <code>CallRecords.Read.All</code> Microsoft Graph
             application permission.
-          </div>
+          </Text>
         </div>
       );
     case 'Error':
       return (
         <div>
-          <span style={{ color: '#b00', fontWeight: 'bold' }}>Couldn't check</span>
-          <div>{status.callWebhookStatusDetail}</div>
+          <Badge appearance="filled" color="warning">
+            Couldn't check
+          </Badge>
+          <Text size={200} block style={{ marginTop: 4 }}>
+            {status.callWebhookStatusDetail}
+          </Text>
         </div>
       );
     default:
-      return <span>Not applicable - Teams calls import is disabled</span>;
+      return <Text>Not applicable - Teams calls import is disabled</Text>;
   }
 }
 
@@ -44,6 +98,7 @@ function WebhookSubscriptionStatus({ status }: { status: SystemStatus }) {
  * Data comes from api/SystemStatus.
  */
 export default function HomePage() {
+  const styles = useStyles();
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,116 +135,129 @@ export default function HomePage() {
 
   if (loading) {
     return (
-      <div className="text-center">
-        <Spinner size={100} />
+      <div style={{ textAlign: 'center', padding: '32px' }}>
+        <Spinner size={100} label="Loading system status..." />
       </div>
     );
   }
 
   if (error || !status) {
-    return <p className="aa-error">Error: {error ?? 'No status available.'}</p>;
+    return (
+      <MessageBar intent="error">
+        <MessageBarBody>{error ?? 'No status available.'}</MessageBarBody>
+      </MessageBar>
+    );
   }
 
   return (
     <div>
       <Toaster />
-      <h5 className="card-header text-center">
-        Microsoft 365 Advanced Analytics Engine - {status.buildLabel} - Service Home
-      </h5>
-      <br />
+      <Title3 block>Service Home - {status.buildLabel}</Title3>
 
-      <h3>Tracking Data Overview</h3>
-      <p>Here's a summary of the data in your database:</p>
-      <table className="table" style={{ width: 500 }}>
-        <tbody>
-          <tr>
-            <td>Hits</td>
-            <td>{status.hitCount.toLocaleString()}</td>
-          </tr>
-          <tr>
-            <td>Activity Imports</td>
-            <td>{status.activityCount.toLocaleString()}</td>
-          </tr>
-          <tr>
-            <td>Teams Discovered</td>
-            <td>{status.teamsCount.toLocaleString()}</td>
-          </tr>
-          <tr>
-            <td>Teams with Tracking Enabled</td>
-            <td>{status.teamsBeingTrackedCount.toLocaleString()}</td>
-          </tr>
-        </tbody>
-      </table>
-      <p>
-        Enable Teams analytics on the <Link to="/teams">Teams Permissions</Link> page.
-      </p>
-      <hr />
+      <div className={styles.cards}>
+        <Card>
+          <CardHeader header={<Subtitle2>Tracking Data Overview</Subtitle2>} />
+          <Body1>Here's a summary of the data in your database:</Body1>
+          <Table aria-label="Tracking data overview" size="small">
+            <TableBody>
+              <TableRow>
+                <TableCell className={styles.label}>Hits</TableCell>
+                <TableCell>{status.hitCount.toLocaleString()}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Activity Imports</TableCell>
+                <TableCell>{status.activityCount.toLocaleString()}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Teams Discovered</TableCell>
+                <TableCell>{status.teamsCount.toLocaleString()}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Teams with Tracking Enabled</TableCell>
+                <TableCell>{status.teamsBeingTrackedCount.toLocaleString()}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+          <Body1>
+            Enable Teams analytics on the <Link href="#/teams">Teams Permissions</Link> page.
+          </Body1>
+        </Card>
 
-      <h3>System Configuration</h3>
-      <p>These are the basics of your system configuration:</p>
-      <table className="table">
-        <tbody>
-          <tr>
-            <td className="header">Graph Call Webhook Endpoint</td>
-            <td>
-              {status.webhookEndpointUrl}
-              {status.webhookEndpointUrl && (
-                <>
-                  {' - '}
-                  <a
-                    href={`${status.webhookEndpointUrl}?validationToken=test`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onTestWebhook(status.webhookEndpointUrl!);
-                    }}
-                  >
-                    test webhook with validation POST
-                  </a>
-                </>
-              )}
-            </td>
-          </tr>
-          <tr>
-            <td className="header">Teams Calls Import</td>
-            <td>{status.callsImportEnabled ? <span>Enabled</span> : <span>Disabled - Teams call records are not being imported</span>}</td>
-          </tr>
-          <tr>
-            <td className="header">Calls Webhook Subscription</td>
-            <td>
-              <WebhookSubscriptionStatus status={status} />
-            </td>
-          </tr>
-          <tr>
-            <td className="header">SQL Server</td>
-            <td>{status.webAppConfigSQL}</td>
-          </tr>
-          <tr>
-            <td>Redis SSL Endpoint</td>
-            <td>{status.webAppConfigRedis}</td>
-          </tr>
-          <tr>
-            <td>Cognitive Services Endpoint</td>
-            <td>{status.webAppConfigCognitive}</td>
-          </tr>
-          <tr>
-            <td>Cognitive Services Enabled</td>
-            <td>
-              {status.cognitiveServiceEnabled ? (
-                <p>Yes - cognitive analytics will be available</p>
-              ) : (
-                <div>No - cognitive analytics are disabled</div>
-              )}
-            </td>
-          </tr>
-          <tr>
-            <td>Service Bus</td>
-            <td>{status.webAppConfigServiceBus}</td>
-          </tr>
-        </tbody>
-      </table>
+        <Card>
+          <CardHeader header={<Subtitle2>System Configuration</Subtitle2>} />
+          <Body1>These are the basics of your system configuration:</Body1>
+          <Table aria-label="System configuration" size="small">
+            <TableBody>
+              <TableRow>
+                <TableCell className={styles.label}>Graph Call Webhook Endpoint</TableCell>
+                <TableCell>
+                  <Text>{status.webhookEndpointUrl}</Text>
+                  {status.webhookEndpointUrl && (
+                    <Button
+                      appearance="transparent"
+                      size="small"
+                      onClick={() => onTestWebhook(status.webhookEndpointUrl!)}
+                    >
+                      test webhook with validation POST
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Teams Calls Import</TableCell>
+                <TableCell>
+                  {status.callsImportEnabled ? (
+                    <Badge appearance="tint" color="success">
+                      Enabled
+                    </Badge>
+                  ) : (
+                    <Badge appearance="tint" color="informative">
+                      Disabled - Teams call records are not being imported
+                    </Badge>
+                  )}
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Calls Webhook Subscription</TableCell>
+                <TableCell>
+                  <WebhookSubscriptionBadge status={status} />
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>SQL Server</TableCell>
+                <TableCell>{status.webAppConfigSQL}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Redis SSL Endpoint</TableCell>
+                <TableCell>{status.webAppConfigRedis}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Cognitive Services Endpoint</TableCell>
+                <TableCell>{status.webAppConfigCognitive}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Cognitive Services Enabled</TableCell>
+                <TableCell>
+                  {status.cognitiveServiceEnabled ? (
+                    <Text>Yes - cognitive analytics will be available</Text>
+                  ) : (
+                    <Text>No - cognitive analytics are disabled</Text>
+                  )}
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Service Bus</TableCell>
+                <TableCell>{status.webAppConfigServiceBus}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </Card>
 
-      <p>Last applied configuration JSon:</p>
-      <code>{status.configJson}</code>
+        <Card>
+          <CardHeader header={<Subtitle2>Last applied configuration</Subtitle2>} />
+          <pre className={styles.configJson}>{status.configJson}</pre>
+        </Card>
+      </div>
     </div>
   );
 }

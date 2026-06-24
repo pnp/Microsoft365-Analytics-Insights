@@ -1,26 +1,22 @@
-type SpinnerProps = {
-  /** Diameter in px. */
+import { Spinner as FluentSpinner, type SpinnerProps } from '@fluentui/react-components';
+
+type Props = {
+  /** Approximate diameter in px (mapped to the nearest Fluent spinner size). */
   size?: number;
-  color?: string;
+  label?: string;
 };
 
-/**
- * Small dependency-free loading spinner. Replaces the old react-loader-spinner package
- * (whose API/CSS import path kept changing between majors).
- */
-export default function Spinner({ size = 100, color = '#007bff' }: SpinnerProps) {
-  const borderWidth = Math.max(2, Math.round(size / 12));
-  return (
-    <div
-      className="aa-spinner"
-      role="status"
-      aria-label="Loading"
-      style={{
-        width: size,
-        height: size,
-        borderWidth,
-        borderColor: `${color} ${color} transparent ${color}`,
-      }}
-    />
-  );
+function mapSize(px?: number): SpinnerProps['size'] {
+  if (!px) return 'medium';
+  if (px <= 16) return 'extra-tiny';
+  if (px <= 24) return 'tiny';
+  if (px <= 32) return 'small';
+  if (px <= 64) return 'medium';
+  if (px <= 96) return 'large';
+  return 'huge';
+}
+
+/** Thin wrapper over the Fluent Spinner so existing call sites (which pass a px size) keep working. */
+export default function Spinner({ size, label }: Props) {
+  return <FluentSpinner size={mapSize(size)} label={label} />;
 }

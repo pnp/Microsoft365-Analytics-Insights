@@ -1,4 +1,5 @@
 import React from 'react';
+import { Button, Text } from '@fluentui/react-components';
 import { msalApp, GRAPH_REQUESTS } from '../../auth/auth-utils';
 import { acquireGraphToken } from '../../auth/Engine';
 import type { AccountInfo, AuthenticationResult } from '@azure/msal-browser';
@@ -39,19 +40,17 @@ export default class LoginControls extends React.Component<LoginControlsProps> {
 
   render() {
     return (
-      <div>
-        <span>No server-side credentials found. Authenticate with client-side to use the application.</span>
-        <span>
-          {this.props.account ? (
-            <button type="button" id="signOut" className="btn btn-secondary" onClick={this.onSignOut}>
-              Sign Out
-            </button>
-          ) : (
-            <button type="button" className="btn btn-primary" onClick={this.onSignInClick}>
-              Sign In
-            </button>
-          )}
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        <Text>No server-side credentials found. Authenticate with client-side to use the application.</Text>
+        {this.props.account ? (
+          <Button id="signOut" appearance="secondary" onClick={this.onSignOut}>
+            Sign Out
+          </Button>
+        ) : (
+          <Button appearance="primary" onClick={this.onSignInClick}>
+            Sign In
+          </Button>
+        )}
       </div>
     );
   }

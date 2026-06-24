@@ -1,4 +1,17 @@
-import Spinner from '../Spinner';
+import { Button, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
+
+const useStyles = makeStyles({
+  root: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    flexWrap: 'wrap',
+    paddingBlock: '8px',
+  },
+  summary: {
+    color: tokens.colorNeutralForeground2,
+  },
+});
 
 type ConfirmSelectionProps = {
   saveCallback: () => void;
@@ -9,22 +22,19 @@ type ConfirmSelectionProps = {
 };
 
 export default function ConfirmSelection(props: ConfirmSelectionProps) {
+  const styles = useStyles();
   return (
-    <div>
-      <div style={{ width: '100%', overflow: 'hidden' }}>
-        <div style={{ float: 'left', fontWeight: 600 }}>Actions to apply:</div>
-        <div style={{ marginLeft: '180px' }}>
-          <div>
-            De-authorise {props.deAuthCount} Team(s); Authorise {props.authCount} Team(s)
-          </div>
-        </div>
-      </div>
+    <div className={styles.root}>
+      <Text weight="semibold">Actions to apply:</Text>
+      <Text className={styles.summary}>
+        De-authorise {props.deAuthCount} Team(s); Authorise {props.authCount} Team(s)
+      </Text>
       {!props.isBusy ? (
-        <Spinner size={30} />
+        <Spinner size="tiny" />
       ) : (
-        <button type="button" className="btn btn-primary" onClick={() => props.saveCallback()}>
+        <Button appearance="primary" onClick={() => props.saveCallback()}>
           Save Changes
-        </button>
+        </Button>
       )}
     </div>
   );

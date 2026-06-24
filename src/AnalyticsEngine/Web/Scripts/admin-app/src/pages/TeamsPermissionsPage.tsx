@@ -1,4 +1,5 @@
 import React from 'react';
+import { Title3, Subtitle1, Text, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import TeamList from '../components/teams/TeamList';
 import LoginControls from '../components/teams/LoginControls';
 import Spinner from '../components/Spinner';
@@ -136,11 +137,11 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
   render() {
     return (
       <div>
-        <h5 className="card-header text-center">Grant Team Access to the Microsoft 365 Advanced Analytics Engine</h5>
-        <br />
+        <Title3 block>Grant Team Access to the Microsoft 365 Advanced Analytics Engine</Title3>
+        <div style={{ height: 16 }} />
         {this.state.loading ? (
-          <div className="text-center">
-            <Spinner size={100} />
+          <div style={{ textAlign: 'center', padding: '32px' }}>
+            <Spinner size={100} label="Loading your Teams..." />
           </div>
         ) : (
           <div>
@@ -153,28 +154,36 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
               />
             )}
 
-            {this.state.error && <p className="aa-error">Error: {this.state.error}</p>}
+            {this.state.error && (
+              <MessageBar intent="error" style={{ marginBlock: '12px' }}>
+                <MessageBarBody>{this.state.error}</MessageBarBody>
+              </MessageBar>
+            )}
 
-            <p>
+            <Text block style={{ marginBlock: '12px' }}>
               This page is so you can authorise deep analytics for a Team. This will allow Microsoft 365 Advanced
               Analytics and Insights to read messages for anonymous statistical reporting purposes only.
-            </p>
+            </Text>
 
-            <section className="data">
+            <section>
               {this.state.joinedTeams ? (
                 <div>
-                  <h2>Your Teams - {this.state.graphProfile?.displayName}</h2>
-                  <p>
+                  <Subtitle1 block style={{ marginBlock: '12px' }}>
+                    Your Teams - {this.state.graphProfile?.displayName}
+                  </Subtitle1>
+                  <Text block style={{ marginBottom: '8px' }}>
                     Here are all the Teams you have access to. Select which Teams you want to enable for deep analytics
                     and continue.
-                  </p>
+                  </Text>
                   <TeamList teamsList={this.state.joinedTeams} />
                 </div>
               ) : (
-                <div>Click 'Sign-In' to see your Teams</div>
+                <Text block>Click 'Sign-In' to see your Teams</Text>
               )}
             </section>
-            <p>Note: tokens are securely stored in a temporary redis cache &amp; aren't accessible to anyone.</p>
+            <Text block size={200} style={{ marginTop: '12px', color: 'var(--colorNeutralForeground3)' }}>
+              Note: tokens are securely stored in a temporary Redis cache &amp; aren't accessible to anyone.
+            </Text>
           </div>
         )}
       </div>
