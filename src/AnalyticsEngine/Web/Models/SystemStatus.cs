@@ -44,12 +44,6 @@ namespace Web.AnalyticsWeb.Models
 
         public string ConfigJson { get; set; }
 
-        public int HitCount { get; set; }
-        public int ActivityCount { get; set; }
-
-        public int TeamsCount { get; set; }
-        public int TeamsBeingTrackedCount { get; set; }
-
         public string BuildLabel { get; set; }
 
         public bool HasValidConfig
@@ -104,16 +98,12 @@ namespace Web.AnalyticsWeb.Models
 
             status.BuildLabel = Common.Entities.BuildConstants.BuildLabel;
 
-            // DB counts
-            status.HitCount = await db.hits.CountAsync();
-            status.ActivityCount = await db.AuditEventsCommon.CountAsync();
-            status.TeamsCount = await db.Teams.CountAsync();
-            status.TeamsBeingTrackedCount = await db.Teams.Where(t => t.HasRefreshToken).CountAsync();
-
             // Config
             var config = new AppConfig();
             status.WebAppConfigCognitive = config.CognitiveEndpoint;
-            status.WebAppConfigRedis = StackExchange.Redis.ConfigurationOptions.Parse(config.ConnectionStrings.RedisConnectionString).SslHost;
+            status.WebAppConfigRedis = string.IsNullOrWhiteSpace(config.ConnectionStrings.RedisConnectionString)
+                ? "(not configured - Teams deep analytics disabled)"
+                : StackExchange.Redis.ConfigurationOptions.Parse(config.ConnectionStrings.RedisConnectionString).SslHost;
             status.WebAppConfigSQL = new System.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
             status.WebAppConfigServiceBus = string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString)
                 ? "(disabled)"
