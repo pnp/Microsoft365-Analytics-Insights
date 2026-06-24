@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HashRouter } from 'react-router-dom';
+import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import App from './App';
 import { initializeAuth } from './auth/auth-utils';
 import './index.css';
@@ -16,9 +17,11 @@ initializeAuth()
     }
     createRoot(container).render(
       <StrictMode>
-        <HashRouter>
-          <App />
-        </HashRouter>
+        <FluentProvider theme={webLightTheme} style={{ minHeight: '100vh' }}>
+          <HashRouter>
+            <App />
+          </HashRouter>
+        </FluentProvider>
       </StrictMode>,
     );
   });

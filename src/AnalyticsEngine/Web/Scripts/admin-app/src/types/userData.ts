@@ -35,11 +35,25 @@ export interface UserDataCategory {
   count: number;
   /** Whether the detail endpoint can return recent rows for this category. */
   supportsDetail: boolean;
+  /** A SQL COUNT query the admin can run to reproduce this count themselves. */
+  sqlQuery: string;
+  /** Display names of the import workloads that feed this category. */
+  workloads: string[];
+  /** Whether at least one feeding workload is enabled (if false, a 0 count is expected). */
+  workloadsEnabled: boolean;
+}
+
+/** An import workload (job) and whether it is enabled for this deployment. */
+export interface Workload {
+  name: string;
+  enabled: boolean;
+  description: string;
 }
 
 export interface UserDataSummary {
   profile: UserProfile;
   categories: UserDataCategory[];
+  workloads: Workload[];
 }
 
 export interface UserDataDetailRow {

@@ -1,4 +1,5 @@
 using Common.Entities;
+using Common.Entities.Config;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -55,52 +56,164 @@ namespace Web.AnalyticsWeb.Controllers
             public string Label;
             public string Description;
             public bool SupportsDetail;
+            /// <summary>SQL table this category counts. Null when the row count is reached indirectly.</summary>
+            public string Table;
+            /// <summary>The user foreign-key column on <see cref="Table"/>.</summary>
+            public string UserColumn;
+            /// <summary>Web hits link to a user indirectly via sessions, so they need a nested query.</summary>
+            public bool IndirectViaSession;
+            /// <summary>Import-workload flags (ImportTaskSettings property names) that feed this category.</summary>
+            public string[] WorkloadFlags = new string[0];
         }
+
+        // Import-workload flag names (must match ImportTaskSettings property names).
+        private static class Wf
+        {
+            public const string Calls = "Calls";
+            public const string UsersMetadata = "GraphUsersMetadata";
+            public const string UserApps = "GraphUserApps";
+            public const string UsageReports = "GraphUsageReports";
+            public const string Teams = "GraphTeams";
+            public const string AuditLog = "ActivityLog";
+            public const string WebTraffic = "WebTraffic";
+            public const string SentEmails = "SentEmails";
+            public const string Copilot = "Copilot";
+        }
+
+        private sealed class WorkloadDef
+        {
+            public string Flag;
+            public string Name;
+            public string Description;
+        }
+
+        // Friendly names / descriptions for the import workloads, shown on the lookup page so an
+        // admin can see why a category might legitimately have 0 records.
+        private static readonly WorkloadDef[] WorkloadDefs =
+        {
+            new WorkloadDef { Flag = Wf.AuditLog, Name = "Audit log", Description = "SharePoint / Exchange / Entra ID audit activity (Audit.SharePoint feed)." },
+            new WorkloadDef { Flag = Wf.Copilot, Name = "Copilot & Power Platform", Description = "Copilot interactions and Power Platform events (Audit.General feed)." },
+            new WorkloadDef { Flag = Wf.WebTraffic, Name = "Web traffic", Description = "SharePoint page views, likes and comments (App Insights tracker)." },
+            new WorkloadDef { Flag = Wf.SentEmails, Name = "Sent emails", Description = "Messages sent from mailboxes (Graph)." },
+            new WorkloadDef { Flag = Wf.Teams, Name = "Teams", Description = "Team memberships, owners, channels and reactions (Graph)." },
+            new WorkloadDef { Flag = Wf.Calls, Name = "Teams calls", Description = "Teams call records: organiser and attended sessions." },
+            new WorkloadDef { Flag = Wf.UsageReports, Name = "Usage reports", Description = "Daily per-user activity reports (Outlook, OneDrive, SharePoint, Teams, Viva Engage)." },
+            new WorkloadDef { Flag = Wf.UserApps, Name = "User Teams apps", Description = "Teams apps installed per user (Graph)." },
+            new WorkloadDef { Flag = Wf.UsersMetadata, Name = "User metadata", Description = "User profile metadata: department, job title, licences, manager, location." },
+        };
 
         // Ordered list that drives both the summary and the detail label lookup.
         private static readonly CategoryMeta[] CategoryMetas =
         {
             new CategoryMeta { Key = CatAuditEvents, Label = "Audit events", SupportsDetail = true,
+                Table = "audit_events", UserColumn = "user_id", WorkloadFlags = new[] { Wf.AuditLog, Wf.Copilot },
                 Description = "SharePoint, Exchange, Entra ID, Copilot, Power Platform and other audit activity." },
             new CategoryMeta { Key = CatSentEmails, Label = "Sent emails", SupportsDetail = true,
+                Table = "sent_emails", UserColumn = "user_id", WorkloadFlags = new[] { Wf.SentEmails },
                 Description = "Messages sent from the user's mailbox." },
             new CategoryMeta { Key = CatWebHits, Label = "Web page hits", SupportsDetail = true,
+                Table = "hits", IndirectViaSession = true, WorkloadFlags = new[] { Wf.WebTraffic },
                 Description = "SharePoint page views captured by the web traffic tracker." },
             new CategoryMeta { Key = CatTeamMemberships, Label = "Team memberships", SupportsDetail = true,
+                Table = "team_membership_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.Teams },
                 Description = "Teams the user has been a member of." },
             new CategoryMeta { Key = CatTeamOwnerships, Label = "Team ownerships", SupportsDetail = true,
+                Table = "team_owners", UserColumn = "owner_id", WorkloadFlags = new[] { Wf.Teams },
                 Description = "Teams the user owns / has owned." },
             new CategoryMeta { Key = CatTeamsReactions, Label = "Teams reactions", SupportsDetail = true,
+                Table = "teams_user_channel_reactions", UserColumn = "user_id", WorkloadFlags = new[] { Wf.Teams },
                 Description = "Reactions the user made on Teams channel messages." },
             new CategoryMeta { Key = CatCallsOrganised, Label = "Calls / meetings organised", SupportsDetail = true,
+                Table = "call_records", UserColumn = "organizer_id", WorkloadFlags = new[] { Wf.Calls },
                 Description = "Teams calls / meetings the user organised." },
             new CategoryMeta { Key = CatCallSessions, Label = "Call sessions attended", SupportsDetail = true,
+                Table = "call_sessions", UserColumn = "attendee_user_id", WorkloadFlags = new[] { Wf.Calls },
                 Description = "Teams call sessions the user attended." },
             new CategoryMeta { Key = CatPageLikes, Label = "Page likes", SupportsDetail = true,
+                Table = "page_likes", UserColumn = "user_id", WorkloadFlags = new[] { Wf.WebTraffic },
                 Description = "SharePoint page likes by the user." },
             new CategoryMeta { Key = CatPageComments, Label = "Page comments", SupportsDetail = true,
+                Table = "page_comments", UserColumn = "user_id", WorkloadFlags = new[] { Wf.WebTraffic },
                 Description = "SharePoint page comments by the user." },
             new CategoryMeta { Key = CatAppInstalls, Label = "Teams app installs", SupportsDetail = true,
+                Table = "teams_addons_user_installed_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UserApps },
                 Description = "Teams apps installed by the user." },
             new CategoryMeta { Key = CatUsageOutlook, Label = "Outlook usage (daily)", SupportsDetail = true,
+                Table = "outlook_user_activity_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily Outlook activity report rows." },
             new CategoryMeta { Key = CatUsageOneDrive, Label = "OneDrive usage (daily)", SupportsDetail = true,
+                Table = "onedrive_user_activity_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily OneDrive activity report rows." },
             new CategoryMeta { Key = CatUsageSharePoint, Label = "SharePoint usage (daily)", SupportsDetail = true,
+                Table = "sharepoint_user_activity_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily SharePoint activity report rows." },
             new CategoryMeta { Key = CatUsageYammer, Label = "Viva Engage usage (daily)", SupportsDetail = true,
+                Table = "yammer_user_activity_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily Viva Engage (Yammer) activity report rows." },
             new CategoryMeta { Key = CatUsageTeams, Label = "Teams usage (daily)", SupportsDetail = true,
+                Table = "teams_user_activity_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily Teams activity report rows." },
             new CategoryMeta { Key = CatUsageTeamsDevice, Label = "Teams device usage (daily)", SupportsDetail = true,
+                Table = "teams_user_device_usage_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily Teams device activity report rows." },
             new CategoryMeta { Key = CatUsageAppPlatform, Label = "App platform usage (daily)", SupportsDetail = true,
+                Table = "platform_user_activity_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily per-app platform activity report rows." },
             new CategoryMeta { Key = CatPowerAppShares, Label = "Power App shares received", SupportsDetail = false,
+                Table = "event_meta_power_app_share", UserColumn = "shared_with_user_id", WorkloadFlags = new[] { Wf.Copilot },
                 Description = "Power Apps shared with the user." },
             new CategoryMeta { Key = CatFlowShares, Label = "Flow shares received", SupportsDetail = false,
+                Table = "event_meta_power_automate_flow_share", UserColumn = "shared_with_user_id", WorkloadFlags = new[] { Wf.Copilot },
                 Description = "Power Automate flows shared with the user." },
         };
+
+        /// <summary>Builds a copy-pasteable COUNT query that reproduces a category's count for a UPN.</summary>
+        private static string BuildCountSql(CategoryMeta meta, string upn)
+        {
+            var literal = EscapeSqlLiteral(upn);
+            if (meta.IndirectViaSession)
+            {
+                return
+                    "SELECT COUNT(*) FROM hits\r\n" +
+                    "WHERE session_id IN (\r\n" +
+                    "    SELECT id FROM sessions\r\n" +
+                    $"    WHERE user_id = (SELECT id FROM users WHERE user_name = '{literal}'));";
+            }
+
+            return
+                $"SELECT COUNT(*) FROM {meta.Table}\r\n" +
+                $"WHERE {meta.UserColumn} = (SELECT id FROM users WHERE user_name = '{literal}');";
+        }
+
+        /// <summary>Escapes a string literal for safe embedding in the displayed SQL (doubles quotes).</summary>
+        private static string EscapeSqlLiteral(string value)
+        {
+            return (value ?? string.Empty).Replace("'", "''");
+        }
+
+        private static bool WorkloadEnabled(ImportTaskSettings s, string flag)
+        {
+            if (s == null) return false;
+            switch (flag)
+            {
+                case Wf.Calls: return s.Calls;
+                case Wf.UsersMetadata: return s.GraphUsersMetadata;
+                case Wf.UserApps: return s.GraphUserApps;
+                case Wf.UsageReports: return s.GraphUsageReports;
+                case Wf.Teams: return s.GraphTeams;
+                case Wf.AuditLog: return s.ActivityLog;
+                case Wf.WebTraffic: return s.WebTraffic;
+                case Wf.SentEmails: return s.SentEmails;
+                case Wf.Copilot: return s.Copilot;
+                default: return false;
+            }
+        }
+
+        private static string WorkloadName(string flag)
+        {
+            var def = WorkloadDefs.FirstOrDefault(w => w.Flag == flag);
+            return def != null ? def.Name : flag;
+        }
 
         /// <summary>
         /// GET api/UserDataLookup/summary?upn=user@contoso.com
@@ -142,6 +255,19 @@ namespace Web.AnalyticsWeb.Controllers
                     Profile = BuildProfile(user),
                 };
 
+                // Which import workloads are enabled for this deployment - shown so an admin can see
+                // why a category might legitimately have 0 records (nothing is importing it).
+                var importSettings = new AppConfig().ImportJobSettings;
+                foreach (var def in WorkloadDefs)
+                {
+                    summary.Workloads.Add(new WorkloadModel
+                    {
+                        Name = def.Name,
+                        Description = def.Description,
+                        Enabled = WorkloadEnabled(importSettings, def.Flag),
+                    });
+                }
+
                 foreach (var meta in CategoryMetas)
                 {
                     var count = await CountForCategoryAsync(db, user.ID, meta.Key);
@@ -152,6 +278,9 @@ namespace Web.AnalyticsWeb.Controllers
                         Description = meta.Description,
                         Count = count,
                         SupportsDetail = meta.SupportsDetail,
+                        SqlQuery = BuildCountSql(meta, upn),
+                        Workloads = meta.WorkloadFlags.Select(WorkloadName).ToList(),
+                        WorkloadsEnabled = meta.WorkloadFlags.Any(f => WorkloadEnabled(importSettings, f)),
                     });
                 }
 

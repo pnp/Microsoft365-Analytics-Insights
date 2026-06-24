@@ -89,6 +89,37 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("supportsDetail")]
         public bool SupportsDetail { get; set; }
+
+        /// <summary>A SQL query (SELECT COUNT) the admin can run to reproduce this count themselves.</summary>
+        [JsonProperty("sqlQuery")]
+        public string SqlQuery { get; set; }
+
+        /// <summary>Display names of the import workloads that feed this category.</summary>
+        [JsonProperty("workloads")]
+        public List<string> Workloads { get; set; } = new List<string>();
+
+        /// <summary>
+        /// True when at least one of the feeding workloads is enabled. When false, a count of 0 is
+        /// expected (nothing is importing this data).
+        /// </summary>
+        [JsonProperty("workloadsEnabled")]
+        public bool WorkloadsEnabled { get; set; }
+    }
+
+    /// <summary>
+    /// An import workload (job) and whether it is enabled for this deployment. Helps explain why a
+    /// category might legitimately have 0 records.
+    /// </summary>
+    public class WorkloadModel
+    {
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("enabled")]
+        public bool Enabled { get; set; }
+
+        [JsonProperty("description")]
+        public string Description { get; set; }
     }
 
     /// <summary>
@@ -101,6 +132,10 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("categories")]
         public List<UserDataCategoryModel> Categories { get; set; } = new List<UserDataCategoryModel>();
+
+        /// <summary>The import workloads and whether each is enabled for this deployment.</summary>
+        [JsonProperty("workloads")]
+        public List<WorkloadModel> Workloads { get; set; } = new List<WorkloadModel>();
     }
 
     /// <summary>
