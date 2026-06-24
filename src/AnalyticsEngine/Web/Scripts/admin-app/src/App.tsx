@@ -1,4 +1,5 @@
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import HomePage from './pages/HomePage';
 import TeamsPermissionsPage from './pages/TeamsPermissionsPage';
 import UserLookupPage from './pages/UserLookupPage';
 
@@ -18,6 +19,11 @@ export default function App() {
         </a>
         <ul className="navbar-nav mr-auto">
           <li className="nav-item">
+            <NavLink className={navLinkClass} to="/home">
+              Home
+            </NavLink>
+          </li>
+          <li className="nav-item">
             <NavLink className={navLinkClass} to="/teams">
               Teams Permissions
             </NavLink>
@@ -28,14 +34,23 @@ export default function App() {
             </NavLink>
           </li>
         </ul>
+        <ul className="navbar-nav ml-auto">
+          <li className="nav-item">
+            {/* Server-side OIDC sign-out (full page navigation, not a SPA route). */}
+            <a className="nav-link" href="/Account/SignOut">
+              Sign out
+            </a>
+          </li>
+        </ul>
       </nav>
 
       <main className="aa-content">
         <Routes>
-          <Route path="/" element={<Navigate to="/teams" replace />} />
+          <Route path="/" element={<Navigate to="/home" replace />} />
+          <Route path="/home" element={<HomePage />} />
           <Route path="/teams" element={<TeamsPermissionsPage />} />
           <Route path="/user-lookup" element={<UserLookupPage />} />
-          <Route path="*" element={<Navigate to="/teams" replace />} />
+          <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </main>
     </>

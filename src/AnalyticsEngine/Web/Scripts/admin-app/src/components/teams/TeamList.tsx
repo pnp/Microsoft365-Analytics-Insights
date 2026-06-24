@@ -250,9 +250,14 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
       },
       body: JSON.stringify(body),
     })
-      .then((response) => {
+      .then(async (response) => {
         if (!response.ok) {
-          this.showApiError(response);
+          // Surface the server's reason (e.g. "Redis is not configured") when present.
+          const serverMessage = await response
+            .json()
+            .then((b) => (b && typeof b.message === 'string' ? b.message : ''))
+            .catch(() => '');
+          this.showApiError(response, serverMessage);
         } else {
           toast(
             'Selected Teams enabled for deep analytics successfully. It may take several hours before the extra metadata appears in any reports.',
@@ -266,9 +271,13 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
       });
   }
 
-  showApiError(errOrResponse: unknown) {
+  showApiError(errOrResponse: unknown, message?: string) {
     console.log(errOrResponse);
-    toast.error('Unexpected response from API. Check JS log for more details.');
+    const text =
+      message && message.trim().length > 0
+        ? message
+        : 'Unexpected response from API. Check JS log for more details.';
+    toast.error(text);
     this.setState({ isBusy: false });
   }
 }
