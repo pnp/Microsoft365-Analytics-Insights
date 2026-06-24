@@ -15,7 +15,7 @@ at the site root (`/`, via `HomeController.Index`) and its built assets live und
 | --- | --- | --- |
 | `#/home` | **Home** | System status: data counts and configuration (SQL, Redis, Cognitive, Service Bus, calls webhook). The default page. |
 | `#/teams` | **Teams Permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token in Redis). Ported from the original app. |
-| `#/user-lookup` | **User Data Lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (each with the **SQL query behind it** in a tooltip, click to copy), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
+| `#/user-lookup` | **User Data Lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
 
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
 MVC route changes are needed to add pages.
