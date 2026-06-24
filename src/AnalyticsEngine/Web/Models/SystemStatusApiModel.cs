@@ -1,8 +1,27 @@
 using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 
 namespace Web.AnalyticsWeb.Models
 {
+    /// <summary>A named record count for one SQL table, shown in the home page overview.</summary>
+    public class NamedCountModel
+    {
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("count")]
+        public int Count { get; set; }
+
+        public NamedCountModel() { }
+
+        public NamedCountModel(string name, int count)
+        {
+            Name = name;
+            Count = count;
+        }
+    }
+
     /// <summary>
     /// JSON shape returned by api/SystemStatus and rendered by the SPA's Home page. Mirrors the
     /// fields the old server-rendered home page showed (kept deliberately flat / display-oriented).
@@ -15,17 +34,9 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("hasValidConfig")]
         public bool HasValidConfig { get; set; }
 
-        [JsonProperty("hitCount")]
-        public int HitCount { get; set; }
-
-        [JsonProperty("activityCount")]
-        public int ActivityCount { get; set; }
-
-        [JsonProperty("teamsCount")]
-        public int TeamsCount { get; set; }
-
-        [JsonProperty("teamsBeingTrackedCount")]
-        public int TeamsBeingTrackedCount { get; set; }
+        /// <summary>Record counts for the main / interesting tables (home page overview).</summary>
+        [JsonProperty("dataCounts")]
+        public List<NamedCountModel> DataCounts { get; set; } = new List<NamedCountModel>();
 
         [JsonProperty("webhookEndpointUrl")]
         public string WebhookEndpointUrl { get; set; }
@@ -57,8 +68,5 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("webAppConfigServiceBus")]
         public string WebAppConfigServiceBus { get; set; }
-
-        [JsonProperty("configJson")]
-        public string ConfigJson { get; set; }
     }
 }

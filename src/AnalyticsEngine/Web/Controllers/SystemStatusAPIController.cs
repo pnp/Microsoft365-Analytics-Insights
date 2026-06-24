@@ -1,6 +1,9 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Redis;
+using System.Collections.Generic;
+using System.Data.Entity;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
@@ -31,10 +34,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     BuildLabel = s.BuildLabel,
                     HasValidConfig = s.HasValidConfig,
-                    HitCount = s.HitCount,
-                    ActivityCount = s.ActivityCount,
-                    TeamsCount = s.TeamsCount,
-                    TeamsBeingTrackedCount = s.TeamsBeingTrackedCount,
+                    DataCounts = await BuildDataCountsAsync(db, s),
                     WebhookEndpointUrl = (s.WebAppBaseURL ?? string.Empty) + "api/CallRecordWebhook",
                     CallsImportEnabled = s.CallsImportEnabled,
                     CallWebhookState = s.CallWebhookState.ToString(),
@@ -45,11 +45,31 @@ namespace Web.AnalyticsWeb.Controllers
                     WebAppConfigCognitive = s.WebAppConfigCognitive,
                     CognitiveServiceEnabled = s.CognitiveServiceEnabled,
                     WebAppConfigServiceBus = s.WebAppConfigServiceBus,
-                    ConfigJson = s.ConfigJson,
                 };
 
                 return Ok(model);
             }
+        }
+
+        /// <summary>
+        /// Record counts for the main tables. Reuses the counts SystemStatus already loaded (hits,
+        /// audit events, teams) and adds the other headline tables.
+        /// </summary>
+        private static async Task<List<NamedCountModel>> BuildDataCountsAsync(AnalyticsEntitiesContext db, SystemStatus s)
+        {
+            return new List<NamedCountModel>
+            {
+                new NamedCountModel("Users", await db.users.CountAsync()),
+                new NamedCountModel("Web page hits", s.HitCount),
+                new NamedCountModel("Audit events", s.ActivityCount),
+                new NamedCountModel("Copilot interactions", await db.CopilotChats.CountAsync()),
+                new NamedCountModel("Sent emails", await db.SentEmails.CountAsync()),
+                new NamedCountModel("Teams discovered", s.TeamsCount),
+                new NamedCountModel("Teams with tracking enabled", s.TeamsBeingTrackedCount),
+                new NamedCountModel("Teams calls", await db.CallRecords.CountAsync()),
+                new NamedCountModel("SharePoint sites", await db.sites.CountAsync()),
+                new NamedCountModel("Tracked URLs", await db.urls.CountAsync()),
+            };
         }
     }
 }

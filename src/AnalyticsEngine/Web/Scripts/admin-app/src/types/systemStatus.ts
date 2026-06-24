@@ -1,12 +1,15 @@
 // Mirrors Web/Models/SystemStatusApiModel.cs (returned by api/SystemStatus).
 
+export interface NamedCount {
+  name: string;
+  count: number;
+}
+
 export interface SystemStatus {
   buildLabel: string | null;
   hasValidConfig: boolean;
-  hitCount: number;
-  activityCount: number;
-  teamsCount: number;
-  teamsBeingTrackedCount: number;
+  /** Record counts for the main / interesting tables (home page overview). */
+  dataCounts: NamedCount[];
   webhookEndpointUrl: string | null;
   callsImportEnabled: boolean;
   /** Disabled | Active | Missing | Error */
@@ -18,5 +21,4 @@ export interface SystemStatus {
   webAppConfigCognitive: string | null;
   cognitiveServiceEnabled: boolean;
   webAppConfigServiceBus: string | null;
-  configJson: string | null;
 }

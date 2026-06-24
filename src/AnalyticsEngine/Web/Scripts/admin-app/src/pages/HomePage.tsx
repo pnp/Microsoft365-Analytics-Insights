@@ -35,18 +35,6 @@ const useStyles = makeStyles({
     width: '260px',
     verticalAlign: 'top',
   },
-  configJson: {
-    fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-    fontSize: tokens.fontSizeBase200,
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    margin: 0,
-    maxHeight: '320px',
-    overflow: 'auto',
-    backgroundColor: tokens.colorNeutralBackground3,
-    padding: '12px',
-    borderRadius: tokens.borderRadiusMedium,
-  },
 });
 
 function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
@@ -160,22 +148,12 @@ export default function HomePage() {
           <Body1>Here's a summary of the data in your database:</Body1>
           <Table aria-label="Tracking data overview" size="small">
             <TableBody>
-              <TableRow>
-                <TableCell className={styles.label}>Hits</TableCell>
-                <TableCell>{status.hitCount.toLocaleString()}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>Activity Imports</TableCell>
-                <TableCell>{status.activityCount.toLocaleString()}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>Teams Discovered</TableCell>
-                <TableCell>{status.teamsCount.toLocaleString()}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>Teams with Tracking Enabled</TableCell>
-                <TableCell>{status.teamsBeingTrackedCount.toLocaleString()}</TableCell>
-              </TableRow>
+              {status.dataCounts.map((c) => (
+                <TableRow key={c.name}>
+                  <TableCell className={styles.label}>{c.name}</TableCell>
+                  <TableCell>{c.count.toLocaleString()}</TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
           <Body1>
@@ -251,11 +229,6 @@ export default function HomePage() {
               </TableRow>
             </TableBody>
           </Table>
-        </Card>
-
-        <Card>
-          <CardHeader header={<Subtitle2>Last applied configuration</Subtitle2>} />
-          <pre className={styles.configJson}>{status.configJson}</pre>
         </Card>
       </div>
     </div>
