@@ -1,9 +1,11 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Redis;
+using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Runtime.Caching;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
@@ -34,7 +36,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     BuildLabel = s.BuildLabel,
                     HasValidConfig = s.HasValidConfig,
-                    DataCounts = await BuildDataCountsAsync(db, s),
+                    DataCounts = await BuildDataCountsAsync(db),
                     WebhookEndpointUrl = (s.WebAppBaseURL ?? string.Empty) + "api/CallRecordWebhook",
                     CallsImportEnabled = s.CallsImportEnabled,
                     CallWebhookState = s.CallWebhookState.ToString(),
@@ -51,25 +53,36 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
+        private const string DataCountsCacheKey = "SystemStatus::DataCounts";
+
         /// <summary>
-        /// Record counts for the main tables. Reuses the counts SystemStatus already loaded (hits,
-        /// audit events, teams) and adds the other headline tables.
+        /// Record counts for the main tables. Several of these are full-table COUNT(*) on large
+        /// tables (hits, audit_events), so the result is cached briefly to keep the home page fast
+        /// on large tenants (the counts only need to be roughly current).
         /// </summary>
-        private static async Task<List<NamedCountModel>> BuildDataCountsAsync(AnalyticsEntitiesContext db, SystemStatus s)
+        private static async Task<List<NamedCountModel>> BuildDataCountsAsync(AnalyticsEntitiesContext db)
         {
-            return new List<NamedCountModel>
+            if (MemoryCache.Default.Get(DataCountsCacheKey) is List<NamedCountModel> cached)
+            {
+                return cached;
+            }
+
+            var counts = new List<NamedCountModel>
             {
                 new NamedCountModel("Users", await db.users.CountAsync()),
-                new NamedCountModel("Web page hits", s.HitCount),
-                new NamedCountModel("Audit events", s.ActivityCount),
+                new NamedCountModel("Web page hits", await db.hits.CountAsync()),
+                new NamedCountModel("Audit events", await db.AuditEventsCommon.CountAsync()),
                 new NamedCountModel("Copilot interactions", await db.CopilotChats.CountAsync()),
                 new NamedCountModel("Sent emails", await db.SentEmails.CountAsync()),
-                new NamedCountModel("Teams discovered", s.TeamsCount),
-                new NamedCountModel("Teams with tracking enabled", s.TeamsBeingTrackedCount),
+                new NamedCountModel("Teams discovered", await db.Teams.CountAsync()),
+                new NamedCountModel("Teams with tracking enabled", await db.Teams.Where(t => t.HasRefreshToken).CountAsync()),
                 new NamedCountModel("Teams calls", await db.CallRecords.CountAsync()),
                 new NamedCountModel("SharePoint sites", await db.sites.CountAsync()),
                 new NamedCountModel("Tracked URLs", await db.urls.CountAsync()),
             };
+
+            MemoryCache.Default.Set(DataCountsCacheKey, counts, DateTimeOffset.UtcNow.AddSeconds(60));
+            return counts;
         }
     }
 }

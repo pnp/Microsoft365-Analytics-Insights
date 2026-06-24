@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   makeStyles,
@@ -9,10 +10,14 @@ import {
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { SignOut20Regular } from '@fluentui/react-icons';
-import HomePage from './pages/HomePage';
-import TeamsPermissionsPage from './pages/TeamsPermissionsPage';
-import UserLookupPage from './pages/UserLookupPage';
-import InstallLogPage from './pages/InstallLogPage';
+import { AppToaster } from './components/toast';
+import Spinner from './components/Spinner';
+
+// Code-split the pages so each route is a separate chunk (smaller initial load).
+const HomePage = lazy(() => import('./pages/HomePage'));
+const TeamsPermissionsPage = lazy(() => import('./pages/TeamsPermissionsPage'));
+const UserLookupPage = lazy(() => import('./pages/UserLookupPage'));
+const InstallLogPage = lazy(() => import('./pages/InstallLogPage'));
 
 const useStyles = makeStyles({
   header: {
@@ -66,6 +71,7 @@ export default function App() {
 
   return (
     <>
+      <AppToaster />
       <header className={styles.header}>
         <Text size={400} className={styles.brand}>
           Microsoft 365 Advanced Analytics
@@ -93,14 +99,22 @@ export default function App() {
       </div>
 
       <main className={styles.content}>
-        <Routes>
-          <Route path="/" element={<Navigate to="/home" replace />} />
-          <Route path="/home" element={<HomePage />} />
-          <Route path="/teams" element={<TeamsPermissionsPage />} />
-          <Route path="/user-lookup" element={<UserLookupPage />} />
-          <Route path="/install-log" element={<InstallLogPage />} />
-          <Route path="*" element={<Navigate to="/home" replace />} />
-        </Routes>
+        <Suspense
+          fallback={
+            <div style={{ textAlign: 'center', padding: '32px' }}>
+              <Spinner size={80} label="Loading..." />
+            </div>
+          }
+        >
+          <Routes>
+            <Route path="/" element={<Navigate to="/home" replace />} />
+            <Route path="/home" element={<HomePage />} />
+            <Route path="/teams" element={<TeamsPermissionsPage />} />
+            <Route path="/user-lookup" element={<UserLookupPage />} />
+            <Route path="/install-log" element={<InstallLogPage />} />
+            <Route path="*" element={<Navigate to="/home" replace />} />
+          </Routes>
+        </Suspense>
       </main>
     </>
   );

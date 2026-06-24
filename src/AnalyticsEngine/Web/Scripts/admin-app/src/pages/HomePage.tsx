@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import toast, { Toaster } from 'react-hot-toast';
+import toast from '../components/toast';
 import {
   Card,
   CardHeader,
@@ -139,7 +139,6 @@ export default function HomePage() {
 
   return (
     <div>
-      <Toaster />
       <Title3 block>Service Home - {status.buildLabel}</Title3>
 
       <div className={styles.cards}>
