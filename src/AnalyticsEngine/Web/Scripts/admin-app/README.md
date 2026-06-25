@@ -16,6 +16,7 @@ at the site root (`/`, via `HomeController.Index`) and its built assets live und
 | `#/home` | **Home** | System status: data counts and configuration (SQL, Redis, Cognitive, Service Bus, calls webhook). The default page. |
 | `#/teams` | **Teams Permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token in Redis). Ported from the original app. |
 | `#/user-lookup` | **User Data Lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
+| `#/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
 | `#/install-log` | **Install Log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The most recent is the current configuration. |
 
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
@@ -38,6 +39,8 @@ analytics. If `SiteTokenAPI` can't return a token, the SPA falls back to client-
 | `o365AnalyticsAuthAPI` | `api/TeamsAuthAPI` | Get / set Teams deep-analytics authorisation. |
 | `o365AnalyticsUserLookupAPI` | `api/UserDataLookup` | User data lookup (summary + per-category detail). |
 | `o365AnalyticsSystemStatusAPI` | `api/SystemStatus` | System status / configuration for the Home page. |
+| `o365AnalyticsInstallLogAPI` | `api/InstallLog` | Install log (config history from `sys_configs`) for the Install Log page. |
+| `o365AnalyticsProfilingStatusAPI` | `api/ProfilingStatus` | Profiling data freshness + paged `profiling.TraceLogs` for the Profiling page. |
 
 ## Local development
 
