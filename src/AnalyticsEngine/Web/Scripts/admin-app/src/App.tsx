@@ -17,6 +17,7 @@ import Spinner from './components/Spinner';
 const HomePage = lazy(() => import('./pages/HomePage'));
 const TeamsPermissionsPage = lazy(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazy(() => import('./pages/UserLookupPage'));
+const ProfilingStatusPage = lazy(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazy(() => import('./pages/InstallLogPage'));
 
 const useStyles = makeStyles({
@@ -61,9 +62,11 @@ export default function App() {
     ? 'teams'
     : location.pathname.startsWith('/user-lookup')
       ? 'user-lookup'
-      : location.pathname.startsWith('/install-log')
-        ? 'install-log'
-        : 'home';
+      : location.pathname.startsWith('/profiling')
+        ? 'profiling'
+        : location.pathname.startsWith('/install-log')
+          ? 'install-log'
+          : 'home';
 
   const onTabSelect: SelectTabEventHandler = (_event, data) => {
     navigate(`/${data.value}`);
@@ -94,6 +97,7 @@ export default function App() {
           <Tab value="home">Home</Tab>
           <Tab value="teams">Teams Permissions</Tab>
           <Tab value="user-lookup">User Data Lookup</Tab>
+          <Tab value="profiling">Profiling</Tab>
           <Tab value="install-log">Install Log</Tab>
         </TabList>
       </div>
@@ -111,6 +115,7 @@ export default function App() {
             <Route path="/home" element={<HomePage />} />
             <Route path="/teams" element={<TeamsPermissionsPage />} />
             <Route path="/user-lookup" element={<UserLookupPage />} />
+            <Route path="/profiling" element={<ProfilingStatusPage />} />
             <Route path="/install-log" element={<InstallLogPage />} />
             <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>

@@ -204,6 +204,7 @@
     <Compile Include="Controllers\BaseAPIController.cs" />
     <Compile Include="Controllers\ImportConfigController.cs" />
     <Compile Include="Controllers\InstallLogAPIController.cs" />
+    <Compile Include="Controllers\ProfilingStatusAPIController.cs" />
     <Compile Include="Controllers\CallRecordWebhookController.cs" />
     <Compile Include="Controllers\HomeController.cs" />
     <Compile Include="Controllers\SiteTokenAPIController.cs" />
@@ -215,6 +216,7 @@
     </Compile>
     <Compile Include="Models\AuthTeamRequest.cs" />
     <Compile Include="Models\InstallLogModels.cs" />
+    <Compile Include="Models\ProfilingStatusModels.cs" />
     <Compile Include="Models\SystemStatus.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
     <Compile Include="Models\TeamAuthStatusResponse.cs" />
