@@ -2,6 +2,16 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <!--
+      Suppress CS0618 for this project. As a netstandard2.0 library it references the
+      System.Data.SqlClient *NuGet package*, whose types (SqlConnection, SqlException,
+      SqlConnectionStringBuilder, ...) are marked [Obsolete] in favour of Microsoft.Data.SqlClient.
+      We intentionally stay on System.Data.SqlClient because EF6 (used across the solution) has no
+      official Microsoft.Data.SqlClient provider and mandates the System.Data.SqlClient provider, so
+      the obsolete usage here is deliberate. (.NET Framework consumers use the in-box, non-obsolete
+      System.Data.SqlClient and don't warn.) See issue for context.
+    -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
   </PropertyGroup>
 
 
