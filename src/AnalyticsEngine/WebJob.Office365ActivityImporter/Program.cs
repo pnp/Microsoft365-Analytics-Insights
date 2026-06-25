@@ -280,7 +280,7 @@ namespace WebJob.Office365ActivityImporter
 
                 if (runAgain)
                 {
-                    ConsoleApp.WebjobWait(telemetry);
+                    ConsoleApp.WebjobWait(telemetry, configuredSettings.ImportCyclePauseMinutes);
                 }
             } // Go around again?
 
@@ -326,6 +326,8 @@ namespace WebJob.Office365ActivityImporter
             telemetry.LogInformation($"Destination SQL Server='{sqlConnectionInfo.DataSource}', DB='{sqlConnectionInfo.InitialCatalog}'.");
             telemetry.LogInformation($"Azure AD tenant='{settings.TenantDomain}, client ID='{settings.ClientID}'.");
             telemetry.LogInformation($"Days back to check for events from Activity API='{settings.DaysBeforeNowToDownload}'.");
+            telemetry.LogInformation($"Import aggressiveness='{settings.ImportAggressiveness}' (audit-load threads={settings.MaxAuditReportLoadConcurrency}, " +
+                $"cycle pause={settings.ImportCyclePauseMinutes} min, non-fresh Graph import interval={settings.GraphMetadataImportIntervalHours}h).");
 
             // Print & verify O365 workloads to import
             var validWorkloadsConfig = false;

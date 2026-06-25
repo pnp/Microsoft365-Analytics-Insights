@@ -26,6 +26,11 @@ namespace Tests.UnitTests
         private const string MetadataRefreshMinutes = "MetadataRefreshMinutes";
         private const string ForceUsageReportsImport = "ForceUsageReportsImport";
         private const string MaxSummaryFetchConcurrency = "MaxSummaryFetchConcurrency";
+        private const string ImportAggressiveness = "ImportAggressiveness";
+        private const string MaxAuditReportLoadConcurrency = "MaxAuditReportLoadConcurrency";
+        private const string ImportCyclePauseMinutes = "ImportCyclePauseMinutes";
+        private const string GraphMetadataImportIntervalHours = "GraphMetadataImportIntervalHours";
+        private const string ImportStartStaggerMinutes = "ImportStartStaggerMinutes";
 
         private static readonly string[] _trackedKeys =
         {
@@ -35,6 +40,11 @@ namespace Tests.UnitTests
             MetadataRefreshMinutes,
             ForceUsageReportsImport,
             MaxSummaryFetchConcurrency,
+            ImportAggressiveness,
+            MaxAuditReportLoadConcurrency,
+            ImportCyclePauseMinutes,
+            GraphMetadataImportIntervalHours,
+            ImportStartStaggerMinutes,
         };
 
         private Dictionary<string, string> _originalAppSettings;
@@ -205,6 +215,136 @@ namespace Tests.UnitTests
             var cfg = new AppConfig();
             Assert.IsFalse(cfg.ForceUsageReportsImport,
                 "Unparseable values must not flip ForceUsageReportsImport to true.");
+        }
+
+        // ----- Import aggressiveness preset & cadence knobs (issue #161) -----
+
+        [TestMethod]
+        public void ImportAggressiveness_EmptyAppSetting_DefaultsToBalanced()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, string.Empty);
+            Assert.AreEqual(ImportAggressivenessLevel.Balanced, new AppConfig().ImportAggressiveness);
+        }
+
+        [TestMethod]
+        public void ImportAggressiveness_InvalidAppSetting_DefaultsToBalanced()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "turbo");
+            Assert.AreEqual(ImportAggressivenessLevel.Balanced, new AppConfig().ImportAggressiveness);
+        }
+
+        [TestMethod]
+        public void ImportAggressiveness_IsCaseInsensitive()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "gEnTlE");
+            Assert.AreEqual(ImportAggressivenessLevel.Gentle, new AppConfig().ImportAggressiveness);
+        }
+
+        [TestMethod]
+        public void BalancedPreset_SetsModeratedDefaults()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(8, cfg.MaxAuditReportLoadConcurrency, "Balanced audit-load concurrency should be 8.");
+            Assert.AreEqual(10, cfg.ImportCyclePauseMinutes, "Balanced cycle pause should be 10 min.");
+        }
+
+        [TestMethod]
+        public void HighPreset_SetsLegacyDefaults()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(20, cfg.MaxAuditReportLoadConcurrency, "High audit-load concurrency should be 20 (legacy).");
+            Assert.AreEqual(10, cfg.ImportCyclePauseMinutes);
+        }
+
+        [TestMethod]
+        public void GentlePreset_SetsLowCpuDefaults()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(3, cfg.MaxAuditReportLoadConcurrency, "Gentle audit-load concurrency should be 3.");
+            Assert.AreEqual(20, cfg.ImportCyclePauseMinutes, "Gentle cycle pause should be 20 min.");
+        }
+
+        [TestMethod]
+        public void ExplicitMaxAuditReportLoadConcurrency_OverridesPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "12");
+            Assert.AreEqual(12, new AppConfig().MaxAuditReportLoadConcurrency,
+                "An explicit MaxAuditReportLoadConcurrency must override the preset.");
+        }
+
+        [TestMethod]
+        public void MaxAuditReportLoadConcurrency_ZeroOrInvalid_FallsBackToPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "0");
+            Assert.AreEqual(8, new AppConfig().MaxAuditReportLoadConcurrency, "0 is invalid; preset (8) preserved.");
+
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "abc");
+            Assert.AreEqual(8, new AppConfig().MaxAuditReportLoadConcurrency, "Unparseable; preset (8) preserved.");
+        }
+
+        [TestMethod]
+        public void ExplicitImportCyclePauseMinutes_OverridesPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, "30");
+            Assert.AreEqual(30, new AppConfig().ImportCyclePauseMinutes);
+        }
+
+        [TestMethod]
+        public void GraphMetadataImportIntervalHours_EmptyOrInvalid_DefaultsTo24()
+        {
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            Assert.AreEqual(24, new AppConfig().GraphMetadataImportIntervalHours);
+
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "nope");
+            Assert.AreEqual(24, new AppConfig().GraphMetadataImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void GraphMetadataImportIntervalHours_ZeroIsAllowed()
+        {
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "0");
+            Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours,
+                "0 explicitly disables the gate and must be honoured.");
+        }
+
+        [TestMethod]
+        public void GraphMetadataImportIntervalHours_PositiveIsParsed()
+        {
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "6");
+            Assert.AreEqual(6, new AppConfig().GraphMetadataImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void ImportStartStaggerMinutes_EmptyOrInvalid_DefaultsToHalfCyclePause()
+        {
+            // Gentle => pause 20 => default stagger 10
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, string.Empty);
+            Assert.AreEqual(10, new AppConfig().ImportStartStaggerMinutes,
+                "Default stagger should be half the (Gentle=20) cycle pause.");
+        }
+
+        [TestMethod]
+        public void ImportStartStaggerMinutes_ExplicitAndZeroHonoured()
+        {
+            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, "7");
+            Assert.AreEqual(7, new AppConfig().ImportStartStaggerMinutes);
+
+            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, "0");
+            Assert.AreEqual(0, new AppConfig().ImportStartStaggerMinutes, "0 disables stagger and must be honoured.");
         }
     }
 }

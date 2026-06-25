@@ -35,6 +35,51 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _graphClient = graphClient;
         }
 
+        // Redis keys for the per-section "last run" timestamps used to daily-gate the non-fresh Graph imports.
+        private const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
+        private const string GraphUserAppsLastImportedKey = "GraphUserAppsLastImported";
+        private const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
+
+        /// <summary>
+        /// Runs a "non-fresh" Graph import section at most once per
+        /// <see cref="AppConfig.GraphMetadataImportIntervalHours"/>. The last-run timestamp is persisted
+        /// in Redis (keyed per section) so the gate survives the per-cycle recreation of this importer.
+        /// With no Redis connection, or an interval of 0, the section runs every cycle (legacy behaviour).
+        /// </summary>
+        private async Task RunGraphSectionIfDueAsync(string redisKey, string sectionName, Func<Task> sectionWork)
+        {
+            var intervalHours = _settings.GraphMetadataImportIntervalHours;
+
+            RedisSingleDateLoader gate = null;
+            if (intervalHours > 0 && !string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
+            {
+                gate = new RedisSingleDateLoader(_settings.ConnectionStrings.RedisConnectionString, redisKey,
+                    _settings.TenantGUID.ToString(), _settings.ClientID, _settings.ClientSecret);
+
+                var lastRun = await gate.GetLastDT();
+                if (lastRun != null && DateTime.Now.Subtract(lastRun.Value) < TimeSpan.FromHours(intervalHours))
+                {
+                    _telemetry.LogInformation($"Skipping {sectionName}: imported recently ({lastRun.Value}). " +
+                        $"Next run after {lastRun.Value.AddHours(intervalHours)} (GraphMetadataImportIntervalHours={intervalHours}).");
+                    return;
+                }
+            }
+
+            var timer = new JobTimer(_telemetry, sectionName);
+            timer.Start();
+
+            await sectionWork();
+
+            timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+
+            // Only record the run once it has completed successfully, so a failure doesn't suppress
+            // the next attempt for a whole interval.
+            if (gate != null)
+            {
+                await gate.SaveDT();
+            }
+        }
+
 
         /// <summary>
         /// Main entry-point

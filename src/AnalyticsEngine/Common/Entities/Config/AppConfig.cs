@@ -105,6 +105,82 @@ namespace Common.Entities.Config
                 && maxSummaryFetchConcurrency > 0
                 ? maxSummaryFetchConcurrency
                 : 8;
+
+            // Import "aggressiveness" preset (High | Balanced | Gentle, default Balanced). It provides
+            // the default values for the burst/cadence knobs below so an admin can ease up CPU usage
+            // with a single setting. Any explicit per-knob AppSetting still overrides the preset.
+            this.ImportAggressiveness = ParseAggressiveness(ConfigurationManager.AppSettings.Get("ImportAggressiveness"));
+            var preset = GetPreset(this.ImportAggressiveness);
+
+            // Max simultaneous threads used to full-load audit reports (Office 365 Management Activity
+            // API). Was a hardcoded 20; lower values reduce peak CPU on the (often 1-vCPU) App Service
+            // plan. Preset-derived unless explicitly set & > 0.
+            this.MaxAuditReportLoadConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxAuditReportLoadConcurrency"), out var maxAuditReportLoadConcurrency)
+                && maxAuditReportLoadConcurrency > 0
+                ? maxAuditReportLoadConcurrency
+                : preset.MaxAuditReportLoadConcurrency;
+
+            // Minutes the WebJob waits between import cycles (was a hardcoded 10). Preset-derived unless
+            // explicitly set & > 0.
+            this.ImportCyclePauseMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("ImportCyclePauseMinutes"), out var importCyclePauseMinutes)
+                && importCyclePauseMinutes > 0
+                ? importCyclePauseMinutes
+                : preset.ImportCyclePauseMinutes;
+
+            // Minimum hours between the "non-fresh" Graph imports (user metadata, user Teams apps, Teams
+            // crawl). These barely change intraday, so by default they run once a day instead of every
+            // cycle. 0 disables the gate (runs every cycle, legacy behaviour). Default 24, independent
+            // of the aggressiveness preset. Invalid/empty falls back to 24.
+            this.GraphMetadataImportIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphMetadataImportIntervalHours"), out var graphMetadataImportIntervalHours)
+                && graphMetadataImportIntervalHours >= 0
+                ? graphMetadataImportIntervalHours
+                : 24;
+
+            // One-off start offset (minutes) applied before the first import cycle, used to stagger the
+            // two WebJobs so they don't peak on the shared App Service plan at the same time. 0 disables.
+            // Default = half the cycle pause. Invalid/empty falls back to that default.
+            this.ImportStartStaggerMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("ImportStartStaggerMinutes"), out var importStartStaggerMinutes)
+                && importStartStaggerMinutes >= 0
+                ? importStartStaggerMinutes
+                : Math.Max(0, this.ImportCyclePauseMinutes / 2);
+        }
+
+        /// <summary>
+        /// Parses the <c>ImportAggressiveness</c> AppSetting, defaulting to
+        /// <see cref="ImportAggressivenessLevel.Balanced"/> when missing or invalid.
+        /// </summary>
+        private static ImportAggressivenessLevel ParseAggressiveness(string raw)
+        {
+            if (!string.IsNullOrWhiteSpace(raw) && Enum.TryParse<ImportAggressivenessLevel>(raw.Trim(), ignoreCase: true, out var level))
+            {
+                return level;
+            }
+            return ImportAggressivenessLevel.Balanced;
+        }
+
+        /// <summary>
+        /// Preset default values for the burst/cadence knobs, keyed by aggressiveness level.
+        /// Audit events &amp; hits keep the same cycle cadence at every level; only the audit burst
+        /// concurrency (and, for Gentle, the cycle pause) change.
+        /// </summary>
+        private static AggressivenessPreset GetPreset(ImportAggressivenessLevel level)
+        {
+            switch (level)
+            {
+                case ImportAggressivenessLevel.High:
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 20, ImportCyclePauseMinutes = 10 };
+                case ImportAggressivenessLevel.Gentle:
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 3, ImportCyclePauseMinutes = 20 };
+                case ImportAggressivenessLevel.Balanced:
+                default:
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 8, ImportCyclePauseMinutes = 10 };
+            }
+        }
+
+        private sealed class AggressivenessPreset
+        {
+            public int MaxAuditReportLoadConcurrency { get; set; }
+            public int ImportCyclePauseMinutes { get; set; }
         }
 
         public string BuildLabel { get; set; }
@@ -229,5 +305,55 @@ namespace Common.Entities.Config
         /// Default 8. Lower values reduce throttling risk; higher values increase wall-clock throughput.
         /// </summary>
         public int MaxSummaryFetchConcurrency { get; set; } = 8;
+
+        /// <summary>
+        /// Import "aggressiveness" preset that supplies the default burst/cadence knobs below.
+        /// Default <see cref="ImportAggressivenessLevel.Balanced"/>. Set via the
+        /// <c>ImportAggressiveness</c> AppSetting (High | Balanced | Gentle).
+        /// </summary>
+        public ImportAggressivenessLevel ImportAggressiveness { get; set; } = ImportAggressivenessLevel.Balanced;
+
+        /// <summary>
+        /// Maximum simultaneous threads used to full-load audit reports from the Office 365 Management
+        /// Activity API. Lower values reduce peak CPU. Preset-derived (High=20, Balanced=8, Gentle=3)
+        /// unless the <c>MaxAuditReportLoadConcurrency</c> AppSetting is set &amp; &gt; 0.
+        /// </summary>
+        public int MaxAuditReportLoadConcurrency { get; set; } = 8;
+
+        /// <summary>
+        /// Minutes the WebJob waits between import cycles. Preset-derived (High/Balanced=10, Gentle=20)
+        /// unless the <c>ImportCyclePauseMinutes</c> AppSetting is set &amp; &gt; 0.
+        /// </summary>
+        public int ImportCyclePauseMinutes { get; set; } = 10;
+
+        /// <summary>
+        /// Minimum hours between the "non-fresh" Graph imports (user metadata, user Teams apps, Teams
+        /// crawl). Default 24 so they run once a day instead of every cycle. 0 disables the gate.
+        /// </summary>
+        public int GraphMetadataImportIntervalHours { get; set; } = 24;
+
+        /// <summary>
+        /// One-off start offset (minutes) applied before the first import cycle, used to stagger the
+        /// two WebJobs so they don't peak on the shared App Service plan simultaneously. Default = half
+        /// the cycle pause. 0 disables.
+        /// </summary>
+        public int ImportStartStaggerMinutes { get; set; } = 5;
+    }
+
+    /// <summary>
+    /// Import aggressiveness presets. Higher levels favour wall-clock speed (more parallelism,
+    /// shorter pauses); lower levels favour low, steady CPU usage on the shared App Service plan.
+    /// Audit events &amp; hits keep the same cycle cadence at every level.
+    /// </summary>
+    public enum ImportAggressivenessLevel
+    {
+        /// <summary>Fastest, highest peak CPU (legacy behaviour: 20 audit-load threads, 10-min pause).</summary>
+        High,
+
+        /// <summary>Default. Modestly eased: 8 audit-load threads, 10-min pause, non-fresh Graph imports daily-gated.</summary>
+        Balanced,
+
+        /// <summary>Lowest CPU: 3 audit-load threads, 20-min pause.</summary>
+        Gentle
     }
 }

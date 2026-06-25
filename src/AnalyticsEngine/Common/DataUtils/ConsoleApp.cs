@@ -9,10 +9,16 @@ namespace DataUtils
     public class ConsoleApp
     {
 
-        public static void WebjobWait(ILogger telemetry)
+        /// <summary>
+        /// Pause between WebJob import cycles.
+        /// </summary>
+        /// <param name="telemetry">Logger.</param>
+        /// <param name="waitMinutes">Minutes to wait. Clamped to a minimum of 1. Default 10.</param>
+        public static void WebjobWait(ILogger telemetry, int waitMinutes = 10)
         {
-            telemetry.LogInformation("Waiting 10 mins...");
-            System.Threading.Thread.Sleep(600000); // 10 mins
+            var minutes = waitMinutes < 1 ? 1 : waitMinutes;
+            telemetry.LogInformation($"Waiting {minutes} min(s)...");
+            System.Threading.Thread.Sleep(minutes * 60 * 1000);
         }
 
         /// <summary>

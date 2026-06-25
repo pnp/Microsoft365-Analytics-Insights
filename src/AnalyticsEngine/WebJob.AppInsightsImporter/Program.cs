@@ -93,6 +93,16 @@ namespace WebJob.AppInsightsImporter
                 }
             }
 
+            // Stagger this WebJob's first cycle so it doesn't peak on the shared App Service plan at the
+            // same time as the activity importer. One-off; later cycles use ImportCyclePauseMinutes.
+#if !DEBUG
+            if (runAgain && config.ImportStartStaggerMinutes > 0)
+            {
+                telemetry.LogInformation($"Staggering start by {config.ImportStartStaggerMinutes} min(s) to avoid simultaneous CPU peaks with the activity importer...");
+                System.Threading.Thread.Sleep(config.ImportStartStaggerMinutes * 60 * 1000);
+            }
+#endif
+
             try
             {
                 while (runAgain)
@@ -121,7 +131,7 @@ namespace WebJob.AppInsightsImporter
 
                     if (runAgain)
                     {
-                        ConsoleApp.WebjobWait(telemetry);
+                        ConsoleApp.WebjobWait(telemetry, config.ImportCyclePauseMinutes);
                     }
                 }
             }
