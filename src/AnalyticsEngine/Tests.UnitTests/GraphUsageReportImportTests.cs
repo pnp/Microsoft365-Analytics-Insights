@@ -67,7 +67,7 @@ namespace Tests.UnitTests
             await graphAppIndentityOAuthContext.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(graphAppIndentityOAuthContext.Creds);
-            var graphImporter = new GraphImporter(telemetry, new NoUsersHaveGroupsUserGroupsCache(telemetry), graphAppIndentityOAuthContext, graphClient, authConfig);
+            var graphImporter = new GraphImporter(telemetry, new NoUsersHaveGroupsUserGroupsCache(telemetry), graphAppIndentityOAuthContext, graphClient, authConfig, new InMemoryImportLastRunStore());
 
             await graphImporter.GetAndSaveActivityReportsMultiThreaded(1, new ManualGraphCallClient(graphAppIndentityOAuthContext, telemetry),
                 new NoUsersHaveGroupsUserGroupsCache(telemetry), new UserGroupsFilterModel());

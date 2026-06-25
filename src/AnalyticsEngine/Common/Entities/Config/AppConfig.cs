@@ -127,14 +127,31 @@ namespace Common.Entities.Config
                 ? importCyclePauseMinutes
                 : preset.ImportCyclePauseMinutes;
 
-            // Minimum hours between the "non-fresh" Graph imports (user metadata, user Teams apps, Teams
-            // crawl). These barely change intraday, so by default they run once a day instead of every
-            // cycle. 0 disables the gate (runs every cycle, legacy behaviour). Default 24, independent
-            // of the aggressiveness preset. Invalid/empty falls back to 24.
+            // Minimum hours between the "static" non-fresh Graph imports (user metadata, user Teams
+            // apps). These barely change intraday, so by default they run once a day instead of every
+            // cycle. 0 disables the gate (runs every cycle). Preset-derived (High=0 i.e. legacy
+            // every-cycle, Balanced/Gentle=24) unless explicitly set >= 0.
             this.GraphMetadataImportIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphMetadataImportIntervalHours"), out var graphMetadataImportIntervalHours)
                 && graphMetadataImportIntervalHours >= 0
                 ? graphMetadataImportIntervalHours
-                : 24;
+                : preset.NonFreshGraphIntervalHours;
+
+            // Minimum hours between Teams crawls. Teams analytics (channel messages/reactions) is fresher
+            // than user metadata and crawls incrementally via delta tokens, so it has its own knob and
+            // can be made more frequent without un-gating the static imports. Same preset defaults.
+            this.GraphTeamsImportIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphTeamsImportIntervalHours"), out var graphTeamsImportIntervalHours)
+                && graphTeamsImportIntervalHours >= 0
+                ? graphTeamsImportIntervalHours
+                : preset.NonFreshGraphIntervalHours;
+
+            // One-off force flag: bypass the cadence gate for the non-fresh Graph imports (user metadata,
+            // user apps, Teams) for this run. Mirrors ForceUsageReportsImport. Default false.
+            var forceGraphMetadataImport = ConfigurationManager.AppSettings.Get("ForceGraphMetadataImport");
+            if (!string.IsNullOrEmpty(forceGraphMetadataImport)
+                && bool.TryParse(forceGraphMetadataImport, out var forceGraphMetadataImportBool))
+            {
+                this.ForceGraphMetadataImport = forceGraphMetadataImportBool;
+            }
 
             // One-off start offset (minutes) applied before the first import cycle, used to stagger the
             // two WebJobs so they don't peak on the shared App Service plan at the same time. 0 disables.
@@ -168,12 +185,12 @@ namespace Common.Entities.Config
             switch (level)
             {
                 case ImportAggressivenessLevel.High:
-                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 20, ImportCyclePauseMinutes = 10 };
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 20, ImportCyclePauseMinutes = 10, NonFreshGraphIntervalHours = 0 };
                 case ImportAggressivenessLevel.Gentle:
-                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 3, ImportCyclePauseMinutes = 20 };
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 3, ImportCyclePauseMinutes = 20, NonFreshGraphIntervalHours = 24 };
                 case ImportAggressivenessLevel.Balanced:
                 default:
-                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 8, ImportCyclePauseMinutes = 10 };
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 8, ImportCyclePauseMinutes = 10, NonFreshGraphIntervalHours = 24 };
             }
         }
 
@@ -181,6 +198,9 @@ namespace Common.Entities.Config
         {
             public int MaxAuditReportLoadConcurrency { get; set; }
             public int ImportCyclePauseMinutes { get; set; }
+
+            /// <summary>Default daily-gate (hours) for the non-fresh Graph imports. 0 = every cycle (legacy).</summary>
+            public int NonFreshGraphIntervalHours { get; set; }
         }
 
         public string BuildLabel { get; set; }
@@ -327,10 +347,26 @@ namespace Common.Entities.Config
         public int ImportCyclePauseMinutes { get; set; } = 10;
 
         /// <summary>
-        /// Minimum hours between the "non-fresh" Graph imports (user metadata, user Teams apps, Teams
-        /// crawl). Default 24 so they run once a day instead of every cycle. 0 disables the gate.
+        /// Minimum hours between the "static" non-fresh Graph imports (user metadata, user Teams apps).
+        /// Preset-derived (High=0 i.e. every cycle/legacy, Balanced/Gentle=24) unless the
+        /// <c>GraphMetadataImportIntervalHours</c> AppSetting is set &gt;= 0. 0 disables the gate.
         /// </summary>
         public int GraphMetadataImportIntervalHours { get; set; } = 24;
+
+        /// <summary>
+        /// Minimum hours between Teams crawls (channel messages/reactions, etc). Separate from
+        /// <see cref="GraphMetadataImportIntervalHours"/> because Teams data is fresher and crawls
+        /// incrementally. Preset-derived (High=0, Balanced/Gentle=24) unless the
+        /// <c>GraphTeamsImportIntervalHours</c> AppSetting is set &gt;= 0. 0 disables the gate.
+        /// </summary>
+        public int GraphTeamsImportIntervalHours { get; set; } = 24;
+
+        /// <summary>
+        /// When true, bypasses the cadence gate for the non-fresh Graph imports (user metadata, user
+        /// Teams apps, Teams crawl) for one run - the equivalent of <see cref="ForceUsageReportsImport"/>
+        /// for those imports. Default false.
+        /// </summary>
+        public bool ForceGraphMetadataImport { get; set; } = false;
 
         /// <summary>
         /// One-off start offset (minutes) applied before the first import cycle, used to stagger the
@@ -347,13 +383,13 @@ namespace Common.Entities.Config
     /// </summary>
     public enum ImportAggressivenessLevel
     {
-        /// <summary>Fastest, highest peak CPU (legacy behaviour: 20 audit-load threads, 10-min pause).</summary>
+        /// <summary>Fastest, highest peak CPU. Full legacy behaviour: 20 audit-load threads, 10-min pause, and the non-fresh Graph imports run every cycle (interval 0).</summary>
         High,
 
-        /// <summary>Default. Modestly eased: 8 audit-load threads, 10-min pause, non-fresh Graph imports daily-gated.</summary>
+        /// <summary>Default. Modestly eased: 8 audit-load threads, 10-min pause, non-fresh Graph imports daily-gated (24h).</summary>
         Balanced,
 
-        /// <summary>Lowest CPU: 3 audit-load threads, 20-min pause.</summary>
+        /// <summary>Lowest CPU: 3 audit-load threads, 20-min pause, non-fresh Graph imports daily-gated (24h).</summary>
         Gentle
     }
 }

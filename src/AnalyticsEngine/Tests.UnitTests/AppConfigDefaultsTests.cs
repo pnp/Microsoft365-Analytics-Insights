@@ -30,6 +30,8 @@ namespace Tests.UnitTests
         private const string MaxAuditReportLoadConcurrency = "MaxAuditReportLoadConcurrency";
         private const string ImportCyclePauseMinutes = "ImportCyclePauseMinutes";
         private const string GraphMetadataImportIntervalHours = "GraphMetadataImportIntervalHours";
+        private const string GraphTeamsImportIntervalHours = "GraphTeamsImportIntervalHours";
+        private const string ForceGraphMetadataImport = "ForceGraphMetadataImport";
         private const string ImportStartStaggerMinutes = "ImportStartStaggerMinutes";
 
         private static readonly string[] _trackedKeys =
@@ -44,6 +46,8 @@ namespace Tests.UnitTests
             MaxAuditReportLoadConcurrency,
             ImportCyclePauseMinutes,
             GraphMetadataImportIntervalHours,
+            GraphTeamsImportIntervalHours,
+            ForceGraphMetadataImport,
             ImportStartStaggerMinutes,
         };
 
@@ -345,6 +349,52 @@ namespace Tests.UnitTests
 
             ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, "0");
             Assert.AreEqual(0, new AppConfig().ImportStartStaggerMinutes, "0 disables stagger and must be honoured.");
+        }
+
+        [TestMethod]
+        public void HighPreset_DisablesNonFreshGraphGate()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(0, cfg.GraphMetadataImportIntervalHours, "High must run metadata/apps every cycle (legacy).");
+            Assert.AreEqual(0, cfg.GraphTeamsImportIntervalHours, "High must run Teams every cycle (legacy).");
+        }
+
+        [TestMethod]
+        public void BalancedPreset_DailyGatesNonFreshGraph()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(24, cfg.GraphMetadataImportIntervalHours);
+            Assert.AreEqual(24, cfg.GraphTeamsImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void GraphTeamsImportIntervalHours_ZeroAndExplicitHonoured()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, "0");
+            Assert.AreEqual(0, new AppConfig().GraphTeamsImportIntervalHours, "0 disables the Teams gate.");
+
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, "6");
+            Assert.AreEqual(6, new AppConfig().GraphTeamsImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void ForceGraphMetadataImport_DefaultsFalse_ParsesTrue_IgnoresGarbage()
+        {
+            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, string.Empty);
+            Assert.IsFalse(new AppConfig().ForceGraphMetadataImport);
+
+            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, "true");
+            Assert.IsTrue(new AppConfig().ForceGraphMetadataImport);
+
+            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, "garbage");
+            Assert.IsFalse(new AppConfig().ForceGraphMetadataImport, "Unparseable must not flip to true.");
         }
     }
 }

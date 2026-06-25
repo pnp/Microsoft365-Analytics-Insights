@@ -31,6 +31,7 @@
   <ItemGroup>
     <Compile Remove="Generated\**" />
     <Compile Include="AppConfigDefaultsTests.cs" />
+    <Compile Include="ImportCadenceTests.cs" />
     <Compile Include="AppInsightsAuthTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />

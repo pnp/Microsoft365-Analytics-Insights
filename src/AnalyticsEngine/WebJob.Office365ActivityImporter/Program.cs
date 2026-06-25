@@ -8,6 +8,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Installer;
+using Common.Entities.Redis;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -185,12 +186,41 @@ namespace WebJob.Office365ActivityImporter
                 statsDatesLoader = new InMemoryStatsDatesLoader();
             }
 
+            // Cadence-gate store for the non-fresh Graph imports (user metadata, user apps, Teams).
+            // Created ONCE here, outside the cycle loop, so the in-memory fallback retains its "last run"
+            // timestamps across cycles (mirrors statsDatesLoader above). Redis when configured (gate also
+            // survives WebJob restarts); otherwise in-memory (resets on restart). Reads/writes are
+            // fail-open so a Redis blip never skips an import.
+            IImportLastRunStore graphLastRunStore;
+            if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+            {
+                try
+                {
+                    var cache = CacheConnectionManager.GetConnectionManager(
+                        configuredSettings.ConnectionStrings.RedisConnectionString,
+                        tenantId: configuredSettings.TenantGUID.ToString(),
+                        clientId: configuredSettings.ClientID,
+                        clientSecret: configuredSettings.ClientSecret);
+                    graphLastRunStore = new RedisImportLastRunStore(cache, telemetry);
+                }
+                catch (Exception ex)
+                {
+                    telemetry.LogWarning($"Could not connect to Redis for import cadence gating ({ex.Message}); using in-memory fallback (the gate resets when the WebJob restarts).");
+                    graphLastRunStore = new InMemoryImportLastRunStore();
+                }
+            }
+            else
+            {
+                telemetry.LogInformation("No Redis configured - using in-memory import cadence gating (resets when the WebJob restarts).");
+                graphLastRunStore = new InMemoryImportLastRunStore();
+            }
+
             // Run app
             while (runAgain)
             {
                 var importCycleTimer = new JobTimer(telemetry, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(telemetry, configuredSettings);
+                var tasks = new ProgramTasks(telemetry, configuredSettings, graphLastRunStore);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
