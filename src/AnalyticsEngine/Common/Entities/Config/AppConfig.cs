@@ -120,6 +120,16 @@ namespace Common.Entities.Config
                 ? maxAuditReportLoadConcurrency
                 : preset.MaxAuditReportLoadConcurrency;
 
+            // Max simultaneous threads InsertBatch uses to commit staged rows to SQL (was a hardcoded 20
+            // inside ParallelListProcessor). Every InsertBatch importer - audit-event persistence, Copilot,
+            // Power Platform and App Insights hits - funnels its SQL commit through this one choke point,
+            // so it is the lever for the SQL Server CPU/DTU burst on commit. Lower values reduce the SQL
+            // peak (and, for insert-bound commits, total SQL CPU). Preset-derived unless explicitly set & > 0.
+            this.MaxSqlCommitConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxSqlCommitConcurrency"), out var maxSqlCommitConcurrency)
+                && maxSqlCommitConcurrency > 0
+                ? maxSqlCommitConcurrency
+                : preset.MaxSqlCommitConcurrency;
+
             // Minutes the WebJob waits between import cycles (was a hardcoded 10). Preset-derived unless
             // explicitly set & > 0.
             this.ImportCyclePauseMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("ImportCyclePauseMinutes"), out var importCyclePauseMinutes)
@@ -185,18 +195,19 @@ namespace Common.Entities.Config
             switch (level)
             {
                 case ImportAggressivenessLevel.High:
-                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 20, ImportCyclePauseMinutes = 10, NonFreshGraphIntervalHours = 0 };
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 20, MaxSqlCommitConcurrency = 20, ImportCyclePauseMinutes = 10, NonFreshGraphIntervalHours = 0 };
                 case ImportAggressivenessLevel.Gentle:
-                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 3, ImportCyclePauseMinutes = 20, NonFreshGraphIntervalHours = 24 };
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 3, MaxSqlCommitConcurrency = 3, ImportCyclePauseMinutes = 20, NonFreshGraphIntervalHours = 24 };
                 case ImportAggressivenessLevel.Balanced:
                 default:
-                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 8, ImportCyclePauseMinutes = 10, NonFreshGraphIntervalHours = 24 };
+                    return new AggressivenessPreset { MaxAuditReportLoadConcurrency = 8, MaxSqlCommitConcurrency = 8, ImportCyclePauseMinutes = 10, NonFreshGraphIntervalHours = 24 };
             }
         }
 
         private sealed class AggressivenessPreset
         {
             public int MaxAuditReportLoadConcurrency { get; set; }
+            public int MaxSqlCommitConcurrency { get; set; }
             public int ImportCyclePauseMinutes { get; set; }
 
             /// <summary>Default daily-gate (hours) for the non-fresh Graph imports. 0 = every cycle (legacy).</summary>
@@ -339,6 +350,17 @@ namespace Common.Entities.Config
         /// unless the <c>MaxAuditReportLoadConcurrency</c> AppSetting is set &amp; &gt; 0.
         /// </summary>
         public int MaxAuditReportLoadConcurrency { get; set; } = 8;
+
+        /// <summary>
+        /// Maximum simultaneous threads <see cref="DataUtils.Sql.Inserts.InsertBatch{T}"/> uses to commit
+        /// staged rows to SQL (was a hardcoded 20 inside <c>ParallelListProcessor</c>). This is the single
+        /// choke point for every InsertBatch importer's SQL commit (audit-event persistence, Copilot,
+        /// Power Platform, App Insights hits), so lowering it eases the SQL Server CPU/DTU burst on commit.
+        /// Preset-derived (High=20, Balanced=8, Gentle=3) unless the <c>MaxSqlCommitConcurrency</c>
+        /// AppSetting is set &amp; &gt; 0. Applied at WebJob startup via
+        /// <c>InsertBatchConcurrency.MaxConcurrentThreads</c>.
+        /// </summary>
+        public int MaxSqlCommitConcurrency { get; set; } = 8;
 
         /// <summary>
         /// Minutes the WebJob waits between import cycles. Preset-derived (High/Balanced=10, Gentle=20)

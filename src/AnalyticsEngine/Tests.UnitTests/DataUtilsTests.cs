@@ -979,6 +979,31 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void InsertBatchConcurrency_DefaultAndClamp()
+        {
+            // The SQL-commit concurrency lever (issue #161 / PR #162). Defaults to the legacy 20 so
+            // behaviour is unchanged unless a host lowers it; values < 1 clamp to 1.
+            var original = DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads;
+            try
+            {
+                Assert.AreEqual(20, original, "Default SQL-commit concurrency should be 20 (no behaviour change unless lowered).");
+
+                DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = 8;
+                Assert.AreEqual(8, DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads);
+
+                DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = 0;
+                Assert.AreEqual(1, DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads, "0 must clamp to 1.");
+
+                DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = -5;
+                Assert.AreEqual(1, DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads, "Negative must clamp to 1.");
+            }
+            finally
+            {
+                DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = original;
+            }
+        }
+
+        [TestMethod]
         public async Task ParallelListProcessor_PropagatesChunkExceptions()
         {
             // Regression guard: a chunk that throws must surface the exception to the caller. The old

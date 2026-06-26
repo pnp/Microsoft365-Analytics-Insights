@@ -63,6 +63,11 @@ namespace WebJob.AppInsightsImporter
 
             var telemetry = new AnalyticsLogger(config.AppInsightsConnectionString, "AppInsightsImporter");
 
+            // Apply the SQL-commit concurrency cap (aggressiveness preset) process-wide BEFORE any hit
+            // commit runs - the hits merge is the heaviest SQL importer, so cap its staging fan-out to
+            // ease the SQL Server CPU/DTU burst (issue #161 / PR #162).
+            DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = config.MaxSqlCommitConcurrency;
+
             // If no command line override was supplied, fall back to the config/app-setting value (if any).
             // The command line argument takes precedence over the config value.
             if (daysBeforeReadOverride == 0 && config.ReadHitsDaysBeforeToday.HasValue && config.ReadHitsDaysBeforeToday.Value > 0)

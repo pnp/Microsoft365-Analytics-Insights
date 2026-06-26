@@ -6,6 +6,7 @@ using System.Data.SqlClient;
 using System.Linq;
 using Tests.FakeDataGen.Copilot;
 using Tests.FakeDataGen.StressTests;
+using Tests.FakeDataGen.StressTests.LoadTest;
 
 namespace Tests.FakeDataGen
 {
@@ -40,6 +41,14 @@ namespace Tests.FakeDataGen
         static void Main(string[] args)
         {
             PrintBanner();
+
+            // Non-interactive load-test mode (issue #161 / PR #162). Usage:
+            //   Tests.FakeDataGen.exe loadtest "<SQL Connection String>" [targetItemsPerArea] [csvPath]
+            if (args.Length >= 2 && args[0].Equals("loadtest", StringComparison.OrdinalIgnoreCase))
+            {
+                RunLoadTest(args);
+                return;
+            }
 
             string connectionString = args.Length > 0 ? string.Join(" ", args) : null;
             if (!string.IsNullOrEmpty(connectionString))
@@ -102,6 +111,29 @@ namespace Tests.FakeDataGen
                 Console.Clear();
                 PrintBanner();
             }
+        }
+
+        private static void RunLoadTest(string[] args)
+        {
+            string connectionString = args[1];
+            int targetItems = 100000;
+            if (args.Length >= 3 && int.TryParse(args[2], out var ti) && ti > 0) targetItems = ti;
+            int reps = 3;
+            if (args.Length >= 4 && int.TryParse(args[3], out var rp) && rp > 0) reps = rp;
+            string csvPath = args.Length >= 5
+                ? args[4]
+                : System.IO.Path.Combine(Environment.CurrentDirectory, "loadtest-results.csv");
+            string areas = args.Length >= 6 ? args[5] : null;
+
+            DisplayConnectionInfo(connectionString);
+
+            // Bring schema (EF migrations + custom SQL scripts) up to date before importing.
+            Console.WriteLine("Ensuring database schema is up to date (DatabaseUpgrader.CheckDbUpgraded)...");
+            var initInfo = new DatabaseUpgradeInfo { ConnectionString = connectionString };
+            DatabaseUpgrader.CheckDbUpgraded(initInfo, msg => Console.WriteLine($"[DB] {msg}"));
+            Console.WriteLine("Schema ready.");
+
+            new LoadTestSuite(connectionString, csvPath, targetItems, reps, areas).Run();
         }
 
         private static void PrintBanner()

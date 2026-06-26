@@ -28,6 +28,7 @@ namespace Tests.UnitTests
         private const string MaxSummaryFetchConcurrency = "MaxSummaryFetchConcurrency";
         private const string ImportAggressiveness = "ImportAggressiveness";
         private const string MaxAuditReportLoadConcurrency = "MaxAuditReportLoadConcurrency";
+        private const string MaxSqlCommitConcurrency = "MaxSqlCommitConcurrency";
         private const string ImportCyclePauseMinutes = "ImportCyclePauseMinutes";
         private const string GraphMetadataImportIntervalHours = "GraphMetadataImportIntervalHours";
         private const string GraphTeamsImportIntervalHours = "GraphTeamsImportIntervalHours";
@@ -44,6 +45,7 @@ namespace Tests.UnitTests
             MaxSummaryFetchConcurrency,
             ImportAggressiveness,
             MaxAuditReportLoadConcurrency,
+            MaxSqlCommitConcurrency,
             ImportCyclePauseMinutes,
             GraphMetadataImportIntervalHours,
             GraphTeamsImportIntervalHours,
@@ -252,6 +254,7 @@ namespace Tests.UnitTests
             ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(8, cfg.MaxAuditReportLoadConcurrency, "Balanced audit-load concurrency should be 8.");
+            Assert.AreEqual(8, cfg.MaxSqlCommitConcurrency, "Balanced SQL-commit concurrency should be 8.");
             Assert.AreEqual(10, cfg.ImportCyclePauseMinutes, "Balanced cycle pause should be 10 min.");
         }
 
@@ -263,6 +266,7 @@ namespace Tests.UnitTests
             ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(20, cfg.MaxAuditReportLoadConcurrency, "High audit-load concurrency should be 20 (legacy).");
+            Assert.AreEqual(20, cfg.MaxSqlCommitConcurrency, "High SQL-commit concurrency should be 20 (legacy).");
             Assert.AreEqual(10, cfg.ImportCyclePauseMinutes);
         }
 
@@ -274,6 +278,7 @@ namespace Tests.UnitTests
             ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(3, cfg.MaxAuditReportLoadConcurrency, "Gentle audit-load concurrency should be 3.");
+            Assert.AreEqual(3, cfg.MaxSqlCommitConcurrency, "Gentle SQL-commit concurrency should be 3.");
             Assert.AreEqual(20, cfg.ImportCyclePauseMinutes, "Gentle cycle pause should be 20 min.");
         }
 
@@ -295,6 +300,26 @@ namespace Tests.UnitTests
 
             ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "abc");
             Assert.AreEqual(8, new AppConfig().MaxAuditReportLoadConcurrency, "Unparseable; preset (8) preserved.");
+        }
+
+        [TestMethod]
+        public void ExplicitMaxSqlCommitConcurrency_OverridesPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "12");
+            Assert.AreEqual(12, new AppConfig().MaxSqlCommitConcurrency,
+                "An explicit MaxSqlCommitConcurrency must override the preset.");
+        }
+
+        [TestMethod]
+        public void MaxSqlCommitConcurrency_ZeroOrInvalid_FallsBackToPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "0");
+            Assert.AreEqual(8, new AppConfig().MaxSqlCommitConcurrency, "0 is invalid; preset (8) preserved.");
+
+            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "abc");
+            Assert.AreEqual(8, new AppConfig().MaxSqlCommitConcurrency, "Unparseable; preset (8) preserved.");
         }
 
         [TestMethod]

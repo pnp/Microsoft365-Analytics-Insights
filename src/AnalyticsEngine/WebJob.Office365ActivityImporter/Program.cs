@@ -84,6 +84,11 @@ namespace WebJob.Office365ActivityImporter
             // Create new telemetry client with AppInsights key
             var telemetry = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
 
+            // Apply the SQL-commit concurrency cap (aggressiveness preset) process-wide BEFORE any
+            // InsertBatch import runs, so commits don't burst the shared SQL tier at the legacy 20
+            // threads (issue #161 / PR #162 - easing SQL Server CPU/DTU spikes on commit).
+            DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = configuredSettings.MaxSqlCommitConcurrency;
+
             // Verify config
             var webhookUrl = configuredSettings.WebAppURL + "api/CallRecordWebhook";
             Uri webHookUrl = null;
@@ -357,6 +362,7 @@ namespace WebJob.Office365ActivityImporter
             telemetry.LogInformation($"Azure AD tenant='{settings.TenantDomain}, client ID='{settings.ClientID}'.");
             telemetry.LogInformation($"Days back to check for events from Activity API='{settings.DaysBeforeNowToDownload}'.");
             telemetry.LogInformation($"Import aggressiveness='{settings.ImportAggressiveness}' (audit-load threads={settings.MaxAuditReportLoadConcurrency}, " +
+                $"SQL-commit threads={settings.MaxSqlCommitConcurrency}, " +
                 $"cycle pause={settings.ImportCyclePauseMinutes} min, non-fresh Graph import interval={settings.GraphMetadataImportIntervalHours}h).");
 
             // Print & verify O365 workloads to import

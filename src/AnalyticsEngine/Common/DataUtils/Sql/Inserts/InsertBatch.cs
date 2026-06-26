@@ -74,8 +74,10 @@ namespace DataUtils.Sql.Inserts
                 // Prepare table
                 await DropAndCreateStagingTable(opGlobalConnection, tempTableName, _batchTypeFieldCache.PropertyMappingInfo.Select(d => d.SqlInfo).ToList());
 
-                // Import data into staging table
-                var loader = new ParallelListProcessor<T>(insertsPerThread);
+                // Import data into staging table. Thread fan-out is capped by the process-wide
+                // InsertBatchConcurrency lever (default 20) so importers can ease the SQL Server
+                // CPU/DTU burst they cause on commit (issue #161 / PR #162).
+                var loader = new ParallelListProcessor<T>(insertsPerThread, InsertBatchConcurrency.MaxConcurrentThreads);
 
                 // Import in parallel
                 await loader.ProcessListInParallel(Rows,
