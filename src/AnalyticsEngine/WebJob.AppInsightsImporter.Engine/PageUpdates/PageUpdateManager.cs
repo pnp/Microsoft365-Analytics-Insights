@@ -134,7 +134,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 // Get all URLs that have not been updated recently
                 var minusMetadataRefreshMinutes = _config.MetadataRefreshMinutes * -1;
                 var matchingUrlsNotUpdatedRecently = await context.urls
-                    .Where(u => urlsForPageUpdateChunk.Contains(u.FullUrl) && (u.MetadataLastRefreshed == null || u.MetadataLastRefreshed < DbFunctions.AddMinutes(DateTime.Now, minusMetadataRefreshMinutes)))
+                    .Where(u => urlsForPageUpdateChunk.Contains(u.FullUrl) && (u.MetadataLastRefreshed == null || u.MetadataLastRefreshed < DbFunctions.AddMinutes(DateTime.UtcNow, minusMetadataRefreshMinutes)))
                     .ToListAsync();
 
                 foreach (var urlToUpdate in matchingUrlsNotUpdatedRecently)
