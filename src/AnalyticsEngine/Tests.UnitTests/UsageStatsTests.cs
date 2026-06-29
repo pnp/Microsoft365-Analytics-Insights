@@ -138,9 +138,6 @@ namespace Tests.UnitTests
                 {
                     AllowTelemetry = true,
                     SolutionConfig = new TargetSolutionConfig()
-                    {
-                        SolutionTargeted = SolutionImportType.Adoptify,
-                    }
                 };
                 db.ConfigStates.Add(new Common.Entities.Config.ConfigState
                 {
@@ -160,7 +157,7 @@ namespace Tests.UnitTests
                 Assert.IsFalse(string.IsNullOrEmpty(latestReport.TableStats[0].TableName));
                 Assert.IsTrue(latestReport.TableStats.Where(s => s.TotalSpaceMB > 0).Any());
                 Assert.IsTrue(latestReport.TableStats.Where(s => s.Rows > 0).Any());
-                Assert.IsTrue(latestReport.ConfiguredSolutionsEnabledDescription == "Adoptify");
+                Assert.IsNull(latestReport.ConfiguredSolutionsEnabledDescription);
                 Assert.IsTrue(latestReport.ConfiguredImportsEnabledDescription == cfg.SolutionConfig.ImportTaskSettings.ToSettingsString());
             }
         }

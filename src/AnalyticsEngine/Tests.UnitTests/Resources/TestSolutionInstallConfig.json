@@ -52,14 +52,7 @@
       "GraphTeams": true,
       "ActivityLog": true,
       "WebTraffic": true
-    },
-    "Adoptify": {
-      "ExistingSiteUrl": "",
-      "ProvisionSchema": true,
-      "CreateDefaultData": true
-    },
-    "SolutionTargeted": 0,
-    "SolutionLanguageCode": "en"
+    }
   },
   "AllowTelemetry": true,
   "ResourceGroupName": "AdvancedAnalyticsEngine",

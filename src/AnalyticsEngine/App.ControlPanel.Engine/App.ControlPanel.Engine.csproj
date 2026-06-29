@@ -90,17 +90,7 @@
     <Compile Include="Utils\DatabaseUpgrader.cs" />
     <Compile Include="Utils\FtpClientFactory.cs" />
     <Compile Include="SolutionInstallVerifier.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Tasks\AdoptifyArmInstallTasks.cs" />
-    <Compile Include="InstallerTasks\Adoptify\AdoptifyInstallJobs.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Tasks\AdoptifyLoadSiteSchemaTask.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Tasks\AdoptifySiteFieldUpdatesTask.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Tasks\AdoptifySiteProvisionTask.cs" />
-    <Compile Include="InstallerTasks\Adoptify\ResourceNameConstants.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Tasks\AssetsInstallTask.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Tasks\ListItemsInstallTask.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Models\Models.cs" />
     <Compile Include="InstallerTasks\AzurePaaSInstallJob.cs" />
-    <Compile Include="InstallerTasks\Adoptify\Models\AdoptifySiteListInfo.cs" />
     <Compile Include="InstallerTasks\Abstract\BaseAnalyticsSolutionInstallJob.cs" />
     <Compile Include="InstallerTasks\JobTasks\InstallAppServiceContentsTask.cs" />
     <Compile Include="InstallerTasks\JobTasks\SoftwarePackageDownloadTasks.cs" />
@@ -151,32 +141,6 @@
     <Compile Include="SPO\SiteTrackerInstaller\SiteAITrackerInstaller.cs" />
     <Compile Include="SPO\SiteTrackerInstaller\SiteListInstaller.cs" />
     <Compile Include="SPO\SiteTrackerInstaller\SpoSiteInstallAdaptor.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processcallmodality.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processchats.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processcounts.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processdeviceusage.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processmeetings.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processredeemedrewards.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processusagereminders.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-questnotification.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\apiconnections.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\SPDataBadges.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\SPDataQuests.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\SPDataLevels.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\Assets.zip" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\SPDataStats.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\SPDataSettings.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\es-ES\SPDataSettings.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\es-ES\SPDataBadges.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\es-ES\SPDataLevels.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\es-ES\SPDataQuests.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processreactions.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-syncteamsapps.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\ARMDefinitions\adoptify-processapps.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\es-ES\SPDataCards.json" />
-    <EmbeddedResource Include="InstallerTasks\Adoptify\DefaultData\SPDataCards.json" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Properties\Resources.resx">
