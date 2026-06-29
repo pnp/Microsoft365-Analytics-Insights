@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -569,6 +570,39 @@ namespace DataUtils
             return statements
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim(' ', '\n'));
+        }
+
+        /// <summary>
+        /// Marker written in place of any password so logs never leak SQL credentials.
+        /// </summary>
+        public const string RedactedSecretMarker = "***REDACTED***";
+
+        /// <summary>
+        /// Returns a copy of a SQL connection string that is safe to write to logs: any password
+        /// (Password / pwd) is replaced with <see cref="RedactedSecretMarker"/>. Server, database,
+        /// user id and other non-secret keys are preserved so logs remain useful for diagnostics.
+        /// </summary>
+        public static string RedactSqlConnectionString(string connectionString)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                return connectionString;
+            }
+
+            try
+            {
+                var builder = new SqlConnectionStringBuilder(connectionString);
+                if (!string.IsNullOrEmpty(builder.Password))
+                {
+                    builder.Password = RedactedSecretMarker;
+                }
+                return builder.ConnectionString;
+            }
+            catch
+            {
+                // Not a parseable SQL connection string; fall back to a key-based regex so we never leak a password.
+                return Regex.Replace(connectionString, @"(?i)\b(password|pwd)\s*=\s*[^;]*", $"$1={RedactedSecretMarker}");
+            }
         }
     }
 }
