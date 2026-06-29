@@ -9,6 +9,13 @@ import {
   PopoverTrigger,
   PopoverSurface,
   Card,
+  Dialog,
+  DialogTrigger,
+  DialogSurface,
+  DialogTitle,
+  DialogBody,
+  DialogContent,
+  DialogActions,
   Table,
   TableHeader,
   TableHeaderCell,
@@ -20,7 +27,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { DocumentText16Regular } from '@fluentui/react-icons';
+import { DocumentText16Regular, TextBulletListSquare16Regular } from '@fluentui/react-icons';
 import { fetchInstallLog } from '../api/installLogApi';
 import type { InstallLogEntry } from '../types/installLog';
 import Spinner from '../components/Spinner';
@@ -46,8 +53,25 @@ const useStyles = makeStyles({
     wordBreak: 'break-word',
     color: tokens.colorNeutralForeground2,
   },
+  logViewer: {
+    fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    userSelect: 'text',
+    margin: 0,
+    padding: '12px',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    maxHeight: '70vh',
+    overflow: 'auto',
+  },
   card: {
     marginTop: '16px',
+  },
+  dialogSurface: {
+    maxWidth: '90vw',
+    width: '900px',
   },
 });
 
@@ -124,7 +148,30 @@ export default function InstallLogPage() {
                   </TableCell>
                   <TableCell>{e.installedByUser || '—'}</TableCell>
                   <TableCell>
-                    <span className={styles.messages}>{e.messages || '—'}</span>
+                    {e.messages ? (
+                      <Dialog>
+                        <DialogTrigger disableButtonEnhancement>
+                          <Button appearance="subtle" size="small" icon={<TextBulletListSquare16Regular />}>
+                            View log
+                          </Button>
+                        </DialogTrigger>
+                        <DialogSurface className={styles.dialogSurface}>
+                          <DialogBody>
+                            <DialogTitle>Install log — {new Date(e.dateApplied).toLocaleString()}</DialogTitle>
+                            <DialogContent>
+                              <pre className={styles.logViewer}>{e.messages}</pre>
+                            </DialogContent>
+                            <DialogActions>
+                              <DialogTrigger disableButtonEnhancement>
+                                <Button appearance="primary">Close</Button>
+                              </DialogTrigger>
+                            </DialogActions>
+                          </DialogBody>
+                        </DialogSurface>
+                      </Dialog>
+                    ) : (
+                      <Text style={{ color: tokens.colorNeutralForeground3 }}>—</Text>
+                    )}
                   </TableCell>
                   <TableCell>
                     {e.configJson ? (
