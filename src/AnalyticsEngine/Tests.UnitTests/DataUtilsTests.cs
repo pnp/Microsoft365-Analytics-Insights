@@ -698,6 +698,38 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void RedactSqlConnectionStringTests()
+        {
+            // The exact shape leaked in installer logs before redaction (issue: plain-text password in logs).
+            const string connStr = "data source=mdona365sql.database.windows.net;initial catalog=officeanalytics;" +
+                "persist security info=True;user id=sqladmin;password=Cambiame03.;MultipleActiveResultSets=True;Connection Timeout=120";
+
+            var cleaned = StringUtils.RedactSqlConnectionString(connStr);
+
+            // Password is gone; non-secret diagnostics preserved.
+            Assert.IsFalse(cleaned.Contains("Cambiame03."), "Plain-text password must never appear in a redacted string");
+            Assert.IsTrue(cleaned.Contains(StringUtils.RedactedSecretMarker));
+            Assert.IsTrue(cleaned.Contains("mdona365sql.database.windows.net"));
+            Assert.IsTrue(cleaned.Contains("officeanalytics"));
+            Assert.IsTrue(cleaned.Contains("sqladmin"));
+
+            // 'pwd' alias is redacted too.
+            Assert.IsFalse(StringUtils.RedactSqlConnectionString("Server=s;Database=d;Uid=u;Pwd=secretpass;").Contains("secretpass"));
+
+            // No password -> non-secret content (server name) preserved; builder normalizes Server->Data Source.
+            var noPwd = StringUtils.RedactSqlConnectionString("Server=s;Database=d;Integrated Security=true;");
+            Assert.IsTrue(noPwd.Contains("Data Source=s"));
+            Assert.IsTrue(noPwd.Contains("Initial Catalog=d"));
+
+            // Null / empty inputs are passed through, not thrown on.
+            Assert.IsNull(StringUtils.RedactSqlConnectionString(null));
+            Assert.AreEqual(string.Empty, StringUtils.RedactSqlConnectionString(string.Empty));
+
+            // Unparseable garbage still gets the password stripped via the regex fallback.
+            Assert.IsFalse(StringUtils.RedactSqlConnectionString("garbage password=topsecret rubbish").Contains("topsecret"));
+        }
+
+        [TestMethod]
         public void IsJson()
         {
             Assert.IsFalse(StringUtils.IsJson("false"));
