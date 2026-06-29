@@ -1,6 +1,5 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
-using App.ControlPanel.Engine.InstallerTasks.Adoptify;
 using App.ControlPanel.Engine.Models;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
@@ -114,14 +113,6 @@ namespace App.ControlPanel.Engine
 
                 log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
 
-                // Install Adoptify components
-                if (Config.SolutionConfig.SolutionTargeted == SolutionImportType.Adoptify)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    log.LogInformation("=== Phase: Adoptify components ===");
-                    await InstallAdoptifyComponents(azureSub, log);
-                }
-
                 // Open admin site?
                 if (Config.TasksConfig.OpenAdminSitePostInstall)
                 {
@@ -183,21 +174,6 @@ namespace App.ControlPanel.Engine
                 _logger.LogInformation($"Completed with {summary.ErrorCount} error(s), {summary.WarningCount} warning(s). See summary below.");
             }
             summary.Print(_logger);
-        }
-
-        private async Task InstallAdoptifyComponents(Azure.ResourceManager.Resources.SubscriptionResource azureSub, ILogger log)
-        {
-            log.LogInformation($"Launching web login pop-up for existing Adoptify site '{Config.SolutionConfig.Adoptify.ExistingSiteUrl}'...");
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(Config.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var adoptifyInstallJob = new AdoptifyInstallJob(log, Config, azureSub, ctx);
-
-                // Install SPSite content and Azure components
-                await adoptifyInstallJob.Install();
-
-                log.LogInformation("Adoptify back-end setup complete. Remember to authorize the API connections in the portal.");
-            }
         }
 
         /// <summary>

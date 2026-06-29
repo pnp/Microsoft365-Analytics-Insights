@@ -23,7 +23,7 @@
     <UseGlobalApplicationHostFile />
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
-    <SpaRoot>Scripts\teams-permission-grant\</SpaRoot>
+    <SpaRoot>Scripts\admin-app\</SpaRoot>
     <TargetFrameworkProfile />
   </PropertyGroup>
   <PropertyGroup>
@@ -161,9 +161,9 @@
   </ItemGroup>
   <PropertyGroup>
     <!-- File with mtime of last successful npm install -->
-    <NpmInstallStampFile>Scripts/teams-permission-grant/node_modules/.install-stamp</NpmInstallStampFile>
+    <NpmInstallStampFile>Scripts/admin-app/node_modules/.install-stamp</NpmInstallStampFile>
   </PropertyGroup>
-  <Target Name="NpmInstall" BeforeTargets="BeforeBuild" Inputs="Scripts\teams-permission-grant\package.json" Outputs="$(NpmInstallStampFile)">
+  <Target Name="NpmInstall" BeforeTargets="BeforeBuild" Inputs="Scripts\admin-app\package.json" Outputs="$(NpmInstallStampFile)">
     <!-- Ensure Node.js is installed -->
     <Exec Command="node --version" ContinueOnError="true">
       <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
@@ -175,7 +175,7 @@
     <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
     <Touch Files="$(NpmInstallStampFile)" AlwaysCreate="true" />
     <ItemGroup>
-      <Content Include="Scripts\teams-permission-grant\build\**">
+      <Content Include="Scripts\admin-app\build\**">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       </Content>
     </ItemGroup>
@@ -203,29 +203,36 @@
     <Compile Include="Controllers\AccountController.cs" />
     <Compile Include="Controllers\BaseAPIController.cs" />
     <Compile Include="Controllers\ImportConfigController.cs" />
+    <Compile Include="Controllers\InstallLogAPIController.cs" />
+    <Compile Include="Controllers\ProfilingStatusAPIController.cs" />
     <Compile Include="Controllers\CallRecordWebhookController.cs" />
     <Compile Include="Controllers\HomeController.cs" />
     <Compile Include="Controllers\SiteTokenAPIController.cs" />
+    <Compile Include="Controllers\SystemStatusAPIController.cs" />
     <Compile Include="Controllers\TeamsAuthAPIController.cs" />
+    <Compile Include="Controllers\UserDataLookupAPIController.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
     <Compile Include="Models\AuthTeamRequest.cs" />
+    <Compile Include="Models\InstallLogModels.cs" />
+    <Compile Include="Models\ProfilingStatusModels.cs" />
     <Compile Include="Models\SystemStatus.cs" />
+    <Compile Include="Models\SystemStatusApiModel.cs" />
     <Compile Include="Models\TeamAuthStatusResponse.cs" />
+    <Compile Include="Models\UserDataLookupModels.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Startup.cs" />
+    <Compile Include="GraphTokenClaims.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Views\Account\SignOutCallback.cshtml" />
-    <Content Include="Views\Home\TeamsAuthApp.cshtml" />
     <Content Include="Views\Shared\Error.cshtml" />
     <Content Include="Views\Shared\_Layout.cshtml" />
     <Content Include="Views\Shared\_LoginPartial.cshtml" />
     <Content Include="Views\Web.config" />
     <Content Include="Views\_ViewStart.cshtml" />
     <Content Include="Views\Account\CredentialsInvalid.cshtml" />
-    <Content Include="Views\Home\Index.cshtml" />
     <None Include="Properties\PublishProfiles\SPOInsightsDemoTeams - Web Deploy.pubxml" />
     <Content Include="Views\Home\YammerAuth.cshtml" />
     <Content Include="Web.config" />
@@ -239,7 +246,7 @@
   </ItemGroup>
   <ItemGroup>
     <Folder Include="App_Data\" />
-    <Folder Include="Scripts\teams-permission-grant\build\static\" />
+    <Folder Include="Scripts\admin-app\build\" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj">

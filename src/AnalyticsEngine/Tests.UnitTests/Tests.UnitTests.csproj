@@ -119,6 +119,7 @@
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
     <Compile Include="DuplicateUrlTests.cs" />
+    <Compile Include="HitImportFanoutTests.cs" />
     <Compile Include="InsertBatchOverWidthTests.cs" />
     <Compile Include="AppInsightsImportTests.cs" />
     <Compile Include="Constants.cs" />
@@ -175,6 +176,7 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="TeamsTests.cs" />
+    <Compile Include="UserDataLookupTests.cs" />
     <Compile Include="StreamTests.cs" />
     <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />

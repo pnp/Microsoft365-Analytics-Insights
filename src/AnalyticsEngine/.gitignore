@@ -263,8 +263,6 @@ __pycache__/
 /Console.Office365ActivityImport/Properties/PublishProfiles/AuditLog - Web Deploy.pubxml
 /Scripts.AITrackerInstaller/MiscConfigs
 Scripts.AITrackerInstaller/DevConfig.json
-Adoptify/parameters copy.json
-Adoptify/parameters.json
 /Web.AnalyticsWeb/Web.config
 /WebJob.AppInsightsImporter/App.config
 /WebJob.AppInsightsImporter/App.Debug.config
@@ -282,7 +280,6 @@ Certificates/SPOInsightsBinaries.snk
 Scripts.AITrackerInstaller/DemoConfig.json
 /Tests.UnitTests/App.Debug.config
 /Tests.UnitTests/App.config
-/Adoptify/parameters.json
 /Scripts.AITrackerInstaller/Mailded.json
 Scripts.AITrackerInstaller/AITracker/dist/AITracker.js
 Scripts.AITrackerInstaller/AITracker/dist/AITracker.js.map
