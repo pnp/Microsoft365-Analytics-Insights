@@ -31,7 +31,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
             var filteredReports = new List<SharePointSiteUsageDetail>();
             foreach (var r in usageReports)
             {
-                if (!string.IsNullOrEmpty(r.SiteId) && string.IsNullOrEmpty(r.SiteUrl))
+                if (!string.IsNullOrEmpty(r.SiteId) && string.IsNullOrEmpty(r.SiteUrl) && !r.IsDeleted)
                 {
                     // No URL in results, despite the clear indication it should be there? Look it up in Graph
                     // Known issue: https://admin.microsoft.com/Adminportal/Home?#/servicehealth/:/alerts/SP676147
