@@ -21,7 +21,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_UserDeactivated_AccountEnabledUpdated()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"deactivateduser{DateTime.Now.Ticks}@test.com";
@@ -34,7 +34,7 @@ namespace Tests.UnitTests
 
             var graphUserActive = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUserActive });
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -45,7 +45,7 @@ namespace Tests.UnitTests
 
             var graphUserDeactivated = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = false, Mail = userUpn };
             var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUserDeactivated });
-            var updaterDeactivated = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
+            var updaterDeactivated = new UserMetadataUpdater(logger, config, updatedFakeLoader);
             await updaterDeactivated.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
@@ -59,7 +59,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_MetadataChanged_DatabaseReflectsChanges()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"metadatachangeuser{DateTime.Now.Ticks}@test.com";
@@ -72,7 +72,7 @@ namespace Tests.UnitTests
 
             var graphUserInitial = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, Department = "IT", JobTitle = "Developer", OfficeLocation = "Building 1", PostalCode = "12345" };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUserInitial });
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -86,7 +86,7 @@ namespace Tests.UnitTests
 
             var graphUserUpdated = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, Department = "HR", JobTitle = "Manager", OfficeLocation = "Building 2", PostalCode = "67890" };
             var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUserUpdated });
-            var updaterUpdated = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
+            var updaterUpdated = new UserMetadataUpdater(logger, config, updatedFakeLoader);
             await updaterUpdated.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
@@ -103,7 +103,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_SameUserReimported_NoChangesOrDuplicates()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"reimportuser{DateTime.Now.Ticks}@test.com";
@@ -116,7 +116,7 @@ namespace Tests.UnitTests
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, Department = "IT", PostalCode = "12345" };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             DateTime? firstImportTime;
@@ -127,7 +127,7 @@ namespace Tests.UnitTests
             }
 
             var fakeLoader2 = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
-            var updater2 = new UserMetadataUpdater(telemetry, config, fakeLoader2);
+            var updater2 = new UserMetadataUpdater(logger, config, fakeLoader2);
             await updater2.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
@@ -141,7 +141,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_AllMetadataFields_PopulatedCorrectly()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"fullmetadata{DateTime.Now.Ticks}@test.com";
@@ -154,7 +154,7 @@ namespace Tests.UnitTests
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, Department = "Engineering", JobTitle = "Senior Developer", OfficeLocation = "Building A", PostalCode = "98052", Country = "United States", State = "Washington", CompanyName = "Contoso", UsageLocation = "US" };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -175,7 +175,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_MetadataClearedToNull_DatabaseReflectsNullValues()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"clearedmeta{DateTime.Now.Ticks}@test.com";
@@ -188,7 +188,7 @@ namespace Tests.UnitTests
 
             var graphUserWithMeta = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, Department = "IT", JobTitle = "Dev", OfficeLocation = "HQ", PostalCode = "12345" };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUserWithMeta });
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -200,7 +200,7 @@ namespace Tests.UnitTests
 
             var graphUserNoMeta = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, Department = null, JobTitle = null, OfficeLocation = null, PostalCode = null };
             var updatedLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUserNoMeta });
-            var updater2 = new UserMetadataUpdater(telemetry, config, updatedLoader);
+            var updater2 = new UserMetadataUpdater(logger, config, updatedLoader);
             await updater2.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
@@ -217,7 +217,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_WhitespaceInMetadataFields_TrimmedCorrectly()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"whitespacemeta{DateTime.Now.Ticks}@test.com";
@@ -230,7 +230,7 @@ namespace Tests.UnitTests
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, Department = "  Engineering  ", JobTitle = "  Developer  ", OfficeLocation = "  HQ  ", Country = "  USA  ", State = "  WA  ", CompanyName = "  Contoso  ", UsageLocation = "  US  " };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -250,7 +250,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_SharedMetadataValues_ReusesSameLookupEntities()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var user1Upn = $"shared_meta1_{timestamp}@test.com";
@@ -269,7 +269,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())

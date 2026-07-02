@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -17,7 +17,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// <summary>
         /// Save hits to staging table & then import all to real hits + lookups
         /// </summary>
-        public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger telemetry, List<FilterUrlConfig> filterUrls)
+        public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger, List<FilterUrlConfig> filterUrls)
         {
             var sw = Stopwatch.StartNew();
 
@@ -29,7 +29,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             var duplicateCount = 0;
             var outOfScopeCount = 0;
 
-            var logsToInsert = new EFInsertBatch<HitTempEntity>(database, telemetry);
+            var logsToInsert = new EFInsertBatch<HitTempEntity>(database, logger);
             foreach (var pv in pageViews.Rows.Where(p => p.CustomProperties?.PageRequestId != null))
             {
                 var hitIsNew = pv.CustomProperties.PageRequestId != Guid.Empty && pageRequestIdProcessed.Add(pv.CustomProperties.PageRequestId.Value);
@@ -55,26 +55,26 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
             if (outOfScopeCount > 0)
             {
-                telemetry.LogInformation($"Filtered {outOfScopeCount} out-of-scope URLs.");
+                logger.LogInformation($"Filtered {outOfScopeCount} out-of-scope URLs.");
             }
             if (duplicateCount > 0)
             {
-                telemetry.LogInformation($"Skipped {duplicateCount} duplicate page-request IDs.");
+                logger.LogInformation($"Skipped {duplicateCount} duplicate page-request IDs.");
             }
 
-            telemetry.LogInformation($"Staging {logsToInsert.Rows.Count:n0} hits for SQL import (filtered from {pageViews.Rows.Count:n0} raw page-views in {sw.Elapsed.TotalSeconds:N1}s)...");
+            logger.LogInformation($"Staging {logsToInsert.Rows.Count:n0} hits for SQL import (filtered from {pageViews.Rows.Count:n0} raw page-views in {sw.Elapsed.TotalSeconds:N1}s)...");
 
             sw.Restart();
             const int MAX_HITS_PER_THREAD = 1000;
             await logsToInsert.SaveToStagingTable(MAX_HITS_PER_THREAD, FixScript(Resources.Migrate_Hits_Import_into_Hits));
 
-            telemetry.LogInformation($"Hits batch imported and merged in {sw.Elapsed.TotalSeconds:N1}s.");
+            logger.LogInformation($"Hits batch imported and merged in {sw.Elapsed.TotalSeconds:N1}s.");
         }
 
 
-        public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger telemetry)
+        public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger)
         {
-            await SaveToSQL(pageViews, database, telemetry, new List<FilterUrlConfig>());
+            await SaveToSQL(pageViews, database, logger, new List<FilterUrlConfig>());
         }
 
 

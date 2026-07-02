@@ -36,19 +36,19 @@ namespace Tests.UnitTests
         //[TestMethod]
         public async Task UserAppLoaderRealTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            var auth = new GraphAppIndentityOAuthContext(telemetry, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
+            var auth = new GraphAppIndentityOAuthContext(logger, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
 
             await auth.InitClientCredential();
             var graphClient = new GraphServiceClient(auth.Creds);
 
             // Do a users import first so we have users in the users table to read apps for
-            var userUpdater = new UserMetadataUpdater(telemetry, config, auth.Creds, new ManualGraphCallClient(auth, telemetry));
+            var userUpdater = new UserMetadataUpdater(logger, config, auth.Creds, new ManualGraphCallClient(auth, logger));
             await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
 
-            var updater = new UserAppLogUpdater(telemetry, new AppConfig());
-            var sucess = await updater.UpdateUserInstalledApps(graphClient, new NoUsersHaveGroupsUserGroupsCache(telemetry), new UserGroupsFilterModel());
+            var updater = new UserAppLogUpdater(logger, new AppConfig());
+            var sucess = await updater.UpdateUserInstalledApps(graphClient, new NoUsersHaveGroupsUserGroupsCache(logger), new UserGroupsFilterModel());
             Assert.IsTrue(sucess);
         }
 
@@ -58,15 +58,15 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserAppSqlSaveTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
-            var auth = new GraphAppIndentityOAuthContext(telemetry, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
+            var auth = new GraphAppIndentityOAuthContext(logger, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
 
             await auth.InitClientCredential();
             var graphClient = new GraphServiceClient(auth.Creds);
             using (var db = new AnalyticsEntitiesContext())
             {
-                var userAppsLoader = new GraphAndSqlUserAppLoader(db, telemetry, graphClient);
+                var userAppsLoader = new GraphAndSqlUserAppLoader(db, logger, graphClient);
 
                 var testUser = new Common.Entities.User { AzureAdId = Guid.NewGuid().ToString(), UserPrincipalName = $"teamsappsuser{DateTime.Now.Ticks}@unitesting.local" };
                 db.users.Add(testUser);
@@ -133,8 +133,8 @@ namespace Tests.UnitTests
                 var graphUser = graphUsers.Value[0];
 
                 // Run updater; force full load
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var userUpdater = new UserMetadataUpdater(telemetry, authConfig, auth.Creds, new ManualGraphCallClient(auth, telemetry));
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var userUpdater = new UserMetadataUpdater(logger, authConfig, auth.Creds, new ManualGraphCallClient(auth, logger));
                 await userUpdater.UserLoader.DeltaValueProvider.ClearDeltaToken();
 
                 await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();

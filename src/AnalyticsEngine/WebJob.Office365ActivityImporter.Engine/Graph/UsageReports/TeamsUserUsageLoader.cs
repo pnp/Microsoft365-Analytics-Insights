@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
@@ -11,8 +11,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
     public class TeamsUserUsageLoader : AbstractUserDailyActivityLoader<GlobalTeamsUserUsageLog, TeamsUserActivityUserDetail>
     {
-        public TeamsUserUsageLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger telemetry)
-            : base(client, userGroupsCache, userGroupsFilterModel, telemetry)
+        public TeamsUserUsageLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger logger)
+            : base(client, userGroupsCache, userGroupsFilterModel, logger)
         {
         }
         protected override void PopulateReportSpecificMetadata(GlobalTeamsUserUsageLog todaysLog, TeamsUserActivityUserDetail userActivityReportPage)

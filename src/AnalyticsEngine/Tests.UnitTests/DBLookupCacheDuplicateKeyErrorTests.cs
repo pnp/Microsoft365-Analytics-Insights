@@ -35,8 +35,8 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 // BATCH 1: Create first user with this location
@@ -116,8 +116,8 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 // BATCH 1: Create location
@@ -217,8 +217,8 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 var allUsers = new System.Collections.Generic.List<User>();
@@ -330,10 +330,10 @@ namespace Tests.UnitTests
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
 
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
                 var cache = new UserMetadataCache(db);
-                var batchProcessor = new UserBatchProcessor(telemetry);
-                var dataMapper = new UserDataMapper(telemetry, cache);
+                var batchProcessor = new UserBatchProcessor(logger);
+                var dataMapper = new UserDataMapper(logger, cache);
 
                 // Simulate InsertMissingUsers workflow
                 const int BATCH_SIZE = 50;
@@ -464,8 +464,8 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 // Act - Process 3 batches of 500 users each, all with same department
@@ -493,7 +493,7 @@ namespace Tests.UnitTests
                     // THE FIX: Preserve lookups across batches
                     batchProcessor.DetachAllEntitiesExceptLookups(db);
 
-                    telemetry.LogInformation($"Completed batch {batchNum + 1}/{NUM_BATCHES}");
+                    logger.LogInformation($"Completed batch {batchNum + 1}/{NUM_BATCHES}");
                 }
 
                 // Assert - Should have exactly ONE department despite 1500 users

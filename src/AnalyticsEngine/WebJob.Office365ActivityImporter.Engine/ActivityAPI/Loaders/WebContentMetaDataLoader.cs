@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -20,7 +20,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         private readonly ConfidentialClientApplicationThrottledHttpClient _httpClient;
         private int _metadataDownloadErrors = 0;
 
-        public WebContentMetaDataLoader(ILogger telemetry, ConfidentialClientApplicationThrottledHttpClient httpClient, AppConfig settings) : base(telemetry, settings)
+        public WebContentMetaDataLoader(ILogger logger, ConfidentialClientApplicationThrottledHttpClient httpClient, AppConfig settings) : base(logger, settings)
         {
             _httpClient = httpClient;
         }
@@ -68,7 +68,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 string nextPageUri = null;
 
                 // Get this batch
-                using (var response = await _httpClient.GetAsyncWithThrottleRetries(currentUri, _telemetry))
+                using (var response = await _httpClient.GetAsyncWithThrottleRetries(currentUri, _logger))
                 {
                     // Read the content.  
                     var responseFromServer = await response.Content.ReadAsStringAsync();
@@ -85,10 +85,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                     catch (HttpRequestException ex)
                     {
                         Interlocked.Increment(ref _metadataDownloadErrors);
-                        _telemetry.LogError(ex, $"Error downloading metadata {currentUri} with error '{ex.Message}'. " +
+                        _logger.LogError(ex, $"Error downloading metadata {currentUri} with error '{ex.Message}'. " +
                             $"If this happens every time, this may be an issue. Ignoring for now.");
 #if DEBUG
-                        _telemetry.LogInformation("DEBUG: Response body was:\n" + responseFromServer);
+                        _logger.LogInformation("DEBUG: Response body was:\n" + responseFromServer);
 #endif
                         break; // Exit the loop on error
                     }
@@ -114,7 +114,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                         }
                         catch (JsonSerializationException)
                         {
-                            _telemetry.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
+                            _logger.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
                         }
                     }
                 }
