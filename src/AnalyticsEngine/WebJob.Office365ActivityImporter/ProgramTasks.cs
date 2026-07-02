@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -24,15 +24,15 @@ namespace WebJob.Office365ActivityImporter
         private bool _isInitialized = false;
         private GraphServiceClient _graphClient = null;
         private readonly GraphAppIndentityOAuthContext _graphAppIndentityOAuthContext;
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
         private readonly AppConfig _settings;
         private ManualGraphCallClient _manualGraphCallClient = null;
         private GraphUserGroupsCache _graphUserGroupsCache = null;
 
-        public ProgramTasks(AnalyticsLogger telemetry, AppConfig settings)
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings)
         {
-            _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(telemetry, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
-            _telemetry = telemetry;
+            _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
+            _logger = logger;
             _settings = settings;
         }
 
@@ -43,8 +43,8 @@ namespace WebJob.Office365ActivityImporter
             // Fire and forget calls SB receiver
             _ = callQueueProcessor.BeginProcessCallsQueue();
 
-            _telemetry.LogInformation("Verifying call webhook subscription.");
-            var callWebhook = new CallWebhook(_settings, _telemetry);
+            _logger.LogInformation("Verifying call webhook subscription.");
+            var callWebhook = new CallWebhook(_settings, _logger);
             await callWebhook.CreateOrUpdateWebhook(webHookUrl, _settings.ClientSecret);
 
         }
@@ -54,11 +54,11 @@ namespace WebJob.Office365ActivityImporter
         /// </summary>
         internal async Task GetGraphTeamsAndUserData()
         {
-            _telemetry.LogInformation("Starting Teams & Graph import.");
+            _logger.LogInformation("Starting Teams & Graph import.");
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_telemetry, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings);
+            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings);
 
             try
             {
@@ -69,17 +69,17 @@ namespace WebJob.Office365ActivityImporter
                 // Don't make a drama if Graph permissions aren't assigned yet.
                 if (ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden)
                 {
-                    _telemetry.LogWarning("ERROR: Can't access Teams user data - are application permissions configured correctly?");
+                    _logger.LogWarning("ERROR: Can't access Teams user data - are application permissions configured correctly?");
                     return;
                 }
                 else
                 {
-                    _telemetry.LogError(ex, ex.Message);
+                    _logger.LogError(ex, ex.Message);
                     throw;
                 }
             }
 
-            _telemetry.LogInformation("Finished Graph API import tasks.");
+            _logger.LogInformation("Finished Graph API import tasks.");
         }
 
         async Task InitAuth()
@@ -90,8 +90,8 @@ namespace WebJob.Office365ActivityImporter
             }
             await _graphAppIndentityOAuthContext.InitClientCredential();
             _graphClient = GraphServiceClientFactory.CreateWithTimeout(_graphAppIndentityOAuthContext.Creds, TimeSpan.FromHours(1));
-            _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _telemetry);
-            _graphUserGroupsCache = new GraphUserGroupsCache(_manualGraphCallClient, _telemetry);
+            _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _logger);
+            _graphUserGroupsCache = new GraphUserGroupsCache(_manualGraphCallClient, _logger);
 
 
             _isInitialized = true;
@@ -114,37 +114,37 @@ namespace WebJob.Office365ActivityImporter
 
                 if (spFilterList.OrgUrlConfigs.Count == 0)
                 {
-                    _telemetry.LogCritical("FATAL ERROR: No org URLs found in database! " +
+                    _logger.LogCritical("FATAL ERROR: No org URLs found in database! " +
                         "This means everything would be ignored for SharePoint audit data. Add at least one URL to the org_urls table for this to work.");
 
                     return;
 
                 }
 
-                _telemetry.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
+                _logger.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
 
                 // Print URLs
-                spFilterList.Print(_telemetry);
+                spFilterList.Print(_logger);
                 Console.WriteLine();
 
-                _telemetry.LogInformation($"Starting activity import for {spFilterList.OrgUrlConfigs.Count} url filters");
+                _logger.LogInformation($"Starting activity import for {spFilterList.OrgUrlConfigs.Count} url filters");
 
                 // Start new O365 activity download session
                 // Reduced from 20000 to 5000, then to 2000 to prevent OutOfMemoryException with large datasets
                 const int MAX_IMPORTS_PER_BATCH = 2000;
-                var importer = new ActivityWebImporter(_settings, _telemetry, MAX_IMPORTS_PER_BATCH);
+                var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH);
 
-                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _telemetry, _settings);
+                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings);
                 try
                 {
                     var stats = await importer.LoadReportsAndSave(sqlAdaptor);
 
                     // Output stats
-                    _telemetry.LogInformation($"Finished activity import. Time taken in = {DateTime.Now.Subtract(startTime).TotalMinutes.ToString("N2")} minutes. Stats: {stats}");
+                    _logger.LogInformation($"Finished activity import. Time taken in = {DateTime.Now.Subtract(startTime).TotalMinutes.ToString("N2")} minutes. Stats: {stats}");
                 }
                 catch (System.Net.Http.HttpRequestException ex)
                 {
-                    _telemetry.LogError(ex, $"Got unexpected exception importing activity: {ex.Message}");
+                    _logger.LogError(ex, $"Got unexpected exception importing activity: {ex.Message}");
                 }
             }
         }

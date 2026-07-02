@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -8,12 +8,12 @@ namespace DataUtils.Http
 {
     public static class HttpClientExtensions
     {
-        public static async Task<HttpResponseMessage> GetAsyncWithThrottleRetries(this AutoThrottleHttpClient httpClient, string url, ILogger debugTracer)
+        public static async Task<HttpResponseMessage> GetAsyncWithThrottleRetries(this AutoThrottleHttpClient httpClient, string url, ILogger logger)
         {
             // Default to return when full content is read
-            return await httpClient.GetAsyncWithThrottleRetries(url, HttpCompletionOption.ResponseContentRead, debugTracer);
+            return await httpClient.GetAsyncWithThrottleRetries(url, HttpCompletionOption.ResponseContentRead, logger);
         }
-        public static async Task<HttpResponseMessage> GetAsyncWithThrottleRetries(this AutoThrottleHttpClient httpClient, string url, HttpCompletionOption completionOption, ILogger debugTracer)
+        public static async Task<HttpResponseMessage> GetAsyncWithThrottleRetries(this AutoThrottleHttpClient httpClient, string url, HttpCompletionOption completionOption, ILogger logger)
         {
             if (httpClient is null)
             {
@@ -25,9 +25,9 @@ namespace DataUtils.Http
                 throw new ArgumentException($"'{nameof(url)}' cannot be null or empty.", nameof(url));
             }
 
-            if (debugTracer is null)
+            if (logger is null)
             {
-                throw new ArgumentNullException(nameof(debugTracer));
+                throw new ArgumentNullException(nameof(logger));
             }
 
             var response = await httpClient.ExecuteHttpCallWithThrottleRetries(async () => await httpClient.GetAsync(url, completionOption), url);
@@ -36,7 +36,7 @@ namespace DataUtils.Http
             return response;
         }
 
-        public static async Task<HttpResponseMessage> PostAsyncWithThrottleRetries(this AutoThrottleHttpClient httpClient, string url, object body, ILogger debugTracer)
+        public static async Task<HttpResponseMessage> PostAsyncWithThrottleRetries(this AutoThrottleHttpClient httpClient, string url, object body, ILogger logger)
         {
             if (httpClient is null)
             {
@@ -48,9 +48,9 @@ namespace DataUtils.Http
                 throw new ArgumentException($"'{nameof(url)}' cannot be null or empty.", nameof(url));
             }
 
-            if (debugTracer is null)
+            if (logger is null)
             {
-                throw new ArgumentNullException(nameof(debugTracer));
+                throw new ArgumentNullException(nameof(logger));
             }
 
             var payload = Newtonsoft.Json.JsonConvert.SerializeObject(body);

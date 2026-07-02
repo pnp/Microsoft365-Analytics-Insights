@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Threading.Tasks;
@@ -65,7 +65,7 @@ namespace Common.Entities.Redis.Teams
             }
         }
 
-        public static async Task SetTeamChannelDeltaTokenInfo(this CacheConnectionManager connectionManager, string teamId, string channelId, TeamChannelDeltaTokenInfo refreshTokenInfo, ILogger telemetry)
+        public static async Task SetTeamChannelDeltaTokenInfo(this CacheConnectionManager connectionManager, string teamId, string channelId, TeamChannelDeltaTokenInfo refreshTokenInfo, ILogger logger)
         {
             if (connectionManager is null)
             {
@@ -87,13 +87,13 @@ namespace Common.Entities.Redis.Teams
                 throw new ArgumentNullException(nameof(refreshTokenInfo));
             }
 
-            telemetry.LogInformation($"Updated cached delta token for channel '{channelId}' in team '{teamId}'");
+            logger.LogInformation($"Updated cached delta token for channel '{channelId}' in team '{teamId}'");
             await connectionManager.SetString(GetRedisTeamChannelKey(teamId, channelId), JsonConvert.SerializeObject(refreshTokenInfo));
         }
 
-        public static async Task RemoveTeamChannelDeltaToken(this CacheConnectionManager connectionManager, string teamId, string channelId, ILogger telemetry)
+        public static async Task RemoveTeamChannelDeltaToken(this CacheConnectionManager connectionManager, string teamId, string channelId, ILogger logger)
         {
-            telemetry.LogInformation($"Removed cached delta token for channel '{channelId}' in team '{teamId}'");
+            logger.LogInformation($"Removed cached delta token for channel '{channelId}' in team '{teamId}'");
             await connectionManager.DeleteString(GetRedisTeamChannelKey(teamId, channelId));
         }
 

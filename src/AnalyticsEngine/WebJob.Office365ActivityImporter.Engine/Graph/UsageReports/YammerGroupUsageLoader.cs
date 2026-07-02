@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Entities;
 using Common.Entities.Entities.Teams;
 using Common.Entities.LookupCaches;
@@ -14,8 +14,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
     /// </summary>
     public class YammerGroupUsageLoader : AbstractDailyActivityLoader<YammerGroupActivityLog, YammerGroupActivityDetail, YammerGroup, YammerGroupCache>
     {
-        public YammerGroupUsageLoader(ManualGraphCallClient client, ILogger telemetry)
-            : base(client, telemetry)
+        public YammerGroupUsageLoader(ManualGraphCallClient client, ILogger logger)
+            : base(client, logger)
         {
         }
         protected override void PopulateReportSpecificMetadata(YammerGroupActivityLog todaysLog, YammerGroupActivityDetail userActivityReportPage)

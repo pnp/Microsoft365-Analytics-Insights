@@ -23,12 +23,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             new Regex("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private readonly CognitiveServicesClient _client;
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
 
-        public AzureLanguageSentEmailSentimentScorer(CognitiveServicesClient client, AnalyticsLogger telemetry)
+        public AzureLanguageSentEmailSentimentScorer(CognitiveServicesClient client, AnalyticsLogger logger)
         {
             _client = client;
-            _telemetry = telemetry;
+            _logger = logger;
         }
 
         public bool IsEnabled => _client != null;
@@ -80,7 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     // Log the full error (with stack trace) but continue: sentiment is best-effort, so
                     // a failed batch must never fail the whole email import - the affected messages just
                     // get no score and the rest of the run proceeds.
-                    _telemetry.LogError(ex, $"Cognitive batch sentiment analysis failed for {docs.Count} message(s); continuing without scores for this batch.");
+                    _logger.LogError(ex, $"Cognitive batch sentiment analysis failed for {docs.Count} message(s); continuing without scores for this batch.");
                 }
             }
 
@@ -104,18 +104,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     /// </summary>
     internal static class SentEmailSentimentScorerFactory
     {
-        public static ISentEmailSentimentScorer Create(AppConfig settings, AnalyticsLogger telemetry)
+        public static ISentEmailSentimentScorer Create(AppConfig settings, AnalyticsLogger logger)
         {
             if (settings == null || !settings.IsValidCognitiveConfig)
                 return NullSentEmailSentimentScorer.Instance;
 
             // Single CognitiveServicesClient per importer run: caches its inner TextAnalyticsClient
             // and auto-falls back to RBAC if the key auth call returns 403 AuthenticationTypeDisabled.
-            var client = settings.CreateCognitiveServicesClient(telemetry);
+            var client = settings.CreateCognitiveServicesClient(logger);
             if (client == null)
                 return NullSentEmailSentimentScorer.Instance;
 
-            return new AzureLanguageSentEmailSentimentScorer(client, telemetry);
+            return new AzureLanguageSentEmailSentimentScorer(client, logger);
         }
     }
 }

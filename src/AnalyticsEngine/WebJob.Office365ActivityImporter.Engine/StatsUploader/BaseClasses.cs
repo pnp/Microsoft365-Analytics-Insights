@@ -1,4 +1,4 @@
-﻿using Common.Entities.Installer;
+using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
@@ -9,12 +9,12 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 
     public abstract class BaseUsageStatsBuilder
     {
-        protected readonly ILogger _tracer;
+        protected readonly ILogger _logger;
         protected readonly Guid _tenantId;
 
-        protected BaseUsageStatsBuilder(ILogger tracer, Guid tenantId)
+        protected BaseUsageStatsBuilder(ILogger logger, Guid tenantId)
         {
-            _tracer = tracer;
+            _logger = logger;
             _tenantId = tenantId;
         }
 

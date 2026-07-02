@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.LookupCaches;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -46,7 +46,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task GraphAndSqlUserAppLoader_ExcludesDisabledUsers()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var tick = DateTime.Now.Ticks;
             var enabledUpn = $"appsloader-enabled-{tick}@contoso.com";
             var disabledUpn = $"appsloader-disabled-{tick}@contoso.com";
@@ -64,7 +64,7 @@ namespace Tests.UnitTests
 
                 try
                 {
-                    var loader = new GraphAndSqlUserAppLoader(db, telemetry, null);
+                    var loader = new GraphAndSqlUserAppLoader(db, logger, null);
                     var upns = await loader.GetUserEmailAddressesToFindAppsFor();
 
                     Assert.IsTrue(upns.Contains(enabledUpn), "Enabled user should be included");

@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
@@ -17,7 +17,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         private readonly GraphServiceClient _graphServiceClient;
 
-        public TeamsFinder(AnalyticsLogger telemetry, AppConfig settings, GraphServiceClient graphServiceClient) : base(telemetry, settings)
+        public TeamsFinder(AnalyticsLogger logger, AppConfig settings, GraphServiceClient graphServiceClient) : base(logger, settings)
         {
             this._graphServiceClient = graphServiceClient;
         }
@@ -33,7 +33,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             bool legacyAPIMode = true;
 
             var allGroupsWithTeams = new List<Group>();
-            _telemetry.LogInformation($"Searching for groups with a team attached...");
+            _logger.LogInformation($"Searching for groups with a team attached...");
 
             if (legacyAPIMode)
             {
@@ -61,7 +61,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                         }
                         if (!groupHasTeam)
                         {
-                            _telemetry.LogInformation($"Group name '{group.DisplayName}' has no Team associated.");
+                            _logger.LogInformation($"Group name '{group.DisplayName}' has no Team associated.");
                         }
                     }
                 }
@@ -76,7 +76,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
 
             // Do the needful
-            _telemetry.LogInformation($"Searching for groups with a team attached...");
+            _logger.LogInformation($"Searching for groups with a team attached...");
 
             var filteredTeams = new List<Group>();
             foreach (var g in allGroupsWithTeams)
@@ -87,7 +87,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 }
                 else
                 {
-                    _telemetry.LogInformation($"Excluding group '{g.DisplayName}' from crawl due to crawl configuration");
+                    _logger.LogInformation($"Excluding group '{g.DisplayName}' from crawl due to crawl configuration");
                 }
             }
 
@@ -116,7 +116,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (iterator.State == PagingState.Paused)
             {
-                _telemetry.LogWarning($"TeamsFinder: hit MAX_GROUPS ({MAX_GROUPS:N0}) walking groups. Returning partial list of {allGroups.Count:N0}.");
+                _logger.LogWarning($"TeamsFinder: hit MAX_GROUPS ({MAX_GROUPS:N0}) walking groups. Returning partial list of {allGroups.Count:N0}.");
             }
 
             return allGroups;
