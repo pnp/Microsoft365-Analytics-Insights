@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using System;
 using System.Collections.Generic;
@@ -20,7 +20,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         private int _reportSummariesProcessed = 0;
         private int _lastReportedPercentDone = 0;
 
-        public ActivityImporter(AppConfig settings, AnalyticsLogger telemetry, int maxSavesPerBatch) : base(telemetry, settings)
+        public ActivityImporter(AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch) : base(logger, settings)
         {
             _maxSavesPerBatch = maxSavesPerBatch;
         }
@@ -32,7 +32,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 
         public async Task<ImportStat> LoadReportsAndSave(IActivityReportPersistenceManager activityReportPersistenceManager)
         {
-            var timer = new JobTimer(_telemetry, "Audit events import");
+            var timer = new JobTimer(_logger, "Audit events import");
             timer.Start();
 
             var active = await ActivitySubscriptionManager.EnsureActiveSubscriptionContentTypesActive();
@@ -72,13 +72,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 #if DEBUG
             Console.WriteLine($"DEBUG: Got {allStats.Total.ToString("N0")} reports from {allSummaries.Count.ToString("N0")} summary reports");
 #endif
-            _telemetry.LogInformation($"Audit events import: Got {allStats.Total.ToString("N0")} audit events from {allSummaries.Count.ToString("N0")} summary reports. " +
+            _logger.LogInformation($"Audit events import: Got {allStats.Total.ToString("N0")} audit events from {allSummaries.Count.ToString("N0")} summary reports. " +
                 $"{allStats.Imported} imported, {allStats.ProcessedAlready} processed already, {allStats.URLsOutOfScope} URLs out of scope of SharePoint site import whitelist (org_urls)");
 
             // Log warning if there were download errors
             if (allStats.MetadataDownloadErrors > 0 || allStats.ReportDownloadErrors > 0)
             {
-                _telemetry.LogWarning($"Audit events import: DOWNLOAD ERRORS DETECTED - {allStats.MetadataDownloadErrors} metadata download failures, " +
+                _logger.LogWarning($"Audit events import: DOWNLOAD ERRORS DETECTED - {allStats.MetadataDownloadErrors} metadata download failures, " +
                     $"{allStats.ReportDownloadErrors} report download failures. Some data may be missing from this import cycle. " +
                     $"These items will be retried on the next import cycle.");
             }
@@ -108,7 +108,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             // Load in parallel & call parent func on listBatchProcessor to save
             await loader.ProcessListInParallel(reportSummaries.OrderByDescending(j => j.Created),
                 async (threadListChunk, threadIndex) => await ProcessSummaryChunkAsync(threadListChunk, listBatchProcessor, activityReportLoader),
-                    threads => _telemetry.LogInformation($"Audit events import: full-loading activity reports from {reportSummaries.Count.ToString("n0")} links, across {threads.ToString("n0")} thread(s)..."));
+                    threads => _logger.LogInformation($"Audit events import: full-loading activity reports from {reportSummaries.Count.ToString("n0")} links, across {threads.ToString("n0")} thread(s)..."));
 
             await listBatchProcessor.Flush();
         }
@@ -134,7 +134,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                             int pcDone = Convert.ToInt32(Math.Round(percentDone, 0));
                             if (_lastReportedPercentDone < pcDone)
                             {
-                                _telemetry.LogInformation($"Audit events import: processed {pcDone.ToString("n0")}% activity report data...");
+                                _logger.LogInformation($"Audit events import: processed {pcDone.ToString("n0")}% activity report data...");
                                 _lastReportedPercentDone = pcDone;
                             }
                         }

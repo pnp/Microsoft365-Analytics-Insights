@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -17,11 +17,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         private TeamsFinder _teamsFinder;
         private TeamsLoadContext _context;
 
-        public TeamsImporter(AnalyticsLogger telemetry, AppConfig settings, GraphServiceClient graphServiceClient) : base(telemetry, settings)
+        public TeamsImporter(AnalyticsLogger logger, AppConfig settings, GraphServiceClient graphServiceClient) : base(logger, settings)
         {
-            if (telemetry is null)
+            if (logger is null)
             {
-                throw new ArgumentNullException(nameof(telemetry));
+                throw new ArgumentNullException(nameof(logger));
             }
 
             if (settings is null)
@@ -35,7 +35,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
 
             _context = new TeamsLoadContext(graphServiceClient);
-            _teamsFinder = new TeamsFinder(telemetry, settings, graphServiceClient);
+            _teamsFinder = new TeamsFinder(logger, settings, graphServiceClient);
         }
 
         /// <summary>
@@ -55,8 +55,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             var loader = new ParallelListProcessor<Group>(MAX_TEAMS_PER_THREAD);
             await loader.ProcessListInParallel(targetGroups,
                 (threadListChunk, threadIndex) => LoadTeamsChunkThreaded(threadListChunk),
-                threads => _telemetry.LogInformation($"Loading & saving to SQL {targetGroups.Count} groups/teams over {threads} threads..."));
-            _telemetry.LogInformation($"Teams import complete.\n");
+                threads => _logger.LogInformation($"Loading & saving to SQL {targetGroups.Count} groups/teams over {threads} threads..."));
+            _logger.LogInformation($"Teams import complete.\n");
         }
 
         async Task LoadTeamsChunkThreaded(List<Group> groupsWithTeams)
@@ -78,11 +78,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             O365Team team = null;
             try
             {
-                team = await O365Team.LoadTeamFull(parentGroup, _context, _telemetry, _settings, lookupManager.Database);
+                team = await O365Team.LoadTeamFull(parentGroup, _context, _logger, _settings, lookupManager.Database);
             }
             catch (ODataError ex)
             {
-                _telemetry.LogError(ex, $"Couldn't load team from Group {parentGroup.DisplayName}: {ex.Message}");
+                _logger.LogError(ex, $"Couldn't load team from Group {parentGroup.DisplayName}: {ex.Message}");
             }
 
 
@@ -90,11 +90,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 try
                 {
-                    await team.SaveToSQL(lookupManager, _settings, _telemetry);
+                    await team.SaveToSQL(lookupManager, _settings, _logger);
                 }
                 catch (SqlException ex)
                 {
-                    _telemetry.LogError(ex, $"Couldn't save Group {parentGroup.DisplayName} to SQL: {ex.Message}");
+                    _logger.LogError(ex, $"Couldn't save Group {parentGroup.DisplayName} to SQL: {ex.Message}");
                 }
             }
         }

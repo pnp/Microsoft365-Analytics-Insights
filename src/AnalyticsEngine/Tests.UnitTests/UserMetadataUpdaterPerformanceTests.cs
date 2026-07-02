@@ -36,7 +36,7 @@ namespace Tests.UnitTests
         public async Task UserMetadataUpdater_Update1000ExistingUsers_WithSkus_Performance()
         {
             const int USER_COUNT = 1000;
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var testPrefix = $"perfsku{DateTime.Now.Ticks}";
 
@@ -49,13 +49,13 @@ namespace Tests.UnitTests
             {
                 // --- Phase 1: Insert ---
                 var insertLoader = new FakeUserMetadataLoader(graphUsers, fakeSkus);
-                var insertUpdater = new UserMetadataUpdater(telemetry, config, insertLoader);
+                var insertUpdater = new UserMetadataUpdater(logger, config, insertLoader);
 
                 var insertSw = Stopwatch.StartNew();
                 await insertUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                 insertSw.Stop();
 
-                telemetry.LogInformation($"PERF: Insert {USER_COUNT} users took {insertSw.ElapsedMilliseconds}ms");
+                logger.LogInformation($"PERF: Insert {USER_COUNT} users took {insertSw.ElapsedMilliseconds}ms");
 
                 // Verify insert
                 using (var db = new AnalyticsEntitiesContext())
@@ -76,13 +76,13 @@ namespace Tests.UnitTests
                 }
 
                 var updateLoader = new FakeUserMetadataLoader(updatedGraphUsers, fakeSkus);
-                var updateUpdater = new UserMetadataUpdater(telemetry, config, updateLoader);
+                var updateUpdater = new UserMetadataUpdater(logger, config, updateLoader);
 
                 var updateSw = Stopwatch.StartNew();
                 await updateUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                 updateSw.Stop();
 
-                telemetry.LogInformation($"PERF: Update {USER_COUNT} existing users took {updateSw.ElapsedMilliseconds}ms");
+                logger.LogInformation($"PERF: Update {USER_COUNT} existing users took {updateSw.ElapsedMilliseconds}ms");
 
                 // Verify correctness
                 using (var db = new AnalyticsEntitiesContext())
@@ -107,7 +107,7 @@ namespace Tests.UnitTests
                 Assert.IsTrue(updateSw.ElapsedMilliseconds < 60000,
                     $"Update took {updateSw.ElapsedMilliseconds}ms, expected under 60000ms");
 
-                telemetry.LogInformation($"=== Results: Insert={insertSw.ElapsedMilliseconds}ms, Update={updateSw.ElapsedMilliseconds}ms ===");
+                logger.LogInformation($"=== Results: Insert={insertSw.ElapsedMilliseconds}ms, Update={updateSw.ElapsedMilliseconds}ms ===");
             }
             finally
             {
@@ -123,7 +123,7 @@ namespace Tests.UnitTests
         public async Task UserMetadataUpdater_Update1000ExistingUsers_WithoutSkus_Performance()
         {
             const int USER_COUNT = 1000;
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var testPrefix = $"perfnosku{DateTime.Now.Ticks}";
 
@@ -134,13 +134,13 @@ namespace Tests.UnitTests
             {
                 // --- Phase 1: Insert ---
                 var insertLoader = new FakeUserMetadataLoader(graphUsers);
-                var insertUpdater = new UserMetadataUpdater(telemetry, config, insertLoader);
+                var insertUpdater = new UserMetadataUpdater(logger, config, insertLoader);
 
                 var insertSw = Stopwatch.StartNew();
                 await insertUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                 insertSw.Stop();
 
-                telemetry.LogInformation($"PERF (no SKU): Insert {USER_COUNT} users took {insertSw.ElapsedMilliseconds}ms");
+                logger.LogInformation($"PERF (no SKU): Insert {USER_COUNT} users took {insertSw.ElapsedMilliseconds}ms");
 
                 // --- Phase 2: Re-generate users with modified metadata ---
                 var updatedGraphUsers = GenerateGraphUsers(USER_COUNT, testPrefix);
@@ -152,13 +152,13 @@ namespace Tests.UnitTests
                 }
 
                 var updateLoader = new FakeUserMetadataLoader(updatedGraphUsers);
-                var updateUpdater = new UserMetadataUpdater(telemetry, config, updateLoader);
+                var updateUpdater = new UserMetadataUpdater(logger, config, updateLoader);
 
                 var updateSw = Stopwatch.StartNew();
                 await updateUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                 updateSw.Stop();
 
-                telemetry.LogInformation($"PERF (no SKU): Update {USER_COUNT} existing users took {updateSw.ElapsedMilliseconds}ms");
+                logger.LogInformation($"PERF (no SKU): Update {USER_COUNT} existing users took {updateSw.ElapsedMilliseconds}ms");
 
                 // Verify correctness
                 using (var db = new AnalyticsEntitiesContext())
@@ -180,7 +180,7 @@ namespace Tests.UnitTests
                 Assert.IsTrue(updateSw.ElapsedMilliseconds < 120000,
                     $"Update took {updateSw.ElapsedMilliseconds}ms, expected under 120000ms");
 
-                telemetry.LogInformation($"=== Results (no SKU): Insert={insertSw.ElapsedMilliseconds}ms, Update={updateSw.ElapsedMilliseconds}ms ===");
+                logger.LogInformation($"=== Results (no SKU): Insert={insertSw.ElapsedMilliseconds}ms, Update={updateSw.ElapsedMilliseconds}ms ===");
             }
             finally
             {

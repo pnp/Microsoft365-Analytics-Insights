@@ -19,7 +19,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task OutlookUserActivityLoader_SaveLoadedReportsToSql_BasicInsertTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -27,8 +27,8 @@ namespace Tests.UnitTests
                 db.Configuration.LazyLoadingEnabled = false;
 
                 // Prepare loader (ManualGraphCallClient not needed because we will inject data directly)
-                var groupsCache = new NoUsersHaveGroupsUserGroupsCache(telemetry);
-                var loader = new OutlookUserActivityLoader(null, groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), telemetry);
+                var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
+                var loader = new OutlookUserActivityLoader(null, groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), logger);
 
                 // Fake single-day activity page for a unique user
                 var testDate = DateTime.UtcNow.Date.AddDays(-2); // Use date unlikely to be current day to avoid partial real data

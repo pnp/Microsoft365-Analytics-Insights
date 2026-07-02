@@ -1,4 +1,4 @@
-﻿using Azure;
+using Azure;
 using Azure.AI.TextAnalytics;
 using Common.Entities;
 using Common.Entities.Config;
@@ -942,7 +942,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task PageExitEventSave()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             using (var db = new AnalyticsEntitiesContext())
             {
                 var hitsToSave = new PageViewCollection();
@@ -982,8 +982,8 @@ namespace Tests.UnitTests
                     });
 
                 }
-                await hitsToSave.SaveToSQL(db, telemetry);
-                await pageStatsToSave.SaveHitsUpdatesToSQL(telemetry, db);
+                await hitsToSave.SaveToSQL(db, logger);
+                await pageStatsToSave.SaveHitsUpdatesToSQL(logger, db);
                 var lastHitAfterTest = await db.hits.OrderByDescending(h => h.ID).Take(1).FirstOrDefaultAsync();
 
                 // Load & verify
@@ -1005,13 +1005,13 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task ClickCollectionEventSave()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             using (var db = new AnalyticsEntitiesContext())
             {
                 var clicksToSave = new CustomEventsResultCollection();
 
                 // Test empty
-                await clicksToSave.SaveClicksToSQL(telemetry, db);
+                await clicksToSave.SaveClicksToSQL(logger, db);
 
                 // Insert required hit & session for clicks to work
                 var testUser = new User { UserPrincipalName = "testuser" + DateTime.Now.Ticks };
@@ -1042,7 +1042,7 @@ namespace Tests.UnitTests
                     });
                 }
 
-                await clicksToSave.SaveAllEventTypesToSql(telemetry, new AppConfig());
+                await clicksToSave.SaveAllEventTypesToSql(logger, new AppConfig());
                 var lastClickAfterTest = await db.Clicks.OrderByDescending(h => h.ID).Take(1).FirstOrDefaultAsync() ?? new Common.Entities.Entities.WebTraffic.Clicks() { ID = int.MaxValue };
 
                 // Load & verify
@@ -1077,7 +1077,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task ClickEventDuplicateSave()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             using (var db = new AnalyticsEntitiesContext())
             {
                 var clicksToSave = new CustomEventsResultCollection();
@@ -1118,7 +1118,7 @@ namespace Tests.UnitTests
                     AppInsightsTimestamp = dt,
                 });
 
-                await clicksToSave.SaveAllEventTypesToSql(telemetry, new AppConfig());
+                await clicksToSave.SaveAllEventTypesToSql(logger, new AppConfig());
                 clicksToSave.Rows.Clear();
 
                 // Duplicate in new save set
@@ -1136,22 +1136,22 @@ namespace Tests.UnitTests
                 });
 
                 // Make sure doesn't crash
-                await clicksToSave.SaveAllEventTypesToSql(telemetry, new AppConfig());
+                await clicksToSave.SaveAllEventTypesToSql(logger, new AppConfig());
             }
         }
 
         [TestMethod]
         public async Task ClickEventEdgeCaseTests()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             using (var db = new AnalyticsEntitiesContext())
             {
                 var randoTestName = "TestName" + DateTime.Now.Ticks;
                 db.Clicks.RemoveRange(db.Clicks.ToList());
                 await db.SaveChangesAsync();
 
-                await TestEdgeClicks(db, telemetry, randoTestName, null);
-                await TestEdgeClicks(db, telemetry, randoTestName, null);     // Use existing lookup
+                await TestEdgeClicks(db, logger, randoTestName, null);
+                await TestEdgeClicks(db, logger, randoTestName, null);     // Use existing lookup
 
                 // Generate 4k(ish) string
                 var sb = "";
@@ -1159,12 +1159,12 @@ namespace Tests.UnitTests
                 {
                     sb += ("a");
                 }
-                await TestEdgeClicks(db, telemetry, randoTestName, sb);
+                await TestEdgeClicks(db, logger, randoTestName, sb);
 
             }
         }
 
-        private async Task TestEdgeClicks(AnalyticsEntitiesContext db, ILogger telemetry, string randoTestName, string classname)
+        private async Task TestEdgeClicks(AnalyticsEntitiesContext db, ILogger logger, string randoTestName, string classname)
         {
             var clicksToSave = new CustomEventsResultCollection();
 
@@ -1193,7 +1193,7 @@ namespace Tests.UnitTests
             var expectedClicks = clicksToSave.Rows.Count;
 
             // Shave
-            await clicksToSave.SaveClicksToSQL(telemetry, db);
+            await clicksToSave.SaveClicksToSQL(logger, db);
 
             var lastClickAfterTest = await db.Clicks.OrderByDescending(h => h.ID).Take(1).FirstOrDefaultAsync() ?? new Common.Entities.Entities.WebTraffic.Clicks() { ID = int.MaxValue };
 
