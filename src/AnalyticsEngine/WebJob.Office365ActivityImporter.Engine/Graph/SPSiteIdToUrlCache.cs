@@ -25,8 +25,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public override async Task<Microsoft.Graph.Models.Site> LoadSite(string id)
         {
-            return await _graphServiceClient.Sites[id]
-                .GetAsync(rc => { rc.QueryParameters.Select = new[] { "WebUrl" }; });
+            try
+            {
+                return await _graphServiceClient.Sites[id]
+                    .GetAsync(rc => { rc.QueryParameters.Select = new[] { "WebUrl" }; });
+            }
+            catch (Exception ex)
+            {
+                base._logger.LogWarning(ex, $"{nameof(GraphSPSiteIdToUrlCache)}: Error loading site URL for {id}: {ex.Message}");
+                throw;
+            }
         }
     }
 
@@ -37,7 +45,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public abstract class SPSiteIdToUrlCache : ObjectByIdCache<SPSiteIdToUrl>
     {
         private readonly AnalyticsEntitiesContext _db;
-        private readonly ILogger _logger;
+        protected readonly ILogger _logger;
 
         public SPSiteIdToUrlCache(AnalyticsEntitiesContext db, ILogger logger)
         {
