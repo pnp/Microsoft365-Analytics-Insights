@@ -13,13 +13,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     internal class UserDataMapper
     {
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
         private readonly UserMetadataCache _userMetaCache;
         private Dictionary<string, GraphUser> _graphUsersByAadId;
 
-        public UserDataMapper(AnalyticsLogger telemetry, UserMetadataCache userMetaCache)
+        public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache)
         {
-            _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
         }
 
@@ -256,7 +256,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                     else
                     {
-                        _telemetry.LogWarning($"Couldn't find manager with AAD ID {graphUser.DefaultManagerInfo?.Id} in Graph cache or DB");
+                        _logger.LogWarning($"Couldn't find manager with AAD ID {graphUser.DefaultManagerInfo?.Id} in Graph cache or DB");
                     }
                 }
                 else

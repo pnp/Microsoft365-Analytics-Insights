@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Entities.UsageReports;
 using Common.Entities.LookupCaches.Discrete;
 using Microsoft.Extensions.Logging;
@@ -18,8 +18,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         private readonly SPSiteIdToUrlCache _sPSiteIdToUrlCache;
         private readonly SiteCache _siteCache;
 
-        public SharePointSitesWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger telemetry, SPSiteIdToUrlCache sPSiteIdToUrlCache)
-            : base(db, client, telemetry)
+        public SharePointSitesWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger logger, SPSiteIdToUrlCache sPSiteIdToUrlCache)
+            : base(db, client, logger)
         {
             _sPSiteIdToUrlCache = sPSiteIdToUrlCache;
             _siteCache = new SiteCache(_context);

@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System;
 
 namespace DataUtils
@@ -9,9 +9,9 @@ namespace DataUtils
     public class ConsoleApp
     {
 
-        public static void WebjobWait(ILogger telemetry)
+        public static void WebjobWait(ILogger logger)
         {
-            telemetry.LogInformation("Waiting 10 mins...");
+            logger.LogInformation("Waiting 10 mins...");
             System.Threading.Thread.Sleep(600000); // 10 mins
         }
 

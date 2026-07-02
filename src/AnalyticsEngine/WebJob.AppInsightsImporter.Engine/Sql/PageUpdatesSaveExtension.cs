@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using DataUtils;
@@ -13,11 +13,11 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     public static class PageUpdatesSaveExtension
     {
 
-        public static async Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger debugTracer, AppConfig config)
+        public static async Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AppConfig config)
         {
             if (eventList.Rows.Count == 0) return 0;
 
-            var updateManager = new PageUpdateManager(debugTracer, config);
+            var updateManager = new PageUpdateManager(logger, config);
 
             // Filter from custom events which are page-updates
             var pageUpdates = eventList.Rows

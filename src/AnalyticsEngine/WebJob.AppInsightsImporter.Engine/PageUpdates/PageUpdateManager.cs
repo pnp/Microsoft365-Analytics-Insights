@@ -1,4 +1,4 @@
-﻿using Azure;
+using Azure;
 using Azure.AI.TextAnalytics;
 using Common.Entities;
 using Common.Entities.Config;
@@ -25,17 +25,17 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public class PageUpdateManager
     {
-        private readonly ILogger _debugTracer;
+        private readonly ILogger _logger;
         private readonly int _chunkSize;
         private readonly CognitiveServicesClient _cognitiveClient = null;
         private readonly AppConfig _config;
 
-        public PageUpdateManager(ILogger debugTracer, AppConfig config) : this(debugTracer, 1000, config)
+        public PageUpdateManager(ILogger logger, AppConfig config) : this(logger, 1000, config)
         {
         }
-        public PageUpdateManager(ILogger debugTracer, int chunkSize, AppConfig config)
+        public PageUpdateManager(ILogger logger, int chunkSize, AppConfig config)
         {
-            _debugTracer = debugTracer ?? throw new ArgumentNullException(nameof(debugTracer));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _chunkSize = chunkSize;
             _config = config;
             if (chunkSize < 0)
@@ -48,7 +48,7 @@ namespace WebJob.AppInsightsImporter.Engine
             // is set and auto-falls back to RBAC (ClientSecretCredential) on 403
             // AuthenticationTypeDisabled so we still work when key auth is disabled on the resource.
             var cognitiveConfig = _config ?? new AppConfig();
-            _cognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(debugTracer);
+            _cognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(logger);
         }
 
         public async Task<List<string>> SaveAll(IEnumerable<PageUpdateEventAppInsightsQueryResult> pageUpdateEvents)
@@ -91,7 +91,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
             }
 
-            _debugTracer.LogInformation($"Updated {uniqueUpdatedUrls.Count} URLs from {pageUpdateEvents.Count()} page-update events");
+            _logger.LogInformation($"Updated {uniqueUpdatedUrls.Count} URLs from {pageUpdateEvents.Count()} page-update events");
 
             return uniqueUpdatedUrls;
         }
@@ -102,7 +102,7 @@ namespace WebJob.AppInsightsImporter.Engine
         async Task SaveChunk(List<PageUpdateEventAppInsightsQueryResult> chunk, List<string> updatedUrls)
         {
 #if DEBUG
-            _debugTracer.LogInformation($"DEBUG: Updating {chunk.Count} URLs on new thread");
+            _logger.LogInformation($"DEBUG: Updating {chunk.Count} URLs on new thread");
 #endif
             using (var context = new AnalyticsEntitiesContext())
             {
@@ -161,7 +161,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         // likely culprit is an uncaught DbUpdateException from a comment/like whose user or
                         // language insert fails - which previously escaped every catch above it and stalled
                         // the importer for months. Log the full error, skip this URL, and keep going.
-                        _debugTracer.LogError(ex, $"Failed applying page-update metadata for URL '{urlToUpdate.FullUrl}': {CommonExceptionHandler.GetErrorText(ex)}. Skipping this URL.");
+                        _logger.LogError(ex, $"Failed applying page-update metadata for URL '{urlToUpdate.FullUrl}': {CommonExceptionHandler.GetErrorText(ex)}. Skipping this URL.");
                     }
                 }
 
@@ -171,16 +171,16 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 catch (SqlException ex)
                 {
-                    _debugTracer.LogError(ex, $"SQL exception '{ex.Message}' when saving page updates for this chunk.");
+                    _logger.LogError(ex, $"SQL exception '{ex.Message}' when saving page updates for this chunk.");
                 }
                 catch (DbUpdateException ex)
                 {
-                    _debugTracer.LogError(ex, $"DbUpdate exception '{CommonExceptionHandler.GetErrorText(ex)}' when saving page updates for this chunk.");
+                    _logger.LogError(ex, $"DbUpdate exception '{CommonExceptionHandler.GetErrorText(ex)}' when saving page updates for this chunk.");
                 }
             }
 
 #if DEBUG
-            _debugTracer.LogDebug($"DEBUG: Updated {chunk.Count} URLs on new thread");
+            _logger.LogDebug($"DEBUG: Updated {chunk.Count} URLs on new thread");
 #endif
         }
 
@@ -216,7 +216,7 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 var cognitiveResults = await newComments.Keys
                     .ToTextAnalysisSampleList()
-                    .GetCognitiveDataStats(_cognitiveClient, _debugTracer);
+                    .GetCognitiveDataStats(_cognitiveClient, _logger);
 
                 if (cognitiveResults != null)
                 {
@@ -238,7 +238,7 @@ namespace WebJob.AppInsightsImporter.Engine
             }
 
             // Save new comments via staging table
-            await newComments.Values.ToList().Save(db, _debugTracer);
+            await newComments.Values.ToList().Save(db, _logger);
 
             // Page likes
             var pageLikeUpdatesMade = await ProcessCustomAppInsightsEvents(correspondingPageUpdate.CustomProperties.Likes, urlExistingLikes, async (UserBasedCustomAIEvent like, string email) =>
@@ -281,7 +281,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 else
                 {
-                    _debugTracer.LogError($"WARNING: Invalid comment/like metadata in event: {eventVal}");
+                    _logger.LogError($"WARNING: Invalid comment/like metadata in event: {eventVal}");
                 }
             }
 
@@ -335,7 +335,7 @@ namespace WebJob.AppInsightsImporter.Engine
             }
             catch (DbUpdateException ex)
             {
-                _debugTracer.LogError(ex, $"DbUpdate exception '{CommonExceptionHandler.GetErrorText(ex)}' when saving page updates for this chunk.");
+                _logger.LogError(ex, $"DbUpdate exception '{CommonExceptionHandler.GetErrorText(ex)}' when saving page updates for this chunk.");
                 return false;
             }
 
@@ -362,7 +362,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         }
                         catch (DbUpdateException ex)
                         {
-                            _debugTracer.LogError(ex, $"ERROR: DbUpdate exception '{CommonExceptionHandler.GetErrorText(ex)}' when saving page updates for this chunk.");
+                            _logger.LogError(ex, $"ERROR: DbUpdate exception '{CommonExceptionHandler.GetErrorText(ex)}' when saving page updates for this chunk.");
                             return false;
                         }
                     }

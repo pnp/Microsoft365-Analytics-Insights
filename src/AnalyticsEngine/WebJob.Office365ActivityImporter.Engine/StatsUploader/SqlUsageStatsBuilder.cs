@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -17,7 +17,7 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     public class SqlUsageStatsBuilder : BaseUsageStatsBuilder
     {
         private readonly AnalyticsEntitiesContext _db;
-        public SqlUsageStatsBuilder(AnalyticsEntitiesContext db, ILogger tracer, Guid tenantId) : base(tracer, tenantId)
+        public SqlUsageStatsBuilder(AnalyticsEntitiesContext db, ILogger logger, Guid tenantId) : base(logger, tenantId)
         {
             _db = db;
         }

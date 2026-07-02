@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -18,7 +18,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public class GraphSPSiteIdToUrlCache : SPSiteIdToUrlCache
     {
         private readonly GraphServiceClient _graphServiceClient;
-        public GraphSPSiteIdToUrlCache(GraphServiceClient graphServiceClient, AnalyticsEntitiesContext db, ILogger debugTracer) : base(db, debugTracer)
+        public GraphSPSiteIdToUrlCache(GraphServiceClient graphServiceClient, AnalyticsEntitiesContext db, ILogger logger) : base(db, logger)
         {
             _graphServiceClient = graphServiceClient;
         }
@@ -37,12 +37,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public abstract class SPSiteIdToUrlCache : ObjectByIdCache<SPSiteIdToUrl>
     {
         private readonly AnalyticsEntitiesContext _db;
-        private readonly ILogger _debugTracer;
+        private readonly ILogger _logger;
 
-        public SPSiteIdToUrlCache(AnalyticsEntitiesContext db, ILogger debugTracer)
+        public SPSiteIdToUrlCache(AnalyticsEntitiesContext db, ILogger logger)
         {
             _db = db;
-            _debugTracer = debugTracer;
+            _logger = logger;
         }
 
         public abstract Task<Microsoft.Graph.Models.Site> LoadSite(string id);
@@ -62,7 +62,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     };
                 }
                 var site = await LoadSite(id);
-                _debugTracer.LogInformation($"{nameof(SPSiteIdToUrlCache)}: Loaded site URL for {id}");
+                _logger.LogInformation($"{nameof(SPSiteIdToUrlCache)}: Loaded site URL for {id}");
 
                 // Cache in DB
                 var dbRecordBySiteUrl = await _db.sites.Where(s => s.UrlBase.ToLower() == site.WebUrl.ToLower()).SingleOrDefaultAsync();
@@ -89,13 +89,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             catch (ODataError ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
             {
-                _debugTracer.LogWarning($"{nameof(SPSiteIdToUrlCache)}: Site with ID '{id}' not found");
+                _logger.LogWarning($"{nameof(SPSiteIdToUrlCache)}: Site with ID '{id}' not found");
 
                 return null;
             }
             catch (Exception ex)
             {
-                _debugTracer.LogError(ex, $"{nameof(SPSiteIdToUrlCache)}: Error loading site URL for {id}: {ex.Message}");
+                _logger.LogError(ex, $"{nameof(SPSiteIdToUrlCache)}: Error loading site URL for {id}: {ex.Message}");
                 return null;
             }
         }
