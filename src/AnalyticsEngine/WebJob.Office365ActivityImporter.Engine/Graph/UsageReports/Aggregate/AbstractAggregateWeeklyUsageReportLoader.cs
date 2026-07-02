@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -15,7 +15,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         protected readonly ManualGraphCallClient _client;
         protected readonly AnalyticsEntitiesContext _context;
 
-        protected GraphAndSqlAggregateWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger telemetry) : base(telemetry)
+        protected GraphAndSqlAggregateWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger logger) : base(logger)
         {
             _client = client;
             _context = db;
@@ -36,7 +36,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
     /// </summary>
     public abstract class AbstractAggregateWeeklyUsageReportLoader<T> : ActivityReportLoader where T : BaseAggregateItemStats
     {
-        public AbstractAggregateWeeklyUsageReportLoader(ILogger telemetry) : base(telemetry)
+        public AbstractAggregateWeeklyUsageReportLoader(ILogger logger) : base(logger)
         {
         }
 

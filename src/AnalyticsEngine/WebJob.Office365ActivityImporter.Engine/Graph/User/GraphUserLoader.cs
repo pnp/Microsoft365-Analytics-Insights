@@ -18,7 +18,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         private readonly ManualGraphCallClient _httpClient;
         private readonly IDeltaValueProvider _deltaValueProvider;
-        private readonly ILogger _telemetry;
+        private readonly ILogger _logger;
         private readonly GraphServiceClient _graphServiceClient;
 
         // Buffer the delta token returned by Graph during the most recent
@@ -31,11 +31,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private string _pendingDeltaToken;
         private bool _hasPendingDeltaToken;
 
-        public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger telemetry, GraphServiceClient graphServiceClient)
+        public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient)
         {
             this._httpClient = httpClient;
             _deltaValueProvider = deltaValueProvider;
-            this._telemetry = telemetry;
+            this._logger = logger;
             this._graphServiceClient = graphServiceClient;
         }
 
@@ -66,7 +66,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _pendingDeltaToken = null;
             _hasPendingDeltaToken = false;
 
-            var results = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(initialDeltaUrl, _telemetry,
+            var results = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(initialDeltaUrl, _logger,
                 (deltaLink) =>
                 {
                     // Buffer the new delta in memory. It will only be persisted to
@@ -80,11 +80,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (string.IsNullOrEmpty(usersQueryDelta))
             {
-                _telemetry.LogInformation($"User import - read {results.Count.ToString("N0")} users (all) from Graph API");
+                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} users (all) from Graph API");
             }
             else
             {
-                _telemetry.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
+                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
             }
 
             // Graph for some reason gives duplicates; filter that out.
@@ -133,15 +133,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 if (ex.ResponseStatusCode == (int)System.Net.HttpStatusCode.Forbidden)
                 {
-                    _telemetry.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
+                    _logger.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
                 }
                 else
                 {
-                    _telemetry.LogError(ex, $"User import - couldn't load SKUs for org - {ex.Message}");
+                    _logger.LogError(ex, $"User import - couldn't load SKUs for org - {ex.Message}");
                 }
 
                 // If we can't get tenant SKUs to find all users by, we can get SKUs per user instead, but this can be very slow.
-                _telemetry.LogWarning($"User import - will load SKUs directly from each user instead. This will be slow.");
+                _logger.LogWarning($"User import - will load SKUs directly from each user instead. This will be slow.");
                 return null;
             }
         }
@@ -178,10 +178,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (iterator.State == PagingState.Paused)
             {
-                _telemetry.LogWarning($"User import - hit MAX_USERS_PER_SKU ({MAX_USERS_PER_SKU:N0}) walking users for SKU {skuId}. Returning partial result of {allUsersWithSku.Count:N0} users.");
+                _logger.LogWarning($"User import - hit MAX_USERS_PER_SKU ({MAX_USERS_PER_SKU:N0}) walking users for SKU {skuId}. Returning partial result of {allUsersWithSku.Count:N0} users.");
             }
 
-            _telemetry.LogDebug($"SKU {skuId} loaded {allUsersWithSku.Count:N0} users");
+            _logger.LogDebug($"SKU {skuId} loaded {allUsersWithSku.Count:N0} users");
 
             return allUsersWithSku;
         }
@@ -198,7 +198,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             catch (ODataError ex)
             {
-                _telemetry.LogError(ex, $"User import - couldn't load service-plans for user ID '{userId}' - {ex.Message}");
+                _logger.LogError(ex, $"User import - couldn't load service-plans for user ID '{userId}' - {ex.Message}");
                 return null;
             }
         }

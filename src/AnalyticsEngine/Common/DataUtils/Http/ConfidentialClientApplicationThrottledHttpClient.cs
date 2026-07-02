@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Net.Http;
@@ -13,12 +13,12 @@ namespace DataUtils.Http
     /// </summary>
     public class ConfidentialClientApplicationThrottledHttpClient : AutoThrottleHttpClient
     {
-        public ConfidentialClientApplicationThrottledHttpClient(HttpMessageHandler server, ILogger debugTracer) : base(server, debugTracer)
+        public ConfidentialClientApplicationThrottledHttpClient(HttpMessageHandler server, ILogger logger) : base(server, logger)
         {
         }
 
-        public ConfidentialClientApplicationThrottledHttpClient(ImportAppIndentityOAuthContext appIndentity, bool ignoreRetryHeader, ILogger debugTracer)
-            : base(ignoreRetryHeader, debugTracer, new ConfidentialClientApplicationHttpHandler(appIndentity))
+        public ConfidentialClientApplicationThrottledHttpClient(ImportAppIndentityOAuthContext appIndentity, bool ignoreRetryHeader, ILogger logger)
+            : base(ignoreRetryHeader, logger, new ConfidentialClientApplicationHttpHandler(appIndentity))
         {
         }
     }

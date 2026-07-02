@@ -1,4 +1,4 @@
-﻿using Azure.Identity;
+using Azure.Identity;
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
@@ -20,12 +20,12 @@ namespace WebJob.AppInsightsImporter.Engine
     public class AppInsightsImporter
     {
         private readonly AppConfig _importConfig;
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
 
-        public AppInsightsImporter(AppConfig importConfig, AnalyticsLogger telemetry)
+        public AppInsightsImporter(AppConfig importConfig, AnalyticsLogger logger)
         {
             _importConfig = importConfig;
-            _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         public async Task ImportAndSave(bool saveRestResponses, int? daysBeforeOverride)
@@ -45,11 +45,11 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 // Delete duplicate hits 1st. It also creates the page-request-ID index
                 await ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID(db);
-                _telemetry.LogInformation($"Startup: duplicate-hit cleanup completed in {sw.Elapsed.TotalSeconds:N1}s");
+                _logger.LogInformation($"Startup: duplicate-hit cleanup completed in {sw.Elapsed.TotalSeconds:N1}s");
 
                 sw.Restart();
                 var filterUrls = await SiteFilterLoader.Load(db);
-                _telemetry.LogInformation($"Startup: loaded {filterUrls.Count} URL filters in {sw.Elapsed.TotalSeconds:N1}s");
+                _logger.LogInformation($"Startup: loaded {filterUrls.Count} URL filters in {sw.Elapsed.TotalSeconds:N1}s");
 
                 var newestHit = await db.hits.OrderByDescending(h => h.hit_timestamp).Take(1).FirstOrDefaultAsync();
 
@@ -60,14 +60,14 @@ namespace WebJob.AppInsightsImporter.Engine
                 // Rewind start-date a wee bit just to make sure we get edge hits...
                 startDate = startDate.AddMinutes(-1);
 
-                var jobTimer = new JobTimer(_telemetry, "Hits import");
+                var jobTimer = new JobTimer(_logger, "Hits import");
                 if (newestHit != null)
                 {
-                    _telemetry.LogInformation($"Requesting data from AppInsights from {startDate} (newest hit is from {newestHit.hit_timestamp})...");
+                    _logger.LogInformation($"Requesting data from AppInsights from {startDate} (newest hit is from {newestHit.hit_timestamp})...");
                 }
                 else
                 {
-                    _telemetry.LogInformation($"Requesting data from AppInsights from {startDate} (no hits yet to start from previous)...");
+                    _logger.LogInformation($"Requesting data from AppInsights from {startDate} (no hits yet to start from previous)...");
                 }
 
                 // Import page-views first
@@ -75,13 +75,13 @@ namespace WebJob.AppInsightsImporter.Engine
                     this._importConfig.TenantGUID.ToString(),
                     this._importConfig.ClientID,
                     this._importConfig.ClientSecret);
-                using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _telemetry))
+                using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _logger))
                 {
 
                     // UTC to match App Insights' UTC timestamps (see startDate above).
                     var endDate = DateTime.UtcNow;
                     var daysToRead = startDate.EachDay(endDate).ToList();
-                    _telemetry.LogInformation($"Importing hits for {daysToRead.Count} days...");
+                    _logger.LogInformation($"Importing hits for {daysToRead.Count} days...");
                     var totalDays = 0;
                     var totalPageViews = 0;
                     var totalEvents = 0;
@@ -89,7 +89,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     {
                         totalDays++;
                         var dayTimer = Stopwatch.StartNew();
-                        _telemetry.LogInformation($"Importing day {totalDays}/{daysToRead.Count}: {d.ToString("yyyy-MM-dd")}...");
+                        _logger.LogInformation($"Importing day {totalDays}/{daysToRead.Count}: {d.ToString("yyyy-MM-dd")}...");
 
                         // Fetch page-views and custom events for the same day in parallel.
                         // Both are independent read-only API calls with no shared state.
@@ -104,11 +104,11 @@ namespace WebJob.AppInsightsImporter.Engine
 
                             pageViewsResult = await pageViewsTask;
                             events = await eventsTask;
-                            _telemetry.LogInformation($"API fetch completed in {sw.Elapsed.TotalSeconds:N1}s - {pageViewsResult.Rows.Count:n0} page-views, {events.Rows.Count:n0} events");
+                            _logger.LogInformation($"API fetch completed in {sw.Elapsed.TotalSeconds:N1}s - {pageViewsResult.Rows.Count:n0} page-views, {events.Rows.Count:n0} events");
                         }
                         catch (Exception ex)
                         {
-                            _telemetry.LogError(ex, $"Got fatal exception downloading from Application Insights REST: {ex.Message}");
+                            _logger.LogError(ex, $"Got fatal exception downloading from Application Insights REST: {ex.Message}");
 #if DEBUG
                             throw;
 #else
@@ -120,7 +120,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         {
                             var earliest = pageViewsResult.Rows.OrderBy(v => v.Timestamp).Take(1).First();
                             var latest = pageViewsResult.Rows.OrderByDescending(v => v.Timestamp).Take(1).First();
-                            _telemetry.LogInformation($"Hits range: {earliest.Timestamp:yyyy-MM-dd HH:mm:ss.ff} to {latest.Timestamp:yyyy-MM-dd HH:mm:ss.ff}");
+                            _logger.LogInformation($"Hits range: {earliest.Timestamp:yyyy-MM-dd HH:mm:ss.ff} to {latest.Timestamp:yyyy-MM-dd HH:mm:ss.ff}");
                         }
 
                         if (pageViewsResult.Rows.Count > 0 || events.Rows.Count > 0)
@@ -129,12 +129,12 @@ namespace WebJob.AppInsightsImporter.Engine
                             try
                             {
                                 sw.Restart();
-                                await pageViewsResult.SaveToSQL(db, _telemetry, filterUrls);
-                                _telemetry.LogInformation($"Page-views SQL save completed in {sw.Elapsed.TotalSeconds:N1}s");
+                                await pageViewsResult.SaveToSQL(db, _logger, filterUrls);
+                                _logger.LogInformation($"Page-views SQL save completed in {sw.Elapsed.TotalSeconds:N1}s");
 
                                 sw.Restart();
-                                await events.SaveAllEventTypesToSql(_telemetry, _importConfig);
-                                _telemetry.LogInformation($"Events SQL save completed in {sw.Elapsed.TotalSeconds:N1}s");
+                                await events.SaveAllEventTypesToSql(_logger, _importConfig);
+                                _logger.LogInformation($"Events SQL save completed in {sw.Elapsed.TotalSeconds:N1}s");
                             }
                             catch (Exception ex)
                             {
@@ -144,9 +144,9 @@ namespace WebJob.AppInsightsImporter.Engine
                                 // SqlException-only catch used to let any other exception escape, which
                                 // permanently stuck the importer re-processing the same day). Log the
                                 // full error, record it, and carry on with the next day.
-                                _telemetry.TrackException(ex);
-                                _telemetry.LogError($"Failed saving data for day {d:yyyy-MM-dd}: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this day and continuing.");
-                                _telemetry.LogError($"Exception detail: {ex}");
+                                _logger.TrackException(ex);
+                                _logger.LogError($"Failed saving data for day {d:yyyy-MM-dd}: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this day and continuing.");
+                                _logger.LogError($"Exception detail: {ex}");
                                 if (Debugger.IsAttached)
                                 {
                                     throw;
@@ -156,15 +156,15 @@ namespace WebJob.AppInsightsImporter.Engine
 
                             totalPageViews += pageViewsResult.Rows.Count;
                             totalEvents += events.Rows.Count;
-                            _telemetry.LogInformation($"Day {d:yyyy-MM-dd} completed in {dayTimer.Elapsed.TotalSeconds:N1}s - saved {pageViewsResult.Rows.Count:n0} page-views, {events.Rows.Count:n0} events");
+                            _logger.LogInformation($"Day {d:yyyy-MM-dd} completed in {dayTimer.Elapsed.TotalSeconds:N1}s - saved {pageViewsResult.Rows.Count:n0} page-views, {events.Rows.Count:n0} events");
                         }
                         else
                         {
-                            _telemetry.LogInformation($"Day {d:yyyy-MM-dd} completed in {dayTimer.Elapsed.TotalSeconds:N1}s - no new data.");
+                            _logger.LogInformation($"Day {d:yyyy-MM-dd} completed in {dayTimer.Elapsed.TotalSeconds:N1}s - no new data.");
                         }
                     }
 
-                    _telemetry.LogInformation($"Import loop finished: {totalDays} days processed, {totalPageViews:n0} total page-views, {totalEvents:n0} total events");
+                    _logger.LogInformation($"Import loop finished: {totalDays} days processed, {totalPageViews:n0} total page-views, {totalEvents:n0} total events");
                 }
 
                 // Track finished event 

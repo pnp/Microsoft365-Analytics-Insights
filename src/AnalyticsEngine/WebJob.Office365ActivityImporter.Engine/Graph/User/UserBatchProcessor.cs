@@ -15,12 +15,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     internal class UserBatchProcessor
     {
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
         private const int DEFAULT_BATCH_SIZE = 500;
 
-        public UserBatchProcessor(AnalyticsLogger telemetry)
+        public UserBatchProcessor(AnalyticsLogger logger)
         {
-            _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         /// <summary>
@@ -35,7 +35,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Func<GraphUser, Common.Entities.User, Task> updateAction,
             int batchSize = DEFAULT_BATCH_SIZE)
         {
-            _telemetry.LogInformation($"User import - updating {userUpnsToProcess.Count.ToString("N0")} existing users in batches...");
+            _logger.LogInformation($"User import - updating {userUpnsToProcess.Count.ToString("N0")} existing users in batches...");
 
             int processedCount = 0;
             // userUpnsToProcess is OrdinalIgnoreCase so we no longer need .ToLower() per Graph user.
@@ -104,7 +104,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 await db.SaveChangesAsync();
 
                 processedCount += batch.Count;
-                _telemetry.LogInformation($"User import - processed batch {processedCount.ToString("N0")}/{batchedGraphUsers.Count.ToString("N0")} existing users");
+                _logger.LogInformation($"User import - processed batch {processedCount.ToString("N0")}/{batchedGraphUsers.Count.ToString("N0")} existing users");
 
                 // Clear change tracker to release memory, but preserve lookups
                 DetachAllEntitiesExceptLookups(db);
@@ -256,7 +256,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (graphUsersToUpdate.Count == 0)
                 return 0;
 
-            _telemetry.LogInformation($"User import - bulk updating {graphUsersToUpdate.Count.ToString("N0")} existing users...");
+            _logger.LogInformation($"User import - bulk updating {graphUsersToUpdate.Count.ToString("N0")} existing users...");
 
             // Pre-warm all lookup caches so every value has a DB ID
             var lookupMaps = await PreWarmLookupCaches(db, graphUsersToUpdate, userMetaCache);
@@ -280,7 +280,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 totalProcessed += batchCount;
-                _telemetry.LogInformation($"User import - bulk updated {totalProcessed.ToString("N0")}/{graphUsersToUpdate.Count.ToString("N0")} existing users");
+                _logger.LogInformation($"User import - bulk updated {totalProcessed.ToString("N0")}/{graphUsersToUpdate.Count.ToString("N0")} existing users");
             }
 
             return totalProcessed;
@@ -333,7 +333,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             foreach (var n in companySet)
                 maps.CompanyNames[n] = await cache.CompanyNameCache.GetOrCreateNewResource(n, new CompanyName { Name = n });
 
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"User import - pre-warmed lookup caches: {deptSet.Count} departments, {titleSet.Count} titles, " +
                 $"{officeSet.Count} offices, {usageSet.Count} usage locations, {countrySet.Count} countries, " +
                 $"{stateSet.Count} states, {companySet.Count} companies");

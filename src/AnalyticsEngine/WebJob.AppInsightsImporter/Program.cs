@@ -61,7 +61,7 @@ namespace WebJob.AppInsightsImporter
 
             var config = new AppConfig();
 
-            var telemetry = new AnalyticsLogger(config.AppInsightsConnectionString, "AppInsightsImporter");
+            var logger = new AnalyticsLogger(config.AppInsightsConnectionString, "AppInsightsImporter");
 
             // If no command line override was supplied, fall back to the config/app-setting value (if any).
             // The command line argument takes precedence over the config value.
@@ -71,22 +71,22 @@ namespace WebJob.AppInsightsImporter
                 Console.WriteLine($"Using ReadHitsDaysBeforeToday='{daysBeforeReadOverride}' from app configuration.");
             }
 
-            bool validConfig = ValidateAndPrintConfig(config, telemetry);
+            bool validConfig = ValidateAndPrintConfig(config, logger);
             if (validConfig)
             {
                 Console.WriteLine();
-                telemetry.LogInformation("Starting Application Insights import.");
+                logger.LogInformation("Starting Application Insights import.");
             }
             else
             {
-                telemetry.LogInformation("\nCheck settings & restart app.");
+                logger.LogInformation("\nCheck settings & restart app.");
                 runAgain = false;
             }
 
             // Should we even be running?
             if (!importJobSettings.WebTraffic)
             {
-                telemetry.LogWarning("WARNING: Web-traffic import is disabled in app configuration. Stopping here until the app is restarted.");
+                logger.LogWarning("WARNING: Web-traffic import is disabled in app configuration. Stopping here until the app is restarted.");
                 while (true)
                 {
                     System.Threading.Thread.Sleep(int.MaxValue);
@@ -97,10 +97,10 @@ namespace WebJob.AppInsightsImporter
             {
                 while (runAgain)
                 {
-                    var importCycleTimer = new JobTimer(telemetry, Process.GetCurrentProcess().ProcessName);
+                    var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                     importCycleTimer.Start();
 
-                    var importer = new Engine.AppInsightsImporter(config, telemetry);
+                    var importer = new Engine.AppInsightsImporter(config, logger);
                     if (daysBeforeReadOverride > 0)
                     {
                         importer.ImportAndSave(saveRestResponses, daysBeforeReadOverride).Wait();
@@ -121,20 +121,20 @@ namespace WebJob.AppInsightsImporter
 
                     if (runAgain)
                     {
-                        ConsoleApp.WebjobWait(telemetry);
+                        ConsoleApp.WebjobWait(logger);
                     }
                 }
             }
             catch (Exception ex)
             {
-                telemetry.TrackException(ex);
+                logger.TrackException(ex);
 
                 // ex is normally an AggregateException from the .Wait() above, whose Message is just
                 // "One or more errors occurred." - useless on its own. Log the unwrapped inner-exception
                 // chain and the full stack so the real failure is visible in the WebJob console & traces,
                 // not only in the AppInsights 'exceptions' table.
-                telemetry.LogError($"Got uncaught exception importing & saving data from Application Insights: {CommonExceptionHandler.GetErrorText(ex)}");
-                telemetry.LogError($"Exception detail: {ex}");
+                logger.LogError($"Got uncaught exception importing & saving data from Application Insights: {CommonExceptionHandler.GetErrorText(ex)}");
+                logger.LogError($"Exception detail: {ex}");
 
 #if DEBUG
                 throw;
@@ -169,17 +169,17 @@ namespace WebJob.AppInsightsImporter
         /// Output the config and check it's good.
         /// </summary>
         /// <returns>If the config is valid</returns>
-        private static bool ValidateAndPrintConfig(AppConfig settings, ILogger telemetry)
+        private static bool ValidateAndPrintConfig(AppConfig settings, ILogger logger)
         {
-            ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, telemetry);
+            ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, logger);
 
             // Have config object test
 
-            settings.ConnectionStrings.TestSQLSettings(telemetry);
+            settings.ConnectionStrings.TestSQLSettings(logger);
 
             if (string.IsNullOrEmpty(settings.AppInsightsConnectionString))
             {
-                telemetry.LogInformation("Critical: no Application Insights connection string found - can't continue. Run the latest installer again to reset configuration.");
+                logger.LogInformation("Critical: no Application Insights connection string found - can't continue. Run the latest installer again to reset configuration.");
                 return false;
             }
 

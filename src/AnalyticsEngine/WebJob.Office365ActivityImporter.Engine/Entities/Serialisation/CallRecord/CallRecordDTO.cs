@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Common.Entities;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
@@ -33,7 +33,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <summary>
         /// Load a Call Record from Graph, using call ID
         /// </summary>
-        public static async Task<CallRecordDTO> LoadFromGraphByID(string callId, ManualGraphCallClient manualClient, TeamsLoadContext teamsLoadContext, ILogger telemetry, string thisTenantId)
+        public static async Task<CallRecordDTO> LoadFromGraphByID(string callId, ManualGraphCallClient manualClient, TeamsLoadContext teamsLoadContext, ILogger logger, string thisTenantId)
         {
             string callJsonText = string.Empty;
             var callDTO = await manualClient.GetAsyncWithThrottleRetries<CallRecordDTO>($"https://graph.microsoft.com/v1.0/communications/callRecords/{callId}?$expand=sessions($expand=segments)",
@@ -41,14 +41,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
             if (callDTO == null)
             {
-                telemetry.LogWarning($"Got null/unparseable response loading call record '{callId}'. Skipping.");
+                logger.LogWarning($"Got null/unparseable response loading call record '{callId}'. Skipping.");
                 return null;
             }
 
             callDTO.JsonText = callJsonText;
 
             // Find email addresses for user IDs
-            await callDTO.PopulateEmailAddresses(teamsLoadContext, thisTenantId, telemetry);
+            await callDTO.PopulateEmailAddresses(teamsLoadContext, thisTenantId, logger);
 
 
             return callDTO;
@@ -57,24 +57,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <summary>
         /// Debug testing method
         /// </summary>
-        public static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TokenCredential graphServiceClientAuthenticationProvider, ILogger telemetry, string thisTenantId)
+        public static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TokenCredential graphServiceClientAuthenticationProvider, ILogger logger, string thisTenantId)
         {
             var teamsLoadContext = new TeamsLoadContext(new GraphServiceClient(graphServiceClientAuthenticationProvider));
 
-            var newCall = await LoadFromGraphByID(callId, manualClient, teamsLoadContext, telemetry, thisTenantId);
+            var newCall = await LoadFromGraphByID(callId, manualClient, teamsLoadContext, logger, thisTenantId);
 
-            telemetry.LogInformation($"Response payload from Graph:\n{newCall.JsonText}");
+            logger.LogInformation($"Response payload from Graph:\n{newCall.JsonText}");
 
-            telemetry.LogInformation("\nSaving call to SQL...");
+            logger.LogInformation("\nSaving call to SQL...");
             using (var db = new AnalyticsEntitiesContext())
             {
-                return await newCall.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), telemetry);
+                return await newCall.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), logger);
             }
         }
 
         static SemaphoreSlim saveCallRecordSemaphoreSlim = new SemaphoreSlim(1, 1);
 
-        public async Task<CallRecord> SaveOrReplaceCallRecord(TeamsAndCallsDBLookupManager context, ILogger telemetry)
+        public async Task<CallRecord> SaveOrReplaceCallRecord(TeamsAndCallsDBLookupManager context, ILogger logger)
         {
             // Make sure we only save call records one at a time
             await saveCallRecordSemaphoreSlim.WaitAsync();
@@ -88,7 +88,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 {
                     if (existingCallRecord != null)
                     {
-                        telemetry.LogWarning($"Detected previous call in database with Graph ID '{this.GraphCallID}'. Replacing with this call data.");
+                        logger.LogWarning($"Detected previous call in database with Graph ID '{this.GraphCallID}'. Replacing with this call data.");
 
                         await existingCallRecord.DeleteAll(context.Database);
                     }
@@ -143,7 +143,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                         }
                         else
                         {
-                            telemetry.LogInformation($"Found a session ID '{session.GraphCallID}' without a caller/callee email address. Skipping session.");
+                            logger.LogInformation($"Found a session ID '{session.GraphCallID}' without a caller/callee email address. Skipping session.");
                         }
                     }
 
@@ -230,39 +230,39 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         }
 
 
-        public async Task PopulateEmailAddresses(TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger telemetry)
+        public async Task PopulateEmailAddresses(TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger logger)
         {
             if (Sessions != null)
             {
                 foreach (var callSession in this.Sessions)
                 {
-                    await PopuplateCallerEmail(callSession.Callee, teamsLoadContext, thisTenantId, telemetry);
-                    await PopuplateCallerEmail(callSession.Caller, teamsLoadContext, thisTenantId, telemetry);
+                    await PopuplateCallerEmail(callSession.Callee, teamsLoadContext, thisTenantId, logger);
+                    await PopuplateCallerEmail(callSession.Caller, teamsLoadContext, thisTenantId, logger);
                 }
             }
 
             if (this.Organizer != null)
             {
-                this.OrganizerEmail = await GetEmailAddress(this.Organizer, teamsLoadContext, telemetry);
+                this.OrganizerEmail = await GetEmailAddress(this.Organizer, teamsLoadContext, logger);
             }
         }
 
-        private static async Task PopuplateCallerEmail(ParticipantEndpointDTO callee, TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger telemetry)
+        private static async Task PopuplateCallerEmail(ParticipantEndpointDTO callee, TeamsLoadContext teamsLoadContext, string thisTenantId, ILogger logger)
         {
             if (callee?.Identity?.User != null)
             {
                 if (callee.Identity.User.TenantId == thisTenantId)
                 {
-                    callee.UserEmailAddress = await GetEmailAddress(callee.Identity, teamsLoadContext, telemetry);
+                    callee.UserEmailAddress = await GetEmailAddress(callee.Identity, teamsLoadContext, logger);
                 }
                 else
                 {
-                    telemetry.LogInformation($"Ignoring external user from tenant Id {callee.Identity.User.TenantId}");
+                    logger.LogInformation($"Ignoring external user from tenant Id {callee.Identity.User.TenantId}");
                 }
             }
         }
 
-        private static async Task<string> GetEmailAddress(IdentitySetDTO callee, TeamsLoadContext teamsLoadContext, ILogger telemetry)
+        private static async Task<string> GetEmailAddress(IdentitySetDTO callee, TeamsLoadContext teamsLoadContext, ILogger logger)
         {
             Microsoft.Graph.Models.User graphUser = null;
             try
@@ -273,7 +273,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             {
                 if (ex.Message.Contains("Request_ResourceNotFound"))
                 {
-                    telemetry.LogInformation($"Cannot find user with id '{callee?.User?.Id} in tenant '{callee?.User?.TenantId}' - user not found.");
+                    logger.LogInformation($"Cannot find user with id '{callee?.User?.Id} in tenant '{callee?.User?.TenantId}' - user not found.");
                     return string.Empty;
                 }
                 else

@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using Microsoft.ApplicationInsights;
 using System;
@@ -30,14 +30,14 @@ namespace Tests.UnitTests
 
         private static async Task DoThing()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
-            var testLoader = new FakeActivityImporter(100, new AppConfig(), telemetry);
+            var testLoader = new FakeActivityImporter(100, new AppConfig(), logger);
 
-            var t = new JobTimer(telemetry, "Soyve");
+            var t = new JobTimer(logger, "Soyve");
             t.Start();
             Console.WriteLine("Saving data...");
-            await testLoader.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(telemetry), telemetry, new AppConfig()));
+            await testLoader.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig()));
 
             t.StopAndPrintElapsed();
         }

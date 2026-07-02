@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Net.Http;
@@ -17,13 +17,13 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
 
         private readonly string _url;
         private readonly string _statsApiSecret;
-        private readonly ILogger _debugTracer;
+        private readonly ILogger _logger;
 
-        public WebApiStatsUploader(string url, string statsApiSecret, ILogger debugTracer)
+        public WebApiStatsUploader(string url, string statsApiSecret, ILogger logger)
         {
             _url = url;
             _statsApiSecret = statsApiSecret;
-            _debugTracer = debugTracer;
+            _logger = logger;
         }
 
         public void Dispose()
@@ -41,16 +41,16 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
                 var response = await _httpClient.PostAsync(_url, content);
                 if (response.IsSuccessStatusCode)
                 {
-                    _debugTracer.LogInformation($"Uploaded stats to {_url}");
+                    _logger.LogInformation($"Uploaded stats to {_url}");
                 }
                 else
                 {
-                    _debugTracer.LogError($"Can't upload stats to API - server returned unexpected response {response.StatusCode}");
+                    _logger.LogError($"Can't upload stats to API - server returned unexpected response {response.StatusCode}");
                 }
             }
             else
             {
-                _debugTracer.LogInformation($"Can't upload stats to API - invalid API configuration");
+                _logger.LogInformation($"Can't upload stats to API - invalid API configuration");
                 throw new InvalidOperationException("Can't upload stats to API - invalid API configuration");
             }
         }

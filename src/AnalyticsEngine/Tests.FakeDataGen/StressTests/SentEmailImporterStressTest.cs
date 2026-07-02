@@ -91,7 +91,7 @@ namespace Tests.FakeDataGen.StressTests
                 _memoryMonitor.UpdatePeak();
 
                 // 2) Build importer wired up with the fake loader + sentiment scorer.
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
                 var appConfig = FakeAppConfigFactory.Create();
                 var fakeLoader = new FakeSentEmailSourceLoader(
                     messagesPerUser: messagesPerUser,
@@ -107,7 +107,7 @@ namespace Tests.FakeDataGen.StressTests
                     : NullSentEmailSentimentScorer.Instance;
 
                 var importer = new SentEmailImporter(
-                    telemetry,
+                    logger,
                     appConfig,
                     fakeLoader,
                     sentimentScorer,

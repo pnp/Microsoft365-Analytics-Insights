@@ -1,4 +1,4 @@
-﻿using DataUtils.Http;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -14,10 +14,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         #region Constructors
 
-        public ManualGraphCallClient(HttpMessageHandler server, ILogger debugTracer) : base(server, debugTracer)
+        public ManualGraphCallClient(HttpMessageHandler server, ILogger logger) : base(server, logger)
         {
         }
-        public ManualGraphCallClient(ImportAppIndentityOAuthContext appIndentity, ILogger debugTracer) : base(appIndentity, false, debugTracer)
+        public ManualGraphCallClient(ImportAppIndentityOAuthContext appIndentity, ILogger logger) : base(appIndentity, false, logger)
         {
         }
         #endregion

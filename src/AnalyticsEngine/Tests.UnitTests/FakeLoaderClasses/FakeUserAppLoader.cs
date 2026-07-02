@@ -1,4 +1,4 @@
-﻿using DataUtils;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -11,7 +11,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         private readonly int _fakeUserCount;
         private bool _haveThrownUserNotFound = false;
 
-        public FakeUserAppLoader(AnalyticsLogger telemetry, int fakeUserCount) : base(telemetry)
+        public FakeUserAppLoader(AnalyticsLogger logger, int fakeUserCount) : base(logger)
         {
             _fakeUserCount = fakeUserCount;
         }
@@ -48,7 +48,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public override Task Save(Dictionary<string, List<FakeUserApp>> usersAndApps)
         {
-            _telemetry.LogInformation($"Faking save for {usersAndApps.Count} users and apps");
+            _logger.LogInformation($"Faking save for {usersAndApps.Count} users and apps");
             return Task.CompletedTask;
         }
 

@@ -1,4 +1,4 @@
-﻿using DataUtils.Http;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 
 namespace WebJob.Office365ActivityImporter.Engine
@@ -8,8 +8,8 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// </summary>
     public class GraphAppIndentityOAuthContext : ImportAppIndentityOAuthContext
     {
-        public GraphAppIndentityOAuthContext(ILogger telemetry, string clientId, string tenantId, string clientSecret, string keyVaultUrl, bool useClientCertificate) :
-            base(telemetry, clientId, tenantId, clientSecret, keyVaultUrl, useClientCertificate)
+        public GraphAppIndentityOAuthContext(ILogger logger, string clientId, string tenantId, string clientSecret, string keyVaultUrl, bool useClientCertificate) :
+            base(logger, clientId, tenantId, clientSecret, keyVaultUrl, useClientCertificate)
         { }
 
         public override string ResourceURL => "https://graph.microsoft.com/.default";
@@ -20,8 +20,8 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// </summary>
     public class ActivityAPIAppIndentityOAuthContext : ImportAppIndentityOAuthContext
     {
-        public ActivityAPIAppIndentityOAuthContext(ILogger telemetry, string clientId, string tenantId, string clientSecret, string keyVaultUrl, bool useClientCertificate) :
-            base(telemetry, clientId, tenantId, clientSecret, keyVaultUrl, useClientCertificate)
+        public ActivityAPIAppIndentityOAuthContext(ILogger logger, string clientId, string tenantId, string clientSecret, string keyVaultUrl, bool useClientCertificate) :
+            base(logger, clientId, tenantId, clientSecret, keyVaultUrl, useClientCertificate)
         { }
 
         public override string ResourceURL => "https://manage.office.com/.default";

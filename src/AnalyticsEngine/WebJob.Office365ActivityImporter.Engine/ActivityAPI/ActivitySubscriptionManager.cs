@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
@@ -14,8 +14,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 {
     public class ActivitySubscriptionManager : AbstractActivityApiLoaderWithHttpClient, IActivitySubscriptionManager
     {
-        public ActivitySubscriptionManager(AppConfig settings, AnalyticsLogger telemetry, ConfidentialClientApplicationThrottledHttpClient httpClient)
-            : base(telemetry, httpClient, settings)
+        public ActivitySubscriptionManager(AppConfig settings, AnalyticsLogger logger, ConfidentialClientApplicationThrottledHttpClient httpClient)
+            : base(logger, httpClient, settings)
         {
         }
 
@@ -48,7 +48,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                         }
                         catch (HttpRequestException)
                         {
-                            _telemetry.LogError("Can't create subscription. Check service-account permissions to Office 365 Activity API & that audit-log is turned on for tenant. https://docs.microsoft.com/en-gb/microsoft-365/compliance/turn-audit-log-search-on-or-off?view=o365-worldwide");
+                            _logger.LogError("Can't create subscription. Check service-account permissions to Office 365 Activity API & that audit-log is turned on for tenant. https://docs.microsoft.com/en-gb/microsoft-365/compliance/turn-audit-log-search-on-or-off?view=o365-worldwide");
                             throw;
                         }
 
@@ -59,7 +59,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                     catch (HttpRequestException ex)
                     {
                         // If we can't create it report the error
-                        _telemetry.LogInformation($"Subscription for '{configuredContentType}' could not be found or created - {ex.Message}. Check the configuration file & app permissions in Azure AD.");
+                        _logger.LogInformation($"Subscription for '{configuredContentType}' could not be found or created - {ex.Message}. Check the configuration file & app permissions in Azure AD.");
                         throw;
                     }
                 }
@@ -96,11 +96,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 {
                     if (sub.status.ToLower() != "enabled")
                     {
-                        _telemetry.LogInformation(string.Format("Subscription for '{0}' is already in place, but not enabled.", contentType));
+                        _logger.LogInformation(string.Format("Subscription for '{0}' is already in place, but not enabled.", contentType));
                     }
                     else
                     {
-                        _telemetry.LogInformation(string.Format("Subscription for '{0}' is already in place and enabled.", contentType));
+                        _logger.LogInformation(string.Format("Subscription for '{0}' is already in place and enabled.", contentType));
                         validContentTypes.Add(contentType);
                     }
                 }
@@ -114,7 +114,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         /// </summary>
         public async Task<ApiSubscription[]> GetActiveSubscriptions()
         {
-            return await GetActiveSubscriptions(_settings.TenantGUID.ToString(), _telemetry, _httpClient);
+            return await GetActiveSubscriptions(_settings.TenantGUID.ToString(), _logger, _httpClient);
         }
 
         // To allow installer to call this method without needing an AppConfig
