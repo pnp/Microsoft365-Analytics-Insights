@@ -67,7 +67,7 @@ namespace DataUtils
             }
             catch (ArgumentException)
             {
-                // This is ok
+                // This is ok - we couldn't find an object in cache or externally by this ID (hence this exception), so we return null
             }
             return r;
         }
