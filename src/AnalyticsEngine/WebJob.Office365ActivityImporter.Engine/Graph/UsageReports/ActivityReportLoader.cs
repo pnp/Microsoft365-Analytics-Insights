@@ -1,13 +1,13 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
     public abstract class ActivityReportLoader
     {
-        internal ActivityReportLoader(ILogger telemetry)
+        internal ActivityReportLoader(ILogger logger)
         {
-            this.Telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            this.Telemetry = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         public abstract string ReportGraphURL { get; }

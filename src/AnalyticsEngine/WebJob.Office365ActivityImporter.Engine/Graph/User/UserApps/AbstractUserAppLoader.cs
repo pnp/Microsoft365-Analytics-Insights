@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using System;
 using System.Collections.Generic;
@@ -12,14 +12,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
     /// </summary>
     public abstract class AbstractUserAppLoader<APPTYPE>
     {
-        protected readonly AnalyticsLogger _telemetry;
+        protected readonly AnalyticsLogger _logger;
 
         private int _totalSaves = 0;
         private int _lastReportedPercentDone = 0;
 
-        public AbstractUserAppLoader(AnalyticsLogger telemetry)
+        public AbstractUserAppLoader(AnalyticsLogger logger)
         {
-            _telemetry = telemetry;
+            _logger = logger;
         }
 
         public abstract TimeSpan GetDelay(int throttledAttempts);
@@ -34,7 +34,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
 
         public async Task<int> LoadAndSave(UserGroupsCache userGroupsCache, UserGroupsFilterModel filter)
         {
-            var timer = new JobTimer(_telemetry, "User Apps load");
+            var timer = new JobTimer(_logger, "User Apps load");
             timer.Start();
 
             _totalSaves = 0;
@@ -49,7 +49,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                     // Check if the user is in the filter
                     if (filter != null && !await userGroupsCache.IsInGroupsFilter(usersEmailResult, filter))
                     {
-                        _telemetry.LogInformation($"User Apps Load - '{usersEmailResult}' is not in the filter groups, skipping...");
+                        _logger.LogInformation($"User Apps Load - '{usersEmailResult}' is not in the filter groups, skipping...");
                         continue;
                     }
                     usersEmailsToUpdate.Add(usersEmailResult);
@@ -73,7 +73,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             }
             else
             {
-                _telemetry.LogWarning("User Apps Load - no users to process");
+                _logger.LogWarning("User Apps Load - no users to process");
             }
 
             timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
@@ -95,7 +95,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             while (true)
             {
                 var testUser = userEmails[userNotFoundCount];
-                _telemetry.LogInformation($"User Apps Load - testing API permissions for 'TeamsAppInstallation.ReadForUser.All' read with '{testUser}'...");
+                _logger.LogInformation($"User Apps Load - testing API permissions for 'TeamsAppInstallation.ReadForUser.All' read with '{testUser}'...");
                 try
                 {
                     success = await TestReadPermissionsForUser(testUser);
@@ -109,7 +109,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                 {
                     // The user we tried with doesn't exist. We still don't know if we have access or not, so try with another
                     userNotFoundCount++;
-                    _telemetry.LogWarning($"User Apps Load - '{testUser}' wasn't found...");
+                    _logger.LogWarning($"User Apps Load - '{testUser}' wasn't found...");
                     if (userNotFoundCount == userEmails.Count)
                     {
                         // We've run out of email addresses to test. Give up. 
@@ -120,7 +120,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                 // If we didn't have a success it'll be because the user wasn't found
                 if (success)
                 {
-                    _telemetry.LogInformation($"User Apps Load - 'TeamsAppInstallation.ReadForUser.All' permissions verified");
+                    _logger.LogInformation($"User Apps Load - 'TeamsAppInstallation.ReadForUser.All' permissions verified");
                     return true;
                 }
             }
@@ -186,7 +186,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                 int pcDone = Convert.ToInt32(Math.Round(percentDone, 0));
                 if (_lastReportedPercentDone < pcDone)
                 {
-                    _telemetry.LogInformation($"User Apps Load: processed {pcDone.ToString("n0")}% of users for Teams Apps...");
+                    _logger.LogInformation($"User Apps Load: processed {pcDone.ToString("n0")}% of users for Teams Apps...");
                     _lastReportedPercentDone = pcDone;
                 }
             }

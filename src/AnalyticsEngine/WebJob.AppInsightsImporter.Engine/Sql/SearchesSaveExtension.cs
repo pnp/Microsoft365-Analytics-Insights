@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -14,7 +14,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     public static class SearchesSaveExtension
     {
 
-        public static async Task<int> SaveSearchesToSQL(this CustomEventsResultCollection eventList, ILogger debugTracer, AnalyticsEntitiesContext database)
+        public static async Task<int> SaveSearchesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AnalyticsEntitiesContext database)
         {
             if (eventList.Rows.Count == 0)
             {
@@ -35,7 +35,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                 return 0;
             }
 
-            debugTracer.LogInformation($"Processing {searches.Count.ToString("n0")} searches...");
+            logger.LogInformation($"Processing {searches.Count.ToString("n0")} searches...");
             var sw = Stopwatch.StartNew();
 
             // Read default connection-string
@@ -79,13 +79,13 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                         await cmd.ExecuteNonQueryAsync();
                     }
 
-                    debugTracer.LogInformation($"Inserted {searches.Count:n0} searches into staging in {sw.Elapsed.TotalSeconds:N1}s. Running merge script...");
+                    logger.LogInformation($"Inserted {searches.Count:n0} searches into staging in {sw.Elapsed.TotalSeconds:N1}s. Running merge script...");
                     sw.Restart();
 
                     // Run script to copy to proper tables
                     var searchesInserted = await db.Database.ExecuteSqlCommandAsync(FixSearchScript(Resources.Migrate_Searches_Import));
 
-                    debugTracer.LogInformation($"Search merge completed in {sw.Elapsed.TotalSeconds:N1}s - {searchesInserted:n0} new rows.");
+                    logger.LogInformation($"Search merge completed in {sw.Elapsed.TotalSeconds:N1}s - {searchesInserted:n0} new rows.");
                     return searchesInserted;
                 }
             }

@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -18,7 +18,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         }
 
 
-        public CustomEventsResultCollection(AppInsightsTable fromTable, DateTime fromWhen, ILogger debugTracer) : base(fromTable, fromWhen, debugTracer)
+        public CustomEventsResultCollection(AppInsightsTable fromTable, DateTime fromWhen, ILogger logger) : base(fromTable, fromWhen, logger)
         {
         }
 
@@ -59,7 +59,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         /// <summary>
         /// Apply hit patches, save searches & clicks
         /// </summary>
-        public async Task SaveAllEventTypesToSql(AnalyticsLogger telemetry, AppConfig config)
+        public async Task SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config)
         {
             using (var database = new AnalyticsEntitiesContext())
             {
@@ -69,19 +69,19 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                 // Each section runs inside its own isolation boundary (see SaveSectionSafe). A failure
                 // in one section (e.g. a page-update that trips a DbUpdateException) is logged in full
                 // but never aborts the sibling sections nor escapes to stall the whole importer.
-                var hitUpdatesCount = await SaveSectionSafe(telemetry, "Hit updates",
-                    () => this.SaveHitsUpdatesToSQL(telemetry, database));
+                var hitUpdatesCount = await SaveSectionSafe(logger, "Hit updates",
+                    () => this.SaveHitsUpdatesToSQL(logger, database));
 
-                var searchesInserted = await SaveSectionSafe(telemetry, "Searches",
-                    () => this.SaveSearchesToSQL(telemetry, database));
+                var searchesInserted = await SaveSectionSafe(logger, "Searches",
+                    () => this.SaveSearchesToSQL(logger, database));
 
-                var pagesUpdated = await SaveSectionSafe(telemetry, "Page updates",
-                    () => this.SavePageUpdatesToSQL(telemetry, config));
+                var pagesUpdated = await SaveSectionSafe(logger, "Page updates",
+                    () => this.SavePageUpdatesToSQL(logger, config));
 
-                var clicks = await SaveSectionSafe(telemetry, "Clicks",
-                    () => this.SaveClicksToSQL(telemetry, database));
+                var clicks = await SaveSectionSafe(logger, "Clicks",
+                    () => this.SaveClicksToSQL(logger, database));
 
-                telemetry.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
+                logger.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
             }
         }
 
@@ -91,9 +91,9 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         /// TrackException, but never propagates - so a single bad section can neither abort its sibling
         /// sections nor escape up the call stack and stall the whole importer.
         /// </summary>
-        private static async Task<int> SaveSectionSafe(AnalyticsLogger telemetry, string sectionName, Func<Task<int>> saveAction)
+        private static async Task<int> SaveSectionSafe(AnalyticsLogger logger, string sectionName, Func<Task<int>> saveAction)
         {
-            var timer = new JobTimer(telemetry, sectionName);
+            var timer = new JobTimer(logger, sectionName);
             timer.Start();
             try
             {
@@ -107,9 +107,9 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             }
             catch (Exception ex)
             {
-                telemetry.TrackException(ex);
-                telemetry.LogError($"Failed importing '{sectionName}' section: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this section and continuing.");
-                telemetry.LogError($"Exception detail: {ex}");
+                logger.TrackException(ex);
+                logger.LogError($"Failed importing '{sectionName}' section: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this section and continuing.");
+                logger.LogError($"Exception detail: {ex}");
                 return 0;
             }
         }

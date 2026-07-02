@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
@@ -10,9 +10,9 @@ namespace WebJob.AppInsightsImporter.Engine.PageUpdates
 {
     public static class PageCommentsExtensions
     {
-        public static async Task Save(this List<PageCommentTemp> comments, AnalyticsEntitiesContext db, ILogger debugTracer)
+        public static async Task Save(this List<PageCommentTemp> comments, AnalyticsEntitiesContext db, ILogger logger)
         {
-            var commentsToInsert = new EFInsertBatch<PageCommentTemp>(db, debugTracer);
+            var commentsToInsert = new EFInsertBatch<PageCommentTemp>(db, logger);
             commentsToInsert.Rows.AddRange(comments);
 
             var mergeSql = Resources.Migrate_New_Comments.Replace("${STAGING_TABLE_COMMENTS}", PageCommentTemp.STAGING_TABLENAME);

@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
 using System;
@@ -22,7 +22,7 @@ namespace DataUtils.Http
         private readonly bool _useClientCertificate;
         private System.Security.Cryptography.X509Certificates.X509Certificate2 _clientAppCert = null;
 
-        public ImportAppIndentityOAuthContext(ILogger telemetry, string clientId, string tenantId, string clientSecret, string keyVaultUrl, bool useClientCertificate)
+        public ImportAppIndentityOAuthContext(ILogger logger, string clientId, string tenantId, string clientSecret, string keyVaultUrl, bool useClientCertificate)
         {
             if (string.IsNullOrEmpty(clientId))
             {
@@ -44,7 +44,7 @@ namespace DataUtils.Http
             _clientSecret = clientSecret;
             _keyVaultUrl = keyVaultUrl;
             _useClientCertificate = useClientCertificate;
-            Telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            Telemetry = logger ?? throw new ArgumentNullException(nameof(logger));
 
         }
 
