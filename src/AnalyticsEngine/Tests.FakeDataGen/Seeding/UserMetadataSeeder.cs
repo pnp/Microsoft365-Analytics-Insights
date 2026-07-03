@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Text;
 
 namespace Tests.FakeDataGen.Seeding
 {
@@ -96,21 +97,50 @@ namespace Tests.FakeDataGen.Seeding
         }
 
         /// <summary>
-        /// Inserts <paramref name="count"/> users with random metadata FK ids drawn from
-        /// the lookup tables (which must already be seeded via <see cref="EnsureMetadataLookups"/>).
+        /// Reads a single lookup table into a case-insensitive name -&gt; id map so callers can
+        /// resolve the specific value a coherent <see cref="SeedDataCatalogue.UserProfile"/>
+        /// asked for (rather than picking a random id and breaking geo consistency).
+        /// </summary>
+        public static Dictionary<string, int> LoadLookupIdsByName(SqlConnection conn, string tableName)
+        {
+            var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $"SELECT id, name FROM [{tableName}];";
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        if (!reader.IsDBNull(1)) map[reader.GetString(1)] = reader.GetInt32(0);
+                    }
+                }
+            }
+            return map;
+        }
+
+        /// <summary>
+        /// Inserts <paramref name="count"/> users with realistic, internally-consistent metadata
+        /// drawn from <see cref="SeedDataCatalogue"/>: a coherent geo locale (country / state / city
+        /// / office / usage location / postal code all agree), a job title that fits the department,
+        /// a company, a realistic account-enabled state, and a UPN spread across several tenant
+        /// domains. After insertion a manager hierarchy is built via <see cref="AssignManagers"/>.
+        /// The lookup tables must already be seeded via <see cref="EnsureMetadataLookups"/>.
         /// Returns the id + UPN of every user that was actually inserted; users whose UPN already
         /// exists are skipped silently.
+        ///
+        /// When <paramref name="upnDomain"/> is null (the default) users are spread deterministically
+        /// across <see cref="SeedDataCatalogue.Domains"/> by index; pass a value to force a single domain.
         /// </summary>
         public static List<SeededUser> SeedUsers(SqlConnection conn, int count, Random random,
-            string upnPrefix = "stressuser", string upnDomain = "contoso.com")
+            string upnPrefix = "stressuser", string upnDomain = null)
         {
-            var departments = LoadLookupIds(conn, "user_departments");
-            var companies = LoadLookupIds(conn, "user_company_name");
-            var jobTitles = LoadLookupIds(conn, "user_job_titles");
-            var states = LoadLookupIds(conn, "user_state_or_province");
-            var countries = LoadLookupIds(conn, "user_country_or_region");
-            var offices = LoadLookupIds(conn, "user_office_locations");
-            var usages = LoadLookupIds(conn, "user_usage_locations");
+            var departments = LoadLookupIdsByName(conn, "user_departments");
+            var companies = LoadLookupIdsByName(conn, "user_company_name");
+            var jobTitles = LoadLookupIdsByName(conn, "user_job_titles");
+            var states = LoadLookupIdsByName(conn, "user_state_or_province");
+            var countries = LoadLookupIdsByName(conn, "user_country_or_region");
+            var offices = LoadLookupIdsByName(conn, "user_office_locations");
+            var usages = LoadLookupIdsByName(conn, "user_usage_locations");
 
             var inserted = new List<SeededUser>(count);
 
@@ -119,10 +149,10 @@ namespace Tests.FakeDataGen.Seeding
                 cmd.CommandText = @"
 IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
 BEGIN
-    INSERT INTO users (user_name, mail, azure_ad_id, account_enabled, last_updated,
+    INSERT INTO users (user_name, mail, azure_ad_id, account_enabled, last_updated, postalcode,
                        department_id, company_name_id, job_title_id,
                        state_or_province_id, country_or_region_id, office_location_id, usage_location_id)
-    VALUES (@upn, @mail, @aad, 1, @lastUpdated,
+    VALUES (@upn, @mail, @aad, @enabled, @lastUpdated, @postal,
             @dept, @company, @job, @state, @country, @office, @usage);
     SELECT CAST(SCOPE_IDENTITY() AS INT);
 END
@@ -132,7 +162,9 @@ ELSE
                 var pUpn = cmd.Parameters.Add("@upn", SqlDbType.NVarChar, 400);
                 var pMail = cmd.Parameters.Add("@mail", SqlDbType.NVarChar, 400);
                 var pAad = cmd.Parameters.Add("@aad", SqlDbType.NVarChar, 400);
+                var pEnabled = cmd.Parameters.Add("@enabled", SqlDbType.Bit);
                 var pLastUpdated = cmd.Parameters.Add("@lastUpdated", SqlDbType.DateTime);
+                var pPostal = cmd.Parameters.Add("@postal", SqlDbType.NVarChar, 50);
                 var pDept = cmd.Parameters.Add("@dept", SqlDbType.Int);
                 var pCompany = cmd.Parameters.Add("@company", SqlDbType.Int);
                 var pJob = cmd.Parameters.Add("@job", SqlDbType.Int);
@@ -143,18 +175,21 @@ ELSE
 
                 for (int i = 0; i < count; i++)
                 {
-                    var upn = $"{upnPrefix}{i}@{upnDomain}";
+                    var profile = SeedDataCatalogue.NextUserProfile(random);
+                    var upn = SeedDataCatalogue.BuildUpn(upnPrefix, i, upnDomain);
                     pUpn.Value = upn;
                     pMail.Value = upn;
                     pAad.Value = Guid.NewGuid().ToString();
+                    pEnabled.Value = profile.AccountEnabled;
                     pLastUpdated.Value = DateTime.UtcNow;
-                    pDept.Value = PickOrDbNull(departments, random);
-                    pCompany.Value = PickOrDbNull(companies, random);
-                    pJob.Value = PickOrDbNull(jobTitles, random);
-                    pState.Value = PickOrDbNull(states, random);
-                    pCountry.Value = PickOrDbNull(countries, random);
-                    pOffice.Value = PickOrDbNull(offices, random);
-                    pUsage.Value = PickOrDbNull(usages, random);
+                    pPostal.Value = string.IsNullOrEmpty(profile.PostalCode) ? (object)DBNull.Value : profile.PostalCode;
+                    pDept.Value = LookupOrDbNull(departments, profile.Department);
+                    pCompany.Value = LookupOrDbNull(companies, profile.Company);
+                    pJob.Value = LookupOrDbNull(jobTitles, profile.JobTitle);
+                    pState.Value = LookupOrDbNull(states, profile.StateOrProvince);
+                    pCountry.Value = LookupOrDbNull(countries, profile.Country);
+                    pOffice.Value = LookupOrDbNull(offices, profile.OfficeLocation);
+                    pUsage.Value = LookupOrDbNull(usages, profile.UsageLocation);
 
                     var newIdObj = cmd.ExecuteScalar();
                     if (newIdObj != null && newIdObj != DBNull.Value)
@@ -163,6 +198,10 @@ ELSE
                     }
                 }
             }
+
+            // Give the tenant a realistic reporting hierarchy (people report to a manager in
+            // their own company). Keyed on the UPN prefix so it spans every domain we just used.
+            AssignManagers(conn, upnPrefix, random);
 
             return inserted;
         }
@@ -213,6 +252,89 @@ IF NOT EXISTS (SELECT 1 FROM user_license_type_lookups WHERE user_id = @userId A
         }
 
         /// <summary>
+        /// Builds a realistic reporting hierarchy across users whose UPN starts with
+        /// <paramref name="upnPrefix"/> (matched across every domain). Within each company a
+        /// small fraction are made managers (left top-level); everyone else reports to a random
+        /// manager in the same company. Only touches users whose <c>manager_id</c> is still NULL,
+        /// so it is idempotent and safe to re-run.
+        ///
+        /// Scale note (tenants of ~200k users): the reporting pairs are applied with set-based,
+        /// parameter-chunked <c>UPDATE ... FROM (VALUES ...)</c> statements (~500 pairs each, well
+        /// under SQL Server's 2100-parameter limit) rather than one round-trip per user, so a full
+        /// tenant is assigned in a few hundred statements instead of hundreds of thousands.
+        /// </summary>
+        public static int AssignManagers(SqlConnection conn, string upnPrefix, Random random,
+            double managerFraction = 0.1)
+        {
+            // Load candidate users (this generator's prefix, no manager yet), grouped by company
+            // so nobody reports across company boundaries. Company -1 means "no company set".
+            var byCompany = new Dictionary<int, List<int>>();
+            var total = 0;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"SELECT id, company_name_id FROM users
+WHERE manager_id IS NULL AND user_name LIKE @prefix + '%';";
+                cmd.Parameters.Add("@prefix", SqlDbType.NVarChar, 400).Value = upnPrefix;
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        int id = reader.GetInt32(0);
+                        int companyId = reader.IsDBNull(1) ? -1 : reader.GetInt32(1);
+                        if (!byCompany.TryGetValue(companyId, out var list))
+                        {
+                            list = new List<int>();
+                            byCompany[companyId] = list;
+                        }
+                        list.Add(id);
+                        total++;
+                    }
+                }
+            }
+            if (total < 2) return 0;
+
+            // Decide who reports to whom (in memory).
+            var assignments = new List<KeyValuePair<int, int>>(total);
+            foreach (var kvp in byCompany)
+            {
+                var users = kvp.Value;
+                if (users.Count < 2) continue; // a lone user in a company has nobody to report to
+
+                int managerCount = Math.Max(1, (int)Math.Round(users.Count * managerFraction));
+                managerCount = Math.Min(managerCount, users.Count - 1); // always leave at least one report
+                var managers = users.GetRange(0, managerCount);
+                for (int i = managerCount; i < users.Count; i++)
+                {
+                    assignments.Add(new KeyValuePair<int, int>(users[i], managers[random.Next(managers.Count)]));
+                }
+            }
+            if (assignments.Count == 0) return 0;
+
+            // Apply set-based in parameter-bounded chunks (2 params per pair).
+            const int chunkPairs = 500;
+            int updated = 0;
+            for (int start = 0; start < assignments.Count; start += chunkPairs)
+            {
+                int take = Math.Min(chunkPairs, assignments.Count - start);
+                using (var cmd = conn.CreateCommand())
+                {
+                    var sb = new StringBuilder("UPDATE u SET manager_id = v.mgr FROM users u JOIN (VALUES ");
+                    for (int i = 0; i < take; i++)
+                    {
+                        if (i > 0) sb.Append(',');
+                        sb.Append($"(@u{i},@m{i})");
+                        cmd.Parameters.Add($"@u{i}", SqlDbType.Int).Value = assignments[start + i].Key;
+                        cmd.Parameters.Add($"@m{i}", SqlDbType.Int).Value = assignments[start + i].Value;
+                    }
+                    sb.Append(") AS v(id, mgr) ON u.id = v.id;");
+                    cmd.CommandText = sb.ToString();
+                    updated += cmd.ExecuteNonQuery();
+                }
+            }
+            return updated;
+        }
+
+        /// <summary>
         /// Inserts each value into <paramref name="tableName"/> if a row with that name
         /// does not already exist. Used for all single-column "[id, name]" lookup tables.
         /// </summary>
@@ -232,10 +354,10 @@ IF NOT EXISTS (SELECT 1 FROM [{tableName}] WHERE name = @name)
             }
         }
 
-        private static object PickOrDbNull(IList<int> ids, Random random)
+        private static object LookupOrDbNull(Dictionary<string, int> map, string name)
         {
-            if (ids == null || ids.Count == 0) return DBNull.Value;
-            return ids[random.Next(ids.Count)];
+            if (name != null && map.TryGetValue(name, out var id)) return id;
+            return DBNull.Value;
         }
     }
 
