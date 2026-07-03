@@ -24,6 +24,13 @@ namespace Web.AnalyticsWeb.Controllers
                 return View(s);
             }
         }
+
+        public async Task<ActionResult> Health()
+        {
+            var model = await HealthDashboard.LoadFrom(new AppConfig());
+            return View(model);
+        }
+
         public ActionResult CredentialsInvalid()
         {
             return View();
