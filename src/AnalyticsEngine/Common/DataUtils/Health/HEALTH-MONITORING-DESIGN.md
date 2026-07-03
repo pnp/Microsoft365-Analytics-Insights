@@ -108,6 +108,60 @@ is to **reuse them, not duplicate them**:
 installer provisions a default action group + a small heartbeat-driven rule set), optionally Option 3 +
 a `SystemStatus` health page; whole thing **opt-out**, thresholds documented + overridable.
 
+## Central health dashboard (web-app tab)
+
+The most common operational question is simply *"is it working?"*, and today there is no single place
+to answer it — an admin has to open Application Insights and run ad-hoc queries. So, alongside the
+Azure-Monitor alerting above, ship a **central health view inside the web app** as a new nav tab so the
+answer is one click away. This complements (does not replace) the alert rules: alerts push when
+something breaks; the dashboard is the pull/at-a-glance "green board".
+
+**Surface** — add a `Health` tab to the nav in `Views/Shared/_Layout.cshtml` (next to the brand link),
+backed by a new `HomeController.Health` action + `Views/Home/Health.cshtml` view and a
+`Web/Models/HealthDashboard` view-model (mirrors the existing `SystemStatus.LoadFrom` pattern). Keep it
+`[Authorize]` like the rest of the app.
+
+**What it shows** (all read-only, best-effort — a data-source hiccup degrades a card, never errors the
+page):
+
+| Card | Content | Source |
+|-|-|-|
+| Component health | Latest `HealthCheck` per `Component` with `Status` (green/amber/red) + `Detail`; credential `DaysToExpiry` | App Insights `customEvents` (`HealthCheck`), newest per `Component` |
+| Import liveness | Per job: last `ImporterHeartbeat` / `FinishedImportCycle` time + "N min ago" freshness badge; last `FinishedSectionImport` per section | App Insights `customEvents` (interim: `FinishedImportCycle`/`FinishedSectionImport`) |
+| Exceptions overview | Count/hour sparkline over last 24h, top exception `type` / `problemId` with counts, total in window | App Insights `exceptions` table |
+| Data overview | Hits / Activity / Teams counts (already on Home) + newest audit/hit timestamps ("data as fresh as …") | SQL (`AnalyticsEntitiesContext`, as `SystemStatus` does today) |
+
+**Data access** — the exception/event cards need to *query* App Insights (not just receive telemetry).
+The solution already has a KQL query client, `WebJob.AppInsightsImporter.Engine.AppInsightsAPIClient`,
+that authenticates to `https://api.applicationinsights.io` with the app's **existing Entra credential**
+(`ClientId`/`ClientSecret`/`TenantGUID` already in web config) and parses the `ApplicationId` from the
+App Insights connection string — **no new API key or config is required**. Two clean ways to reuse it
+from the Web project (which does not currently reference `WebJob.AppInsightsImporter.Engine`):
+
+- **(preferred)** extract `AppInsightsAPIClient` + its connection-string parsing into `Common`
+  (`Common/DataUtils` or a small `Common.AppInsightsQuery`) so both the importer and the web app depend
+  on one copy — this also removes the duplicated `ParseInstrumentationKey` helper noted in
+  `ImportConfigController`; or
+- add a `ProjectReference` from `Web` to `WebJob.AppInsightsImporter.Engine`.
+
+Example queries the dashboard runs (KQL, same store the alerts use):
+
+```kusto
+// Exceptions per hour (last 24h)
+exceptions | where timestamp > ago(24h) | summarize count() by bin(timestamp, 1h) | order by timestamp asc
+// Top exception types (last 24h)
+exceptions | where timestamp > ago(24h) | summarize count() by type, problemId | top 10 by count_ desc
+// Latest health per component
+customEvents | where name == "HealthCheck" | summarize arg_max(timestamp, *) by tostring(customDimensions.Component)
+// Last confirmed import cycle per job
+customEvents | where name == "FinishedImportCycle" | summarize arg_max(timestamp, *) by operation_Name
+```
+
+The health values are cheap to cache (e.g. 60s `MemoryCache`) so opening the tab doesn't hammer the
+query API. When the runtime heartbeat (Option 2) is not yet deployed, the Component-health card is
+simply empty/greyed and the liveness card falls back to `FinishedImportCycle` — the dashboard degrades
+gracefully as later phases fill it in.
+
 ## Reusing `SolutionInstallVerifier` at runtime
 
 `App.ControlPanel.Engine/SolutionInstallVerifier.cs` already implements most checks (SQL, runtime-credential
@@ -157,8 +211,11 @@ configured at install).
   (`BaseInstallTask.IsCritical = false`) so a monitoring-provisioning hiccup never fails the install.
 - **Config:** add `AlertEmail` + `EnableDefaultMonitoring` (opt-out) to `SolutionInstallConfig` and the
   installer UI; the action group uses `AlertEmail`. (DB/config/permissions change → "migration needed".)
-- **Surfacing:** extend `Web/Models/SystemStatus` + `HomeController` to show health; optionally add a
-  `/health` endpoint + availability test.
+- **Surfacing:** the central health dashboard tab (see "Central health dashboard (web-app tab)" above) —
+  new `HomeController.Health` action + `Views/Home/Health.cshtml` + `Web/Models/HealthDashboard`, nav
+  entry in `_Layout.cshtml`, reusing the extracted `AppInsightsAPIClient` for the exception/event cards
+  and `AnalyticsEntitiesContext` (as `SystemStatus` does) for the SQL cards; optionally add a `/health`
+  endpoint + availability test.
 - **Idempotency:** provision create-if-absent so admin edits to thresholds/recipients aren't clobbered
   on upgrade.
 
@@ -169,10 +226,60 @@ configured at install).
   catch-alls that reuse events already emitted today** — activity import stalled (#9, existing
   `FinishedImportCycle`) and the exception-spike general probe (#10); opt-out flag; doc update.
   Delivers the originally-requested items. *(This PR lands the Phase-1 telemetry primitive.)*
-- **Phase 2:** dependency checks (Redis, Service Bus dead-letter, Key Vault), data-freshness alerts,
-  web-app availability test, `SystemStatus` health page.
-- **Phase 3:** dashboard/workbook, richer overridable thresholds, extra notification channels
-  (Teams/webhook/ITSM), tenant report-anonymisation re-check, cost/quota anomaly alerts.
+- **Phase 2:** the central health dashboard tab in the web app (exceptions overview + last-confirmed
+  import cycles + component-health cards — see above), dependency checks (Redis, Service Bus dead-letter,
+  Key Vault), data-freshness alerts, web-app availability test, `SystemStatus` health page.
+- **Phase 3:** Azure workbook/portal dashboard, richer overridable thresholds, extra notification
+  channels (Teams/webhook/ITSM), tenant report-anonymisation re-check, cost/quota anomaly alerts.
+
+## Alert-setup guide (to publish to the wiki)
+
+The wiki's [Monitoring](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Monitoring) page
+documents individual queries but not a repeatable "add another alert" procedure. The content below is
+the source for a **step-by-step admin guide to be published to the wiki** (the wiki lives in the sibling
+`Microsoft365-Analytics-Insights.wiki` repo; it is drafted here so it is version-controlled and reviewed
+with the code). Once the installer provisions the default action group, extra alerts are a few clicks.
+
+**One-time:** confirm the default action group exists (installer creates `M365-Analytics-alerts`, or
+create one under *Monitor → Alerts → Action groups* with an email/Teams-webhook receiver). Every alert
+below routes to it, so recipients are configured in one place.
+
+**Add a log-search (KQL) alert** — for the custom-event / exception rules:
+
+1. Application Insights resource → **Logs**, paste the query and confirm it returns rows.
+2. **New alert rule** (top of the Logs blade) → the query is pre-filled as the condition.
+3. Measurement: aggregate **Table rows** / **Count**; set the threshold and **Aggregation granularity**
+   + **Frequency of evaluation** to match the window (e.g. 30 min for liveness).
+4. Actions → select the default action group. Details → name + severity. **Create**.
+
+**Add a metric alert** — for capacity rules (SQL DTU, App Service CPU, Service Bus dead-letter):
+
+1. The resource (SQL DB / App Service Plan / Service Bus) → **Alerts → New alert rule**.
+2. Condition → pick the platform metric (e.g. *DTU percentage*, *CPU Percentage*,
+   *Dead-lettered messages*), set operator/threshold/window.
+3. Actions → default action group. Name + severity → **Create**.
+
+**Ready-to-paste queries for the default rules** (numbers match the ship-list table above):
+
+```kusto
+// #1 Any component unhealthy (last 15m)
+customEvents | where name == "HealthCheck" and timestamp > ago(15m)
+| where tostring(customDimensions.Status) == "Unhealthy"
+// #2 Web-jobs not heartbeating (alert when result is 0; interim uses FinishedImportCycle)
+customEvents | where name in ("ImporterHeartbeat","FinishedImportCycle") and timestamp > ago(30m)
+| summarize beats = count()
+// #3 Credential expiring (warn < 14 days)
+customEvents | where name == "HealthCheck" and tostring(customDimensions.Component) == "Credential"
+| extend days = toint(customDimensions.DaysToExpiry) | where days < 14
+// #9 Activity import stalled (alert when result is 0 over the window)
+customEvents | where name == "FinishedImportCycle" and timestamp > ago(24h) | summarize cycles = count()
+// #10 Exception spike (general health probe)
+exceptions | where timestamp > ago(1h) | summarize errors = count()
+```
+
+For "alert when a query returns **no** rows" rules (#2, #9), use *Number of results* **= 0** with the
+window as the evaluation period. Document the chosen thresholds next to each rule so admins can override
+them.
 
 ## Open questions
 
@@ -185,4 +292,5 @@ configured at install).
 
 ## Out of scope (for now)
 
-Cost/quota anomaly alerting, full dashboards/workbooks, SIEM integration — possible follow-ups.
+Cost/quota anomaly alerting, Azure portal workbooks/dashboards (the in-app Health tab above is the
+Phase-2 dashboard; a portal workbook stays Phase 3), SIEM integration — possible follow-ups.
