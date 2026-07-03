@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
@@ -13,7 +13,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     public class UserAppLogUpdater : AbstractApiLoader
     {
-        public UserAppLogUpdater(AnalyticsLogger telemetry, AppConfig settings) : base(telemetry, settings)
+        public UserAppLogUpdater(AnalyticsLogger logger, AppConfig settings) : base(logger, settings)
         {
         }
 
@@ -21,7 +21,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var l = new GraphAndSqlUserAppLoader(db, _telemetry, graphClient);
+                var l = new GraphAndSqlUserAppLoader(db, _logger, graphClient);
 
                 await l.LoadAndSave(graphUserGroupsCache, filter);
 

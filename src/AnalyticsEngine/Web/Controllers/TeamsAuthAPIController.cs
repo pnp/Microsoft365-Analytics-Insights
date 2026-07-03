@@ -2,6 +2,7 @@
 using Common.Entities.Redis;
 using Common.Entities.Redis.Teams;
 using System.Collections.Generic;
+using System.Net;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
@@ -23,20 +24,14 @@ namespace Web.AnalyticsWeb.Controllers
                 return response;
             }
 
+            // Redis is optional. With no cache no Team can have a stored token, so report
+            // everything as unauthorised rather than failing.
             var cache = GetConnectionManager();
 
             foreach (var teamId in teamIds)
             {
-                var cachedToken = await cache.GetTeamRefreshToken(teamId);
-                if (cachedToken != null)
-                {
-                    response.Add(new TeamAuthStatusResponse { TeamId = teamId, HasAuthToken = true });
-                }
-                else
-                {
-                    response.Add(new TeamAuthStatusResponse { TeamId = teamId, HasAuthToken = false });
-                }
-
+                var cachedToken = cache != null ? await cache.GetTeamRefreshToken(teamId) : null;
+                response.Add(new TeamAuthStatusResponse { TeamId = teamId, HasAuthToken = cachedToken != null });
             }
             return response;
         }
@@ -52,6 +47,17 @@ namespace Web.AnalyticsWeb.Controllers
                 return NotFound();
             }
 
+            // Redis is optional for the web app, but Teams deep analytics specifically needs it to
+            // store the per-Team refresh token. Without it, return a clear, actionable message
+            // rather than a misleading 401.
+            var cache = GetConnectionManager();
+            if (cache == null)
+            {
+                return Content(HttpStatusCode.ServiceUnavailable, new ApiErrorModel(
+                    "Teams deep analytics can't be enabled because Redis is not configured for this deployment. " +
+                    "Add a Redis connection string so Teams authorisation tokens can be stored."));
+            }
+
             // Get redis-cached token we got on login in Startup.ConfigureAuth
             var auth = await base.GetCachedUserAccessTokenAsync();
             if (auth == null || string.IsNullOrEmpty(auth.RefreshToken))
@@ -59,7 +65,6 @@ namespace Web.AnalyticsWeb.Controllers
                 return Unauthorized();
             }
 
-            var cache = GetConnectionManager();
             if (authTeamData.TeamIdsToAuth != null)
             {
                 foreach (var teamIdToAuth in authTeamData.TeamIdsToAuth)
@@ -79,10 +84,13 @@ namespace Web.AnalyticsWeb.Controllers
             return Ok();
         }
 
+        /// <summary>
+        /// Gets the Redis cache manager, or <c>null</c> when Redis is not configured (optional).
+        /// </summary>
         CacheConnectionManager GetConnectionManager()
         {
             var appConfig = new AppConfig();
-            var cache = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
+            var cache = CacheConnectionManager.TryGetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
 
             return cache;
         }

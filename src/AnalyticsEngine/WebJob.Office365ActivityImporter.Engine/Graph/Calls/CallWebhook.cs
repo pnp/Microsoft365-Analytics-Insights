@@ -1,4 +1,4 @@
-﻿using Azure.Identity;
+using Azure.Identity;
 using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -20,14 +20,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         public GraphServiceClient Client { get; set; }
         public ILogger Telemetry { get; set; }
 
-        public CallWebhook(AppConfig o365DownloadSettings, ILogger telemetry)
-            : this(o365DownloadSettings?.TenantGUID.ToString(), o365DownloadSettings?.ClientID, o365DownloadSettings?.ClientSecret, telemetry) { }
+        public CallWebhook(AppConfig o365DownloadSettings, ILogger logger)
+            : this(o365DownloadSettings?.TenantGUID.ToString(), o365DownloadSettings?.ClientID, o365DownloadSettings?.ClientSecret, logger) { }
 
-        public CallWebhook(string tenantId, string clientId, string secret, ILogger telemetry)
+        public CallWebhook(string tenantId, string clientId, string secret, ILogger logger)
         {
             var cred = new ClientSecretCredential(tenantId, clientId, secret);
 
-            this.Telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            this.Telemetry = logger ?? throw new ArgumentNullException(nameof(logger));
             this.Client = new GraphServiceClient(cred);
         }
 
@@ -38,32 +38,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         // Grep-friendly tag so the calls-webhook lifecycle is easy to filter in App Insights traces.
         private const string LOG_TAG = "[Calls Webhook]";
 
+        // The Graph resource path we subscribe to for Teams call records.
+        private const string CALL_RECORDS_RESOURCE = "/communications/callRecords";
+
         public async Task CreateOrUpdateWebhook(Uri webAppUrl, string secret)
         {
             // https://docs.microsoft.com/en-us/graph/api/resources/webhooks?view=graph-rest-1.0
-            const string CALL_TYPE = "/communications/callRecords";
-
-            // Walk every subscriptions page; default Graph page size may not include the existing
-            // call-record subscription when tenant subscription count is high.
-            var matchingSubs = new List<Subscription>();
-            var firstPage = await this.Client.Subscriptions.GetAsync();
-            if (firstPage != null)
-            {
-                var iterator = PageIterator<Subscription, SubscriptionCollectionResponse>.CreatePageIterator(
-                    this.Client,
-                    firstPage,
-                    sub =>
-                    {
-                        if (sub.Resource == CALL_TYPE && sub.NotificationUrl == webAppUrl.ToString())
-                        {
-                            matchingSubs.Add(sub);
-                        }
-
-                        return true;
-                    });
-
-                await iterator.IterateAsync();
-            }
+            var matchingSubs = await FindCallRecordsSubscriptions(webAppUrl);
 
             if (matchingSubs.Count == 0)
             {
@@ -73,7 +54,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     var result = await this.Client.Subscriptions.PostAsync(new Subscription()
                     {
                         NotificationUrl = webAppUrl.ToString(),
-                        Resource = CALL_TYPE,
+                        Resource = CALL_RECORDS_RESOURCE,
                         ClientState = secret,
                         ChangeType = "created",
                         ExpirationDateTime = DateTime.UtcNow.AddDays(2)        // the max Graph will permit - https://docs.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-beta#properties
@@ -106,6 +87,65 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     throw;
                 }
             }
+        }
+
+        /// <summary>
+        /// Walk every subscriptions page (the default Graph page size may not include the
+        /// call-records subscription when the tenant has many subscriptions) and return those
+        /// matching the call-records resource for this web-app's notification URL.
+        /// </summary>
+        private async Task<List<Subscription>> FindCallRecordsSubscriptions(Uri webAppUrl)
+        {
+            var matchingSubs = new List<Subscription>();
+            var firstPage = await this.Client.Subscriptions.GetAsync();
+            if (firstPage != null)
+            {
+                var iterator = PageIterator<Subscription, SubscriptionCollectionResponse>.CreatePageIterator(
+                    this.Client,
+                    firstPage,
+                    sub =>
+                    {
+                        if (sub.Resource == CALL_RECORDS_RESOURCE && sub.NotificationUrl == webAppUrl.ToString())
+                        {
+                            matchingSubs.Add(sub);
+                        }
+
+                        return true;
+                    });
+
+                await iterator.IterateAsync();
+            }
+
+            return matchingSubs;
+        }
+
+        /// <summary>
+        /// Read-only check of the current call-records webhook subscription, for status display
+        /// (e.g. the web homepage). Does NOT create or renew anything. Returns whether a matching
+        /// subscription currently exists and, if so, when it expires. Any Graph error is allowed to
+        /// propagate so the caller can surface it as an explicit "couldn't check" state.
+        /// </summary>
+        public async Task<CallRecordSubscriptionInfo> GetCallRecordsSubscriptionInfo(Uri webAppUrl)
+        {
+            var matchingSubs = await FindCallRecordsSubscriptions(webAppUrl);
+
+            // If more than one matches (shouldn't normally happen), report the one that expires
+            // latest - that's the subscription keeping the webhook alive.
+            var current = matchingSubs
+                .OrderByDescending(s => s.ExpirationDateTime ?? DateTimeOffset.MinValue)
+                .FirstOrDefault();
+
+            if (current == null)
+            {
+                return new CallRecordSubscriptionInfo { Exists = false };
+            }
+
+            return new CallRecordSubscriptionInfo
+            {
+                Exists = true,
+                SubscriptionId = current.Id,
+                ExpirationDateTime = current.ExpirationDateTime,
+            };
         }
 
         /// <summary>

@@ -31,8 +31,8 @@ namespace Tests.UnitTests
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
 
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 int usersProcessed = 0;
@@ -124,8 +124,8 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 // Create department in first batch
@@ -168,8 +168,8 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 // Create all lookup types
@@ -239,8 +239,8 @@ namespace Tests.UnitTests
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
 
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 var random = new Random();
@@ -314,8 +314,8 @@ namespace Tests.UnitTests
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
 
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var batchProcessor = new UserBatchProcessor(telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var batchProcessor = new UserBatchProcessor(logger);
                 var cache = new UserMetadataCache(db);
 
                 // Batch 1

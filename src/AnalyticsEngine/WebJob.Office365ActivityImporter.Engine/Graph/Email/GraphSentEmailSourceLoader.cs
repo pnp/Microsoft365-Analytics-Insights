@@ -32,18 +32,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private readonly ManualGraphCallClient _httpClient;
         private readonly IDeltaTokenStore _deltaTokenStore;
         private readonly ImportAppIndentityOAuthContext _appIdentity;
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
 
         public GraphSentEmailSourceLoader(
             ManualGraphCallClient httpClient,
             IDeltaTokenStore deltaTokenStore,
             ImportAppIndentityOAuthContext appIdentity,
-            AnalyticsLogger telemetry)
+            AnalyticsLogger logger)
         {
             _httpClient = httpClient;
             _deltaTokenStore = deltaTokenStore;
             _appIdentity = appIdentity;
-            _telemetry = telemetry;
+            _logger = logger;
         }
 
         public async Task<bool> HasMailReadAccessAsync()
@@ -62,7 +62,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
             catch (Exception ex)
             {
-                _telemetry.LogWarning($"Could not verify Mail.Read permission on access token: {ex.Message}. Assuming access is not granted.");
+                _logger.LogWarning($"Could not verify Mail.Read permission on access token: {ex.Message}. Assuming access is not granted.");
                 return false;
             }
         }
@@ -77,7 +77,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             var url = BuildDeltaUrl(user, deltaToken, includeBody);
 
             var messages = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphSentMessage>(
-                url, _telemetry,
+                url, _logger,
                 async (deltaLink) =>
                 {
                     var thisPageDelta = StringUtils.ExtractCodeFromGraphUrl(deltaLink);

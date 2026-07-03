@@ -78,7 +78,7 @@
             this.lblGUICredsDescr.Name = "lblGUICredsDescr";
             this.lblGUICredsDescr.Size = new System.Drawing.Size(456, 42);
             this.lblGUICredsDescr.TabIndex = 89;
-            this.lblGUICredsDescr.Text = "We need three application registrations in Azure AD: one to setup Azure resources" +
+            this.lblGUICredsDescr.Text = "We need three application registrations in Entra ID: one to setup Azure resources" +
     " with and two others to allow web-jobs to read activity data from Office 365 and" +
     " Azure. ";
             // 

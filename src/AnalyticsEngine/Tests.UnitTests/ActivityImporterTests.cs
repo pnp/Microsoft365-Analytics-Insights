@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
@@ -118,12 +118,12 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task FakeInMemoryImportTests()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
             var saveManager = new FakeActivityReportPersistenceManager();
             for (int i = 1; i < 1000; i++)
             {
-                var testLoader = new FakeActivityImporter(i, new AppConfig(), telemetry);
+                var testLoader = new FakeActivityImporter(i, new AppConfig(), logger);
 
                 var reportSaveStats = await testLoader.LoadReportsAndSave(saveManager);
                 var expected = i * reportSaveStats.ForTimeSlots.Count;
@@ -671,8 +671,8 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             // Get settings
             var s = GetSettings();
 
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-            var auth = new ActivityAPIAppIndentityOAuthContext(telemetry, s.ClientID, s.TenantGUID.ToString(), s.ClientSecret, s.KeyVaultUrl, s.UseClientCertificate);
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var auth = new ActivityAPIAppIndentityOAuthContext(logger, s.ClientID, s.TenantGUID.ToString(), s.ClientSecret, s.KeyVaultUrl, s.UseClientCertificate);
 
 
             var config = new HttpConfiguration();
@@ -684,9 +684,9 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             {
                 db.Database.ExecuteSqlCommand("TRUNCATE TABLE TestingSubscriptions");
             }
-            using (var fakeClient = new ConfidentialClientApplicationThrottledHttpClient(server, telemetry))
+            using (var fakeClient = new ConfidentialClientApplicationThrottledHttpClient(server, logger))
             {
-                var importer = new ActivitySubscriptionManager(s, telemetry, fakeClient);
+                var importer = new ActivitySubscriptionManager(s, logger, fakeClient);
 
                 var active = await importer.GetActiveSubscriptionContentTypes();
 
@@ -715,19 +715,18 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             config.MapHttpAttributeRoutes();
             HttpServer server = new HttpServer(config);
 
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
             // Start new download session
-            using (var fakeClient = new ConfidentialClientApplicationThrottledHttpClient(server, telemetry))
+            using (var fakeClient = new ConfidentialClientApplicationThrottledHttpClient(server, logger))
             {
-                var importer = new ActivityWebImporter(fakeClient, s, telemetry);
+                var importer = new ActivityWebImporter(fakeClient, s, logger);
 
                 // Download all the things & get stats.
 
-                var logger = AnalyticsLogger.ConsoleOnlyTracer();
                 var stats = await importer.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), new NoUsersHaveGroupsUserGroupsCache(logger), logger, new AppConfig()));
 
-                var contentMetaDataLoader = new WebContentMetaDataLoader(telemetry, fakeClient, s);
+                var contentMetaDataLoader = new WebContentMetaDataLoader(logger, fakeClient, s);
 
                 // Each activity call should return X activities per page of results, + another page
                 var timeChunks = contentMetaDataLoader.GetScanningTimeChunksFromNow();

@@ -180,7 +180,7 @@ namespace Tests.UnitTests
             foreach (var propName in new[]
             {
                 "Calls", "GraphUsersMetadata", "GraphUserApps", "GraphUsageReports",
-                "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails",
+                "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
             })
             {
                 Assert.IsTrue(settingsString.Contains(propName + "="),
@@ -196,7 +196,7 @@ namespace Tests.UnitTests
             foreach (var propName in new[]
             {
                 "Calls", "GraphUsersMetadata", "GraphUserApps", "GraphUsageReports",
-                "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails",
+                "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
             })
             {
                 Assert.IsTrue(settingsString.Contains(propName + "=False"),
@@ -249,6 +249,27 @@ namespace Tests.UnitTests
             Assert.IsTrue(new ImportTaskSettings { ActivityLog = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { WebTraffic = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { SentEmails = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { Copilot = true }.HaveSomethingToDo());
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_ToActivityApiContentTypesString_MapsAuditSources()
+        {
+            // SharePoint audit only -> Audit.SharePoint
+            Assert.AreEqual("Audit.SharePoint",
+                new ImportTaskSettings { ActivityLog = true }.ToActivityApiContentTypesString());
+
+            // Copilot only -> Audit.General
+            Assert.AreEqual("Audit.General",
+                new ImportTaskSettings { Copilot = true }.ToActivityApiContentTypesString());
+
+            // Copilot + SharePoint -> Audit.General;Audit.SharePoint
+            Assert.AreEqual("Audit.General;Audit.SharePoint",
+                new ImportTaskSettings { Copilot = true, ActivityLog = true }.ToActivityApiContentTypesString());
+
+            // Neither audit source -> safe non-empty default so the runtime workload list is valid
+            Assert.AreEqual("Audit.SharePoint",
+                new ImportTaskSettings().ToActivityApiContentTypesString());
         }
 
         #endregion

@@ -168,6 +168,10 @@ namespace App.ControlPanel.Engine
 
             appSettings.Properties.Add("ImportJobSettings", this.Config.SolutionConfig.ImportTaskSettings.ToSettingsString());
 
+            // Office 365 Management Activity API feeds to subscribe to, derived from the selected
+            // audit-based imports (Copilot => Audit.General, SharePoint audit => Audit.SharePoint).
+            appSettings.Properties.Add("ContentTypesListAsString", this.Config.SolutionConfig.ImportTaskSettings.ToActivityApiContentTypesString());
+
             // When private VNet is enabled, ensure the app service routes all outbound traffic through
             // the VNet so that private DNS zones resolve Azure PaaS hostnames to private endpoint IPs.
             if (this.Config.NetworkConfig?.Enabled == true)

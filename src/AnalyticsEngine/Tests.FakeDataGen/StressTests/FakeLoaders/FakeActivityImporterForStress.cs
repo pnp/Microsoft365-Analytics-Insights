@@ -12,9 +12,9 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
         private FakeContentMetaDataLoaderForStress _contentMetaDataLoader;
         private FakeActivitySubscriptionManagerForStress _activitySubscriptionManager;
 
-        public FakeActivityImporterForStress(AnalyticsLogger telemetry, int maxSavesPerBatch,
+        public FakeActivityImporterForStress(AnalyticsLogger logger, int maxSavesPerBatch,
             int reportsPerLoad, int reportsPerTimeSlot, int timeSlotCount)
-            : base(FakeAppConfigFactory.Create(), telemetry, maxSavesPerBatch)
+            : base(FakeAppConfigFactory.Create(), logger, maxSavesPerBatch)
         {
             _reportLoader = new FakeActivityReportLoaderForStress(reportsPerLoad);
             _contentMetaDataLoader = new FakeContentMetaDataLoaderForStress(reportsPerTimeSlot, timeSlotCount);

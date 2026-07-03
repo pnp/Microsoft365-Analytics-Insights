@@ -143,15 +143,13 @@ namespace Tests.UnitTests
                     ClientOS = "Win"
                 });
 
-                await Assert.ThrowsAsync<BatchSaveException>(async () =>
-                    await duplicateHitsInSingleBatch.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer())
-                );
-
-                // Cleanup duplicate URLs
-                await ImportDbHacks.CleanDuplicateUrls(db);
-
-                // Save hits again after cleanup. Should succeed now
+                // Saving hits while the duplicate URL still exists no longer throws (issue #165): the
+                // merge now keeps exactly one row per page_request_id, so a duplicate dimension lookup
+                // can't break the unique IX_PageRequestID. Each of the 2 page-views is imported once.
                 await duplicateHitsInSingleBatch.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
+
+                // Cleanup duplicate URLs - consolidates the 2 url rows into 1 and repoints all FKs.
+                await ImportDbHacks.CleanDuplicateUrls(db);
 
                 var hitsPostInsert = db.hits.Count();
 

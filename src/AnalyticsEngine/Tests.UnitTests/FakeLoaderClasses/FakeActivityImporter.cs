@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 
@@ -10,10 +10,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
         private FakeActivityReportLoader _reportLoader;
         private FakeContentMetaDataLoader _contentMetaDataLoader;
         private FakeActivitySubscriptionManager _activitySubscriptionManager;
-        public FakeActivityImporter(int reportsWanted, AppConfig settings, AnalyticsLogger telemetry) : base(settings, telemetry, 1)
+        public FakeActivityImporter(int reportsWanted, AppConfig settings, AnalyticsLogger logger) : base(settings, logger, 1)
         {
             _reportLoader = new FakeActivityReportLoader(1);
-            _contentMetaDataLoader = new FakeContentMetaDataLoader(telemetry, settings, reportsWanted);
+            _contentMetaDataLoader = new FakeContentMetaDataLoader(logger, settings, reportsWanted);
             _activitySubscriptionManager = new FakeActivitySubscriptionManager();
         }
 

@@ -15,7 +15,11 @@ namespace Web.AnalyticsWeb
         public void ConfigureAuth(IAppBuilder app)
         {
             var config = new AppConfig();
-            var redisConManager = CacheConnectionManager.GetConnectionManager(
+
+            // Redis is optional for the web app. When it isn't configured we can't persist the
+            // user's refresh token, so Teams deep analytics can't be enabled — but sign-in must
+            // still work. TryGetConnectionManager returns null (instead of throwing) in that case.
+            var redisConManager = CacheConnectionManager.TryGetConnectionManager(
                 config.ConnectionStrings.RedisConnectionString, logger: null,
                 tenantId: config.TenantGUID.ToString(), clientId: config.ClientID, clientSecret: config.ClientSecret);
             app.SetDefaultSignInAsAuthenticationType(CookieAuthenticationDefaults.AuthenticationType);
@@ -39,16 +43,31 @@ namespace Web.AnalyticsWeb
                     },
                     Notifications = new OpenIdConnectAuthenticationNotifications()
                     {
-                        // If there is a code in the OpenID Connect response, redeem it for an access token and refresh token, and store those away.
+                        // When AAD redirects back with an auth code, redeem it for tokens and stash
+                        // the refresh token in the (encrypted, httpOnly) auth cookie so the SPA can
+                        // get a Graph token via SiteTokenAPI without Redis. When Redis IS configured
+                        // we also store the token there for the importer's Teams deep-analytics.
                         AuthorizationCodeReceived = async (context) =>
                         {
-
-                            var code = context.Code;
-
-                            var signedInUser = new ClaimsPrincipal(context.AuthenticationTicket.Identity);
+                            var identity = context.AuthenticationTicket.Identity;
+                            var signedInUser = new ClaimsPrincipal(identity);
 
                             var authToken = await RefreshOAuthToken.GetAccessToken(context.Code, $"openid email profile offline_access {graphScopes}", config);
-                            await redisConManager.SaveToken(signedInUser, authToken);
+
+                            // Persist the refresh token in the auth cookie (claim). SiteTokenAPI uses
+                            // it to mint fresh access tokens for the SPA. The access token itself isn't
+                            // stored (it's short-lived and would bloat the cookie).
+                            if (authToken != null && !string.IsNullOrEmpty(authToken.RefreshToken))
+                            {
+                                identity.AddClaim(new Claim(GraphTokenClaims.RefreshToken, authToken.RefreshToken));
+                            }
+
+                            // Teams deep analytics needs the refresh token in Redis for the importer.
+                            // Without Redis we simply skip this; sign-in and the rest of the app still work.
+                            if (redisConManager != null && authToken != null)
+                            {
+                                await redisConManager.SaveToken(signedInUser, authToken);
+                            }
                         }
                     }
                 });

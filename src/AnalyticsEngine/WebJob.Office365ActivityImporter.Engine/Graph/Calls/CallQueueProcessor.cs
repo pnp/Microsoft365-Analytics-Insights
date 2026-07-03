@@ -1,4 +1,4 @@
-﻿using Azure.Identity; // Added for ClientSecretCredential
+using Azure.Identity; // Added for ClientSecretCredential
 using Azure.Messaging.ServiceBus;
 using Common.Entities;
 using Common.Entities.Config;
@@ -28,7 +28,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private ServiceBusClient _sbClient;
         private ServiceBusProcessor _processor;
         private TeamsLoadContext _teamsLoadContext;
-        private ILogger _telemetry;
+        private ILogger _logger;
         private ImportAppIndentityOAuthContext _auth;
         private string _thisTenantId = null;
         private ManualGraphCallClient _graphCallClient;
@@ -65,9 +65,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private CallQueueProcessor(AppConfig config, string thisTenantId)
         {
             // Use seperate telemetry context from rest of the importer
-            _telemetry = new AnalyticsLogger(config.AppInsightsConnectionString, "Office365CallsImporter");
+            _logger = new AnalyticsLogger(config.AppInsightsConnectionString, "Office365CallsImporter");
 
-            _auth = new GraphAppIndentityOAuthContext(_telemetry, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
+            _auth = new GraphAppIndentityOAuthContext(_logger, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
             this._thisTenantId = thisTenantId;
 
             // Always authenticate to Service Bus with Entra ID RBAC (the runtime service principal) -
@@ -75,7 +75,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             // connection string's Endpoint, so existing installs keep their current config; the shared
             // access key in it is ignored. The runtime SP needs the "Azure Service Bus Data Owner" role
             // on the namespace (assigned by the installer). See issue #138.
-            _telemetry.LogInformation("Initializing ServiceBusClient using Entra ID RBAC (no SAS keys).");
+            _logger.LogInformation("Initializing ServiceBusClient using Entra ID RBAC (no SAS keys).");
             var sbProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
             _sbClient = CreateRbacServiceBusClient(config);
             _processor = _sbClient.CreateProcessor(sbProps.EntityPath, new ServiceBusProcessorOptions
@@ -123,7 +123,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             // Use manual graph call client if provided (for testing), or create a new one if not
             if (manualGraphCallClient == null)
             {
-                _graphCallClient = new ManualGraphCallClient(_auth, _telemetry);
+                _graphCallClient = new ManualGraphCallClient(_auth, _logger);
             }
             else
             {
@@ -154,15 +154,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             await _processor.StartProcessingAsync();
             if (_processor.IsProcessing)
             {
-                _telemetry.LogInformation("ServiceBus client: Now listening for service-bus messages.");
+                _logger.LogInformation("ServiceBus client: Now listening for service-bus messages.");
             }
             else
             {
-                _telemetry.LogWarning("ServiceBus client: Not listening for service-bus messages?");
+                _logger.LogWarning("ServiceBus client: Not listening for service-bus messages?");
             }
         }
 
-        public static async Task AddChangeMsgToQueue(List<GraphChangeNotification> changes, ILogger telemetry, ServiceBusSender sbSender)
+        public static async Task AddChangeMsgToQueue(List<GraphChangeNotification> changes, ILogger logger, ServiceBusSender sbSender)
         {
             foreach (var change in changes)
             {
@@ -170,11 +170,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
                 if (!string.IsNullOrEmpty(callId))
                 {
-                    telemetry.LogInformation($"New call POSTed from Graph with ID '{callId}'");
+                    logger.LogInformation($"New call POSTed from Graph with ID '{callId}'");
                 }
                 else
                 {
-                    telemetry.LogInformation($"New call POSTed from Graph with unknown ID. Adding to service-bus queue anyway.");
+                    logger.LogInformation($"New call POSTed from Graph with unknown ID. Adding to service-bus queue anyway.");
                 }
 
                 var json = JsonConvert.SerializeObject(change);
@@ -189,7 +189,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         {
             string msgBody = args.Message.Body.ToString();
 
-            _telemetry.LogInformation($"New message received from ServiceBus with ID '{args.Message.MessageId}'.");
+            _logger.LogInformation($"New message received from ServiceBus with ID '{args.Message.MessageId}'.");
 
             GraphChangeNotification change = null;
             try
@@ -198,7 +198,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
             catch (Exception ex)
             {
-                _telemetry.LogError(ex, $"Error deserialising body '{msgBody}' from ServiceBus. Exception: {ex.Message}");
+                _logger.LogError(ex, $"Error deserialising body '{msgBody}' from ServiceBus. Exception: {ex.Message}");
             }
             if (change == null)
             {
@@ -217,7 +217,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 }
                 catch (Exception ex)
                 {
-                    _telemetry.LogError(ex, $"ServiceBus processing error: processing call notification with msg body '{msgBody}'. Exception: {ex.Message}");
+                    _logger.LogError(ex, $"ServiceBus processing error: processing call notification with msg body '{msgBody}'. Exception: {ex.Message}");
                 }
             }
             if (success)
@@ -226,11 +226,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 try
                 {
                     await args.CompleteMessageAsync(args.Message);
-                    _telemetry.LogInformation($"Succesfully processed & completed ServiceBus message ID '{args.Message.MessageId}'");
+                    _logger.LogInformation($"Succesfully processed & completed ServiceBus message ID '{args.Message.MessageId}'");
                 }
                 catch (ServiceBusException ex)
                 {
-                    _telemetry.LogError(ex, $"Couldn't complete ServiceBus message '{args.Message.MessageId}': " + ex.Message);
+                    _logger.LogError(ex, $"Couldn't complete ServiceBus message '{args.Message.MessageId}': " + ex.Message);
 #if DEBUG
                     throw;
 #endif
@@ -239,7 +239,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             else
             {
                 // Leave for processing later
-                _telemetry.LogInformation($"Abandoning ServiceBus message ID '{args.Message.MessageId}' as import was NOT succesful");
+                _logger.LogInformation($"Abandoning ServiceBus message ID '{args.Message.MessageId}' as import was NOT succesful");
                 await args.AbandonMessageAsync(args.Message);
             }
         }
@@ -252,7 +252,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 CallProcessed?.Invoke(this, EventArgs.Empty);
 
-                _telemetry.LogInformation($"Added call ID '{call.GraphCallID}' to database from ServiceBus.");
+                _logger.LogInformation($"Added call ID '{call.GraphCallID}' to database from ServiceBus.");
                 return true;
             }
             else
@@ -267,23 +267,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             string callId = change?.ResourceData.Id;
             if (string.IsNullOrEmpty(callId))
             {
-                _telemetry.LogInformation("ServiceBus error: couldn't find call ID in JSon. Ignoring event.");
+                _logger.LogInformation("ServiceBus error: couldn't find call ID in JSon. Ignoring event.");
                 return null;
             }
 
             CallRecordDTO callResponse = null;
             using (var db = new AnalyticsEntitiesContext())
             {
-                callResponse = await CallRecordDTO.LoadFromGraphByID(callId, _graphCallClient, _teamsLoadContext, this._telemetry, this._thisTenantId);
+                callResponse = await CallRecordDTO.LoadFromGraphByID(callId, _graphCallClient, _teamsLoadContext, this._logger, this._thisTenantId);
                 if (callResponse == null)
                 {
-                    _telemetry.LogWarning($"Could not load call record '{callId}' from Graph. Skipping.");
+                    _logger.LogWarning($"Could not load call record '{callId}' from Graph. Skipping.");
                     return null;
                 }
 
                 if (!string.IsNullOrEmpty(callResponse.OrganizerEmail))
                 {
-                    await callResponse.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), _telemetry);
+                    await callResponse.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), _logger);
                 }
             }
 
@@ -293,16 +293,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         Task ExceptionReceivedHandler(ProcessErrorEventArgs args)
         {
-            _telemetry.LogError(args.Exception, args.Exception.Message);
+            _logger.LogError(args.Exception, args.Exception.Message);
             // Log the full exception (type + message + stack) as text too: the AppInsights ILogger
             // adapter formats only the message and drops the Exception argument above, so otherwise the
             // stack never reaches the trace logs (why a bare 401 showed up with "no exception logged").
-            _telemetry.LogError($"ServiceBus processor encountered an exception: {args.Exception}");
+            _logger.LogError($"ServiceBus processor encountered an exception: {args.Exception}");
 
-            _telemetry.LogError("Exception context for troubleshooting:");
-            _telemetry.LogError($"- Namespace: {args.FullyQualifiedNamespace}");
-            _telemetry.LogError($"- Entity Path: {args.EntityPath}");
-            _telemetry.LogError($"- Error Source: {Enum.GetName(typeof(ServiceBusErrorSource), args.ErrorSource)}");
+            _logger.LogError("Exception context for troubleshooting:");
+            _logger.LogError($"- Namespace: {args.FullyQualifiedNamespace}");
+            _logger.LogError($"- Entity Path: {args.EntityPath}");
+            _logger.LogError($"- Error Source: {Enum.GetName(typeof(ServiceBusErrorSource), args.ErrorSource)}");
             return Task.CompletedTask;
         }
 
@@ -321,7 +321,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
             catch (Exception ex)
             {
-                _telemetry?.LogError(ex, $"Error during {nameof(CallQueueProcessor)} dispose: {ex.Message}");
+                _logger?.LogError(ex, $"Error during {nameof(CallQueueProcessor)} dispose: {ex.Message}");
             }
             GC.SuppressFinalize(this);
         }
@@ -333,7 +333,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 if (_processor.IsProcessing)
                 {
-                    _telemetry.LogInformation("ServiceBus client: Service-bus processor stopped.");
+                    _logger.LogInformation("ServiceBus client: Service-bus processor stopped.");
                     await _processor.StopProcessingAsync();
                 }
 

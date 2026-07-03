@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
 using Microsoft.Extensions.Logging;
@@ -12,8 +12,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
     // https://docs.microsoft.com/en-us/graph/api/reportroot-getonedriveactivityuserdetail?view=graph-rest-beta
     public class SharePointUserActivityLoader : AbstractUserDailyActivityLoader<SharePointUserActivityLog, SharePointUserActivityDetail>
     {
-        public SharePointUserActivityLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger telemetry)
-            : base(client, userGroupsCache, userGroupsFilterModel, telemetry)
+        public SharePointUserActivityLoader(ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger logger)
+            : base(client, userGroupsCache, userGroupsFilterModel, logger)
         {
         }
         protected override void PopulateReportSpecificMetadata(SharePointUserActivityLog todaysLog, SharePointUserActivityDetail userActivityReportPage)

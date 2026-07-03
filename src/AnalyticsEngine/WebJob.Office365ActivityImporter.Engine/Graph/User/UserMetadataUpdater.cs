@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
@@ -26,19 +26,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private UserLicenseProcessor _licenseProcessor;
         private UserDataMapper _dataMapper;
 
-        public UserMetadataUpdater(AnalyticsLogger telemetry, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient)
-            : base(telemetry, settings)
+        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient)
+            : base(logger, settings)
         {
             IDeltaValueProvider deltaProvider = null;
             if (!string.IsNullOrEmpty(settings.ConnectionStrings.RedisConnectionString))
             {
-                deltaProvider = new RedisProcessDeltaValueProvider(settings, telemetry);
-                telemetry.LogInformation($"User import - using Redis for delta token cache.");
+                deltaProvider = new RedisProcessDeltaValueProvider(settings, logger);
+                logger.LogInformation($"User import - using Redis for delta token cache.");
             }
             else
             {
-                telemetry.LogInformation($"User import - no redis found configured, using in-process cache for delta token.");
-                deltaProvider = new InProcessDeltaValueProvider(telemetry);
+                logger.LogInformation($"User import - no redis found configured, using in-process cache for delta token.");
+                deltaProvider = new InProcessDeltaValueProvider(logger);
             }
 
             // v4 used graphClient.HttpProvider.OverallTimeout = 1h directly. HttpProvider is gone
@@ -47,15 +47,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // default 100s timeout - the explicit 1h timeout is load-bearing.
             var graphServiceClient = GraphServiceClientFactory.CreateWithTimeout(creds, TimeSpan.FromHours(1));
 
-            _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _telemetry, graphServiceClient);
+            _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient);
             InitializeHelpers();
         }
 
         /// <summary>
         /// Constructor with injectable user loader for testing and alternate implementations
         /// </summary>
-        public UserMetadataUpdater(AnalyticsLogger telemetry, AppConfig settings, IUserMetadataLoader userLoader)
-            : base(telemetry, settings)
+        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader)
+            : base(logger, settings)
         {
             _userLoader = userLoader;
             InitializeHelpers();
@@ -63,8 +63,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private void InitializeHelpers()
         {
-            _batchProcessor = new UserBatchProcessor(_telemetry);
-            _insertProcessor = new UserInsertProcessor(_telemetry, _batchProcessor);
+            _batchProcessor = new UserBatchProcessor(_logger);
+            _insertProcessor = new UserInsertProcessor(_logger, _batchProcessor);
         }
 
         public IUserMetadataLoader UserLoader => _userLoader;
@@ -83,10 +83,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 db.Configuration.AutoDetectChangesEnabled = false;
 
                 _userMetaCache = new UserMetadataCache(db);
-                _licenseProcessor = new UserLicenseProcessor(_telemetry, _userLoader, _userMetaCache);
-                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
+                _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
 
-                _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - start");
+                _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - start");
 
                 // If we have no active users, assume new install so clear delta key
                 var activeUserCount = await db.users.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value == true).CountAsync();
@@ -97,7 +97,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
-                _telemetry.LogInformation($"User import - loaded {allActiveGraphUsers.Count.ToString("N0")} users from Graph");
+                _logger.LogInformation($"User import - loaded {allActiveGraphUsers.Count.ToString("N0")} users from Graph");
 
                 // Pre-build dictionary for O(1) graph user lookups by AAD ID (avoids O(n) scans per user in manager resolution)
                 _dataMapper.SetGraphUserLookup(allActiveGraphUsers);
@@ -114,7 +114,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var allDbUsers = skus == null
                     ? await db.users.AsNoTracking().Include(u => u.LicenseLookups).ToListAsync()
                     : await db.users.AsNoTracking().ToListAsync();
-                _telemetry.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
+                _logger.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
 
                 // Create lookup dictionaries for performance - pre-allocate capacity
                 var dbUsersByUpn = new Dictionary<string, Common.Entities.User>(allDbUsers.Count, StringComparer.OrdinalIgnoreCase);
@@ -137,13 +137,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Insert any user we've not seen so far
                 var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null);
-                _telemetry.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
+                _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
                 // Reload newly inserted users WITH TRACKING and update dictionaries
                 // This ensures they're properly tracked when used as managers in ProcessExistingUsersInBatches
                 if (insertedDbUsers.Count > 0)
                 {
-                    _telemetry.LogInformation($"User import - Reloading {insertedDbUsers.Count.ToString("N0")} newly inserted users with tracking for manager relationships...");
+                    _logger.LogInformation($"User import - Reloading {insertedDbUsers.Count.ToString("N0")} newly inserted users with tracking for manager relationships...");
 
                     // Collect UPNs as Graph delivers them. SQL Server's default code-first
                     // collation (Latin1_General_CI_AS) is case-insensitive, so we no longer
@@ -235,7 +235,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // path (no per-user Graph calls needed for licenses).
                 // When SKUs are NOT available we must fall back to the EF-per-entity
                 // path because each user needs individual Graph license queries.
-                _telemetry.LogInformation($"User import - Starting metadata update for {notInsertedUpns.Count.ToString("N0")} existing users...");
+                _logger.LogInformation($"User import - Starting metadata update for {notInsertedUpns.Count.ToString("N0")} existing users...");
                 int existingUsersUpdated = 0;
                 try
                 {
@@ -261,11 +261,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId),
                             BATCH_SIZE);
                     }
-                    _telemetry.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
+                    _logger.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
                 }
                 catch (Exception ex)
                 {
-                    _telemetry.LogError($"User import - ERROR updating existing users: {ex.Message}");
+                    _logger.LogError($"User import - ERROR updating existing users: {ex.Message}");
                     throw;
                 }
 
@@ -312,7 +312,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
 
                     allDbUsersForLicenseRefresh = new List<Common.Entities.User>(combinedById.Values);
-                    _telemetry.LogInformation($"User import - licence refresh will cover {allDbUsersForLicenseRefresh.Count.ToString("N0")} DB users (entire population, not just delta).");
+                    _logger.LogInformation($"User import - licence refresh will cover {allDbUsersForLicenseRefresh.Count.ToString("N0")} DB users (entire population, not just delta).");
                 }
 
                 // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
@@ -322,13 +322,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // instead of the User navigation property, so the entities do not
                     // need to be tracked by EF.
                     await _licenseProcessor.ProcessSKUsForAllUsers(skus, allDbUsersForLicenseRefresh, db);
-                    _telemetry.LogInformation($"User import - updated user license information from {skus.Count.ToString("N0")} tenant SKUs");
+                    _logger.LogInformation($"User import - updated user license information from {skus.Count.ToString("N0")} tenant SKUs");
 
                     db.ChangeTracker.DetectChanges();
                     await db.SaveChangesAsync();
                 }
 
-                _telemetry.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
+                _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
                 // All insert/metadata/license work succeeded. Now and ONLY now is it
                 // safe to persist the new Graph delta token. If any of the previous
@@ -372,11 +372,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             if (_dataMapper == null)
             {
-                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
             }
             if (_licenseProcessor == null)
             {
-                _licenseProcessor = new UserLicenseProcessor(_telemetry, _userLoader, _userMetaCache);
+                _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache);
             }
 
             return await _insertProcessor.InsertMissingUsers(
@@ -399,7 +399,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Ensure mapper is initialized
             if (_dataMapper == null && _userMetaCache != null)
             {
-                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
             }
 
             if (_dataMapper != null)
@@ -434,7 +434,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Ensure mapper is initialized
             if (_dataMapper == null && _userMetaCache != null)
             {
-                _dataMapper = new UserDataMapper(_telemetry, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
             }
 
             // If mapper is available, use it; otherwise do direct mapping
