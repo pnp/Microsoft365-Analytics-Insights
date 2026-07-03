@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using Common.Entities.Entities.Teams;
@@ -73,17 +73,17 @@ namespace Common.Entities
         /// <summary>
         /// Outputs the changes to be made & then calls SaveChangesAsync
         /// </summary>
-        public void PrintChangesAndSaveToSQL(ILogger telemetry)
+        public void PrintChangesAndSaveToSQL(ILogger logger)
         {
             var adds = this.ChangeTracker.Entries().Where(e => e.State == EntityState.Added).ToList();
             var mods = this.ChangeTracker.Entries().Where(e => e.State == EntityState.Modified).ToList();
             if (adds.Count > 0 || mods.Count > 0)
             {
-                telemetry.LogInformation($"Saving changes to SQL. Inserts: {adds.Count}, updates: {mods.Count}...");
+                logger.LogInformation($"Saving changes to SQL. Inserts: {adds.Count}, updates: {mods.Count}...");
             }
             else
             {
-                telemetry.LogInformation("No changes to commit to SQL.");
+                logger.LogInformation("No changes to commit to SQL.");
             }
 
             this.SaveChanges();

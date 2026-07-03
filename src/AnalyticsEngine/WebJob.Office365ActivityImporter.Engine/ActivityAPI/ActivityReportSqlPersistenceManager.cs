@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Sql;
@@ -28,7 +28,7 @@ namespace WebJob.Office365ActivityImporter.Engine
     {
         private readonly AuditFilterConfig _filterConfig;
         private readonly UserGroupsCache _userGroupsCache;
-        private readonly ILogger _telemetry;
+        private readonly ILogger _logger;
         private readonly AppConfig _appConfig;
         private string _defaultConnectionString = null;
         private UserGroupsFilterModel _userGroupsFilter = null;
@@ -41,11 +41,11 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// </summary>
         private static SemaphoreSlim _sqlSaveSemaphore = new SemaphoreSlim(1);      // Make sure we're only saving one thread at a time
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger telemetry, AppConfig appConfig)
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig)
         {
             _filterConfig = filterConfig;
             _userGroupsCache = userGroupsCache;
-            _telemetry = telemetry;
+            _logger = logger;
             _appConfig = appConfig;
             _userGroupsFilter = new UserGroupsFilterModel(appConfig.UserGroupsFilter);
         }
@@ -114,7 +114,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         private async Task<ImportStat> SaveToSqlAllTheThings(ActivityReportSet activities, AnalyticsEntitiesContext db, SqlConnection con, ActivityImportCache cache)
         {
             var listOfActivitiesSavedToSQL = new ConcurrentBag<AbstractAuditLogContent>();
-            var logsToInsert = new EFInsertBatch<AuditLogTempEntity>(db, _telemetry);
+            var logsToInsert = new EFInsertBatch<AuditLogTempEntity>(db, _logger);
             // Sequential dedup within this set: a HashSet gives O(1) Contains. The previous
             // ConcurrentBag.Contains was O(n) per row (an O(n^2) scan over a large activity set).
             var processedIds = new HashSet<Guid>();
@@ -139,7 +139,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                         else
                         {
                             result = SaveResultEnum.UserOutOfScope;
-                            _telemetry.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
+                            _logger.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
                         }
                     }
                     else
@@ -158,7 +158,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                     else if (result == SaveResultEnum.ProcessedAlready) stats.ProcessedAlready++;
                     else if (result == SaveResultEnum.UrlOutOfScope) stats.URLsOutOfScope++;
                     else if (result == SaveResultEnum.UserOutOfScope) stats.UsersOutOfScope++;
-                    else _telemetry.LogError($"Unexpected log result for log {abtractLog.Id}");
+                    else _logger.LogError($"Unexpected log result for log {abtractLog.Id}");
 
                     processedIds.Add(abtractLog.Id);
                 }
@@ -175,7 +175,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             #region Add Extra Metadata
 
             // Add metadata the traditional way with EF. By now should have all the sites saved. 
-            var saveSession = new SaveSession(_telemetry, db, _appConfig);
+            var saveSession = new SaveSession(_logger, db, _appConfig);
             await saveSession.Init();
 
             int metaSaveIdx = 0, changesMadeCount = 0;
@@ -220,7 +220,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                         metaSaveIdx++;
                         continue;
                     }
-                    var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _telemetry);
+                    var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _logger);
                     if (changesMade)
                         changesMadeCount++;
 

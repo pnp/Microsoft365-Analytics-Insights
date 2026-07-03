@@ -43,10 +43,32 @@ namespace Common.Entities.Redis
         private static readonly object _lock = new object();
 
         /// <summary>
+        /// Like <see cref="GetConnectionManager"/> but treats Redis as optional: returns
+        /// <c>null</c> (instead of throwing) when no connection string is configured. Use this
+        /// from components where Redis is optional — e.g. the web app, where a missing Redis
+        /// config simply disables Teams deep analytics rather than breaking the whole site.
+        /// </summary>
+        public static CacheConnectionManager TryGetConnectionManager(string connectionString, ILogger logger = null, string tenantId = null, string clientId = null, string clientSecret = null)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                logger?.LogInformation("No Redis connection string configured — Redis features are disabled.");
+                return null;
+            }
+
+            return GetConnectionManager(connectionString, logger, tenantId, clientId, clientSecret);
+        }
+
+        /// <summary>
         /// Gets or creates a singleton connection manager. When the connection string contains a
         /// <c>password=</c> the key-based path is attempted first; otherwise the RBAC path is
         /// taken straight away. RBAC requires the runtime account credentials.
         /// </summary>
+        /// <remarks>
+        /// Redis is mandatory for callers of this method (e.g. the importer web-jobs). If Redis is
+        /// optional in your component, call <see cref="TryGetConnectionManager"/> and handle a
+        /// <c>null</c> result instead.
+        /// </remarks>
         public static CacheConnectionManager GetConnectionManager(string connectionString, ILogger logger = null, string tenantId = null, string clientId = null, string clientSecret = null)
         {
             if (_connectionManager == null)
@@ -65,6 +87,17 @@ namespace Common.Entities.Redis
 
         private static CacheConnectionManager CreateConnectionManager(string connectionString, ILogger logger, string tenantId, string clientId, string clientSecret)
         {
+            // Fail fast with a clear, actionable message if Redis isn't configured. Without this
+            // guard StackExchange.Redis throws a cryptic "Value cannot be null. Parameter name:
+            // configuration" ArgumentNullException from deep inside ConfigurationOptions.Parse.
+            // Components where Redis is optional should call TryGetConnectionManager instead.
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                throw new InvalidOperationException(
+                    "Redis connection string is not configured, but Redis is required here. " +
+                    "If Redis is optional for this component, use CacheConnectionManager.TryGetConnectionManager and handle a null result.");
+            }
+
             // Parse the caller's connection string just to inspect whether a password was provided.
             // The connect attempts below re-parse it so they each get a clean ConfigurationOptions.
             var parsedOptions = ConfigurationOptions.Parse(connectionString);

@@ -90,7 +90,6 @@
     <Compile Include="Entities\OnlineMeeting.cs" />
     <Compile Include="Entities\UsageReports\AppPlatformUserActivityLog.cs" />
     <Compile Include="Entities\UsageReports\SharePointSitesFileWeeklyStats.cs" />
-    <Compile Include="Installer\AdoptifySolutionInstallConfig.cs" />
     <Compile Include="Installer\BaseConfig.cs" />
     <Compile Include="Installer\BaseSolutionInstallConfig.cs" />
     <Compile Include="Installer\TargetSolutionConfig.cs" />

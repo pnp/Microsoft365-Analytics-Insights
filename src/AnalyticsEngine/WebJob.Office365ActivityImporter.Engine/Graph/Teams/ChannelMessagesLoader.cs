@@ -1,4 +1,4 @@
-﻿using Common.Entities.Redis;
+using Common.Entities.Redis;
 using Common.Entities.Redis.Teams;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -25,13 +25,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         private readonly GraphServiceClient _client;
         private readonly CacheConnectionManager _cacheConnectionManager;
-        private readonly ILogger _telemetry;
+        private readonly ILogger _logger;
 
-        public ChannelMessagesLoader(GraphServiceClient client, CacheConnectionManager cacheConnectionManager, ILogger telemetry)
+        public ChannelMessagesLoader(GraphServiceClient client, CacheConnectionManager cacheConnectionManager, ILogger logger)
         {
             this._client = client;
             this._cacheConnectionManager = cacheConnectionManager;
-            this._telemetry = telemetry;
+            this._logger = logger;
         }
 
         /// <summary>
@@ -65,8 +65,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 if (ex.Error?.Code == "BadRequest" && channelDeltaInfo != null)
                 {
-                    await _cacheConnectionManager.RemoveTeamChannelDeltaToken(teamId, channel.Id, _telemetry);
-                    _telemetry.LogError(ex, $"Got bad request using delta token for messages. Removing from cache & will try full read next time.");
+                    await _cacheConnectionManager.RemoveTeamChannelDeltaToken(teamId, channel.Id, _logger);
+                    _logger.LogError(ex, $"Got bad request using delta token for messages. Removing from cache & will try full read next time.");
                 }
                 else throw;
             }
@@ -86,7 +86,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
                 if (iterator.State == PagingState.Paused)
                 {
-                    _telemetry.LogWarning($"Channel '{channel.DisplayName}' on Team '{teamId}': hit MAX_MESSAGES_PER_CHANNEL ({MAX_MESSAGES_PER_CHANNEL:N0}). Returning partial set of {rootMsgs.Count:N0} root messages.");
+                    _logger.LogWarning($"Channel '{channel.DisplayName}' on Team '{teamId}': hit MAX_MESSAGES_PER_CHANNEL ({MAX_MESSAGES_PER_CHANNEL:N0}). Returning partial set of {rootMsgs.Count:N0} root messages.");
                 }
 
                 if (!string.IsNullOrEmpty(iterator.Deltalink))
@@ -108,15 +108,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (channelDeltaInfo != null)
             {
-                _telemetry.LogInformation($"Loaded channel messages with last delta token for channel '{channel.DisplayName}' on Team '{teamId}'...");
+                _logger.LogInformation($"Loaded channel messages with last delta token for channel '{channel.DisplayName}' on Team '{teamId}'...");
             }
             else
             {
-                _telemetry.LogInformation($"Loaded channel messages (all) for channel '{channel.DisplayName}' on Team '{teamId}'...");
+                _logger.LogInformation($"Loaded channel messages (all) for channel '{channel.DisplayName}' on Team '{teamId}'...");
             }
 
             // Set new msg & reaction data on channel
-            channel.CalculateAndSetNewMessagesAndReactions(rootMsgs, channelDeltaInfo?.LastUpdated, _telemetry);
+            channel.CalculateAndSetNewMessagesAndReactions(rootMsgs, channelDeltaInfo?.LastUpdated, _logger);
 
             return newDelta;
         }
@@ -144,7 +144,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (iterator.State == PagingState.Paused)
             {
-                _telemetry.LogWarning($"Channel {channelId} msg {messageId}: hit MAX_REPLIES_PER_MESSAGE ({MAX_REPLIES_PER_MESSAGE:N0}). Returning partial reply list of {allReplies.Count:N0}.");
+                _logger.LogWarning($"Channel {channelId} msg {messageId}: hit MAX_REPLIES_PER_MESSAGE ({MAX_REPLIES_PER_MESSAGE:N0}). Returning partial reply list of {allReplies.Count:N0}.");
             }
 
             return allReplies;

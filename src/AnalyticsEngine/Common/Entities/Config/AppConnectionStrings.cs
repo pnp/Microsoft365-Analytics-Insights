@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;
 using System.Linq;
@@ -8,10 +8,10 @@ namespace Common.Entities.Config
 
     public class AppConnectionStrings
     {
-        public bool TestSQLSettings(ILogger debugTracer)
+        public bool TestSQLSettings(ILogger logger)
         {
             // Test DB conectivity
-            debugTracer.LogInformation("Testing SQL config...");
+            logger.LogInformation("Testing SQL config...");
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -19,16 +19,16 @@ namespace Common.Entities.Config
                 {
                     int count = (from allHits in db.hits
                                  select allHits).Count();
-                    debugTracer.LogInformation($"Found {count.ToString("n0")} hits in table already. Test passed!");
+                    logger.LogInformation($"Found {count.ToString("n0")} hits in table already. Test passed!");
                 }
                 catch (System.Data.Entity.Core.EntityException ex)
                 {
-                    HandleSqlTestException(ex, debugTracer);
+                    HandleSqlTestException(ex, logger);
                     return false;
                 }
                 catch (System.Data.SqlClient.SqlException ex)
                 {
-                    HandleSqlTestException(ex, debugTracer);
+                    HandleSqlTestException(ex, logger);
                     return false;
                 }
             }
@@ -37,10 +37,10 @@ namespace Common.Entities.Config
         }
 
 
-        void HandleSqlTestException(Exception ex, ILogger debugTracer)
+        void HandleSqlTestException(Exception ex, ILogger logger)
         {
-            debugTracer.LogInformation("Fatal error connecting to configured SQL:");
-            debugTracer.LogError(ex, ex.Message);
+            logger.LogInformation("Fatal error connecting to configured SQL:");
+            logger.LogError(ex, ex.Message);
 
             Console.WriteLine("Check your SQL configuration in the .config file / App Service settings.");
         }

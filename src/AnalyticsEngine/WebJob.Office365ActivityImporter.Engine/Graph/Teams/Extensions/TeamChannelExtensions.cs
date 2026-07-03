@@ -1,4 +1,4 @@
-﻿using Azure;
+using Azure;
 using Azure.AI.TextAnalytics;
 using Common.Entities;
 using Common.Entities.Config;
@@ -30,14 +30,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         private static CognitiveServicesClient _cachedCognitiveClient;
         private static bool _cognitiveClientBuilt;
 
-        private static CognitiveServicesClient GetOrBuildCognitiveClient(AppConfig cognitiveConfig, ILogger telemetry)
+        private static CognitiveServicesClient GetOrBuildCognitiveClient(AppConfig cognitiveConfig, ILogger logger)
         {
             if (_cognitiveClientBuilt) return _cachedCognitiveClient;
             lock (_cognitiveClientLock)
             {
                 if (!_cognitiveClientBuilt)
                 {
-                    _cachedCognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(telemetry);
+                    _cachedCognitiveClient = cognitiveConfig.CreateCognitiveServicesClient(logger);
                     _cognitiveClientBuilt = true;
                 }
                 return _cachedCognitiveClient;
@@ -47,18 +47,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// Sets the "Messages" prop on each channel by reading each channel messages.
         /// </summary>
         public static async Task PopulateNewMessagesAndReactions(this List<ChannelWithReactions> channels, Team team, RefreshOAuthToken refreshToken,
-            CacheConnectionManager cacheConnectionManager, ILogger telemetry)
+            CacheConnectionManager cacheConnectionManager, ILogger logger)
         {
 
             foreach (var channel in channels)
             {
                 // Load stats. Will throw ChannelMessagesReadException if token is invalid
-                var channelDelta = await channel.GetChannelMessagesAndReactions(team, refreshToken, cacheConnectionManager, telemetry);
+                var channelDelta = await channel.GetChannelMessagesAndReactions(team, refreshToken, cacheConnectionManager, logger);
 
                 // Save delta token for next read
                 if (channelDelta != null)
                 {
-                    await cacheConnectionManager.SetTeamChannelDeltaTokenInfo(team.Id, channel.Id, channelDelta, telemetry);
+                    await cacheConnectionManager.SetTeamChannelDeltaTokenInfo(team.Id, channel.Id, channelDelta, logger);
                 }
             }
         }
@@ -67,7 +67,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// Save this channel stats. Channel object should be fully-loaded with tabs
         /// </summary>
         static async Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> GetChannelMessagesAndReactions(this ChannelWithReactions channel, Team parentTeam, RefreshOAuthToken refreshToken,
-            CacheConnectionManager cacheConnectionManager, ILogger telemetry)
+            CacheConnectionManager cacheConnectionManager, ILogger logger)
         {
             TeamsRedisManager.TeamChannelDeltaTokenInfo channelDeltaInfo = null;
 
@@ -79,7 +79,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 // IAuthenticationProvider that pins the supplied bearer token onto every request.
                 var _preCachedTokenClient = new GraphServiceClient(new BearerTokenAuthenticationProvider(refreshToken.AccessToken));
 
-                var channelMessagesLoader = new ChannelMessagesLoader(_preCachedTokenClient, cacheConnectionManager, telemetry);
+                var channelMessagesLoader = new ChannelMessagesLoader(_preCachedTokenClient, cacheConnectionManager, logger);
                 try
                 {
                     // Load msgs using user token
@@ -98,7 +98,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Loads cognitive data for these messages. Messages may be on different dates, hence list of stats.
         /// </summary>
-        internal static async Task<List<MessageCognitiveStats>> GetCognitiveDataStats(this IEnumerable<ChatMessage> allChannelMsgs, ILogger telemetry, ChannelWithReactions parentChannel)
+        internal static async Task<List<MessageCognitiveStats>> GetCognitiveDataStats(this IEnumerable<ChatMessage> allChannelMsgs, ILogger logger, ChannelWithReactions parentChannel)
         {
             var allStatsAllDays = new List<MessageCognitiveStats>();
 
@@ -110,7 +110,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (!cognitiveConfig.IsValidCognitiveConfig)
             {
-                telemetry.LogWarning($"Cognitive config not valid. Cannot load cognitive stats for channel {parentChannel.DisplayName} ({parentChannel.Id}). Adding basic stats with no cognitive insights.");
+                logger.LogWarning($"Cognitive config not valid. Cannot load cognitive stats for channel {parentChannel.DisplayName} ({parentChannel.Id}). Adding basic stats with no cognitive insights.");
                 // No cognitive available. Add basic stats for all dates
                 foreach (var uniqueMsgDate in msgDates)
                 {
@@ -123,10 +123,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Use key auth when CognitiveKey is set, otherwise RBAC (ClientSecretCredential)
             // so we still work against resources that have key auth disabled. The wrapper
             // is cached per process and auto-falls back to RBAC on key-auth failure.
-            var client = GetOrBuildCognitiveClient(cognitiveConfig, telemetry);
+            var client = GetOrBuildCognitiveClient(cognitiveConfig, logger);
             if (client == null)
             {
-                telemetry.LogWarning($"Could not build cognitive client for channel {parentChannel.DisplayName} ({parentChannel.Id}). Adding basic stats with no cognitive insights.");
+                logger.LogWarning($"Could not build cognitive client for channel {parentChannel.DisplayName} ({parentChannel.Id}). Adding basic stats with no cognitive insights.");
                 foreach (var uniqueMsgDate in msgDates)
                 {
                     var msgsForDate = allChannelMsgs.GetByDate(uniqueMsgDate);
@@ -139,7 +139,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 // No log - generate new stats
                 var msgsForDate = allChannelMsgs.GetByDate(uniqueMsgDate);
-                var dateStats = await msgsForDate.LoadSameDayCognitiveDataStats(client, telemetry, parentChannel);
+                var dateStats = await msgsForDate.LoadSameDayCognitiveDataStats(client, logger, parentChannel);
                 allStatsAllDays.Add(dateStats);
             }
 

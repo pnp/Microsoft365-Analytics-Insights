@@ -51,14 +51,14 @@ namespace Tests.UnitTests
         [TestCategory("Integration")]
         public async Task MessageImportTests()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
-            var auth = new GraphAppIndentityOAuthContext(telemetry, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
+            var auth = new GraphAppIndentityOAuthContext(logger, config.ClientID, config.TenantGUID.ToString(), config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
 
             await auth.InitClientCredential();
             var graphClient = new GraphServiceClient(auth.Creds);
 
-            var finder = new TeamsFinder(telemetry, config, graphClient);
+            var finder = new TeamsFinder(logger, config, graphClient);
             var allGroups = await finder.FindGroupsWithTeamToCrawl(TeamsCrawlConfig.AllGroupsConfig);
 
             Assert.IsTrue(allGroups.Count > 0, "No teams found to load messages for");
@@ -66,7 +66,7 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 var context = new TeamsLoadContext(graphClient);
-                var team = await O365Team.LoadTeamFull(allGroups[0], context, telemetry, config, db);
+                var team = await O365Team.LoadTeamFull(allGroups[0], context, logger, config, db);
                 var channel = team.Channels.First();
                 var user = new Identity { Id = team.OwnerUserAccounts[0].Id };
 
@@ -119,13 +119,13 @@ namespace Tests.UnitTests
                     channel.Messages = new List<ChatMessage>();
                 }
                 channel.Messages.Add(msgRoot);
-                channel.CalculateAndSetNewMessagesAndReactions(channel.Messages, DateTime.Now.AddDays(-7), telemetry);
+                channel.CalculateAndSetNewMessagesAndReactions(channel.Messages, DateTime.Now.AddDays(-7), logger);
 
                 // Rebuild reactions from msgs now we have fake messages
                 await team.ProcessAllReactionsFromMessages(context, channel);
 
 
-                var sqlTeam = await team.SaveToSQL(new TeamsAndCallsDBLookupManager(db), config, telemetry);
+                var sqlTeam = await team.SaveToSQL(new TeamsAndCallsDBLookupManager(db), config, logger);
                 Assert.IsNotNull(sqlTeam);
 
                 // Check we see reactions & stats
@@ -178,7 +178,7 @@ namespace Tests.UnitTests
         public async Task CallQueueProcessorTest()
         {
             const int CALLS_TO_ADD = 10;
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
             var httpConfig = new HttpConfiguration();
             httpConfig.MapHttpAttributeRoutes();
@@ -194,7 +194,7 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 var callCountInitial = await db.CallRecords.CountAsync();
-                using (var client = new ManualGraphCallClient(server, telemetry))
+                using (var client = new ManualGraphCallClient(server, logger))
                 {
                     using (var callProcessor = await CallQueueProcessor.GetCallQueueProcessor(config,
                         config.TenantGUID.ToString(), client))
@@ -212,7 +212,7 @@ namespace Tests.UnitTests
                         {
                             var newCallId = Guid.NewGuid();
                             var change = new GraphChangeNotification { ResourceData = new Common.Entities.Models.ResourceData { Id = newCallId.ToString() } };
-                            await CallQueueProcessor.AddChangeMsgToQueue(new List<GraphChangeNotification> { change }, telemetry, sbSender);
+                            await CallQueueProcessor.AddChangeMsgToQueue(new List<GraphChangeNotification> { change }, logger, sbSender);
                             testIds.Add(newCallId.ToString());
                         }
 
@@ -267,26 +267,26 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task LoadAllPagesWithThrottleRetriesTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
             var config = new HttpConfiguration();
             config.MapHttpAttributeRoutes();
             var server = new HttpServer(config);
 
-            using (var client = new ManualGraphCallClient(server, telemetry))
+            using (var client = new ManualGraphCallClient(server, logger))
             {
-                await TestPageResponse(client, telemetry, 100, 10);
-                await TestPageResponse(client, telemetry, 100, 1);
-                await TestPageResponse(client, telemetry, 102, 10);
-                await TestPageResponse(client, telemetry, 1000, 10);
+                await TestPageResponse(client, logger, 100, 10);
+                await TestPageResponse(client, logger, 100, 1);
+                await TestPageResponse(client, logger, 102, 10);
+                await TestPageResponse(client, logger, 1000, 10);
 
             }
         }
 
-        private async Task TestPageResponse(ManualGraphCallClient client, ILogger telemetry, int v1, int v2)
+        private async Task TestPageResponse(ManualGraphCallClient client, ILogger logger, int v1, int v2)
         {
             var url = FakePageableResultsController.GetUrl(0, v1, v2);
-            var results = await client.LoadAllPagesWithThrottleRetries<FakePagedResult>(url, telemetry);
+            var results = await client.LoadAllPagesWithThrottleRetries<FakePagedResult>(url, logger);
 
             Assert.IsTrue(results.Count == v1);
         }
@@ -410,12 +410,12 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task AllTeamsLoadTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
-            var auth = new GraphAppIndentityOAuthContext(telemetry, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
+            var auth = new GraphAppIndentityOAuthContext(logger, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
             await auth.InitClientCredential();
 
-            var importer = new TeamsImporter(telemetry, new AppConfig(), new GraphServiceClient(auth.Creds));
+            var importer = new TeamsImporter(logger, new AppConfig(), new GraphServiceClient(auth.Creds));
 
             // Use a filter for tests?
             const string SEP = ";";

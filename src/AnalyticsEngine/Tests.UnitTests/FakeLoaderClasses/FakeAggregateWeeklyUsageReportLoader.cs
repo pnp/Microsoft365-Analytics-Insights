@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
@@ -13,7 +13,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         private readonly string _fakeUrlForLoadSiteResult;
 
-        public FakeSPSiteIdToUrlCache(Common.Entities.AnalyticsEntitiesContext db, ILogger debugTracer, string fakeUrlForLoadSiteResult) : base(db, debugTracer)
+        public FakeSPSiteIdToUrlCache(Common.Entities.AnalyticsEntitiesContext db, ILogger logger, string fakeUrlForLoadSiteResult) : base(db, logger)
         {
             _fakeUrlForLoadSiteResult = fakeUrlForLoadSiteResult;
         }
@@ -28,7 +28,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         bool _hasSaved = false;
         int _loadCount = 0;
-        public MultiPageFakeWeeklyUsageReportLoader(ILogger telemetry) : base(telemetry) { }
+        public MultiPageFakeWeeklyUsageReportLoader(ILogger logger) : base(logger) { }
         public override string ReportGraphURL => "fake URL";
 
         public override Task<AggregateResourceUsageDetail<FakeStats>> LoadReportDataForUrl(string requestUrl)
@@ -84,7 +84,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         bool _hasSaved = false;
         int _loadCount = 0;
-        public SundayOrNotFakeWeeklyUsageReportLoader(ILogger telemetry) : base(telemetry) { }
+        public SundayOrNotFakeWeeklyUsageReportLoader(ILogger logger) : base(logger) { }
         public override string ReportGraphURL => "fake pagable URL";
 
         public override Task<AggregateResourceUsageDetail<FakeStats>> LoadReportDataForUrl(string requestUrl)
