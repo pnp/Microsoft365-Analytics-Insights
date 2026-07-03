@@ -40,6 +40,23 @@ log.TrackHealthCheck(HealthComponent.Credential, HealthStatus.Degraded, "secret 
 log.TrackImporterHeartbeat("Office365ActivityImporter", DateTime.UtcNow, cycleDurationSeconds);
 ```
 
+### Also delivered: in-app Health dashboard + query client + alert-setup guide
+
+Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing** described below:
+
+- **`Common/DataUtils/AppInsights/AppInsightsQueryClient.cs`** — a small, self-contained KQL client for the
+  App Insights REST query API, authenticated with the app's existing Entra credential (no new key/config). It
+  is intentionally separate from the importer's `AppInsightsAPIClient` (which is coupled to the importer's
+  response parsers) to avoid destabilising the importer; consolidating the two onto one client remains a
+  future cleanup.
+- **`Web` Health tab** — `HomeController.Health` + `Views/Home/Health.cshtml` + `Web/Models/HealthDashboard.cs`
+  + a nav entry, all best-effort and cached (60 s). The import-liveness, exceptions-overview and
+  data-freshness cards are populated **today** from the existing custom events / SQL; the component-health
+  card degrades gracefully (empty by design) until the runtime `HealthCheck` emitter lands.
+- **Alert-setup guide** — the repeatable "add an alert" procedure plus the health-telemetry rules are
+  published to the wiki's
+  [Health Alerts](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Health-Alerts) page.
+
 ## Relationship to existing telemetry (no duplication)
 
 The solution **already** emits two custom events the wiki's
@@ -227,8 +244,9 @@ configured at install).
   `FinishedImportCycle`) and the exception-spike general probe (#10); opt-out flag; doc update.
   Delivers the originally-requested items. *(This PR lands the Phase-1 telemetry primitive.)*
 - **Phase 2:** the central health dashboard tab in the web app (exceptions overview + last-confirmed
-  import cycles + component-health cards — see above), dependency checks (Redis, Service Bus dead-letter,
-  Key Vault), data-freshness alerts, web-app availability test, `SystemStatus` health page.
+  import cycles + component-health + data-freshness cards) **— delivered, see "Also delivered" above** — plus
+  the remaining dependency checks (Redis, Service Bus dead-letter, Key Vault), data-freshness alerts,
+  web-app availability test, `SystemStatus` health page.
 - **Phase 3:** Azure workbook/portal dashboard, richer overridable thresholds, extra notification
   channels (Teams/webhook/ITSM), tenant report-anonymisation re-check, cost/quota anomaly alerts.
 
