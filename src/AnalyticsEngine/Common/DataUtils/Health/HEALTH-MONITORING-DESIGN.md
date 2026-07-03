@@ -40,11 +40,39 @@ log.TrackHealthCheck(HealthComponent.Credential, HealthStatus.Degraded, "secret 
 log.TrackImporterHeartbeat("Office365ActivityImporter", DateTime.UtcNow, cycleDurationSeconds);
 ```
 
+## Relationship to existing telemetry (no duplication)
+
+The solution **already** emits two custom events the wiki's
+[Confirm Import Cycles & Sections Are Finishing (custom events)](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Monitoring#confirm-import-cycles--sections-are-finishing-custom-events)
+section alerts on, via `AnalyticsLogger.TrackEvent` / `JobTimer.TrackFinishedEventAndStopTimer`:
+
+- **`FinishedImportCycle`** — one per full importer loop (`Office365ActivityImporter` and
+  `AppInsightsImporter`), with a `context` dimension = elapsed-time string.
+- **`FinishedSectionImport`** — one per section (audit, user metadata, user apps, usage activity, Teams,
+  sent emails, App Insights hits/custom events).
+
+These **are** the wiki's cycle/section-completion signals, so there is deliberate overlap and the plan
+is to **reuse them, not duplicate them**:
+
+- **Data-flow / freshness** monitoring (issue #144 default alert #9, "Activity import stalled") builds
+  directly on the existing `FinishedImportCycle` / `FinishedSectionImport` events — no new emit needed;
+  the design just codifies the wiki query (`FinishedImportCycle` count == 0 over the window) as a
+  shipped default rule.
+- **`ImporterHeartbeat`** is **not** a rename of `FinishedImportCycle`. `FinishedImportCycle` fires only
+  when a cycle *completes*, so a job stuck **mid-cycle** emits nothing and looks identical to a dead job.
+  The Appendix E heartbeat is intended to be raised on an **independent timer** (Appendix D open
+  question: same web-job on its own timer vs a separate WebJob/Function) so a stuck import can't
+  suppress the liveness beat. It also adds structured `JobName` / `LastCycleUtc` /
+  `LastCycleDurationSeconds` dimensions (vs the free-text `context` string) so the same rule works
+  across both jobs. Until the independent-timer host lands (Phase 1/2), the existing
+  `FinishedImportCycle` remains the interim liveness signal and the wiki alert stays valid.
+
 ## What should be monitored
 
 - **A. Liveness** — continuous web-jobs (`Office365ActivityImporter`, `AppInsightsImporter`) alive &
-  completing cycles (emit `ImporterHeartbeat`); web app reachable (tracker-config / Teams-auth API /
-  Teams call-record webhook).
+  completing cycles (interim: existing `FinishedImportCycle` event; target: independent-timer
+  `ImporterHeartbeat` that survives a stuck mid-cycle import — see "Relationship to existing telemetry"
+  above); web app reachable (tracker-config / Teams-auth API / Teams call-record webhook).
 - **B. Data flow / freshness** — activity cycle completing, audit events non-zero, user/Teams metadata
   & usage-report imports completing, `AppInsightsImporter` writing hits, web-tracker `pageViews`
   arriving; backlog/lag (a full cycle must finish < 24h).
@@ -56,7 +84,12 @@ log.TrackImporterHeartbeat("Office365ActivityImporter", DateTime.UtcNow, cycleDu
   dead-letter depth, Key Vault reachable, Storage reachable.
 - **E. Capacity / performance KPIs** — App Service Plan CPU/memory, SQL DTU/vCore + storage growth,
   Redis server load, Service Bus throttling.
-- **F. Safety net** — spike in App Insights `exceptions` rate.
+- **F. Safety net** — spike in App Insights `exceptions` rate as a **general health probe**. Every
+  web-job logs unhandled/handled errors through `AnalyticsLogger.TrackException` into the same App
+  Insights instance, so a rising `exceptions` count is a cheap catch-all for failures that no specific
+  check anticipates (a new/unknown error, a dependency the checks don't cover, a code regression). Ship
+  a default rule on total `exceptions` volume in addition to the specific `SqlException` /
+  "database is read-only" rules below.
 
 ## Where to surface — options
 
@@ -101,14 +134,15 @@ configured at install).
 | # | Monitored item | Signal source | Type | Default threshold |
 |-|-|-|-|-|
 | 1 | Any component unhealthy | `HealthCheck Status == Unhealthy` | log/heartbeat | any in 15m |
-| 2 | Web-jobs not heartbeating | `ImporterHeartbeat` absent | log/heartbeat | none in 30m |
+| 2 | Web-jobs not heartbeating | `ImporterHeartbeat` absent (interim: `FinishedImportCycle` absent) | log/heartbeat | none in 30m |
 | 3 | Runtime credential expiring | `HealthCheck{Component=Credential}.DaysToExpiry` | metric/log | < 14 warn, < 3 critical |
 | 4 | SQL unreachable / schema mismatch | `HealthCheck{Component=Sql}` | log/heartbeat | any Unhealthy in 15m |
 | 5 | SQL full / read-only | `exceptions ... "database is read-only"` | log | > 2 in 10m |
 | 6 | SQL capacity | DTU/vCore % + storage % | metric | sustained high |
 | 7 | App Service Plan capacity | CPU/memory % | metric | > 90% for 1h |
 | 8 | Service Bus backlog (Teams calls) | dead-letter / throttled requests | metric | > 0 |
-| 9 | Activity import stalled | data-flow trace query | log | per wiki |
+| 9 | Activity import stalled | existing `FinishedImportCycle` / `FinishedSectionImport` custom events (wiki) | log | count == 0 in window |
+| 10 | Exception spike (general probe) | total App Insights `exceptions` volume | log | sustained spike vs baseline |
 
 ## Implementation pointers (remaining phases)
 
@@ -131,7 +165,9 @@ configured at install).
 ## Phasing
 
 - **Phase 1 (MVP):** heartbeat liveness + SQL/schema + runtime-credential valid + credential expiry
-  warning; ship the action group (email) + heartbeat-based rules (#1–4, #6–7); opt-out flag; doc update.
+  warning; ship the action group (email) + heartbeat-based rules (#1–4, #6–7) **plus the two cheap
+  catch-alls that reuse events already emitted today** — activity import stalled (#9, existing
+  `FinishedImportCycle`) and the exception-spike general probe (#10); opt-out flag; doc update.
   Delivers the originally-requested items. *(This PR lands the Phase-1 telemetry primitive.)*
 - **Phase 2:** dependency checks (Redis, Service Bus dead-letter, Key Vault), data-freshness alerts,
   web-app availability test, `SystemStatus` health page.
