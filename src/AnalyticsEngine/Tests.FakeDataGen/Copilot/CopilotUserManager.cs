@@ -1,7 +1,9 @@
 using Common.Entities;
 using System;
 using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
+using Tests.FakeDataGen.Seeding;
 
 namespace Tests.FakeDataGen.Copilot
 {
@@ -31,21 +33,35 @@ namespace Tests.FakeDataGen.Copilot
 
             Console.WriteLine($"Creating {count} test users with {copilotLicensePercentage}% having Copilot licenses...");
 
-            // Create users
+            // Look-up caches so each distinct metadata value is created once and the same instance
+            // is reused (keeps FKs coherent and lets us group users by company for the hierarchy).
+            var deptCache = new Dictionary<string, UserDepartment>(StringComparer.OrdinalIgnoreCase);
+            var companyCache = new Dictionary<string, CompanyName>(StringComparer.OrdinalIgnoreCase);
+            var jobCache = new Dictionary<string, UserJobTitle>(StringComparer.OrdinalIgnoreCase);
+            var stateCache = new Dictionary<string, StateOrProvince>(StringComparer.OrdinalIgnoreCase);
+            var countryCache = new Dictionary<string, CountryOrRegion>(StringComparer.OrdinalIgnoreCase);
+            var officeCache = new Dictionary<string, UserOfficeLocation>(StringComparer.OrdinalIgnoreCase);
+            var usageCache = new Dictionary<string, UserUsageLocation>(StringComparer.OrdinalIgnoreCase);
+
+            // Create users with realistic, internally-consistent metadata spread across domains.
             for (int i = 0; i < count; i++)
             {
-                // Get or create a random department
-                var departmentName = CopilotActivityGeneratorConfig.DepartmentNames[_random.Next(CopilotActivityGeneratorConfig.DepartmentNames.Length)];
-                var department = GetOrCreateDepartment(db, departmentName);
-
-                var upn = $"testuser{i}@contoso.com";
+                var profile = SeedDataCatalogue.NextUserProfile(_random);
+                var upn = SeedDataCatalogue.BuildUpn("testuser", i);
                 var user = new User
                 {
                     UserPrincipalName = upn,
                     Mail = upn,
-                    Department = department,
-                    AccountEnabled = true,
-                    AzureAdId = Guid.NewGuid().ToString()
+                    AccountEnabled = profile.AccountEnabled,
+                    AzureAdId = Guid.NewGuid().ToString(),
+                    PostalCode = profile.PostalCode ?? string.Empty,
+                    Department = GetOrCreateLookup(db, db.UserDepartments, deptCache, profile.Department),
+                    CompanyName = GetOrCreateLookup(db, db.CompanyNames, companyCache, profile.Company),
+                    JobTitle = GetOrCreateLookup(db, db.UserJobTitles, jobCache, profile.JobTitle),
+                    StateOrProvince = GetOrCreateLookup(db, db.StateOrProvinces, stateCache, profile.StateOrProvince),
+                    UserCountry = GetOrCreateLookup(db, db.CountryOrRegions, countryCache, profile.Country),
+                    OfficeLocation = GetOrCreateLookup(db, db.UserOfficeLocations, officeCache, profile.OfficeLocation),
+                    UsageLocation = GetOrCreateLookup(db, db.UserUsageLocations, usageCache, profile.UsageLocation)
                 };
                 db.users.Add(user);
                 users.Add(user);
@@ -56,6 +72,8 @@ namespace Tests.FakeDataGen.Copilot
             int usersWithCopilot = AssignLicensesToUsers(db, users, copilotLicense, e5License, e3License, copilotLicensePercentage);
 
             Console.WriteLine($"Assigned Copilot licenses to {usersWithCopilot}/{count} users ({(usersWithCopilot * 100.0 / count):F1}%)");
+
+            AssignManagers(db, users);
 
             return users;
         }
@@ -90,16 +108,49 @@ namespace Tests.FakeDataGen.Copilot
             return usersWithCopilot;
         }
 
-        private UserDepartment GetOrCreateDepartment(AnalyticsEntitiesContext db, string departmentName)
+        /// <summary>
+        /// Resolves (or lazily creates) a named lookup row, caching the instance so each distinct
+        /// value is created once and shared across every user that references it.
+        /// </summary>
+        private static T GetOrCreateLookup<T>(AnalyticsEntitiesContext db, DbSet<T> set,
+            Dictionary<string, T> cache, string name) where T : AbstractEFEntityWithName, new()
         {
-            var department = db.UserDepartments.FirstOrDefault(d => d.Name == departmentName);
-            if (department == null)
+            if (name == null) return null;
+            if (cache.TryGetValue(name, out var cached)) return cached;
+
+            var existing = set.FirstOrDefault(x => x.Name == name);
+            if (existing == null)
             {
-                department = new UserDepartment { Name = departmentName };
-                db.UserDepartments.Add(department);
+                existing = new T { Name = name };
+                set.Add(existing);
                 db.SaveChanges();
             }
-            return department;
+            cache[name] = existing;
+            return existing;
+        }
+
+        /// <summary>
+        /// Gives the generated users a realistic reporting hierarchy: within each company a small
+        /// fraction are managers (left top-level) and everyone else reports to one of them.
+        /// </summary>
+        private void AssignManagers(AnalyticsEntitiesContext db, List<User> users)
+        {
+            if (users.Count < 2) return;
+
+            foreach (var group in users.GroupBy(u => u.CompanyName))
+            {
+                var list = group.ToList();
+                if (list.Count < 2) continue;
+
+                int managerCount = Math.Max(1, (int)Math.Round(list.Count * 0.1));
+                managerCount = Math.Min(managerCount, list.Count - 1);
+                var managers = list.Take(managerCount).ToList();
+                for (int i = managerCount; i < list.Count; i++)
+                {
+                    list[i].ManagerId = managers[_random.Next(managers.Count)].ID;
+                }
+            }
+            db.SaveChanges();
         }
     }
 }
