@@ -1,10 +1,7 @@
-using Common.Entities.Config;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Net;
 using System.Runtime.Caching;
-using System.Threading.Tasks;
 using System.Web.Mvc;
-using Web.AnalyticsWeb.Models;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -19,12 +16,6 @@ namespace Web.AnalyticsWeb.Controllers
         public ActionResult Index()
         {
             return ServeAdminApp();
-        }
-
-        public async Task<ActionResult> Health()
-        {
-            var model = await HealthDashboard.LoadFrom(new AppConfig());
-            return View(model);
         }
 
         public ActionResult CredentialsInvalid()

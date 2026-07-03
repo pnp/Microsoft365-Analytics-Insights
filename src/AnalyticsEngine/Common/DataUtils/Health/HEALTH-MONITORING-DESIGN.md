@@ -49,8 +49,10 @@ Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing
   is intentionally separate from the importer's `AppInsightsAPIClient` (which is coupled to the importer's
   response parsers) to avoid destabilising the importer; consolidating the two onto one client remains a
   future cleanup.
-- **`Web` Health tab** — `HomeController.Health` + `Views/Home/Health.cshtml` + `Web/Models/HealthDashboard.cs`
-  + a nav entry, all best-effort and cached (60 s). The import-liveness, exceptions-overview and
+- **Web Health tab (in the admin SPA)** — a new `Health` tab in the React admin-app
+  (`Scripts/admin-app/src/pages/HealthPage.tsx` + `api/healthApi.ts` + `types/health.ts`, routed in
+  `App.tsx`), backed by a new `api/Health` endpoint (`HealthAPIController` → `Web/Models/HealthDashboard.cs`,
+  a best-effort, 60 s-cached JSON aggregation). The import-liveness, exceptions-overview and
   data-freshness cards are populated **today** from the existing custom events / SQL; the component-health
   card degrades gracefully (empty by design) until the runtime `HealthCheck` emitter lands.
 - **Alert-setup guide** — the repeatable "add an alert" procedure plus the health-telemetry rules are
