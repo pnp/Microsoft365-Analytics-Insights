@@ -62,7 +62,12 @@ Tests.FakeDataGen/
 
 `Seeding` is intentionally shared: every data generator and stress test that
 needs prerequisite metadata calls `UserMetadataSeeder` so the same lookup tables,
-departments, license catalogue, etc. are populated everywhere.
+departments, license catalogue, etc. are populated everywhere. Users are made as
+realistic as a live tenant: `SeedDataCatalogue` assigns each user a coherent geo
+locale (country / state / city / office / usage location / postal code all agree,
+across 21 countries incl. non-Latin values), a job title that fits its department,
+a company, a realistic account-enabled state, a UPN on one of several tenant
+domains, and a manager in their own company.
 
 ## Data generation
 
@@ -71,7 +76,9 @@ departments, license catalogue, etc. are populated everywhere.
 `CopilotActivityGenerator` inserts:
 
 - License types (Copilot, E5, E3, Business Premium, Exchange Online) if missing.
-- 10 test users with random departments, mail attributes, and license
+- Test users with coherent, realistic metadata (country / state / city / office /
+  usage location / postal code, department + fitting job title, company, account
+  state) spread across several email domains and a manager hierarchy, plus license
   assignments (configurable Copilot percentage).
 - Copilot chat events (configurable count) tagged with a mix of standard and
   custom agents, plus the matching `audit_events` + meeting / file metadata

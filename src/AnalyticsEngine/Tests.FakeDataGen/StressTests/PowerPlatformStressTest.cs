@@ -33,16 +33,6 @@ namespace Tests.FakeDataGen.StressTests
         private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp", "CreatePowerApp" };
         private static readonly string[] FlowOperations = { "FlowRunStarted", "FlowRunCompleted", "EditFlow", "CreateFlow" };
 
-        // Names for lookup tables / license catalogue come from shared seed data
-        // so every stress test and data generator populates the same metadata.
-        private static string[] Departments => SeedDataCatalogue.Departments;
-        private static string[] Companies => SeedDataCatalogue.Companies;
-        private static string[] JobTitles => SeedDataCatalogue.JobTitles;
-        private static string[] StatesOrProvinces => SeedDataCatalogue.StatesOrProvinces;
-        private static string[] Countries => SeedDataCatalogue.Countries;
-        private static string[] OfficeLocations => SeedDataCatalogue.OfficeLocations;
-        private static string[] UsageLocations => SeedDataCatalogue.UsageLocations;
-
         protected override StressTestResult Execute()
         {
             Console.WriteLine("\n=== Power Platform Event Import Stress Test ===\n");
@@ -395,8 +385,9 @@ namespace Tests.FakeDataGen.StressTests
         }
 
         /// <summary>
-        /// Inserts the prerequisite users (with departments, companies, job titles) + audit_events rows
-        /// so FKs are satisfied when CommitAllChanges runs.
+        /// Inserts the prerequisite users (with coherent geography, department + fitting job title,
+        /// company, postal code and account state) + audit_events rows so FKs are satisfied when
+        /// CommitAllChanges runs. A realistic reporting hierarchy is added once the users exist.
         /// </summary>
         private void InsertPrerequisiteAuditEvents(string connectionString, List<(Guid Id, string Upn, string Operation, DateTime TimeStamp)> eventIds)
         {
@@ -425,9 +416,10 @@ namespace Tests.FakeDataGen.StressTests
                     cmd.CommandText = @"
 IF NOT EXISTS (SELECT 1 FROM users WHERE user_name = @upn)
 BEGIN
-    INSERT INTO users (user_name, department_id, company_name_id, job_title_id,
+    INSERT INTO users (user_name, mail, azure_ad_id, account_enabled, postalcode,
+                       department_id, company_name_id, job_title_id,
                        state_or_province_id, country_or_region_id, office_location_id, usage_location_id)
-    SELECT @upn, d.id, c.id, j.id, s.id, co.id, o.id, u.id
+    SELECT @upn, @mail, @aad, @enabled, @postal, d.id, c.id, j.id, s.id, co.id, o.id, u.id
     FROM user_departments d, user_company_name c, user_job_titles j,
          user_state_or_province s, user_country_or_region co,
          user_office_locations o, user_usage_locations u
@@ -438,6 +430,10 @@ END
 ELSE
     SELECT 0;";
                     var pUpn = cmd.Parameters.Add("@upn", System.Data.SqlDbType.NVarChar, 400);
+                    var pMail = cmd.Parameters.Add("@mail", System.Data.SqlDbType.NVarChar, 400);
+                    var pAad = cmd.Parameters.Add("@aad", System.Data.SqlDbType.NVarChar, 400);
+                    var pEnabled = cmd.Parameters.Add("@enabled", System.Data.SqlDbType.Bit);
+                    var pPostal = cmd.Parameters.Add("@postal", System.Data.SqlDbType.NVarChar, 50);
                     var pDept = cmd.Parameters.Add("@dept", System.Data.SqlDbType.NVarChar, 100);
                     var pCompany = cmd.Parameters.Add("@company", System.Data.SqlDbType.NVarChar, 100);
                     var pJob = cmd.Parameters.Add("@job", System.Data.SqlDbType.NVarChar, 100);
@@ -450,14 +446,19 @@ ELSE
                     {
                         if (seenUsers.Add(ev.Upn))
                         {
+                            var profile = SeedDataCatalogue.NextUserProfile(random);
                             pUpn.Value = ev.Upn;
-                            pDept.Value = Departments[random.Next(Departments.Length)];
-                            pCompany.Value = Companies[random.Next(Companies.Length)];
-                            pJob.Value = JobTitles[random.Next(JobTitles.Length)];
-                            pState.Value = StatesOrProvinces[random.Next(StatesOrProvinces.Length)];
-                            pCountry.Value = Countries[random.Next(Countries.Length)];
-                            pOffice.Value = OfficeLocations[random.Next(OfficeLocations.Length)];
-                            pUsage.Value = UsageLocations[random.Next(UsageLocations.Length)];
+                            pMail.Value = ev.Upn;
+                            pAad.Value = Guid.NewGuid().ToString();
+                            pEnabled.Value = profile.AccountEnabled;
+                            pPostal.Value = string.IsNullOrEmpty(profile.PostalCode) ? (object)DBNull.Value : profile.PostalCode;
+                            pDept.Value = profile.Department;
+                            pCompany.Value = profile.Company;
+                            pJob.Value = profile.JobTitle;
+                            pState.Value = profile.StateOrProvince;
+                            pCountry.Value = profile.Country;
+                            pOffice.Value = profile.OfficeLocation;
+                            pUsage.Value = profile.UsageLocation;
                             var inserted = Convert.ToInt32(cmd.ExecuteScalar());
                             if (inserted == 1)
                             {
@@ -534,6 +535,10 @@ WHERE u.user_name = @upn;";
                         cmd.ExecuteNonQuery();
                     }
                 }
+
+                // Give these prerequisite users a realistic reporting hierarchy too (people report
+                // to a manager in their own company). Keyed on the shared "stressuser" UPN prefix.
+                UserMetadataSeeder.AssignManagers(conn, "stressuser", random);
             }
         }
 
@@ -547,7 +552,7 @@ WHERE u.user_name = @upn;";
         private static List<(string Upn, string AadId)> BuildUserCatalogue(int count)
         {
             var list = new List<(string, string)>(count);
-            for (int i = 0; i < count; i++) list.Add(($"stressuser{i}@contoso.com", Guid.NewGuid().ToString()));
+            for (int i = 0; i < count; i++) list.Add((SeedDataCatalogue.BuildUpn("stressuser", i), Guid.NewGuid().ToString()));
             return list;
         }
     }
