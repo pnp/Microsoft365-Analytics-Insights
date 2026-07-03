@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -12,7 +12,7 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
         public PageViewAppInsightsQueryResult() : base()
         {
         }
-        public PageViewAppInsightsQueryResult(List<object> rowColumnVals, Dictionary<int, PropertyInfo> propDic, ILogger debugTracer) : base(rowColumnVals, propDic)
+        public PageViewAppInsightsQueryResult(List<object> rowColumnVals, Dictionary<int, PropertyInfo> propDic, ILogger logger) : base(rowColumnVals, propDic)
         {
             if (string.IsNullOrEmpty(this.CustomDimensionsJson))
             {
@@ -26,11 +26,11 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
                 }
                 catch (JsonException)
                 {
-                    debugTracer.LogWarning($"Couldn't deserialise page-view custom event data: invalid Json (JsonException)");
+                    logger.LogWarning($"Couldn't deserialise page-view custom event data: invalid Json (JsonException)");
                 }
                 catch (ArgumentException)
                 {
-                    debugTracer.LogWarning($"Couldn't deserialise page-view custom event data: invalid Json (ArgumentException)");
+                    logger.LogWarning($"Couldn't deserialise page-view custom event data: invalid Json (ArgumentException)");
                 }
             }
         }

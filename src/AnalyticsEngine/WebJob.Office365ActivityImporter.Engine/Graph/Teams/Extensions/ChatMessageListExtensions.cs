@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
@@ -14,7 +14,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Generates stats where there aren't any already
         /// </summary>
-        public static async Task<List<MessageCognitiveStats>> GetMessagesStats(this List<ChannelWithReactions> channels, ILogger telemetry)
+        public static async Task<List<MessageCognitiveStats>> GetMessagesStats(this List<ChannelWithReactions> channels, ILogger logger)
         {
             var allStats = new List<MessageCognitiveStats>();
             if (channels is null)
@@ -24,7 +24,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             foreach (var channel in channels)
             {
-                var channelStats = await channel.Messages.GetCognitiveDataStats(telemetry, channel);
+                var channelStats = await channel.Messages.GetCognitiveDataStats(logger, channel);
                 allStats.AddRange(channelStats);
             }
 

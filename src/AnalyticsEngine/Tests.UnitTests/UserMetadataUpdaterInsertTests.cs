@@ -21,7 +21,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_InsertsNewUsersOnly()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var graphUsers = new List<GraphUser>
@@ -32,7 +32,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -68,7 +68,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_IgnoresUsersWithoutUPN()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var graphUsers = new List<GraphUser>
@@ -79,7 +79,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -103,7 +103,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_CaseInsensitiveUPNComparison()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var graphUsers = new List<GraphUser>
@@ -112,7 +112,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -133,7 +133,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_UpdatesUserMetadata()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -153,7 +153,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -183,7 +183,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_HandlesLargeNumberOfUsers()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var graphUsers = new List<GraphUser>();
@@ -198,7 +198,7 @@ namespace Tests.UnitTests
             }
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -221,10 +221,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_EmptyGraphUsersList_ReturnsEmpty()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -237,7 +237,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_InsertMissingUsers_AllUsersAlreadyExist_ReturnsEmpty()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var graphUsers = new List<GraphUser>
@@ -253,7 +253,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -266,7 +266,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_DuplicateUPNInGraphUsers_HandledGracefully()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -292,7 +292,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 

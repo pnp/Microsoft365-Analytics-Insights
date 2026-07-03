@@ -1,7 +1,6 @@
-﻿using Common.Entities;
 using Common.Entities.Config;
-using Common.Entities.Redis;
 using System.Collections.Generic;
+using System.Net;
 using System.Runtime.Caching;
 using System.Threading.Tasks;
 using System.Web.Mvc;
@@ -12,17 +11,14 @@ namespace Web.AnalyticsWeb.Controllers
     [Authorize]
     public class HomeController : Controller
     {
-        public async Task<ActionResult> Index()
+        // Root of the site. The whole admin experience (home/system status, Teams permissions,
+        // user lookup) is now the SPA, so "/" serves it. It's served through this [Authorize]'d
+        // action (rather than as a static file) so OIDC sign-in still gates access; the SPA then
+        // gets a Graph token via SiteTokenAPI. The system-status data the old home page rendered
+        // server-side now comes from api/SystemStatus.
+        public ActionResult Index()
         {
-            // Load most recent status
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                var appConfig = new AppConfig();
-                var cache = CacheConnectionManager.GetConnectionManager(appConfig.ConnectionStrings.RedisConnectionString, tenantId: appConfig.TenantGUID.ToString(), clientId: appConfig.ClientID, clientSecret: appConfig.ClientSecret);
-                var s = await SystemStatus.LoadFrom(db, cache);
-
-                return View(s);
-            }
+            return ServeAdminApp();
         }
 
         public async Task<ActionResult> Health()
@@ -35,36 +31,48 @@ namespace Web.AnalyticsWeb.Controllers
         {
             return View();
         }
+
+        // Back-compat aliases for the SPA's old URLs.
+        public ActionResult AdminApp()
+        {
+            return RedirectToAction("Index");
+        }
+
         public ActionResult TeamsAuthApp()
         {
-            // Inject content from react output
+            return RedirectToAction("Index");
+        }
+
+        /// <summary>
+        /// Serves the built admin SPA's index.html. The SPA's hashed JS/CSS assets referenced by
+        /// it are then loaded as ordinary static files under /Scripts/admin-app/build/.
+        /// </summary>
+        private ActionResult ServeAdminApp()
+        {
             var cache = MemoryCache.Default;
-            var fileContents = cache["filecontents"] as string;
+            var fileContents = cache["adminAppIndexHtml"] as string;
 
             if (fileContents == null)
             {
-                CacheItemPolicy policy = new CacheItemPolicy();
+                string indexFile = Server.MapPath("~/Scripts/admin-app/build/index.html");
 
-                List<string> filePaths = new List<string>();
-                string templateFile = Server.MapPath("~/Scripts/teams-permission-grant/build/index.html");
+                if (!System.IO.File.Exists(indexFile))
+                {
+                    return new HttpStatusCodeResult(HttpStatusCode.NotFound,
+                        "The admin app has not been built. Run 'npm run build' in Scripts/admin-app (or build the Web project).");
+                }
 
-                filePaths.Add(templateFile);
-
-                policy.ChangeMonitors.Add(new
-                HostFileChangeMonitor(filePaths));
-
-                // Fetch the file contents.  
-                fileContents = System.IO.File.ReadAllText(templateFile);
+                // Fetch the file contents.
+                fileContents = System.IO.File.ReadAllText(indexFile);
 
 #if !DEBUG
-                cache.Set("filecontents", fileContents, policy);
+                var policy = new CacheItemPolicy();
+                policy.ChangeMonitors.Add(new HostFileChangeMonitor(new List<string> { indexFile }));
+                cache.Set("adminAppIndexHtml", fileContents, policy);
 #endif
-
             }
 
-            this.ViewBag.Contents = fileContents;
-            return View();
+            return Content(fileContents, "text/html");
         }
-
     }
 }

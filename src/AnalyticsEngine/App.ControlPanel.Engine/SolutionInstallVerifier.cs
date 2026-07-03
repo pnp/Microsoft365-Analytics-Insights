@@ -1,4 +1,4 @@
-﻿using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager;
@@ -654,9 +654,9 @@ namespace App.ControlPanel.Engine
         {
             try
             {
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var auth = new ActivityAPIAppIndentityOAuthContext(telemetry, clientId, tenantId, clientSecret, null, false);
-                var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var auth = new ActivityAPIAppIndentityOAuthContext(logger, clientId, tenantId, clientSecret, null, false);
+                var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, logger);
                 // This will start an auth & activity subscription read, which will fail if error with account and/or permissions
                 var downloadSession = await ActivitySubscriptionManager.GetActiveSubscriptions(tenantId, _logger, httpClient);
             }
@@ -672,16 +672,16 @@ namespace App.ControlPanel.Engine
 
         async Task VerifyTeamsAndUserActivityImport(string clientId, string tenantId, string clientSecret)
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-            var auth = new GraphAppIndentityOAuthContext(telemetry, clientId, tenantId, clientSecret, null, false);
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var auth = new GraphAppIndentityOAuthContext(logger, clientId, tenantId, clientSecret, null, false);
             await auth.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(auth.Creds);
 
-            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, telemetry),
+            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, logger),
                 new NoUsersHaveGroupsUserGroupsCache(_logger),
                 new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
-                telemetry);
+                logger);
 
             // Usage reports
             if (Config.SolutionConfig.ImportTaskSettings.GraphUsageReports)

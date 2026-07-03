@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.ActivityReports;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -23,7 +23,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         where CACHETYPE : DBLookupCache<TLookupType>
     {
         protected readonly ManualGraphCallClient _client;
-        internal AbstractDailyActivityLoader(ManualGraphCallClient client, ILogger telemetry) : base(telemetry)
+        internal AbstractDailyActivityLoader(ManualGraphCallClient client, ILogger logger) : base(logger)
         {
             _client = client;
         }

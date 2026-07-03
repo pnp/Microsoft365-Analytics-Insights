@@ -91,7 +91,7 @@ namespace Tests.FakeDataGen.StressTests
                 _memoryMonitor.UpdatePeak();
 
                 // 2) Build importer wired up with the fake loader + sentiment scorer.
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
                 var appConfig = FakeAppConfigFactory.Create();
                 var fakeLoader = new FakeSentEmailSourceLoader(
                     messagesPerUser: messagesPerUser,
@@ -107,7 +107,7 @@ namespace Tests.FakeDataGen.StressTests
                     : NullSentEmailSentimentScorer.Instance;
 
                 var importer = new SentEmailImporter(
-                    telemetry,
+                    logger,
                     appConfig,
                     fakeLoader,
                     sentimentScorer,
@@ -182,21 +182,21 @@ namespace Tests.FakeDataGen.StressTests
             // or job title is empty. Uses the same idempotent helper and catalogue as the other
             // stress tests so all of them populate identical metadata.
             var random = new Random(123);
-            List<int> departmentIds, jobTitleIds, companyIds, stateIds, countryIds, officeIds, usageIds;
+            Dictionary<string, int> departments, jobTitles, companies, states, countries, offices, usages;
             using (var conn = new SqlConnection(connectionString))
             {
                 conn.Open();
                 UserMetadataSeeder.EnsureMetadataLookups(conn);
-                departmentIds = UserMetadataSeeder.LoadLookupIds(conn, "user_departments");
-                jobTitleIds = UserMetadataSeeder.LoadLookupIds(conn, "user_job_titles");
-                companyIds = UserMetadataSeeder.LoadLookupIds(conn, "user_company_name");
-                stateIds = UserMetadataSeeder.LoadLookupIds(conn, "user_state_or_province");
-                countryIds = UserMetadataSeeder.LoadLookupIds(conn, "user_country_or_region");
-                officeIds = UserMetadataSeeder.LoadLookupIds(conn, "user_office_locations");
-                usageIds = UserMetadataSeeder.LoadLookupIds(conn, "user_usage_locations");
+                departments = UserMetadataSeeder.LoadLookupIdsByName(conn, "user_departments");
+                jobTitles = UserMetadataSeeder.LoadLookupIdsByName(conn, "user_job_titles");
+                companies = UserMetadataSeeder.LoadLookupIdsByName(conn, "user_company_name");
+                states = UserMetadataSeeder.LoadLookupIdsByName(conn, "user_state_or_province");
+                countries = UserMetadataSeeder.LoadLookupIdsByName(conn, "user_country_or_region");
+                offices = UserMetadataSeeder.LoadLookupIdsByName(conn, "user_office_locations");
+                usages = UserMetadataSeeder.LoadLookupIdsByName(conn, "user_usage_locations");
             }
-            Console.WriteLine($"  Metadata lookups ready ({departmentIds.Count} departments, " +
-                              $"{jobTitleIds.Count} job titles) - assigning random metadata to seeded users.");
+            Console.WriteLine($"  Metadata lookups ready ({departments.Count} departments, " +
+                              $"{jobTitles.Count} job titles) - assigning coherent metadata to seeded users.");
 
             using (var db = dbFactory())
             {
@@ -215,22 +215,25 @@ namespace Tests.FakeDataGen.StressTests
 
                 for (int i = 0; i < userCount; i++)
                 {
-                    var upn = $"stress-user{i:D6}@stress.local";
+                    var upn = SeedDataCatalogue.BuildUpn("stress-user", i);
                     if (existingSet.Contains(upn))
                         continue;
 
+                    var profile = SeedDataCatalogue.NextUserProfile(random);
                     pending.Add(new User
                     {
                         UserPrincipalName = upn,
                         Mail = upn,
                         AzureAdId = Guid.NewGuid().ToString(),
-                        DepartmentId = PickOrNull(departmentIds, random),
-                        JobTitleId = PickOrNull(jobTitleIds, random),
-                        CompanyNameId = PickOrNull(companyIds, random),
-                        StateOrProvinceId = PickOrNull(stateIds, random),
-                        UserCountryId = PickOrNull(countryIds, random),
-                        OfficeLocationId = PickOrNull(officeIds, random),
-                        UsageLocationId = PickOrNull(usageIds, random)
+                        AccountEnabled = profile.AccountEnabled,
+                        PostalCode = profile.PostalCode ?? string.Empty,
+                        DepartmentId = LookupOrNull(departments, profile.Department),
+                        JobTitleId = LookupOrNull(jobTitles, profile.JobTitle),
+                        CompanyNameId = LookupOrNull(companies, profile.Company),
+                        StateOrProvinceId = LookupOrNull(states, profile.StateOrProvince),
+                        UserCountryId = LookupOrNull(countries, profile.Country),
+                        OfficeLocationId = LookupOrNull(offices, profile.OfficeLocation),
+                        UsageLocationId = LookupOrNull(usages, profile.UsageLocation)
                     });
 
                     if (pending.Count >= batch)
@@ -254,6 +257,14 @@ namespace Tests.FakeDataGen.StressTests
                 }
             }
 
+            // Build a realistic reporting hierarchy across the seeded users (managers are in the
+            // same company). Keyed on the "stress-user" prefix so it spans every domain used above.
+            using (var conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+                UserMetadataSeeder.AssignManagers(conn, "stress-user", random);
+            }
+
             sw.Stop();
             Console.WriteLine($"  Seeded {inserted:N0} new users in {sw.ElapsedMilliseconds:N0}ms " +
                               $"(existing stress users left untouched).");
@@ -266,13 +277,14 @@ namespace Tests.FakeDataGen.StressTests
         }
 
         /// <summary>
-        /// Picks a random id from a lookup id list, or null when the list is empty so the user's
-        /// FK column is left NULL rather than pointing at a non-existent row.
+        /// Resolves a metadata id from a coherent profile's value via a name -&gt; id map, or null
+        /// when the value isn't present so the user's FK column is left NULL rather than pointing
+        /// at a non-existent row.
         /// </summary>
-        private static int? PickOrNull(IList<int> ids, Random random)
+        private static int? LookupOrNull(Dictionary<string, int> map, string name)
         {
-            if (ids == null || ids.Count == 0) return null;
-            return ids[random.Next(ids.Count)];
+            if (name != null && map.TryGetValue(name, out var id)) return id;
+            return null;
         }
 
         private static long CountStressRows(Func<AnalyticsEntitiesContext> dbFactory)
@@ -370,8 +382,8 @@ namespace Tests.FakeDataGen.StressTests
                     "INNER JOIN sent_emails s ON s.id = r.sent_email_id " +
                     "WHERE s.graph_message_id LIKE 'stress-msg-%'");
                 db.Database.ExecuteSqlCommand("DELETE FROM sent_emails WHERE graph_message_id LIKE 'stress-msg-%'");
-                db.Database.ExecuteSqlCommand("DELETE FROM email_addresses WHERE address LIKE '%@stress.local' OR address LIKE 'recipient-%'");
-                db.Database.ExecuteSqlCommand("DELETE FROM users WHERE user_name LIKE 'stress-user%@stress.local'");
+                db.Database.ExecuteSqlCommand("DELETE FROM email_addresses WHERE address LIKE 'stress-user%' OR address LIKE 'recipient-%'");
+                db.Database.ExecuteSqlCommand("DELETE FROM users WHERE user_name LIKE 'stress-user%'");
             }
             sw.Stop();
             Console.WriteLine($"  Deleted in {sw.ElapsedMilliseconds:N0}ms.");
