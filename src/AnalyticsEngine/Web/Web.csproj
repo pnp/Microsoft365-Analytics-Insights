@@ -187,6 +187,7 @@
     <Compile Include="Controllers\CallRecordWebhookController.cs" />
     <Compile Include="Controllers\HomeController.cs" />
     <Compile Include="Controllers\SiteTokenAPIController.cs" />
+    <Compile Include="Controllers\HealthAPIController.cs" />
     <Compile Include="Controllers\SystemStatusAPIController.cs" />
     <Compile Include="Controllers\TeamsAuthAPIController.cs" />
     <Compile Include="Controllers\UserDataLookupAPIController.cs" />
@@ -213,7 +214,6 @@
     <Content Include="Views\Web.config" />
     <Content Include="Views\_ViewStart.cshtml" />
     <Content Include="Views\Account\CredentialsInvalid.cshtml" />
-    <Content Include="Views\Home\Health.cshtml" />
     <None Include="Properties\PublishProfiles\SPOInsightsDemoTeams - Web Deploy.pubxml" />
     <Content Include="Views\Home\YammerAuth.cshtml" />
     <Content Include="Web.config" />

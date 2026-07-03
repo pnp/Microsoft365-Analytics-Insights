@@ -19,6 +19,7 @@ const TeamsPermissionsPage = lazy(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazy(() => import('./pages/UserLookupPage'));
 const ProfilingStatusPage = lazy(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazy(() => import('./pages/InstallLogPage'));
+const HealthPage = lazy(() => import('./pages/HealthPage'));
 
 const useStyles = makeStyles({
   header: {
@@ -66,7 +67,9 @@ export default function App() {
         ? 'profiling'
         : location.pathname.startsWith('/install-log')
           ? 'install-log'
-          : 'home';
+          : location.pathname.startsWith('/health')
+            ? 'health'
+            : 'home';
 
   const onTabSelect: SelectTabEventHandler = (_event, data) => {
     navigate(`/${data.value}`);
@@ -99,6 +102,7 @@ export default function App() {
           <Tab value="user-lookup">User Data Lookup</Tab>
           <Tab value="profiling">Profiling</Tab>
           <Tab value="install-log">Install Log</Tab>
+          <Tab value="health">Health</Tab>
         </TabList>
       </div>
 
@@ -117,6 +121,7 @@ export default function App() {
             <Route path="/user-lookup" element={<UserLookupPage />} />
             <Route path="/profiling" element={<ProfilingStatusPage />} />
             <Route path="/install-log" element={<InstallLogPage />} />
+            <Route path="/health" element={<HealthPage />} />
             <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>
         </Suspense>

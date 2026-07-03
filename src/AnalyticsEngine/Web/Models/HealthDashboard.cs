@@ -3,6 +3,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.AppInsights;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -28,57 +29,57 @@ namespace Web.AnalyticsWeb.Models
         private const string CacheKey = "healthdashboard:v1";
         public const int CacheSeconds = 60;
 
+        [JsonProperty("buildLabel")]
         public string BuildLabel { get; set; }
+
+        [JsonProperty("loadedAtUtc")]
         public DateTime LoadedAtUtc { get; set; } = DateTime.UtcNow;
 
         /// <summary>False when no App Insights connection string is configured - the AI-backed cards are then unavailable.</summary>
+        [JsonProperty("appInsightsConfigured")]
         public bool AppInsightsConfigured { get; set; }
 
         // --- Component health card ---
+        [JsonProperty("componentHealth")]
         public List<ComponentHealthRow> ComponentHealth { get; set; } = new List<ComponentHealthRow>();
+        [JsonProperty("componentHealthError")]
         public string ComponentHealthError { get; set; }
 
         // --- Import liveness card ---
+        [JsonProperty("lastCyclePerJob")]
         public List<ImportCycleRow> LastCyclePerJob { get; set; } = new List<ImportCycleRow>();
+        [JsonProperty("lastSectionImports")]
         public List<SectionImportRow> LastSectionImports { get; set; } = new List<SectionImportRow>();
+        [JsonProperty("lastHeartbeats")]
         public List<HeartbeatRow> LastHeartbeats { get; set; } = new List<HeartbeatRow>();
+        [JsonProperty("livenessError")]
         public string LivenessError { get; set; }
 
         // --- Exceptions overview card ---
+        [JsonProperty("exceptionsLast24h")]
         public long ExceptionsLast24h { get; set; }
+        [JsonProperty("exceptionsPerHour")]
         public List<HourCount> ExceptionsPerHour { get; set; } = new List<HourCount>();
+        [JsonProperty("topExceptionTypes")]
         public List<ExceptionTypeRow> TopExceptionTypes { get; set; } = new List<ExceptionTypeRow>();
+        [JsonProperty("exceptionsError")]
         public string ExceptionsError { get; set; }
 
         // --- Data overview card (SQL) ---
+        [JsonProperty("hitCount")]
         public int HitCount { get; set; }
+        [JsonProperty("activityCount")]
         public int ActivityCount { get; set; }
+        [JsonProperty("teamsCount")]
         public int TeamsCount { get; set; }
+        [JsonProperty("teamsBeingTrackedCount")]
         public int TeamsBeingTrackedCount { get; set; }
+        [JsonProperty("newestHitUtc")]
         public DateTime? NewestHitUtc { get; set; }
+        [JsonProperty("newestAuditEventUtc")]
         public DateTime? NewestAuditEventUtc { get; set; }
+        [JsonProperty("dataError")]
         public string DataError { get; set; }
-
-        /// <summary>Whole-cycle SLA: a full activity import cycle should complete at least once every 24h.</summary>
-        public const int CycleSlaHours = 24;
-
-        /// <summary>Minutes since a UTC timestamp, or null when the timestamp is null.</summary>
-        public static double? MinutesAgo(DateTime? utc)
-        {
-            if (!utc.HasValue) return null;
-            return (DateTime.UtcNow - DateTime.SpecifyKind(utc.Value, DateTimeKind.Utc)).TotalMinutes;
-        }
-
-        /// <summary>Human-readable "N min/hours/days ago" for a UTC timestamp.</summary>
-        public static string HowLongAgo(DateTime? utc)
-        {
-            var mins = MinutesAgo(utc);
-            if (!mins.HasValue) return "never";
-            if (mins.Value < 1) return "just now";
-            if (mins.Value < 60) return $"{Math.Round(mins.Value)} min ago";
-            if (mins.Value < 60 * 24) return $"{Math.Round(mins.Value / 60, 1)} hours ago";
-            return $"{Math.Round(mins.Value / 60 / 24, 1)} days ago";
-        }
 
         internal static async Task<HealthDashboard> LoadFrom(AppConfig config)
         {
@@ -108,14 +109,17 @@ namespace Web.AnalyticsWeb.Models
                     TeamsCount = await db.Teams.CountAsync();
                     TeamsBeingTrackedCount = await db.Teams.Where(t => t.HasRefreshToken).CountAsync();
 
-                    NewestHitUtc = await db.hits
+                    var newestHit = await db.hits
                         .OrderByDescending(h => h.hit_timestamp)
                         .Select(h => (DateTime?)h.hit_timestamp)
                         .FirstOrDefaultAsync();
-                    NewestAuditEventUtc = await db.AuditEventsCommon
+                    NewestHitUtc = newestHit.HasValue ? DateTime.SpecifyKind(newestHit.Value, DateTimeKind.Utc) : (DateTime?)null;
+
+                    var newestAudit = await db.AuditEventsCommon
                         .OrderByDescending(e => e.TimeStamp)
                         .Select(e => (DateTime?)e.TimeStamp)
                         .FirstOrDefaultAsync();
+                    NewestAuditEventUtc = newestAudit.HasValue ? DateTime.SpecifyKind(newestAudit.Value, DateTimeKind.Utc) : (DateTime?)null;
                 }
             }
             catch (Exception ex)
@@ -308,46 +312,67 @@ namespace Web.AnalyticsWeb.Models
 
     public class ComponentHealthRow
     {
+        [JsonProperty("component")]
         public string Component { get; set; }
+        [JsonProperty("status")]
         public string Status { get; set; }
+        [JsonProperty("detail")]
         public string Detail { get; set; }
+        [JsonProperty("daysToExpiry")]
         public int? DaysToExpiry { get; set; }
+        [JsonProperty("lastSeenUtc")]
         public DateTime? LastSeenUtc { get; set; }
     }
 
     public class ImportCycleRow
     {
+        [JsonProperty("jobName")]
         public string JobName { get; set; }
+        [JsonProperty("lastCycleUtc")]
         public DateTime? LastCycleUtc { get; set; }
+        [JsonProperty("duration")]
         public string Duration { get; set; }
     }
 
     public class SectionImportRow
     {
+        [JsonProperty("sectionName")]
         public string SectionName { get; set; }
+        [JsonProperty("lastRunUtc")]
         public DateTime? LastRunUtc { get; set; }
+        [JsonProperty("detail")]
         public string Detail { get; set; }
+        [JsonProperty("jobName")]
         public string JobName { get; set; }
     }
 
     public class HeartbeatRow
     {
+        [JsonProperty("jobName")]
         public string JobName { get; set; }
+        [JsonProperty("lastBeatUtc")]
         public DateTime? LastBeatUtc { get; set; }
+        [JsonProperty("lastCycleUtc")]
         public string LastCycleUtc { get; set; }
+        [JsonProperty("lastCycleDurationSeconds")]
         public string LastCycleDurationSeconds { get; set; }
     }
 
     public class HourCount
     {
+        [JsonProperty("hourUtc")]
         public DateTime? HourUtc { get; set; }
+        [JsonProperty("count")]
         public long Count { get; set; }
     }
 
     public class ExceptionTypeRow
     {
+        [JsonProperty("type")]
         public string Type { get; set; }
+        [JsonProperty("problemId")]
         public string ProblemId { get; set; }
+        [JsonProperty("count")]
         public long Count { get; set; }
     }
 }
