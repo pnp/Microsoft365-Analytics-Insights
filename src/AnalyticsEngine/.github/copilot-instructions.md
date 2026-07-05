@@ -1,5 +1,8 @@
 # Copilot Instructions
 
+## Sensitive & customer data handling (read first)
+- **Never** put real customer/tenant/environment data — including anything obtained by analysing a database, external system, or "example"/sample data (DB names, tenant/org/agent GUIDs, agent/user names, URLs, paths, row counts, raw payloads) — into source, tests, commit messages, PRs, issues, screenshots, or documentation. Use synthetic substitutes (`Contoso`, zeroed GUIDs) and **always double-check the diff before committing/pushing**. See the repo-wide policy in [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md).
+
 ## Git workflow
 - Never commit. Never push. Make file changes only.
 - Wait for the user to explicitly say "commit", "commit and push", or similar before running any `git commit` / `git push`. "Commit and push" given for one change does not extend to subsequent changes — ask again each time.

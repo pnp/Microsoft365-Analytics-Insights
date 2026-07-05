@@ -2,6 +2,16 @@
 
 This repository contains multiple workloads (the C# AnalyticsEngine solution, SharePoint trackers, deployment assets, reports, etc.). Workload-specific guidance lives next to each workload.
 
+## Sensitive & customer data handling (read first)
+
+This is a **public** repository (part of a multi-fork network). Anything pushed is effectively permanent and world-readable, and a force-push does **not** remove it — orphaned commits stay reachable by SHA until GitHub Support purges them. So the bar is: never let real data in, and always double-check before it leaves your machine.
+
+- **Never** put real customer, tenant, or environment data anywhere in this repo or its public surface — source, tests, commit messages, PR titles/descriptions, issues, screenshots, and **all public documentation (README, wiki, samples, reports)**.
+- This explicitly includes **anything obtained by analysing a database, external/production system, or "example"/sample data**: real database names, tenant/organization/agent GUIDs, agent or user display names, SharePoint/OneDrive URLs and paths, file names, row counts, and raw payloads. If you queried a real DB or inspected a real payload to understand a bug, **do not** paste those values into code, tests, commit messages, or docs — reproduce the *shape*, not the data.
+- **Always use synthetic substitutes**: `Contoso`, zeroed GUIDs (`00000000-0000-0000-0000-000000000000`), obviously-fake names/URLs, and rounded/made-up counts.
+- **Always double-check before you commit, push, or publish.** Re-scan the full diff *and* any new/edited documentation for real names, GUIDs, DB names, URLs, counts, and payloads. When in doubt, ask before committing.
+- If real data does reach a public location, treat it as **compromised**: flag it immediately so history can be rewritten and a GitHub Support purge requested (a force-push alone is not enough).
+
 ## C# / AnalyticsEngine
 
 For all work inside `src/AnalyticsEngine/` (the C# solution, web-jobs, installer, Common libraries and tests), follow the conventions in:
