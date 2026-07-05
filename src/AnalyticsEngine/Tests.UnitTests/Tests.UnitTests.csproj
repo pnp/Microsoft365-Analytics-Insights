@@ -139,6 +139,7 @@
     <Compile Include="TestsAppConfig.cs" />
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="AppInsightsQueryTableTests.cs" />
+    <Compile Include="HealthRollupTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
     <Compile Include="AuditTests.cs" />
     <Compile Include="AddAuditEventsOperationIndexMigrationTests.cs" />
