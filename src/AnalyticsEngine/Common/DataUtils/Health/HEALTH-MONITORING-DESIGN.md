@@ -52,9 +52,28 @@ Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing
 - **Web Health tab (in the admin SPA)** — a new `Health` tab in the React admin-app
   (`Scripts/admin-app/src/pages/HealthPage.tsx` + `api/healthApi.ts` + `types/health.ts`, routed in
   `App.tsx`), backed by a new `api/Health` endpoint (`HealthAPIController` → `Web/Models/HealthDashboard.cs`,
-  a best-effort, 60 s-cached JSON aggregation). The import-liveness, exceptions-overview and
-  data-freshness cards are populated **today** from the existing custom events / SQL; the component-health
-  card degrades gracefully (empty by design) until the runtime `HealthCheck` emitter lands.
+  a best-effort, 60 s-cached, cache-stampede-guarded JSON aggregation). It auto-refreshes every 60 s and
+  leads with a single **overall traffic-light** (rolled up by the pure, unit-tested
+  `DataUtils.Health.HealthRollup`). Cards:
+  - **Import liveness** — `FinishedImportCycle` per job, `FinishedSectionImport` per section,
+    `ImporterHeartbeat` (when it lands), **plus a web-tracker `pageViews`-in-App-Insights probe** that tells
+    a "tracker not deployed" apart from an "AppInsightsImporter not running".
+  - **Exceptions overview** — 24 h total, a **zero-filled 24-bar** per-hour sparkline, top types, and a
+    dedicated **SQL capacity / read-only** sub-count (count only — no message text is surfaced).
+  - **Component health** — populated **today** for the two proactive checks the web app can run itself: the
+    runtime **credential expiry** (certificate `NotAfter` → days-to-expiry; a client secret's expiry isn't
+    visible at runtime) and the **Service Bus** Teams-calls queue depth / dead-letter count. SQL, Activity
+    API, Graph, Key Vault, Redis and DNS fill in as the runtime `HealthCheck` emitter lands.
+  - **Data overview** — **scale-safe**: approximate row counts per workload (from
+    `sys.dm_db_partition_stats`, so a 200k-user tenant is never hit with `COUNT(*)` on fact tables),
+    last-24 h / last-7 d volume on the indexed audit + hits tables, newest audit/hit freshness, and DB size.
+  - **Configuration** — enabled imports, resource endpoints, the Teams call-records **webhook subscription
+    state + expiry** (reusing the homepage `SystemStatus` logic), and the **schema/migration version**
+    (`DbMigrator.GetPendingMigrations()` → "up to date with this build" vs "N pending — DB behind build").
+
+  All App-Insights-backed queries authenticate with the app's existing Entra credential **honouring
+  certificate auth** (`UseClientCertificate` → `ClientCertificateCredential`), not a hard-coded client
+  secret, so the AI cards work on certificate-based installs too.
 - **Alert-setup guide** — the repeatable "add an alert" procedure plus the health-telemetry rules are
   published to the wiki's
   [Health Alerts](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Health-Alerts) page.

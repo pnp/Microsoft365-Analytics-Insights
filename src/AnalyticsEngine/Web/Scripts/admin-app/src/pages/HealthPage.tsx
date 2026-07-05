@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
+  Button,
   Card,
   CardHeader,
   Title3,
@@ -18,13 +19,14 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { fetchHealth } from '../api/healthApi';
-import type { HealthDashboard } from '../types/health';
+import type { HealthDashboard, HourCount } from '../types/health';
 import Spinner from '../components/Spinner';
 
 type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'subtle';
 
 // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).
 const CYCLE_SLA_HOURS = 24;
+const AUTO_REFRESH_MS = 60_000;
 
 function minutesAgo(iso: string | null): number | null {
   if (!iso) return null;
@@ -64,6 +66,19 @@ function statusColor(status: string | null): BadgeColor {
   }
 }
 
+function overallColor(status: string | null): BadgeColor {
+  switch ((status ?? '').toLowerCase()) {
+    case 'healthy':
+      return 'success';
+    case 'degraded':
+      return 'warning';
+    case 'unhealthy':
+      return 'danger';
+    default:
+      return 'informative';
+  }
+}
+
 function formatUtc(iso: string | null): string {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -71,7 +86,39 @@ function formatUtc(iso: string | null): string {
   return `${d.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
 }
 
+function formatSize(mb: number): string {
+  if (!mb || mb <= 0) return '-';
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${mb.toLocaleString()} MB`;
+}
+
+// KQL summarize-by-bin omits empty hours, so pad to a full 24-bar series for a readable sparkline.
+function buildHourBuckets(perHour: HourCount[]): { hourUtc: string; count: number }[] {
+  const byHour = new Map<number, number>();
+  for (const h of perHour) {
+    if (!h.hourUtc) continue;
+    const t = new Date(h.hourUtc);
+    if (Number.isNaN(t.getTime())) continue;
+    t.setUTCMinutes(0, 0, 0);
+    byHour.set(t.getTime(), (byHour.get(t.getTime()) ?? 0) + h.count);
+  }
+  const now = new Date();
+  now.setUTCMinutes(0, 0, 0);
+  const buckets: { hourUtc: string; count: number }[] = [];
+  for (let i = 23; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 3_600_000);
+    buckets.push({ hourUtc: d.toISOString(), count: byHour.get(d.getTime()) ?? 0 });
+  }
+  return buckets;
+}
+
 const useStyles = makeStyles({
+  headerRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    flexWrap: 'wrap',
+  },
   cards: {
     display: 'flex',
     flexDirection: 'column',
@@ -99,6 +146,17 @@ const useStyles = makeStyles({
     display: 'block',
     marginTop: '8px',
   },
+  reasons: {
+    marginTop: '8px',
+    marginBottom: 0,
+    paddingLeft: '20px',
+  },
+  chips: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginTop: '4px',
+  },
 });
 
 export default function HealthPage() {
@@ -106,23 +164,36 @@ export default function HealthPage() {
   const [data, setData] = useState<HealthDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const d = await fetchHealth();
+      setData(d);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load system health.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    fetchHealth()
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load system health.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const tick = async () => {
+      if (cancelled) return;
+      await load();
+    };
+    tick();
+    // Auto-refresh so this can be left open as a "green board". The API is cached ~60s server-side.
+    const id = window.setInterval(tick, AUTO_REFRESH_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
-  }, []);
+  }, [load]);
 
   if (loading) {
     return (
@@ -140,23 +211,44 @@ export default function HealthPage() {
     );
   }
 
-  const maxHourCount = Math.max(1, ...data.exceptionsPerHour.map((h) => h.count));
+  const hourBuckets = buildHourBuckets(data.exceptionsPerHour);
+  const maxHourCount = Math.max(1, ...hourBuckets.map((h) => h.count));
 
   return (
     <div>
-      <Title3 block>System Health - {data.buildLabel}</Title3>
+      <div className={styles.headerRow}>
+        <Title3>System Health - {data.buildLabel}</Title3>
+        <Badge appearance="filled" size="large" color={overallColor(data.overallStatus)}>
+          {data.overallStatus}
+        </Badge>
+        <Button size="small" appearance="secondary" disabled={refreshing} onClick={() => void load()}>
+          {refreshing ? 'Refreshing...' : 'Refresh'}
+        </Button>
+      </div>
+
       <Text className={styles.desc} style={{ marginTop: 8 }}>
         A single "is it working?" view. All values are read-only and best-effort - a data-source hiccup greys out one
-        card, it never breaks the page. Data is cached for ~60s (loaded {formatUtc(data.loadedAtUtc)}). This complements
-        the Azure Monitor alert rules (which push when something breaks) - it's the at-a-glance green board.
+        card, it never breaks the page. Auto-refreshes every 60s (cached server-side; loaded {formatUtc(data.loadedAtUtc)}).
+        This complements the Azure Monitor alert rules (which push when something breaks) - it's the at-a-glance green board.
       </Text>
+
+      {data.overallReasons.length > 0 && (
+        <ul className={styles.reasons}>
+          {data.overallReasons.map((r, i) => (
+            <li key={i}>
+              <Text size={200}>{r}</Text>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {!data.appInsightsConfigured && (
         <div style={{ marginTop: 12 }}>
           <MessageBar intent="warning">
             <MessageBarBody>
               Application Insights is not configured for this web app, so the Import liveness, Exceptions and
-              Component-health cards are unavailable. The Data overview card (from SQL) still works.
+              Component-health (App Insights) cards are unavailable. The Data overview, Configuration and runtime
+              credential / Service Bus checks still work.
             </MessageBarBody>
           </MessageBar>
         </div>
@@ -213,6 +305,18 @@ export default function HealthPage() {
                   <MessageBarBody>No FinishedImportCycle events in the retention window yet.</MessageBarBody>
                 </MessageBar>
               )}
+
+              <Text className={styles.subHeading}>Web tracker (pageViews in App Insights, last 24h)</Text>
+              <div>
+                <Badge appearance="filled" color={data.pageViewsLast24h > 0 ? 'success' : 'warning'}>
+                  {data.pageViewsLast24h.toLocaleString()} pageViews
+                </Badge>{' '}
+                <Text size={200}>
+                  {data.pageViewsLast24h > 0
+                    ? `last seen ${howLongAgo(data.newestPageViewUtc)}`
+                    : 'none - the web tracker may not be deployed on the site, or is not sending to App Insights'}
+                </Text>
+              </div>
 
               <Text className={styles.subHeading}>Last run per section</Text>
               {data.lastSectionImports.length > 0 ? (
@@ -306,38 +410,45 @@ export default function HealthPage() {
                 <Text>exceptions in the last 24 hours</Text>
               </div>
 
-              {data.exceptionsPerHour.length > 0 && (
-                <>
-                  <Text className={styles.subHeading}>Per hour</Text>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'flex-end',
-                      height: '90px',
-                      gap: '2px',
-                      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-                      marginBottom: '12px',
-                    }}
-                  >
-                    {data.exceptionsPerHour.map((h, i) => {
-                      const pct = Math.round((100 * h.count) / maxHourCount);
-                      const label = `${h.hourUtc ? new Date(h.hourUtc).toISOString().slice(11, 16) : '?'} UTC: ${h.count}`;
-                      return (
-                        <div
-                          key={h.hourUtc ?? i}
-                          title={label}
-                          style={{
-                            flex: 1,
-                            minWidth: '4px',
-                            height: `${Math.max(pct, 2)}%`,
-                            backgroundColor: h.count > 0 ? '#c50f1f' : '#e0e0e0',
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                </>
+              {data.sqlCapacityExceptions24h > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      {data.sqlCapacityExceptions24h.toLocaleString()} of these look like SQL capacity / read-only
+                      failures - check the database storage / edition. This usually means data has stopped being written.
+                    </MessageBarBody>
+                  </MessageBar>
+                </div>
               )}
+
+              <Text className={styles.subHeading}>Per hour</Text>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  height: '90px',
+                  gap: '2px',
+                  borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+                  marginBottom: '12px',
+                }}
+              >
+                {hourBuckets.map((h, i) => {
+                  const pct = Math.round((100 * h.count) / maxHourCount);
+                  const label = `${h.hourUtc ? new Date(h.hourUtc).toISOString().slice(11, 16) : '?'} UTC: ${h.count}`;
+                  return (
+                    <div
+                      key={h.hourUtc ?? i}
+                      title={label}
+                      style={{
+                        flex: 1,
+                        minWidth: '4px',
+                        height: `${Math.max(pct, 2)}%`,
+                        backgroundColor: h.count > 0 ? '#c50f1f' : '#e0e0e0',
+                      }}
+                    />
+                  );
+                })}
+              </div>
 
               <Text className={styles.subHeading}>Top exception types</Text>
               {data.topExceptionTypes.length > 0 ? (
@@ -374,107 +485,257 @@ export default function HealthPage() {
         <Card>
           <CardHeader header={<Subtitle2>Component health</Subtitle2>} />
           <Text className={styles.desc}>
-            Latest runtime HealthCheck per component (SQL, Activity API, Graph, Key Vault, Redis, Service Bus, runtime
-            credential, DNS), including the credential days-to-expiry warning.
+            Latest health per component. The runtime credential (expiry) and Service Bus (Teams calls queue) checks run
+            here today; SQL, Activity API, Graph, Key Vault, Redis and DNS fill in as the runtime HealthCheck emitter
+            (a later phase) lands.
           </Text>
 
           {data.componentHealthError ? (
             <MessageBar intent="warning">
               <MessageBarBody>Couldn't load component health: {data.componentHealthError}</MessageBarBody>
             </MessageBar>
-          ) : data.appInsightsConfigured ? (
-            data.componentHealth.length > 0 ? (
-              <Table size="small" aria-label="Component health">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Component</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Detail</TableHeaderCell>
-                    <TableHeaderCell>Days to expiry</TableHeaderCell>
-                    <TableHeaderCell>Last checked</TableHeaderCell>
+          ) : data.componentHealth.length > 0 ? (
+            <Table size="small" aria-label="Component health">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Component</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Detail</TableHeaderCell>
+                  <TableHeaderCell>Days to expiry</TableHeaderCell>
+                  <TableHeaderCell>Last checked</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.componentHealth.map((c, i) => (
+                  <TableRow key={(c.component ?? '') + i}>
+                    <TableCell>{c.component}</TableCell>
+                    <TableCell>
+                      <Badge appearance="filled" color={statusColor(c.status)}>
+                        {c.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Text size={200}>{c.detail}</Text>
+                    </TableCell>
+                    <TableCell>{c.daysToExpiry ?? ''}</TableCell>
+                    <TableCell>
+                      <Text size={200}>{howLongAgo(c.lastSeenUtc)}</Text>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.componentHealth.map((c, i) => (
-                    <TableRow key={(c.component ?? '') + i}>
-                      <TableCell>{c.component}</TableCell>
-                      <TableCell>
-                        <Badge appearance="filled" color={statusColor(c.status)}>
-                          {c.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Text size={200}>{c.detail}</Text>
-                      </TableCell>
-                      <TableCell>{c.daysToExpiry ?? ''}</TableCell>
-                      <TableCell>
-                        <Text size={200}>{howLongAgo(c.lastSeenUtc)}</Text>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <MessageBar intent="info">
-                <MessageBarBody>
-                  No HealthCheck telemetry yet. Runtime health checks are emitted by a later phase (the independent-timer
-                  heartbeat host). Until then this card is empty by design - use Import liveness and Exceptions above,
-                  which are populated today.
-                </MessageBarBody>
-              </MessageBar>
-            )
-          ) : null}
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <MessageBar intent="info">
+              <MessageBarBody>No component health available yet.</MessageBarBody>
+            </MessageBar>
+          )}
         </Card>
 
         {/* Data overview */}
         <Card>
           <CardHeader header={<Subtitle2>Data overview</Subtitle2>} />
-          <Text className={styles.desc}>Row counts and freshness straight from the database.</Text>
+          <Text className={styles.desc}>
+            Volume and freshness from the database. Row counts are approximate (read from index metadata, so a large
+            tenant isn't hit with a COUNT(*) on every load); "last 24h / 7d" show what's actually flowing in.
+          </Text>
 
           {data.dataError ? (
             <MessageBar intent="warning">
               <MessageBarBody>Couldn't load data overview: {data.dataError}</MessageBarBody>
             </MessageBar>
           ) : (
-            <Table size="small" aria-label="Data overview">
-              <TableBody>
-                <TableRow>
-                  <TableCell>Hits</TableCell>
-                  <TableCell>{data.hitCount.toLocaleString()}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Activity imports (audit events)</TableCell>
-                  <TableCell>{data.activityCount.toLocaleString()}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Teams discovered</TableCell>
-                  <TableCell>{data.teamsCount.toLocaleString()}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Teams with tracking enabled</TableCell>
-                  <TableCell>{data.teamsBeingTrackedCount.toLocaleString()}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Newest hit</TableCell>
-                  <TableCell>
-                    {formatUtc(data.newestHitUtc)}{' '}
-                    <Badge appearance="filled" color={freshnessColor(data.newestHitUtc, CYCLE_SLA_HOURS, CYCLE_SLA_HOURS * 2)}>
-                      {howLongAgo(data.newestHitUtc)}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Newest audit event</TableCell>
-                  <TableCell>
-                    {formatUtc(data.newestAuditEventUtc)}{' '}
-                    <Badge appearance="filled" color={freshnessColor(data.newestAuditEventUtc, CYCLE_SLA_HOURS, CYCLE_SLA_HOURS * 2)}>
-                      {howLongAgo(data.newestAuditEventUtc)}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
+            <>
+              <Table size="small" aria-label="Data overview">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Workload</TableHeaderCell>
+                    <TableHeaderCell>Rows{data.countsAreApproximate ? ' (approx)' : ''}</TableHeaderCell>
+                    <TableHeaderCell>Last 24h</TableHeaderCell>
+                    <TableHeaderCell>Last 7d</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow>
+                    <TableCell>Activity imports (audit events)</TableCell>
+                    <TableCell>{data.activityCount.toLocaleString()}</TableCell>
+                    <TableCell>{data.auditEventsLast24h.toLocaleString()}</TableCell>
+                    <TableCell>{data.auditEventsLast7d.toLocaleString()}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Web hits</TableCell>
+                    <TableCell>{data.hitCount.toLocaleString()}</TableCell>
+                    <TableCell>{data.hitsLast24h.toLocaleString()}</TableCell>
+                    <TableCell>{data.hitsLast7d.toLocaleString()}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Copilot interactions</TableCell>
+                    <TableCell>{data.copilotChatCount.toLocaleString()}</TableCell>
+                    <TableCell colSpan={2}>
+                      <Text size={200} className={styles.muted} style={{ marginTop: 0 }}>
+                        see audit-event freshness
+                      </Text>
+                    </TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Sent emails</TableCell>
+                    <TableCell>{data.sentEmailCount.toLocaleString()}</TableCell>
+                    <TableCell colSpan={2} />
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Teams call records</TableCell>
+                    <TableCell>{data.callRecordCount.toLocaleString()}</TableCell>
+                    <TableCell colSpan={2} />
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Teams discovered / tracked</TableCell>
+                    <TableCell>
+                      {data.teamsCount.toLocaleString()} / {data.teamsBeingTrackedCount.toLocaleString()}
+                    </TableCell>
+                    <TableCell colSpan={2} />
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Users</TableCell>
+                    <TableCell>{data.userCount.toLocaleString()}</TableCell>
+                    <TableCell colSpan={2} />
+                  </TableRow>
+                </TableBody>
+              </Table>
+
+              <Text className={styles.subHeading}>Freshness</Text>
+              <Table size="small" aria-label="Data freshness">
+                <TableBody>
+                  <TableRow>
+                    <TableCell>Newest audit event</TableCell>
+                    <TableCell>
+                      {formatUtc(data.newestAuditEventUtc)}{' '}
+                      <Badge appearance="filled" color={freshnessColor(data.newestAuditEventUtc, CYCLE_SLA_HOURS, CYCLE_SLA_HOURS * 2)}>
+                        {howLongAgo(data.newestAuditEventUtc)}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Newest hit</TableCell>
+                    <TableCell>
+                      {formatUtc(data.newestHitUtc)}{' '}
+                      <Badge appearance="filled" color={freshnessColor(data.newestHitUtc, CYCLE_SLA_HOURS, CYCLE_SLA_HOURS * 2)}>
+                        {howLongAgo(data.newestHitUtc)}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>Database size (data files)</TableCell>
+                    <TableCell>{formatSize(data.databaseSizeMb)}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </>
           )}
+        </Card>
+
+        {/* Configuration */}
+        <Card>
+          <CardHeader header={<Subtitle2>Configuration</Subtitle2>} />
+          <Text className={styles.desc}>
+            What's turned on and what this app points at - so an empty card above reads as "feature off", not "broken".
+          </Text>
+
+          {data.configError && (
+            <MessageBar intent="warning">
+              <MessageBarBody>Couldn't load configuration: {data.configError}</MessageBarBody>
+            </MessageBar>
+          )}
+
+          <Text className={styles.subHeading}>Enabled imports</Text>
+          {data.enabledImports.length > 0 ? (
+            <div className={styles.chips}>
+              {data.enabledImports.map((f) => (
+                <Badge key={f} appearance="tint" color="brand">
+                  {f}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <Text size={200}>None enabled in this app's config.</Text>
+          )}
+
+          <Text className={styles.subHeading}>Schema / migration version</Text>
+          {data.schemaError ? (
+            <Text size={200}>Couldn't check: {data.schemaError}</Text>
+          ) : data.schemaUpToDate === true ? (
+            <Badge appearance="filled" color="success">
+              Up to date with this build
+            </Badge>
+          ) : data.schemaUpToDate === false ? (
+            <div>
+              <Badge appearance="filled" color="danger">
+                {data.pendingMigrations.length} migration(s) pending
+              </Badge>{' '}
+              <Text size={200}>The database is behind this build - run the upgrader. ({data.pendingMigrations.join(', ')})</Text>
+            </div>
+          ) : (
+            <Text size={200}>Unknown.</Text>
+          )}
+
+          <Text className={styles.subHeading}>Teams call-records webhook</Text>
+          {data.callsImportEnabled ? (
+            <div>
+              <Badge
+                appearance="filled"
+                color={
+                  data.webhookState === 'Active'
+                    ? 'success'
+                    : data.webhookState === 'Missing'
+                      ? 'warning'
+                      : data.webhookState === 'Error'
+                        ? 'danger'
+                        : 'subtle'
+                }
+              >
+                {data.webhookState}
+              </Badge>{' '}
+              {data.webhookExpiryUtc && <Text size={200}>expires {formatUtc(data.webhookExpiryUtc)}</Text>}
+              {data.webhookDetail && (
+                <Text size={200} className={styles.muted}>
+                  {data.webhookDetail}
+                </Text>
+              )}
+            </div>
+          ) : (
+            <Text size={200}>Teams calls import is off.</Text>
+          )}
+
+          <Text className={styles.subHeading}>Resources</Text>
+          <Table size="small" aria-label="Resources">
+            <TableBody>
+              <TableRow>
+                <TableCell>SQL server</TableCell>
+                <TableCell>
+                  <Text font="monospace">{data.sqlServer}</Text>
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Redis</TableCell>
+                <TableCell>{data.redisHost}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Service Bus</TableCell>
+                <TableCell>{data.serviceBusEndpoint}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Cognitive / Language</TableCell>
+                <TableCell>
+                  <Text font="monospace">{data.cognitiveEndpoint}</Text>
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Web app URL</TableCell>
+                <TableCell>
+                  <Text font="monospace">{data.webAppUrl}</Text>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
         </Card>
       </div>
 
