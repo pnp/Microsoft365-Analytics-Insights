@@ -118,7 +118,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             // so we don't silently absorb arbitrary future AgentName + AppIdentity combinations whose AppIdentity
             // may not be a stable per-agent key - which could merge distinct agents onto one id or fragment one
             // agent across ids. Records that don't match the allow-list keep agent_id NULL, exactly as before.
-            // See issue #144 / PR #180.
+            // See PR #180.
             if (!string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
                 string.IsNullOrEmpty(thisAuditLogReport.AgentId) &&
                 IsVettedFirstPartyAppIdentity(thisAuditLogReport.AppIdentity))
