@@ -66,10 +66,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             {
                 // TargetAgentName indicates a custom engine agent
                 thisAuditLogReport.AgentName = targetAgentName;
-                // If AgentId is not set, use AppIdentity as the identifier
+                // If AgentId is not set, identify the agent from the payload. Newer audit records carry an explicit
+                // per-agent id in CopilotEventData.TargetPlatformAgentId (e.g. "T_{guid}" Copilot Studio, "P_{guid}",
+                // "BuiltIn_..." or short first-party ids like "OutlookDraft"); prefer it. Older records don't include
+                // it, so fall back to AppIdentity exactly as before.
                 if (string.IsNullOrEmpty(thisAuditLogReport.AgentId))
                 {
-                    thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+                    var targetPlatformAgentId = thisAuditLogReport.CopilotEventData?.TargetPlatformAgentId;
+                    thisAuditLogReport.AgentId = !string.IsNullOrEmpty(targetPlatformAgentId)
+                        ? targetPlatformAgentId
+                        : thisAuditLogReport.AppIdentity;
                 }
             }
             else if (string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
@@ -103,6 +109,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 }
             }
 
+            // First-party named agents (e.g. Copilot Cowork, AppIdentity "Copilot.M365Copilot.CoworkChat")
+            // carry an AgentName but no AgentId and no TargetAgentName, so neither branch above set an id.
+            // Promote AppIdentity to AgentId so the agent is dimensioned in copilot_agents (the agents upsert
+            // keys on agent_id, so without an id the interaction imports but shows as unattributed / agent_id NULL).
+            //
+            // Restricted to a vetted allow-list of first-party AppIdentity prefixes (IsVettedFirstPartyAppIdentity)
+            // so we don't silently absorb arbitrary future AgentName + AppIdentity combinations whose AppIdentity
+            // may not be a stable per-agent key - which could merge distinct agents onto one id or fragment one
+            // agent across ids. Records that don't match the allow-list keep agent_id NULL, exactly as before.
+            // See PR #180.
+            if (!string.IsNullOrEmpty(thisAuditLogReport.AgentName) &&
+                string.IsNullOrEmpty(thisAuditLogReport.AgentId) &&
+                IsVettedFirstPartyAppIdentity(thisAuditLogReport.AppIdentity))
+            {
+                thisAuditLogReport.AgentId = thisAuditLogReport.AppIdentity;
+            }
+
+            // Normalise the resolved id (from any branch above or the raw payload) to a single canonical form so
+            // the same logical agent is not split across id variants. Microsoft emits some agents under more than
+            // one id string - notably SharePoint agents as both "SharePointAgents.Declarative.SPO_..." and bare
+            // "SPO_..." - which would otherwise create duplicate copilot_agents rows and double-count usage.
+            thisAuditLogReport.AgentId = NormalizeAgentId(thisAuditLogReport.AgentId);
+
             if (!string.IsNullOrEmpty(thisAuditLogReport.AgentName))
             {
                 // Calculate cost from the parsed event for agents
@@ -115,6 +144,66 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
 
             return thisAuditLogReport;
+        }
+
+        /// <summary>
+        /// Vetted first-party AppIdentity prefixes whose AppIdentity is known to be a stable, agent-specific
+        /// identifier. Only these are promoted to AgentId when a named agent arrives without its own AgentId
+        /// (see <see cref="FromJson"/>). Keep this list conservative: add a prefix only after confirming from
+        /// real payloads that its AppIdentity is a stable per-agent key, not a shared app-level or volatile value.
+        /// </summary>
+        internal static readonly string[] FirstPartyNamedAgentAppIdentityPrefixes = new[]
+        {
+            "Copilot.M365Copilot.",   // e.g. "Copilot.M365Copilot.CoworkChat" (Copilot Cowork)
+        };
+
+        private const string SharePointDeclarativeAgentIdPrefix = "SharePointAgents.Declarative.";
+
+        /// <summary>
+        /// True when <paramref name="appIdentity"/> starts with a vetted first-party prefix from
+        /// <see cref="FirstPartyNamedAgentAppIdentityPrefixes"/> and can therefore safely be used as an AgentId.
+        /// </summary>
+        internal static bool IsVettedFirstPartyAppIdentity(string appIdentity)
+        {
+            if (string.IsNullOrEmpty(appIdentity))
+            {
+                return false;
+            }
+
+            foreach (var prefix in FirstPartyNamedAgentAppIdentityPrefixes)
+            {
+                if (appIdentity.StartsWith(prefix, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Collapses redundant agent id variants to a single canonical form so the same logical agent is not
+        /// dimensioned twice. Currently strips the "SharePointAgents.Declarative." wrapper prefix from SharePoint
+        /// agent ids, whose canonical identity is the bare "SPO_..." item id (Microsoft emits both forms for the
+        /// same agent). Null/empty and all other ids are returned unchanged.
+        /// </summary>
+        internal static string NormalizeAgentId(string agentId)
+        {
+            if (string.IsNullOrEmpty(agentId))
+            {
+                return agentId;
+            }
+
+            if (agentId.StartsWith(SharePointDeclarativeAgentIdPrefix, System.StringComparison.OrdinalIgnoreCase))
+            {
+                var remainder = agentId.Substring(SharePointDeclarativeAgentIdPrefix.Length);
+                if (remainder.StartsWith("SPO_", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return remainder;
+                }
+            }
+
+            return agentId;
         }
 
         public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, CommonAuditEvent relatedAuditEvent, ILogger logger)
@@ -150,6 +239,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// The name of the target custom engine agent. Present when the interaction involves a custom engine agent.
         /// </summary>
         public string TargetAgentName { get; set; }
+
+        /// <summary>
+        /// Explicit identifier of the target (custom engine) agent that handled the interaction, present in newer
+        /// Copilot audit records alongside <see cref="TargetAgentName"/>. Observed forms include "T_{guid}"
+        /// (Copilot Studio), "P_{guid}", "BuiltIn_{name}" and short first-party ids such as "OutlookDraft".
+        /// Preferred over AppIdentity as the AgentId for custom engine agents when no explicit AgentId is present.
+        /// </summary>
+        public string TargetPlatformAgentId { get; set; }
 
         /// <summary>
         /// Identifier of the Copilot conversation thread the interaction belongs to.
