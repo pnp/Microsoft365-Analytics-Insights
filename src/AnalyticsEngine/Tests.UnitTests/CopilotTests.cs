@@ -1,4 +1,4 @@
-﻿using ActivityImporter.Engine.ActivityAPI.Copilot;
+using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -1203,6 +1203,150 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// First-party named agents (e.g. Copilot Cowork) carry an AgentName and AppIdentity but no AgentId
+        /// and no TargetAgentName. For a vetted first-party AppIdentity (allow-list), AgentId should fall back
+        /// to AppIdentity so the agent still gets dimensioned (the copilot_agents upsert keys on agent_id; a null
+        /// id imports the chat but drops agent attribution). Non-vetted AppIdentities are covered by the guard test.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_UsesAppIdentityAsAgentIdWhenNamePresentButNoId()
+        {
+            // Arrange - the shape of a real "Copilot Cowork" CopilotInteraction record.
+            var appIdentity = "Copilot.M365Copilot.CoworkChat";
+            var json = $@"{{
+                ""AgentName"": ""Copilot Cowork"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""OrganizationId"": ""00000000-0000-0000-0000-000000000000"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""cowork"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result);
+            Assert.AreEqual("Copilot Cowork", result.AgentName, "AgentName from the record should be preserved");
+            Assert.AreEqual(appIdentity, result.AgentId, "AgentId should fall back to AppIdentity so the agent is dimensioned");
+        }
+
+        /// <summary>
+        /// Guard for the allow-list: a named agent with no AgentId whose AppIdentity is NOT a vetted first-party
+        /// identity must keep agent_id NULL (pre-PR #180 behaviour), rather than absorbing an unverified
+        /// AgentName + AppIdentity combination as a synthetic agent.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_DoesNotUseAppIdentityAsAgentIdWhenNotVettedFirstParty()
+        {
+            // Arrange - a first-party-style named agent (e.g. a SharePoint "summarizer-agent") whose
+            // AppIdentity is outside the allow-list and unverified as a stable per-agent key.
+            var json = @"{
+                ""AgentName"": ""summarizer-agent"",
+                ""AppIdentity"": ""SomeUnverified.App.Identity"",
+                ""CopilotEventData"": {
+                    ""AppHost"": ""SharePoint"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": []
+                }
+            }";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.IsNotNull(result);
+            Assert.AreEqual("summarizer-agent", result.AgentName, "AgentName from the record should be preserved");
+            Assert.IsNull(result.AgentId, "AgentId must stay NULL for an AppIdentity outside the vetted first-party allow-list");
+        }
+
+        /// <summary>
+        /// Documents the intended many-to-one behaviour: two interactions for the same first-party experience
+        /// that carry the same (vetted) AppIdentity but different AgentName strings resolve to the SAME AgentId,
+        /// so they dimension to a single copilot_agents row rather than fragmenting.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_SameFirstPartyAppIdentityDifferentNamesResolveToSameAgentId()
+        {
+            // Arrange - same AppIdentity, two different display names (e.g. localisation / word-order variants).
+            var appIdentity = "Copilot.M365Copilot.CoworkChat";
+            var jsonA = $@"{{
+                ""AgentName"": ""Copilot Cowork"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{ ""AppHost"": ""cowork"", ""AccessedResources"": [], ""Contexts"": [] }}
+            }}";
+            var jsonB = $@"{{
+                ""AgentName"": ""Cowork"",
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{ ""AppHost"": ""cowork"", ""AccessedResources"": [], ""Contexts"": [] }}
+            }}";
+
+            // Act
+            var a = CopilotAuditLogContent.FromJson(jsonA);
+            var b = CopilotAuditLogContent.FromJson(jsonB);
+
+            // Assert
+            Assert.AreEqual(appIdentity, a.AgentId);
+            Assert.AreEqual(appIdentity, b.AgentId);
+            Assert.AreEqual(a.AgentId, b.AgentId, "Same first-party AppIdentity must yield one shared AgentId regardless of name");
+        }
+
+        /// <summary>
+        /// De-fragmentation: Microsoft emits the same SharePoint agent both as "SharePointAgents.Declarative.SPO_..."
+        /// and as bare "SPO_...". Both must normalise to the same canonical bare SPO_ id so the agent is dimensioned
+        /// once, not twice (otherwise the same agent produces duplicate copilot_agents rows).
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_NormalizesSharePointDeclarativeAgentIdToBareSpoId()
+        {
+            // Arrange
+            var bareId = "SPO_M2U2ZGNkExampleItemId_01ABCDEF";
+            var jsonPrefixed = $@"{{
+                ""AgentName"": ""Contoso Proposals Agent"",
+                ""AgentId"": ""SharePointAgents.Declarative.{bareId}"",
+                ""CopilotEventData"": {{ ""AppHost"": ""SharePoint"", ""AccessedResources"": [], ""Contexts"": [] }}
+            }}";
+            var jsonBare = $@"{{
+                ""AgentName"": ""Contoso Proposals Agent"",
+                ""AgentId"": ""{bareId}"",
+                ""CopilotEventData"": {{ ""AppHost"": ""SharePoint"", ""AccessedResources"": [], ""Contexts"": [] }}
+            }}";
+
+            // Act
+            var prefixed = CopilotAuditLogContent.FromJson(jsonPrefixed);
+            var bare = CopilotAuditLogContent.FromJson(jsonBare);
+
+            // Assert
+            Assert.AreEqual(bareId, prefixed.AgentId, "SharePointAgents.Declarative. wrapper should be stripped to the bare SPO_ id");
+            Assert.AreEqual(bareId, bare.AgentId, "A bare SPO_ id should be left unchanged");
+            Assert.AreEqual(prefixed.AgentId, bare.AgentId, "Both id variants must resolve to a single canonical agent id");
+        }
+
+        /// <summary>
+        /// Normalisation must not touch ids that are not the SharePoint wrapper form - declarative Copilot Studio
+        /// ids (and other schemes) are left exactly as-is.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_NormalizeAgentIdLeavesOtherIdsUnchanged()
+        {
+            // Arrange - a declarative Copilot Studio agent id supplied explicitly.
+            var declarativeId = "CopilotStudio.Declarative.T_11111111-1111-1111-1111-111111111111.22222222-2222-2222-2222-222222222222";
+            var json = $@"{{
+                ""AgentName"": ""Contoso Risk Agent"",
+                ""AgentId"": ""{declarativeId}"",
+                ""CopilotEventData"": {{ ""AppHost"": ""Office"", ""AccessedResources"": [], ""Contexts"": [] }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual(declarativeId, result.AgentId, "Non-SharePoint-wrapper ids must be left unchanged by normalisation");
+        }
+
+        /// <summary>
         /// Tests that existing AgentName and AgentId values are not overwritten when they are already present
         /// </summary>
         [TestMethod]
@@ -1416,6 +1560,88 @@ namespace Tests.UnitTests
             Assert.AreEqual(targetAgentName, result.AgentName, "AgentName should be set from TargetAgentName");
             Assert.AreEqual(agentId, result.AgentId, "AgentId from JSON should be preserved, not overwritten by AppIdentity");
             Assert.IsNull(result.IsCustomAgent, "IsCustomAgent should always be null from FromJson");
+        }
+
+        /// <summary>
+        /// Newer schema: a custom engine agent (TargetAgentName) with no explicit AgentId should take its id from
+        /// CopilotEventData.TargetPlatformAgentId in preference to the AppIdentity fallback.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNamePrefersTargetPlatformAgentIdOverAppIdentity()
+        {
+            // Arrange - both TargetPlatformAgentId (new) and AppIdentity (old) present, no explicit AgentId.
+            var targetPlatformAgentId = "T_33333333-3333-3333-3333-333333333333";
+            var json = $@"{{
+                ""AppIdentity"": ""Copilot.Studio.Default-someorg-someagent"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Office"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""Contoso Proofreader"",
+                    ""TargetPlatformAgentId"": ""{targetPlatformAgentId}""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual("Contoso Proofreader", result.AgentName, "AgentName should be set from TargetAgentName");
+            Assert.AreEqual(targetPlatformAgentId, result.AgentId, "AgentId should prefer TargetPlatformAgentId over AppIdentity");
+        }
+
+        /// <summary>
+        /// Older schema fallback: when CopilotEventData.TargetPlatformAgentId is absent, a custom engine agent with
+        /// no explicit AgentId still falls back to AppIdentity, exactly as before.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNameFallsBackToAppIdentityWhenNoTargetPlatformAgentId()
+        {
+            // Arrange - no TargetPlatformAgentId and no explicit AgentId.
+            var appIdentity = "Copilot.Studio.Default-someorg-someagent";
+            var json = $@"{{
+                ""AppIdentity"": ""{appIdentity}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Teams"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""CustomEngineAgent""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual("CustomEngineAgent", result.AgentName, "AgentName should be set from TargetAgentName");
+            Assert.AreEqual(appIdentity, result.AgentId, "AgentId should fall back to AppIdentity when TargetPlatformAgentId is absent");
+        }
+
+        /// <summary>
+        /// An explicit AgentId still wins over CopilotEventData.TargetPlatformAgentId for a custom engine agent.
+        /// </summary>
+        [TestMethod]
+        public void CopilotAuditLogContent_FromJson_TargetAgentNamePreservesExplicitAgentIdOverTargetPlatformAgentId()
+        {
+            // Arrange - explicit AgentId present alongside TargetPlatformAgentId.
+            var explicitAgentId = "CopilotStudio.Declarative.T_33333333-3333-3333-3333-333333333333.publication-guid";
+            var json = $@"{{
+                ""AgentId"": ""{explicitAgentId}"",
+                ""CopilotEventData"": {{
+                    ""AppHost"": ""Office"",
+                    ""AccessedResources"": [],
+                    ""Contexts"": [],
+                    ""TargetAgentName"": ""Contoso Proofreader"",
+                    ""TargetPlatformAgentId"": ""T_33333333-3333-3333-3333-333333333333""
+                }}
+            }}";
+
+            // Act
+            var result = CopilotAuditLogContent.FromJson(json);
+
+            // Assert
+            Assert.AreEqual("Contoso Proofreader", result.AgentName, "AgentName should be set from TargetAgentName");
+            Assert.AreEqual(explicitAgentId, result.AgentId, "Explicit AgentId should be preserved over TargetPlatformAgentId");
         }
 
         /// <summary>
