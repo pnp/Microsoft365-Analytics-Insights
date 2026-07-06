@@ -32,6 +32,12 @@ Always read it before making changes under `src/AnalyticsEngine/`.
 - This applies to both human-driven and Copilot-driven PRs, including coding-agent tasks that auto-create branches.
 - If a PR has already been opened against the wrong base, retarget it with `gh pr edit <num> --base dev` rather than closing and reopening.
 
+## Releases
+Release descriptions (the dev→main release PR body and the GitHub release notes) are read by operators and customers, not just developers.
+- **Always explain changes in plain English** — say what changed and why it matters to someone running the product, not just the technical/internal detail. Prefer more explanation over less; err on the side of over-explaining a user-facing change.
+- **Don't list pure code changes individually.** Internal-only changes with no user-visible effect (e.g. "Standardise ILogger variable names to `_logger` / `logger`", trimming redundant `PackageReference`s, cleaning binding redirects, test-data tweaks) must **not** each get their own bullet. Roll them all up under a single general **"Code maintenance"** line.
+- Reserve individual, plain-English bullets for changes an operator or end-user would actually notice: new features, bug fixes, installer/UI changes, performance/reliability improvements, and any schema/database or upgrade-step changes.
+
 ## Documentation
 - The wiki repo for Microsoft365-Analytics-Insights is normally cloned as a sibling directory named `Microsoft365-Analytics-Insights.wiki` (e.g., `V:\Repos\Microsoft365-Analytics-Insights.wiki`).
 - When a docs update is requested, make the changes in the wiki repo.

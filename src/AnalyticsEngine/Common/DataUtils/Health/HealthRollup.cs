@@ -20,7 +20,7 @@ namespace DataUtils.Health
 
     /// <summary>
     /// Everything the overall-health roll-up needs, decoupled from the web view-model
-    /// (<c>Web/Models/HealthDashboard.cs</c>) so the roll-up rules can be unit-tested without a
+    /// (<c>Web/Models/Health/</c>) so the roll-up rules can be unit-tested without a
     /// database, App Insights or the Web project. See HEALTH-MONITORING-DESIGN.md (#144).
     /// </summary>
     public class HealthRollupInput

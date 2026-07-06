@@ -198,7 +198,8 @@
     <Compile Include="Models\InstallLogModels.cs" />
     <Compile Include="Models\ProfilingStatusModels.cs" />
     <Compile Include="Models\SystemStatus.cs" />
-    <Compile Include="Models\HealthDashboard.cs" />
+    <Compile Include="Models\Health\HealthModels.cs" />
+    <Compile Include="Models\Health\HealthService.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
     <Compile Include="Models\TeamAuthStatusResponse.cs" />
     <Compile Include="Models\UserDataLookupModels.cs" />
