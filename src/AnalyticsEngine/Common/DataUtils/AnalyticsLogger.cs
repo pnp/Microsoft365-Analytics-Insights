@@ -1,7 +1,9 @@
-﻿using Microsoft.ApplicationInsights;
+﻿using DataUtils.Health;
+using Microsoft.ApplicationInsights;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace DataUtils
 {
@@ -135,6 +137,51 @@ namespace DataUtils
             }
         }
 
+        /// <summary>
+        /// Emit a structured <c>HealthCheck</c> event (issue #144 Appendix E) for a single dependency/capability.
+        /// Uniform shape so runtime monitoring can alert with a couple of generic rules
+        /// (e.g. "any HealthCheck Status == Unhealthy", "Credential DaysToExpiry &lt; N").
+        /// </summary>
+        /// <param name="component">Which dependency/capability was checked.</param>
+        /// <param name="status">Result of the check.</param>
+        /// <param name="detail">Optional free-text reason. MUST NOT contain secrets or customer data.</param>
+        /// <param name="daysToExpiry">Optional; for <see cref="HealthComponent.Credential"/>, days until the credential expires.</param>
+        public void TrackHealthCheck(HealthComponent component, HealthStatus status, string detail = null, int? daysToExpiry = null)
+        {
+            var context = new Dictionary<string, string>
+            {
+                { "Component", component.ToString() },
+                { "Status", status.ToString() },
+            };
+            if (!string.IsNullOrEmpty(detail))
+            {
+                context.Add("Detail", detail);
+            }
+            if (daysToExpiry.HasValue)
+            {
+                context.Add("DaysToExpiry", daysToExpiry.Value.ToString(CultureInfo.InvariantCulture));
+            }
+            TrackEvent(AnalyticsEvent.HealthCheck, context);
+        }
+
+        /// <summary>
+        /// Emit a structured <c>ImporterHeartbeat</c> event (issue #144 Appendix E), one per import job per cycle.
+        /// Absence of this signal is the canonical "web-job died / crash-looping" detector.
+        /// </summary>
+        /// <param name="jobName">Importer job name, e.g. "Office365ActivityImporter" or "AppInsightsImporter".</param>
+        /// <param name="lastCycleUtc">UTC timestamp of the cycle that just completed.</param>
+        /// <param name="lastCycleDurationSeconds">Wall-clock duration of the cycle, in seconds.</param>
+        public void TrackImporterHeartbeat(string jobName, DateTime lastCycleUtc, double lastCycleDurationSeconds)
+        {
+            var context = new Dictionary<string, string>
+            {
+                { "JobName", jobName ?? string.Empty },
+                { "LastCycleUtc", lastCycleUtc.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) },
+                { "LastCycleDurationSeconds", lastCycleDurationSeconds.ToString(CultureInfo.InvariantCulture) },
+            };
+            TrackEvent(AnalyticsEvent.ImporterHeartbeat, context);
+        }
+
         public override void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
         {
             if (!IsEnabled(logLevel)) return;
@@ -174,7 +221,9 @@ namespace DataUtils
             Unknown,
             AzureAIQuery,
             FinishedSectionImport,
-            FinishedImportCycle
+            FinishedImportCycle,
+            HealthCheck,
+            ImporterHeartbeat
         }
     }
 }
