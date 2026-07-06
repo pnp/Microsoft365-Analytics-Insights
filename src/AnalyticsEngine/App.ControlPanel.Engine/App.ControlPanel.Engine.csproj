@@ -73,6 +73,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="BaseInstallProcessClasses.cs" />
+    <Compile Include="InstallLogCapturingLogger.cs" />
     <Compile Include="InstallerLogs.cs" />
     <Compile Include="InstallerTasks\JobTasks\HybridWorkerGroupTask.cs" />
     <Compile Include="InstallerTasks\JobTasks\ProfilingScriptsLocateTask.cs" />

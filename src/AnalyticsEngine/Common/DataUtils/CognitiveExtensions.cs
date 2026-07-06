@@ -1,4 +1,4 @@
-﻿using Azure;
+using Azure;
 using Azure.AI.TextAnalytics;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
@@ -267,7 +267,7 @@ namespace DataUtils
         /// Loads Azure Cognitive data for a message. Routes calls through
         /// <see cref="CognitiveServicesClient"/> so key-auth failures auto-retry with RBAC.
         /// </summary>
-        public static async Task<List<TextAnalysisResult<T>>> GetCognitiveDataStats<T>(this IEnumerable<TextAnalysisSample<T>> inputData, CognitiveServicesClient client, ILogger telemetry) where T : class
+        public static async Task<List<TextAnalysisResult<T>>> GetCognitiveDataStats<T>(this IEnumerable<TextAnalysisSample<T>> inputData, CognitiveServicesClient client, ILogger logger) where T : class
         {
             if (inputData == null || inputData.Count() == 0) return null;
             if (client == null) return null;
@@ -304,7 +304,7 @@ namespace DataUtils
                         }
                         catch (RequestFailedException ex)
                         {
-                            telemetry.LogError(ex, $"Couldn't detect languages: cognitive services error - {ex.Message}");
+                            logger.LogError(ex, $"Couldn't detect languages: cognitive services error - {ex.Message}");
                             return new List<DetectLanguageResult>();
                         }
                     }
@@ -318,7 +318,7 @@ namespace DataUtils
             }
             catch (RequestFailedException ex)
             {
-                telemetry.LogError(ex, $"Couldn't detect languages: cognitive services error - {ex.Message}");
+                logger.LogError(ex, $"Couldn't detect languages: cognitive services error - {ex.Message}");
                 return null;
             }
             if (validInput.Count == 0) return null;
@@ -378,12 +378,12 @@ namespace DataUtils
                 }
                 catch (RequestFailedException ex)
                 {
-                    telemetry.LogError(ex, $"Cognitive services error {ex.Message}");
+                    logger.LogError(ex, $"Cognitive services error {ex.Message}");
                     return null;
                 }
                 if (sentimentSuccess)
                 {
-                    telemetry.LogInformation($"Sentiment results for chat messages: {allAnalyzeSentimentResults.Count} documents processed");
+                    logger.LogInformation($"Sentiment results for chat messages: {allAnalyzeSentimentResults.Count} documents processed");
 
                     foreach (var sentimentResult in allAnalyzeSentimentResults)
                     {
@@ -403,12 +403,12 @@ namespace DataUtils
                             }
                             else
                             {
-                                telemetry.LogError($"Error in sentiment analysis for message: {originalInput.Text}");
+                                logger.LogError($"Error in sentiment analysis for message: {originalInput.Text}");
                             }
                         }
                         else
                         {
-                            telemetry.LogWarning($"Error in sentiment analysis for message {sentimentResult.Id}. Original message not found.");
+                            logger.LogWarning($"Error in sentiment analysis for message {sentimentResult.Id}. Original message not found.");
                         }
                     }
                 }

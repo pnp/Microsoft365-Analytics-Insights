@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils;
 using Microsoft.Graph;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -94,11 +94,11 @@ namespace Tests.UnitTests
             var failedGroupCall = JsonConvert.DeserializeObject<CallRecordDTO>(Resources.TeamsCall_Failed_Call);
             var p2pCall = JsonConvert.DeserializeObject<CallRecordDTO>(Resources.TeamsCall_Peer2PeerCall);
 
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
             var config = new Common.Entities.Config.AppConfig();
             var auth = new WebJob.Office365ActivityImporter.Engine.GraphAppIndentityOAuthContext
-                (telemetry, config.ClientID,
+                (logger, config.ClientID,
                 config.TenantGUID.ToString(),
                 config.ClientSecret,
                 config.KeyVaultUrl,
@@ -109,9 +109,9 @@ namespace Tests.UnitTests
             var teamsLoadContext = new TeamsLoadContext(new GraphServiceClient(auth.Creds));
 
             // Populate email addresses using demo v4 tenant context. Won't work with any other environment.
-            await call3way.PopulateEmailAddresses(teamsLoadContext, config.TenantGUID.ToString(), telemetry);
-            await failedGroupCall.PopulateEmailAddresses(teamsLoadContext, config.TenantGUID.ToString(), telemetry);
-            await p2pCall.PopulateEmailAddresses(teamsLoadContext, config.TenantGUID.ToString(), telemetry);
+            await call3way.PopulateEmailAddresses(teamsLoadContext, config.TenantGUID.ToString(), logger);
+            await failedGroupCall.PopulateEmailAddresses(teamsLoadContext, config.TenantGUID.ToString(), logger);
+            await p2pCall.PopulateEmailAddresses(teamsLoadContext, config.TenantGUID.ToString(), logger);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -131,9 +131,9 @@ namespace Tests.UnitTests
                 db.SaveChanges();
 
                 var context = new TeamsAndCallsDBLookupManager(db);
-                var call3wayDB = await call3way.SaveOrReplaceCallRecord(context, telemetry);
-                var failedGroupCallDB = await failedGroupCall.SaveOrReplaceCallRecord(context, telemetry);
-                var p2pCallDB = await p2pCall.SaveOrReplaceCallRecord(context, telemetry);
+                var call3wayDB = await call3way.SaveOrReplaceCallRecord(context, logger);
+                var failedGroupCallDB = await failedGroupCall.SaveOrReplaceCallRecord(context, logger);
+                var p2pCallDB = await p2pCall.SaveOrReplaceCallRecord(context, logger);
 
                 // DTOs always include a session for initiator too (Teams endpoint). 
                 // For a group call, that means x2 sessions for initiator user (user -> endpoint; endpoint -> user) - something we ignore

@@ -1,4 +1,4 @@
-﻿using Azure.AI.TextAnalytics;
+using Azure.AI.TextAnalytics;
 using Common.Entities.Config;
 using Common.Entities.Redis;
 using DataUtils;
@@ -21,7 +21,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// Loads Azure Cognitive data for a message
         /// </summary>
         /// <returns>Stats and whether it was returned from redis or not</returns>
-        public static async Task<(MessageCognitiveStats, bool)> LoadCognitiveStatsFromCacheOrAI(this ChatMessage msg, CognitiveServicesClient client, ILogger telemetry, ChannelWithReactions parentChannel)
+        public static async Task<(MessageCognitiveStats, bool)> LoadCognitiveStatsFromCacheOrAI(this ChatMessage msg, CognitiveServicesClient client, ILogger logger, ChannelWithReactions parentChannel)
         {
             var stats = new MessageCognitiveStats(parentChannel, msg.CreatedDateTime.Value.DateTime);
 
@@ -51,7 +51,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (cachedResultsJson == null)
             {
-                var sentimentAndLang = await languageBatchInput.GetCognitiveDataStats(client, telemetry);
+                var sentimentAndLang = await languageBatchInput.GetCognitiveDataStats(client, logger);
 
                 var listProcessor = new ParallelCallsForSingleReturnListHander<string, ExtractKeyPhrasesResult>();
 
@@ -66,7 +66,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 if (sentimentAndLang == null)
                 {
                     // Message is an adaptive card or something not user generated
-                    telemetry.LogDebug($"Return empty stats for ChatMessage {msg.Id}. Message contains no user-genereated data in message.");
+                    logger.LogDebug($"Return empty stats for ChatMessage {msg.Id}. Message contains no user-genereated data in message.");
 
                     return (stats, false);
                 }
@@ -81,11 +81,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (fromCache)
             {
-                telemetry.LogInformation($"Loaded cognitive stats from cache for ChatMessage {msg.Id}");
+                logger.LogInformation($"Loaded cognitive stats from cache for ChatMessage {msg.Id}");
             }
             else
             {
-                telemetry.LogInformation($"Loaded cognitive stats from AI for ChatMessage {msg.Id}");
+                logger.LogInformation($"Loaded cognitive stats from AI for ChatMessage {msg.Id}");
             }
 
             // Compile stats
@@ -103,7 +103,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Loads Azure Cognitive data for a message
         /// </summary>
-        public static async Task<MessageCognitiveStats> LoadSameDayCognitiveDataStats(this List<ChatMessage> msgsInChannel, CognitiveServicesClient client, ILogger telemetry, ChannelWithReactions parentChannel)
+        public static async Task<MessageCognitiveStats> LoadSameDayCognitiveDataStats(this List<ChatMessage> msgsInChannel, CognitiveServicesClient client, ILogger logger, ChannelWithReactions parentChannel)
         {
             if (msgsInChannel != null && msgsInChannel.Count > 0)
             {
@@ -116,7 +116,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 {
                     if (msg.CreatedDateTime.HasValue && msg.CreatedDateTime.Value.DateTime.Date == firstMsgDate.Date)
                     {
-                        var (statsResult, fromCache) = await msg.LoadCognitiveStatsFromCacheOrAI(client, telemetry, parentChannel);
+                        var (statsResult, fromCache) = await msg.LoadCognitiveStatsFromCacheOrAI(client, logger, parentChannel);
                         allStats.Add(statsResult);
                     }
                     else

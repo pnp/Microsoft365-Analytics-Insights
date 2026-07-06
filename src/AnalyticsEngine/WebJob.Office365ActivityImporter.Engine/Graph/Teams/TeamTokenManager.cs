@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using Common.Entities.Models;
 using Common.Entities.Redis;
 using Common.Entities.Redis.Teams;
@@ -29,7 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public O365Team Team { get; set; }
 
         static Lazy<Dictionary<O365Team, RefreshOAuthToken>> _cahedTokens = new Lazy<Dictionary<O365Team, RefreshOAuthToken>>(() => new Dictionary<O365Team, RefreshOAuthToken>());
-        public async Task<RefreshOAuthToken> GetRefreshToken(ILogger telemetry)
+        public async Task<RefreshOAuthToken> GetRefreshToken(ILogger logger)
         {
             if (CacheConnectionManager == null)
             {
@@ -58,12 +58,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     if (ex.Message.Contains("Bad Request"))
                     {
-                        telemetry.LogError(ex, $"Got error {ex.Message} trying to get access token for team. App registration configuration issue? Check reply URLs match");
+                        logger.LogError(ex, $"Got error {ex.Message} trying to get access token for team. App registration configuration issue? Check reply URLs match");
                     }
                     else
                     {
                         // Get access key failed. Delete key
-                        telemetry.LogError(ex, $"Got error {ex.Message} trying to get access token for team. Removing refresh-token from cache.");
+                        logger.LogError(ex, $"Got error {ex.Message} trying to get access token for team. Removing refresh-token from cache.");
                         await CacheConnectionManager.RemoveTeamAuthToken(this.Team.Id);
                     }
 
@@ -71,7 +71,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 if (success)
                 {
-                    telemetry.LogInformation($"Got refresh token for Team '{this.Team.DisplayName}'.");
+                    logger.LogInformation($"Got refresh token for Team '{this.Team.DisplayName}'.");
                 }
 
                 _cahedTokens.Value.Add(this.Team, teamToken);
@@ -80,7 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             else
             {
-                telemetry.LogInformation($"Couldn't find token entry in redis for Team '{this.Team.DisplayName}', or refresh token is null.");
+                logger.LogInformation($"Couldn't find token entry in redis for Team '{this.Team.DisplayName}', or refresh token is null.");
             }
 
             return teamToken;

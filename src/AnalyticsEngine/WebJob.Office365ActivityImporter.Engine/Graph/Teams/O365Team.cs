@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Redis.Teams;
@@ -72,12 +72,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         #endregion
 
-        public async Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger telemetry)
+        public async Task<TeamDefinition> SaveToSQL(TeamsAndCallsDBLookupManager lookupManager, AppConfig appConfig, ILogger logger)
         {
             if (lookupManager is null) throw new ArgumentNullException(nameof(lookupManager));
-            if (telemetry is null) throw new ArgumentNullException(nameof(telemetry));
+            if (logger is null) throw new ArgumentNullException(nameof(logger));
 
-            telemetry.LogInformation($"Saving Team '{this.DisplayName}' to SQL...");
+            logger.LogInformation($"Saving Team '{this.DisplayName}' to SQL...");
 
             // Save to SQL if doesn't exist already
             var dbTeam = await lookupManager.GetOrCreateTeam(this.Id, this.DisplayName);
@@ -108,14 +108,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Channels
             var dbChannels = new List<TeamChannel>();
 
-            var teamTokenManager = new TeamTokenManager(this, appConfig, telemetry);
+            var teamTokenManager = new TeamTokenManager(this, appConfig, logger);
             foreach (var channel in this.Channels)
             {
                 var dbChannel = await channel.SaveToSql(lookupManager, dbTeam);
             }
 
             // Get & save channel stats for relevant chats found
-            var channelMessageStats = await this.Channels.GetMessagesStats(telemetry);
+            var channelMessageStats = await this.Channels.GetMessagesStats(logger);
             foreach (var channelStat in channelMessageStats)
             {
                 await channelStat.InsertOrAppendSqlStats(lookupManager, dbTeam);
@@ -163,22 +163,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
             catch (System.Data.Entity.Infrastructure.DbUpdateException ex)
             {
-                telemetry.LogError(ex, $"Got SQL exception saving Team: {ex.Message}. Will try again next cycle.");
-                await ClearChannelDeltaTokens(telemetry, appConfig);
+                logger.LogError(ex, $"Got SQL exception saving Team: {ex.Message}. Will try again next cycle.");
+                await ClearChannelDeltaTokens(logger, appConfig);
                 return null;
             }
 
             return dbTeam;
         }
 
-        async Task ClearChannelDeltaTokens(ILogger telemetry, AppConfig appConfig)
+        async Task ClearChannelDeltaTokens(ILogger logger, AppConfig appConfig)
         {
-            var teamTokenManager = new TeamTokenManager(this, appConfig, telemetry);
+            var teamTokenManager = new TeamTokenManager(this, appConfig, logger);
             foreach (var c in this.Channels)
             {
                 if (teamTokenManager.CacheConnectionManager != null)
                 {
-                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(this.Id, c.Id, telemetry);
+                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(this.Id, c.Id, logger);
                 }
             }
         }
@@ -186,7 +186,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Loads all the Team child data, plus messages from the last channel log in the DB
         /// </summary>
-        public static async Task<O365Team> LoadTeamFull(Group parentGroup, TeamsLoadContext context, ILogger telemetry, AppConfig appConfig, AnalyticsEntitiesContext db)
+        public static async Task<O365Team> LoadTeamFull(Group parentGroup, TeamsLoadContext context, ILogger logger, AppConfig appConfig, AnalyticsEntitiesContext db)
         {
             var teamId = parentGroup.Id;
             // Get Team details from Graph and convert to our own class
@@ -209,14 +209,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 }
                 else
                 {
-                    telemetry.LogInformation($"Couldn't find owner with user ID '{groupOwner.Id}' for Team {fullTeam.DisplayName}");
+                    logger.LogInformation($"Couldn't find owner with user ID '{groupOwner.Id}' for Team {fullTeam.DisplayName}");
                 }
             }
 
 #if DEBUG
             Console.WriteLine($"\nReading team '{parentGroup.DisplayName}':");
 #endif
-            var members = await LoadAllGroupMembers(context.GraphClient, parentGroup.Id, telemetry);
+            var members = await LoadAllGroupMembers(context.GraphClient, parentGroup.Id, logger);
 
             foreach (var member in members)
             {
@@ -252,7 +252,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
 
 
-            var teamTokenManager = new TeamTokenManager(fullTeam, appConfig, telemetry);
+            var teamTokenManager = new TeamTokenManager(fullTeam, appConfig, logger);
 
             // Load tabs in each channel
             foreach (var channel in fullTeam.Channels)
@@ -261,7 +261,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 if (dbChannel == null && teamTokenManager.CacheConnectionManager != null)
                 {
                     // Clear delta cache if new channel in DB. Mainly for debug reasons but also if there's no channel, we need to make sure we ignore any delta code (just in case)
-                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(fullTeam.Id, channel.Id, telemetry);
+                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(fullTeam.Id, channel.Id, logger);
                 }
                 var tabsPage = await context.GraphClient.Teams[teamId].Channels[channel.Id].Tabs.GetAsync(rc =>
                 {
@@ -271,7 +271,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
 
             // Get token for Team
-            var teamRefreshOAuthToken = await teamTokenManager.GetRefreshToken(telemetry);
+            var teamRefreshOAuthToken = await teamTokenManager.GetRefreshToken(logger);
 
             // Update access-token stats for Team
             if (teamRefreshOAuthToken == null)
@@ -283,11 +283,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 // We have a token. Load channel msgs/replies/reactions
                 try
                 {
-                    await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.CacheConnectionManager, telemetry);
+                    await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.CacheConnectionManager, logger);
                 }
                 catch (ChannelMessagesReadException ex)
                 {
-                    telemetry.LogError(ex, $"Couldn't get channel messages via cached token. '{ex.Message}'. Deleting token.");
+                    logger.LogError(ex, $"Couldn't get channel messages via cached token. '{ex.Message}'. Deleting token.");
                     await teamTokenManager.CacheConnectionManager.RemoveTeamAuthToken(team.Id);
                     teamRefreshOAuthToken = null;
                 }
@@ -334,7 +334,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         }
         #endregion
 
-        private static async Task<List<DirectoryObject>> LoadAllGroupMembers(GraphServiceClient client, string groupId, ILogger telemetry)
+        private static async Task<List<DirectoryObject>> LoadAllGroupMembers(GraphServiceClient client, string groupId, ILogger logger)
         {
             // Safety cap on paging: at 200k-user scale a single group rarely exceeds ~50k members
             // but a runaway nextLink shouldn't ever fill memory unbounded. 200k members per group
@@ -358,7 +358,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             if (iterator.State == PagingState.Paused)
             {
-                telemetry.LogWarning($"Group {groupId}: hit MAX_MEMBERS ({MAX_MEMBERS:N0}). Returning partial list of {all.Count:N0} members.");
+                logger.LogWarning($"Group {groupId}: hit MAX_MEMBERS ({MAX_MEMBERS:N0}). Returning partial list of {all.Count:N0} members.");
             }
 
             return all;

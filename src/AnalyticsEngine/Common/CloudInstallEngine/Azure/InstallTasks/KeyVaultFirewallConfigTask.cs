@@ -95,8 +95,18 @@ namespace CloudInstallEngine.Azure.InstallTasks
             _logger.LogInformation($"Enabling Key Vault '{vault.Data.Name}' firewall: default action 'Deny', bypass 'AzureServices', {ruleSet.IPRules.Count} IP rule(s), {ruleSet.VirtualNetworkRules.Count} virtual-network rule(s).");
 
             var patch = new KeyVaultPatch { Properties = new KeyVaultPatchProperties { NetworkRuleSet = ruleSet } };
-            var updated = await vault.UpdateAsync(patch);
-            return updated.Value;
+            try
+            {
+                var updated = await vault.UpdateAsync(patch);
+                return updated.Value;
+            }
+            catch (global::Azure.RequestFailedException ex) when (KeyVaultTask.IsDisallowedByPolicy(ex))
+            {
+                // Tenant Azure Policy denies writes to Microsoft.KeyVault/vaults. The vault already
+                // exists and is usable; firewall allow-listing is best-effort, so reuse it as-is.
+                _logger.LogWarning($"Could not allow-list IPs on key vault '{vault.Data.Name}': the write was disallowed by Azure Policy. Reusing the existing firewall configuration; ensure the installer and App Service IPs already have access, or grant a policy exemption and re-run.");
+                return vault;
+            }
         }
 
         List<string> GetAppServiceOutboundIps(string appServiceName)

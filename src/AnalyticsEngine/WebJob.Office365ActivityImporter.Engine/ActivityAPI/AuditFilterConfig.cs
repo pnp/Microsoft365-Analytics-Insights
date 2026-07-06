@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -54,17 +54,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             };
         }
 
-        public void Print(ILogger telemetry)
+        public void Print(ILogger logger)
         {
             foreach (var url in this.OrgUrlConfigs)
             {
                 if (url.ExactSiteMatch)
                 {
-                    telemetry.LogInformation($"+{url.Url} (exact match)");
+                    logger.LogInformation($"+{url.Url} (exact match)");
                 }
                 else
                 {
-                    telemetry.LogInformation($"+{url.Url} (*)");
+                    logger.LogInformation($"+{url.Url} (*)");
                 }
             }
         }

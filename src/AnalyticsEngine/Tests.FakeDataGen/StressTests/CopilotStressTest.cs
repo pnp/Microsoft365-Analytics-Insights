@@ -279,7 +279,7 @@ WHERE u.user_name = @upn;";
         private static List<string> BuildUserCatalogue(int count)
         {
             var list = new List<string>(count);
-            for (int i = 0; i < count; i++) list.Add($"stressuser{i}@contoso.com");
+            for (int i = 0; i < count; i++) list.Add(SeedDataCatalogue.BuildUpn("stressuser", i));
             return list;
         }
 

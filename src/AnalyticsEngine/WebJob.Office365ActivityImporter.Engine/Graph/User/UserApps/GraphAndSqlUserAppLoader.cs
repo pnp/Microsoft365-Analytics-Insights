@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -31,7 +31,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
 
         private readonly AnalyticsEntitiesContext _db;
         private readonly GraphServiceClient _graphClient;
-        public GraphAndSqlUserAppLoader(AnalyticsEntitiesContext db, AnalyticsLogger telemetry, GraphServiceClient graphClient) : base(telemetry)
+        public GraphAndSqlUserAppLoader(AnalyticsEntitiesContext db, AnalyticsLogger logger, GraphServiceClient graphClient) : base(logger)
         {
             _db = db;
             _graphClient = graphClient;
@@ -46,7 +46,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                                     && !string.IsNullOrEmpty(u.UserPrincipalName) && u.UserPrincipalName.Contains("@") && !u.UserPrincipalName.Contains("#ext#"))
                                 .ToListAsync();
 
-            _telemetry.LogInformation($"User Apps Load - updating Teams Apps for {usersWithLicenses.Count.ToString("N0")} users...");
+            _logger.LogInformation($"User Apps Load - updating Teams Apps for {usersWithLicenses.Count.ToString("N0")} users...");
 
             return usersWithLicenses.Select(u => u.UserPrincipalName).ToList();
         }
@@ -65,17 +65,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
             {
                 if (ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden)
                 {
-                    _telemetry.LogError(ex, $"User Apps Load - access denied reading user Teams Apps. Check 'TeamsAppInstallation.ReadForUser.All' is granted.");
+                    _logger.LogError(ex, $"User Apps Load - access denied reading user Teams Apps. Check 'TeamsAppInstallation.ReadForUser.All' is granted.");
                     throw new AccessDeniedToTeamsAppsException();
                 }
                 else if (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
                 {
-                    _telemetry.LogError($"User Apps Load - user not found reading user Teams Apps.");
+                    _logger.LogError($"User Apps Load - user not found reading user Teams Apps.");
                     throw new UserNotFoundException();
                 }
                 else
                 {
-                    _telemetry.LogError(ex, "Unexpected error reading installed Teams apps for user");
+                    _logger.LogError(ex, "Unexpected error reading installed Teams apps for user");
                     // Permissions test failed but not for permissions. Blow up. 
                     throw;
                 }
@@ -123,7 +123,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
 
                 if (i > 0 && i % REPORT_EVERY == 0)
                 {
-                    _telemetry.LogInformation($"User Apps Load - user {i.ToString("N0")}/{emailAddresses.Count.ToString("N0")} Teams app info loaded from Graph");
+                    _logger.LogInformation($"User Apps Load - user {i.ToString("N0")}/{emailAddresses.Count.ToString("N0")} Teams app info loaded from Graph");
                 }
 
                 i++;
@@ -168,12 +168,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
                     }
                     else if (response.StatusCode == HttpStatusCode.NotFound)
                     {
-                        _telemetry.LogWarning($"User Apps Load - user with ID '{r.Key}' not found in configured tenant");
+                        _logger.LogWarning($"User Apps Load - user with ID '{r.Key}' not found in configured tenant");
                     }
                     else
                     {
                         // Usually means user has no Teams license
-                        _telemetry.LogWarning($"User Apps Load - got unexpected error on batch response for user with ID '{r.Key}'. Check user has Teams license? HTTP response: {response.StatusCode}.");
+                        _logger.LogWarning($"User Apps Load - got unexpected error on batch response for user with ID '{r.Key}'. Check user has Teams license? HTTP response: {response.StatusCode}.");
                     }
                 }
 
@@ -245,7 +245,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.User.UserApps
 
         public override async Task Save(Dictionary<string, List<UserTeamApp>> pendingSave)
         {
-            var logsToInsert = new EFInsertBatch<UserAppLogTempEntity>(_db, _telemetry);
+            var logsToInsert = new EFInsertBatch<UserAppLogTempEntity>(_db, _logger);
 
             // Add user + apps to flat temp table
             foreach (var userAndState in pendingSave)
@@ -309,7 +309,7 @@ insert into teams_addons_user_installed_log(addon_id, user_id, date)
             }
             catch (System.Data.SqlClient.SqlException ex)
             {
-                _telemetry.LogError(ex, $"User Apps Load - got SQL error saving user apps");
+                _logger.LogError(ex, $"User Apps Load - got SQL error saving user apps");
             }
         }
 

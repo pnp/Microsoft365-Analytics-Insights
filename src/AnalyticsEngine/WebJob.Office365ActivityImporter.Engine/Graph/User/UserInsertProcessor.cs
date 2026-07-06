@@ -17,14 +17,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     internal class UserInsertProcessor
     {
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
         private readonly UserBatchProcessor _batchProcessor;
         private const int BULK_INSERT_BATCH_SIZE = 10000;
         private const int METADATA_BATCH_SIZE = 500;
 
-        public UserInsertProcessor(AnalyticsLogger telemetry, UserBatchProcessor batchProcessor)
+        public UserInsertProcessor(AnalyticsLogger logger, UserBatchProcessor batchProcessor)
         {
-            _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _batchProcessor = batchProcessor ?? throw new ArgumentNullException(nameof(batchProcessor));
         }
 
@@ -41,7 +41,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             UserLicenseProcessor licenseProcessor,
             Func<AnalyticsEntitiesContext, GraphUser, List<GraphUser>, List<Common.Entities.User>, Common.Entities.User, bool, Dictionary<string, Common.Entities.User>, Task> updateAction)
         {
-            _telemetry.LogInformation($"User import - Inserting missing users (two-phase: bulk insert + metadata enrichment)...");
+            _logger.LogInformation($"User import - Inserting missing users (two-phase: bulk insert + metadata enrichment)...");
 
             // Create HashSet for O(1) lookup of existing DB users.
             // OrdinalIgnoreCase comparer handles case so we don't need .ToLower() on the keys
@@ -62,7 +62,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
 
-            _telemetry.LogInformation($"User import - Found {usersToInsert.Count.ToString("N0")} new users to insert");
+            _logger.LogInformation($"User import - Found {usersToInsert.Count.ToString("N0")} new users to insert");
 
             if (usersToInsert.Count == 0)
             {
@@ -70,12 +70,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // PHASE 1: Fast bulk insert with minimal data
-            _telemetry.LogInformation($"User import - Phase 1: Starting bulk insert of {usersToInsert.Count.ToString("N0")} users...");
+            _logger.LogInformation($"User import - Phase 1: Starting bulk insert of {usersToInsert.Count.ToString("N0")} users...");
             await BulkInsertUsers(db, usersToInsert, BULK_INSERT_BATCH_SIZE);
-            _telemetry.LogInformation($"User import - Phase 1: Bulk insert completed");
+            _logger.LogInformation($"User import - Phase 1: Bulk insert completed");
 
             // PHASE 2: Load inserted users and enrich with metadata
-            _telemetry.LogInformation($"User import - Phase 2: Starting metadata enrichment for {usersToInsert.Count.ToString("N0")} new users (existing users will be updated separately)...");
+            _logger.LogInformation($"User import - Phase 2: Starting metadata enrichment for {usersToInsert.Count.ToString("N0")} new users (existing users will be updated separately)...");
             var insertedUserUpns = usersToInsert.Select(u => u.UserPrincipalName).ToList();
             var insertedDbUsers = await EnrichInsertedUsersWithMetadata(
                 db,
@@ -87,14 +87,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 userMetaCache,
                 updateAction);
 
-            _telemetry.LogInformation($"User import - Phase 2: Metadata enrichment completed for {insertedDbUsers.Count.ToString("N0")} new users");
+            _logger.LogInformation($"User import - Phase 2: Metadata enrichment completed for {insertedDbUsers.Count.ToString("N0")} new users");
 
             // Cleanup
             existingUpns.Clear();
             usersToInsert.Clear();
             insertedUserUpns.Clear();
 
-            _telemetry.LogInformation($"User import - Completed inserting and enriching {insertedDbUsers.Count.ToString("N0")} new users");
+            _logger.LogInformation($"User import - Completed inserting and enriching {insertedDbUsers.Count.ToString("N0")} new users");
 
             return insertedDbUsers;
         }
@@ -134,7 +134,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 totalInserted += batch.Count;
-                _telemetry.LogInformation($"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL");
+                _logger.LogInformation($"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL");
 
                 dataTable.Clear();
                 dataTable.Dispose();
@@ -265,7 +265,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var estimatedTotalMs = elapsedMs / percentDone * 100;
                 var remainingMs = estimatedTotalMs - elapsedMs;
                 var remaining = TimeSpan.FromMilliseconds(remainingMs);
-                _telemetry.LogInformation($"User import - Enriched metadata for {enrichedUsers.Count.ToString("N0")}/{insertedUserUpns.Count.ToString("N0")} new users ({percentDone:F1}% done, estimated {remaining.Hours}h {remaining.Minutes}m {remaining.Seconds}s remaining)");
+                _logger.LogInformation($"User import - Enriched metadata for {enrichedUsers.Count.ToString("N0")}/{insertedUserUpns.Count.ToString("N0")} new users ({percentDone:F1}% done, estimated {remaining.Hours}h {remaining.Minutes}m {remaining.Seconds}s remaining)");
 
                 // Clear change tracker to free memory after each batch
                 _batchProcessor.DetachAllEntitiesExceptLookups(db);

@@ -1,4 +1,4 @@
-﻿using Azure.Identity;
+using Azure.Identity;
 using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -20,14 +20,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         public GraphServiceClient Client { get; set; }
         public ILogger Telemetry { get; set; }
 
-        public CallWebhook(AppConfig o365DownloadSettings, ILogger telemetry)
-            : this(o365DownloadSettings?.TenantGUID.ToString(), o365DownloadSettings?.ClientID, o365DownloadSettings?.ClientSecret, telemetry) { }
+        public CallWebhook(AppConfig o365DownloadSettings, ILogger logger)
+            : this(o365DownloadSettings?.TenantGUID.ToString(), o365DownloadSettings?.ClientID, o365DownloadSettings?.ClientSecret, logger) { }
 
-        public CallWebhook(string tenantId, string clientId, string secret, ILogger telemetry)
+        public CallWebhook(string tenantId, string clientId, string secret, ILogger logger)
         {
             var cred = new ClientSecretCredential(tenantId, clientId, secret);
 
-            this.Telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            this.Telemetry = logger ?? throw new ArgumentNullException(nameof(logger));
             this.Client = new GraphServiceClient(cred);
         }
 

@@ -1,3 +1,4 @@
+using Azure;
 using Azure.ResourceManager.KeyVault.Models;
 using CloudInstallEngine.Azure.InstallTasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -72,6 +73,23 @@ namespace Tests.UnitTests.InstallTests
 
             Assert.AreEqual(1, ruleSet.VirtualNetworkRules.Count);
             Assert.AreEqual(true, ruleSet.VirtualNetworkRules.Single().IgnoreMissingVnetServiceEndpoint);
+        }
+
+        [TestMethod]
+        public void IsDisallowedByPolicy_Detects403PolicyDenial()
+        {
+            // "Not allowed resource types" Azure Policy denial: a 403 the installer must
+            // treat as best-effort (reuse the existing vault) rather than a fatal install error.
+            var ex = new RequestFailedException(403, "Resource was disallowed by policy.", "RequestDisallowedByPolicy", null);
+            Assert.IsTrue(KeyVaultTask.IsDisallowedByPolicy(ex));
+        }
+
+        [TestMethod]
+        public void IsDisallowedByPolicy_IgnoresOther403sAndStatuses()
+        {
+            // A plain RBAC 403 (Forbidden) or any other status must NOT be swallowed as a policy denial.
+            Assert.IsFalse(KeyVaultTask.IsDisallowedByPolicy(new RequestFailedException(403, "Forbidden", "Forbidden", null)));
+            Assert.IsFalse(KeyVaultTask.IsDisallowedByPolicy(new RequestFailedException(409, "Conflict", "RequestDisallowedByPolicy", null)));
         }
     }
 }

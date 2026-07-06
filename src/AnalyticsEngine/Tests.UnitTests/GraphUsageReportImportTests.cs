@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
 using DataUtils;
@@ -25,14 +25,14 @@ namespace Tests.UnitTests
         public async Task SPSiteIdToUrlCacheTests()
         {
             // Run all activity imports for test
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Test the cache with new site URL & ID
                 var fakeId = $"fake id {DateTime.Now.Ticks}";
                 var fakeUrlNew = $"fake URL {DateTime.Now.Ticks}";
-                var siteUrlCache = new FakeSPSiteIdToUrlCache(db, telemetry, fakeUrlNew);
+                var siteUrlCache = new FakeSPSiteIdToUrlCache(db, logger, fakeUrlNew);
                 var site1 = await siteUrlCache.Load(fakeId);
 
                 var dbRecord = db.sites.Where(s => s.SiteId == fakeId).SingleOrDefault();
@@ -46,7 +46,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync();
 
                 // Load the site with a new fake ID. Currently in the DB it doesn't have an ID
-                var siteUrlCache2 = new FakeSPSiteIdToUrlCache(db, telemetry, fakeUrlExisting);
+                var siteUrlCache2 = new FakeSPSiteIdToUrlCache(db, logger, fakeUrlExisting);
                 var site2 = await siteUrlCache2.Load($"fake id2 {DateTime.Now.Ticks}");
                 Assert.IsNotNull(site2);
                 Assert.AreEqual(fakeUrlExisting, site2.SiteUrl);
@@ -60,33 +60,33 @@ namespace Tests.UnitTests
         public async Task AllO365ActivityTests()
         {
             // Run all activity imports for test
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
 
-            var graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(telemetry, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
+            var graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
             await graphAppIndentityOAuthContext.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(graphAppIndentityOAuthContext.Creds);
-            var graphImporter = new GraphImporter(telemetry, new NoUsersHaveGroupsUserGroupsCache(telemetry), graphAppIndentityOAuthContext, graphClient, authConfig);
+            var graphImporter = new GraphImporter(logger, new NoUsersHaveGroupsUserGroupsCache(logger), graphAppIndentityOAuthContext, graphClient, authConfig);
 
-            await graphImporter.GetAndSaveActivityReportsMultiThreaded(1, new ManualGraphCallClient(graphAppIndentityOAuthContext, telemetry),
-                new NoUsersHaveGroupsUserGroupsCache(telemetry), new UserGroupsFilterModel());
+            await graphImporter.GetAndSaveActivityReportsMultiThreaded(1, new ManualGraphCallClient(graphAppIndentityOAuthContext, logger),
+                new NoUsersHaveGroupsUserGroupsCache(logger), new UserGroupsFilterModel());
         }
 
         [TestMethod]
         public async Task SharePointSitesUsageLoaderTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
 
-            var graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(telemetry, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
+            var graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
 
             await graphAppIndentityOAuthContext.InitClientCredential();
             var graphClient = new Microsoft.Graph.GraphServiceClient(graphAppIndentityOAuthContext.Creds);
             using (var db = new AnalyticsEntitiesContext())
             {
-                var siteUrlCache = new GraphSPSiteIdToUrlCache(graphClient, db, telemetry);
-                var loader = new SharePointSitesWeeklyUsageReportLoader(db, new ManualGraphCallClient(graphAppIndentityOAuthContext, telemetry), telemetry, siteUrlCache);
+                var siteUrlCache = new GraphSPSiteIdToUrlCache(graphClient, db, logger);
+                var loader = new SharePointSitesWeeklyUsageReportLoader(db, new ManualGraphCallClient(graphAppIndentityOAuthContext, logger), logger, siteUrlCache);
 
                 // Override/fake the last refresh date to be today
                 var data = await loader.LoadReportData();
@@ -104,8 +104,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task SundayOrNotFakeUsageLoaderTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-            var loader = new SundayOrNotFakeWeeklyUsageReportLoader(telemetry);
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var loader = new SundayOrNotFakeWeeklyUsageReportLoader(logger);
 
             // First time we load, we return a report that's not a sunday
             var saves = await loader.LoadAndSaveLastWeeksReportsIfRefreshOnDay(DayOfWeek.Sunday);
@@ -119,8 +119,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task MultiPageFakeUsageLoaderTest()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-            var loader = new MultiPageFakeWeeklyUsageReportLoader(telemetry);
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var loader = new MultiPageFakeWeeklyUsageReportLoader(logger);
 
             // We should have two items, each one loaded on a seperate page
             var fakeData = await loader.LoadReportData();
@@ -135,8 +135,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public void TeamsUserUsageLoader_DurationsUseTotalSecondsNotComponent()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-            var loader = new TestableTeamsUserUsageLoader(telemetry);
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var loader = new TestableTeamsUserUsageLoader(logger);
 
             var page = new TeamsUserActivityUserDetail
             {
@@ -159,7 +159,7 @@ namespace Tests.UnitTests
         /// </summary>
         private class TestableTeamsUserUsageLoader : TeamsUserUsageLoader
         {
-            public TestableTeamsUserUsageLoader(ILogger telemetry) : base(null, null, null, telemetry) { }
+            public TestableTeamsUserUsageLoader(ILogger logger) : base(null, null, null, logger) { }
 
             public GlobalTeamsUserUsageLog Populate(TeamsUserActivityUserDetail page)
             {

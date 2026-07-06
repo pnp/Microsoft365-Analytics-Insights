@@ -88,13 +88,44 @@ namespace CloudInstallEngine.Azure.InstallTasks
                             NetworkRuleSet = KeyVaultFirewallConfigTask.BuildFirewallRuleSet(r.Data.Properties.NetworkRuleSet, null, null)
                         }
                     };
-                    var updateResult = await r.UpdateAsync(patch);
-                    r = updateResult.Value;
+                    try
+                    {
+                        var updateResult = await r.UpdateAsync(patch);
+                        r = updateResult.Value;
+                    }
+                    catch (RequestFailedException ex) when (IsDisallowedByPolicy(ex))
+                    {
+                        // Some tenants attach a "Not allowed resource types" Azure Policy to the
+                        // management group that denies any write to Microsoft.KeyVault/vaults. The
+                        // vault already exists and is usable, so this update is best-effort hardening
+                        // (public network access + firewall) — reuse the vault as-is rather than abort
+                        // an otherwise-successful install. Network hardening should stay best-effort here.
+                        _logger.LogWarning($"Key vault '{r.Data.Name}' already exists but updating its network settings (public access '{desiredAccess}', firewall) was disallowed by Azure Policy. Reusing the existing vault as-is and skipping the network hardening. To apply these settings, grant a policy exemption for the vault and re-run the installer.");
+                    }
                 }
 
-                await EnsureTagsOnExisting(r.Data.Tags, r.GetTagResource());
+                try
+                {
+                    await EnsureTagsOnExisting(r.Data.Tags, r.GetTagResource());
+                }
+                catch (RequestFailedException ex) when (IsDisallowedByPolicy(ex))
+                {
+                    // Tagging is also a write to the vault and can be blocked by the same policy; tags
+                    // are cosmetic, so skip them rather than fail the install.
+                    _logger.LogWarning($"Could not tag existing key vault '{r.Data.Name}': the write was disallowed by Azure Policy. Continuing without updating tags.");
+                }
             }
             return r;
+        }
+
+        /// <summary>
+        /// True when an Azure Resource Manager write was rejected by an Azure Policy "deny" effect
+        /// (e.g. a "Not allowed resource types" initiative that blocks Microsoft.KeyVault/vaults).
+        /// Surfaces as HTTP 403 with error code "RequestDisallowedByPolicy".
+        /// </summary>
+        public static bool IsDisallowedByPolicy(RequestFailedException ex)
+        {
+            return ex.Status == 403 && string.Equals(ex.ErrorCode, "RequestDisallowedByPolicy", StringComparison.OrdinalIgnoreCase);
         }
     }
 

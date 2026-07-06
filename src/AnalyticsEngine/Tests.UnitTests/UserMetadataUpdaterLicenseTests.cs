@@ -23,7 +23,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_UserLicenseChange_DatabaseReflectsChange()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -68,7 +68,7 @@ namespace Tests.UnitTests
             var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { initialSkuId, usersWithInitialSku } };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, initialSkus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -85,7 +85,7 @@ namespace Tests.UnitTests
             var updatedFakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { newSkuId, usersWithNewSku } };
 
             var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, updatedSkus, updatedFakeUsersBySku);
-            var updaterWithNewLicense = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
+            var updaterWithNewLicense = new UserMetadataUpdater(logger, config, updatedFakeLoader);
             await updaterWithNewLicense.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
@@ -101,7 +101,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_AllLicensesRemoved_DatabaseReflectsRemoval()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -130,7 +130,7 @@ namespace Tests.UnitTests
             var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { skuId, usersWithSku } };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -141,7 +141,7 @@ namespace Tests.UnitTests
 
             var emptySkus = new List<SubscribedSku>();
             var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, emptySkus, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
-            var updaterNoLicenses = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
+            var updaterNoLicenses = new UserMetadataUpdater(logger, config, updatedFakeLoader);
             await updaterNoLicenses.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
@@ -155,7 +155,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_MultipleLicensesSimultaneous_AllLicensesSaved()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"multilicenseuser{DateTime.Now.Ticks}@test.com";
@@ -176,7 +176,7 @@ namespace Tests.UnitTests
             var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { sku1Id, new List<Microsoft.Graph.Models.User> { graphUserObject } }, { sku2Id, new List<Microsoft.Graph.Models.User> { graphUserObject } } };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -192,7 +192,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_MultipleUsersWithDifferentLicenses_AllProcessedCorrectly()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var user1Upn = $"batchuser1{timestamp}@test.com"; var user2Upn = $"batchuser2{timestamp}@test.com"; var user3Upn = $"batchuser3{timestamp}@test.com";
@@ -224,7 +224,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(graphUsers, skus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -244,7 +244,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_NoUsersWithLicense_LicenseTypeRemains()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"orphanlicenseuser{DateTime.Now.Ticks}@test.com";
@@ -262,7 +262,7 @@ namespace Tests.UnitTests
             var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
             var fakeUsersBySku = new Dictionary<Guid, List<Microsoft.Graph.Models.User>> { { skuId, new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { UserPrincipalName = userUpn, Id = userId } } } };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             int licenseTypeId;
@@ -274,7 +274,7 @@ namespace Tests.UnitTests
 
             var emptySkus = new List<SubscribedSku>();
             var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, emptySkus, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
-            var updaterNoLicenses = new UserMetadataUpdater(telemetry, config, updatedFakeLoader);
+            var updaterNoLicenses = new UserMetadataUpdater(logger, config, updatedFakeLoader);
             await updaterNoLicenses.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
@@ -287,7 +287,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_UserPerLicenseMode_ReadUserSkusTrue()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var userId = Guid.NewGuid().ToString();
             var userUpn = $"peruser_lic{DateTime.Now.Ticks}@test.com";
@@ -300,7 +300,7 @@ namespace Tests.UnitTests
 
             var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, fakeSkus: null);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -326,7 +326,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_TwoSkusSameDisplayName_DoesNotThrowDuplicateKey()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -366,7 +366,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             // Should NOT throw. Before the fix this throws a DbUpdateException with the
             // SQL "Cannot insert duplicate key row ... IX_license_type_id_user_id".
@@ -401,7 +401,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_GraphReturnsDuplicateUserForSingleSku_DoesNotThrowDuplicateKey()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -441,7 +441,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
@@ -468,7 +468,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_DuplicateSubscribedSku_DoesNotThrowDuplicateKey()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -505,7 +505,7 @@ namespace Tests.UnitTests
             };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
@@ -533,7 +533,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_PerUserLicenses_TwoSkusSameDisplayName_DoesNotThrowDuplicateKey()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -574,7 +574,7 @@ namespace Tests.UnitTests
                 fakeUsersBySku: null,
                 fakeLicenseDetails: fakeLicenseDetails);
 
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
@@ -602,7 +602,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_LicenseProcessingThrows_DeltaTokenNotAdvanced()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -634,7 +634,7 @@ namespace Tests.UnitTests
             fakeLoader.SimulatedNewDeltaToken = "delta-that-must-NOT-be-saved";
             fakeLoader.OnLoadUsersBySku = _ => throw new InvalidOperationException("simulated Graph failure during license import");
 
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 async () => await updater.InsertAndUpdateDatabaseFromExternalUsers(),
@@ -653,7 +653,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_SuccessfulImport_DeltaTokenCommitted()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var userId = Guid.NewGuid().ToString();
@@ -679,7 +679,7 @@ namespace Tests.UnitTests
             const string newDelta = "delta-after-successful-import";
             fakeLoader.SimulatedNewDeltaToken = newDelta;
 
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
             await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
             var persistedDelta = await fakeLoader.DeltaValueProvider.GetDeltaToken();
@@ -710,7 +710,7 @@ namespace Tests.UnitTests
             // existing DB users plus newly inserted ones), so both A and B end up
             // with the correct licence row.
 
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var tick = DateTime.Now.Ticks;
@@ -763,7 +763,7 @@ namespace Tests.UnitTests
                 emptyUsersBySku);
             fakeLoader.SimulatedNewDeltaToken = $"delta-after-run-1-{tick}";
 
-            await new UserMetadataUpdater(telemetry, config, fakeLoader)
+            await new UserMetadataUpdater(logger, config, fakeLoader)
                 .InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
@@ -806,7 +806,7 @@ namespace Tests.UnitTests
             fakeLoader.DeltaUsersOverride = new List<GraphUser> { userAGraph };
             fakeLoader.SimulatedNewDeltaToken = $"delta-after-run-2-{tick}";
 
-            await new UserMetadataUpdater(telemetry, config, fakeLoader)
+            await new UserMetadataUpdater(logger, config, fakeLoader)
                 .InsertAndUpdateDatabaseFromExternalUsers();
 
             // -------- Assert: BOTH users have the licence row, not just user A. --------

@@ -45,7 +45,7 @@ namespace Tests.FakeDataGen.StressTests
                 _memoryMonitor.Start();
                 var stopwatch = Stopwatch.StartNew();
 
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
                 var saveManager = new FakeActivityReportPersistenceManager();
 
                 long totalItems = 0;
@@ -60,7 +60,7 @@ namespace Tests.FakeDataGen.StressTests
                         }
 
                         var importer = new FakeActivityImporterForStress(
-                            telemetry,
+                            logger,
                             maxSavesPerBatch,
                             reportsPerLoad,
                             reportsPerTimeSlot,

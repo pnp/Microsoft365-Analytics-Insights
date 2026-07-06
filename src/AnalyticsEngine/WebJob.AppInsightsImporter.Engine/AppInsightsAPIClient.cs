@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -36,7 +36,7 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <param name="appInsightsConnectionString">The Application Insights connection string. The ApplicationId is parsed from it for use in the query URL.</param>
         /// <param name="credential">A TokenCredential (e.g. ClientSecretCredential) for Entra ID authentication.</param>
         /// <param name="debugTracer">Logger instance.</param>
-        public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger debugTracer)
+        public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger logger)
         {
             if (string.IsNullOrEmpty(appInsightsConnectionString))
             {
@@ -53,7 +53,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-            _logger = debugTracer;
+            _logger = logger;
         }
 
         #endregion

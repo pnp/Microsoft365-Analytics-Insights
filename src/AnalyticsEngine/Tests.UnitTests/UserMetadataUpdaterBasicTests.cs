@@ -22,12 +22,12 @@ namespace Tests.UnitTests
         public void UserMetadataUpdater_Constructor_WithInjectedLoader_SetsLoaderCorrectly()
         {
             // Arrange
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
 
             // Act
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             // Assert
             Assert.IsNotNull(updater.UserLoader);
@@ -40,10 +40,10 @@ namespace Tests.UnitTests
         public void UserMetadataUpdater_GetDbUsersFromGraphUsers_ReturnsMatchingUsers()
         {
             // Arrange
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var graphUsers = new List<GraphUser>
             {
@@ -73,10 +73,10 @@ namespace Tests.UnitTests
         public void UserMetadataUpdater_GetDbUsersFromGraphUsers_IgnoresNullOrEmptyUPN()
         {
             // Arrange
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var graphUsers = new List<GraphUser>
             {
@@ -101,10 +101,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserMetadataUpdater_GetDbUsersFromGraphUsers_EmptyLists_ReturnsEmpty()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var result = updater.GetDbUsersFromGraphUsers(new List<GraphUser>(), new List<Common.Entities.User>());
 
@@ -114,10 +114,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserMetadataUpdater_GetDbUsersFromGraphUsers_NoMatchingUsers_ReturnsEmpty()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var graphUsers = new List<GraphUser>
             {
@@ -137,10 +137,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserMetadataUpdater_GetDbUsersFromGraphUsers_CaseInsensitiveUPNMatch()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var graphUsers = new List<GraphUser>
             {
@@ -165,10 +165,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserMetadataUpdater_UpdateDbUserFromGraphUser_CopiesBasicProperties()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var graphUser = new GraphUser
             {
@@ -192,10 +192,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserMetadataUpdater_UpdateDbUserFromGraphUser_HandlesNullValues()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var graphUser = new GraphUser
             {
@@ -225,10 +225,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserMetadataUpdater_UpdateDbUserFromGraphUser_OverwritesExistingValues()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
-            var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+            var updater = new UserMetadataUpdater(logger, config, fakeLoader);
 
             var dbUser = new Common.Entities.User
             {
@@ -264,7 +264,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_DeltaProvider_ClearsTokenWhenNoActiveUsers()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser>());
 
