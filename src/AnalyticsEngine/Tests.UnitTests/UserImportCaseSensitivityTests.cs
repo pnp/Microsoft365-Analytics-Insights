@@ -41,7 +41,7 @@ namespace Tests.UnitTests
             // Pre-existing DB user has lowercase UPN; Graph returns same UPN in MixedCase.
             // Without LOWER() on the column, the EF reload query relies on the CI collation
             // for the match - this asserts that path still works.
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var ticks = DateTime.Now.Ticks;
@@ -77,7 +77,7 @@ namespace Tests.UnitTests
                 };
 
                 var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
-                var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+                var updater = new UserMetadataUpdater(logger, config, fakeLoader);
                 await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
                 using (var verifyDb = new AnalyticsEntitiesContext())
@@ -119,7 +119,7 @@ namespace Tests.UnitTests
             // Validates the H1+H3 refactor end-to-end: dropping .ToLower() from
             // the dictionary key build AND the per-Graph-user lookup, and reusing
             // the same dictionary across SKUs.
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var ticks = DateTime.Now.Ticks;
@@ -172,7 +172,7 @@ namespace Tests.UnitTests
                 };
 
                 var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-                var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+                var updater = new UserMetadataUpdater(logger, config, fakeLoader);
                 await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
                 using (var verifyDb = new AnalyticsEntitiesContext())
@@ -216,7 +216,7 @@ namespace Tests.UnitTests
             // (built once and reused). This test runs an import with TWO SKUs covering
             // the same user to verify the second SKU iteration still resolves the user
             // against the hoisted dictionary.
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
 
             var ticks = DateTime.Now.Ticks;
@@ -256,7 +256,7 @@ namespace Tests.UnitTests
                 };
 
                 var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, fakeUsersBySku);
-                var updater = new UserMetadataUpdater(telemetry, config, fakeLoader);
+                var updater = new UserMetadataUpdater(logger, config, fakeLoader);
                 await updater.InsertAndUpdateDatabaseFromExternalUsers();
 
                 using (var verifyDb = new AnalyticsEntitiesContext())

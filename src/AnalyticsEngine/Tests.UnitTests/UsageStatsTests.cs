@@ -1,4 +1,4 @@
-﻿using Azure.Identity;
+using Azure.Identity;
 using Common.Entities;
 using Common.Entities.Installer;
 using DataUtils;
@@ -26,9 +26,9 @@ namespace Tests.UnitTests
         public async Task UsageStatsReporterFakeAdaptorTest()
         {
             var tenantId = Guid.NewGuid();
-            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
-            var r = new UsageStatsManager(new ShittyUsageStatsReporterAdaptor(tracer, tenantId),
-                new ShittyDatesLoader(tracer), new FakeStatsUploader(tracer, true), tracer);
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var r = new UsageStatsManager(new ShittyUsageStatsReporterAdaptor(logger, tenantId),
+                new ShittyDatesLoader(logger), new FakeStatsUploader(logger, true), logger);
 
 
             var result = await r.ProcessAndFailSilently(); // Crash GetLastSettings
@@ -111,12 +111,12 @@ namespace Tests.UnitTests
         public async Task UsageStatsReporterRealTests()
         {
             var tenantId = Guid.NewGuid();
-            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Fake "last uploaded". Also test
                 var randoDate = DateTime.UtcNow.AddYears(-12);
-                var sqlStatsAdaptor = new SqlUsageStatsBuilder(db, tracer, tenantId);
+                var sqlStatsAdaptor = new SqlUsageStatsBuilder(db, logger, tenantId);
                 var redisDatesAdaptor = new RedisStatsDatesLoader(new Common.Entities.Config.AppConfig());
 
                 await redisDatesAdaptor.RegisterLastUploadDt(randoDate);
@@ -128,7 +128,7 @@ namespace Tests.UnitTests
                 await db.SaveChangesAsync();
 
                 // Do everything for real except actually upload stats
-                var r = new UsageStatsManager(sqlStatsAdaptor, redisDatesAdaptor, new FakeStatsUploader(tracer, false), tracer);
+                var r = new UsageStatsManager(sqlStatsAdaptor, redisDatesAdaptor, new FakeStatsUploader(logger, false), logger);
 
                 var result = await r.ProcessAndUploadStats();   // Won't work because no config saved in DB
                 Assert.IsFalse(result);
@@ -269,17 +269,17 @@ namespace Tests.UnitTests
             // End-to-end: the SAME loader instance threaded through two UsageStatsManager
             // invocations (simulating two import cycles) should let the first through and
             // suppress the second via MIN_WAIT.
-            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var tenantId = Guid.NewGuid();
-            var uploader = new FakeStatsUploader(tracer, false);
+            var uploader = new FakeStatsUploader(logger, false);
 
             // Single shared loader, mirroring Program.cs hoisting it outside the loop.
             var sharedLoader = new InMemoryStatsDatesLoader();
 
-            var mgr1 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), sharedLoader, uploader, tracer);
+            var mgr1 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(logger, tenantId), sharedLoader, uploader, logger);
             Assert.IsTrue(await mgr1.ProcessAndUploadStats(), "First cycle should upload.");
 
-            var mgr2 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), sharedLoader, uploader, tracer);
+            var mgr2 = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(logger, tenantId), sharedLoader, uploader, logger);
             Assert.IsFalse(await mgr2.ProcessAndUploadStats(), "Second cycle (same loader) must be throttled by cycle 1's RegisterLastUploadDt.");
         }
 
@@ -290,13 +290,13 @@ namespace Tests.UnitTests
             // saved BaseSolutionInstallConfig. Pin that kill switch end-to-end: the manager
             // must NOT call the uploader, and ProcessAndUploadStats must return false so the
             // caller knows no upload happened.
-            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var tenantId = Guid.NewGuid();
             var loader = new InMemoryStatsDatesLoader();
             var uploader = new CountingStatsUploader();
 
-            var builder = new AlwaysWorksUsageStatsBuilder(tracer, tenantId, allowTelemetry: false);
-            var mgr = new UsageStatsManager(builder, loader, uploader, tracer);
+            var builder = new AlwaysWorksUsageStatsBuilder(logger, tenantId, allowTelemetry: false);
+            var mgr = new UsageStatsManager(builder, loader, uploader, logger);
 
             var result = await mgr.ProcessAndUploadStats();
 
@@ -311,17 +311,17 @@ namespace Tests.UnitTests
             // The uploader contract is "no URL or no secret = configuration error, throw". This is
             // by design: UsageStatsManager.ProcessAndFailSilently catches the throw and logs a
             // warning, but no upload happens. Pin both halves of that contract.
-            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var model = AnonUsageStatsModelLoader.Load(Guid.NewGuid(), null);
 
-            using (var uploader = new WebApiStatsUploader(string.Empty, string.Empty, tracer))
+            using (var uploader = new WebApiStatsUploader(string.Empty, string.Empty, logger))
             {
                 await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                     async () => await uploader.UploadToServer(model),
                     "Empty URL + empty secret must throw — caller (ProcessAndFailSilently) relies on this to skip uploading when the operator hasn't configured StatsApiUrl/StatsApiSecret.");
             }
 
-            using (var uploader = new WebApiStatsUploader("https://stats.example/", string.Empty, tracer))
+            using (var uploader = new WebApiStatsUploader("https://stats.example/", string.Empty, logger))
             {
                 await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                     async () => await uploader.UploadToServer(model),
@@ -335,11 +335,11 @@ namespace Tests.UnitTests
             // End-to-end: a misconfigured uploader must NOT escape ProcessAndFailSilently. The
             // importer's main loop calls ProcessAndFailSilently exactly so transient/config
             // failures in telemetry never break the import cycle.
-            var tracer = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var tenantId = Guid.NewGuid();
-            using (var uploader = new WebApiStatsUploader(string.Empty, string.Empty, tracer))
+            using (var uploader = new WebApiStatsUploader(string.Empty, string.Empty, logger))
             {
-                var mgr = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(tracer, tenantId), new InMemoryStatsDatesLoader(), uploader, tracer);
+                var mgr = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(logger, tenantId), new InMemoryStatsDatesLoader(), uploader, logger);
                 var result = await mgr.ProcessAndFailSilently();
                 Assert.IsFalse(result, "ProcessAndFailSilently must report failure but not throw when the uploader is misconfigured.");
             }
@@ -352,7 +352,7 @@ namespace Tests.UnitTests
     {
         private readonly bool _allowTelemetry;
 
-        public AlwaysWorksUsageStatsBuilder(ILogger tracer, Guid tenantId, bool allowTelemetry = true) : base(tracer, tenantId)
+        public AlwaysWorksUsageStatsBuilder(ILogger logger, Guid tenantId, bool allowTelemetry = true) : base(logger, tenantId)
         {
             _allowTelemetry = allowTelemetry;
         }
@@ -382,13 +382,13 @@ namespace Tests.UnitTests
     // It crashes, a lot. By design. 
     internal class ShittyDatesLoader : IStatsDatesLoader
     {
-        private readonly ILogger _tracer;
+        private readonly ILogger _logger;
         private bool _returnNullGetLastUploadDt = true;
         private bool _crashRegisterLastUploadDt = true;
 
-        public ShittyDatesLoader(ILogger tracer)
+        public ShittyDatesLoader(ILogger logger)
         {
-            _tracer = tracer;
+            _logger = logger;
         }
 
         public Task<DateTime?> GetLastUploadDt()
@@ -399,7 +399,7 @@ namespace Tests.UnitTests
                 DateTime? dtNull = null;
                 return Task.FromResult(dtNull);
             }
-            _tracer.LogInformation($"{UsageStatsManager.LOG_PREFIX}got pretend stats uploaded date/time");
+            _logger.LogInformation($"{UsageStatsManager.LOG_PREFIX}got pretend stats uploaded date/time");
 
             DateTime? dt = DateTime.Now.AddDays(-2);
             return Task.FromResult(dt);
@@ -413,7 +413,7 @@ namespace Tests.UnitTests
                 throw new Exception();
             }
 
-            _tracer.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend registered last stats upload date/time");
+            _logger.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend registered last stats upload date/time");
             return Task.CompletedTask;
         }
     }
@@ -425,7 +425,7 @@ namespace Tests.UnitTests
         private bool _crashLoadUsageStatsModel = true;
         private bool _crashSaveUsageStatsModelToDatabase = true;
 
-        public ShittyUsageStatsReporterAdaptor(ILogger tracer, Guid tenantId) : base(tracer, tenantId)
+        public ShittyUsageStatsReporterAdaptor(ILogger logger, Guid tenantId) : base(logger, tenantId)
         {
         }
 
@@ -436,7 +436,7 @@ namespace Tests.UnitTests
                 _crashGetLastSettings = false;
                 throw new Exception("Test crash");
             }
-            _tracer.LogInformation($"{UsageStatsManager.LOG_PREFIX}got pretend last solution settings");
+            _logger.LogInformation($"{UsageStatsManager.LOG_PREFIX}got pretend last solution settings");
 
             return Task.FromResult(new BaseSolutionInstallConfig() { AllowTelemetry = true }); ;
         }
@@ -448,7 +448,7 @@ namespace Tests.UnitTests
                 _crashLoadUsageStatsModel = false;
                 throw new Exception();
             }
-            _tracer.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend generated latest stats");
+            _logger.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend generated latest stats");
 
             return Task.FromResult(AnonUsageStatsModelLoader.Load(_tenantId, lastSettings));
         }
@@ -461,7 +461,7 @@ namespace Tests.UnitTests
                 _crashSaveUsageStatsModelToDatabase = false;
                 throw new Exception("crashed saving stats to DB");
             }
-            _tracer.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend saved stats to DB");
+            _logger.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend saved stats to DB");
 
             return Task.CompletedTask;
         }
@@ -470,12 +470,12 @@ namespace Tests.UnitTests
 
     internal class FakeStatsUploader : IStatsUploader
     {
-        private readonly ILogger _tracer;
+        private readonly ILogger _logger;
         private bool _crashUploadToServer = true;
 
-        public FakeStatsUploader(ILogger tracer, bool crashFirstTime)
+        public FakeStatsUploader(ILogger logger, bool crashFirstTime)
         {
-            _tracer = tracer;
+            _logger = logger;
             _crashUploadToServer = crashFirstTime;
         }
 
@@ -486,7 +486,7 @@ namespace Tests.UnitTests
                 _crashUploadToServer = false;
                 throw new Exception("crashed uploading to server");
             }
-            _tracer.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend uploaded to stats");
+            _logger.LogInformation($"{UsageStatsManager.LOG_PREFIX}pretend uploaded to stats");
 
             return Task.CompletedTask;
         }

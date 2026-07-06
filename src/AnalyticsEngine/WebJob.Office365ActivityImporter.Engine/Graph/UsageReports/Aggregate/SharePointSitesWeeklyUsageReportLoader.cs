@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Entities.UsageReports;
 using Common.Entities.LookupCaches.Discrete;
 using Microsoft.Extensions.Logging;
@@ -18,8 +18,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         private readonly SPSiteIdToUrlCache _sPSiteIdToUrlCache;
         private readonly SiteCache _siteCache;
 
-        public SharePointSitesWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger telemetry, SPSiteIdToUrlCache sPSiteIdToUrlCache)
-            : base(db, client, telemetry)
+        public SharePointSitesWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger logger, SPSiteIdToUrlCache sPSiteIdToUrlCache)
+            : base(db, client, logger)
         {
             _sPSiteIdToUrlCache = sPSiteIdToUrlCache;
             _siteCache = new SiteCache(_context);
@@ -31,7 +31,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
             var filteredReports = new List<SharePointSiteUsageDetail>();
             foreach (var r in usageReports)
             {
-                if (!string.IsNullOrEmpty(r.SiteId) && string.IsNullOrEmpty(r.SiteUrl))
+                if (!string.IsNullOrEmpty(r.SiteId) && string.IsNullOrEmpty(r.SiteUrl) && !r.IsDeleted)
                 {
                     // No URL in results, despite the clear indication it should be there? Look it up in Graph
                     // Known issue: https://admin.microsoft.com/Adminportal/Home?#/servicehealth/:/alerts/SP676147

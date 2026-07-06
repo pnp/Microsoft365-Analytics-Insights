@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -12,9 +12,9 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// <summary>
         /// Save hits to staging table & then import all to real hits + lookups
         /// </summary>
-        public static async Task<int> SaveClicksToSQL(this CustomEventsResultCollection events, ILogger telemetry, AnalyticsEntitiesContext database)
+        public static async Task<int> SaveClicksToSQL(this CustomEventsResultCollection events, ILogger logger, AnalyticsEntitiesContext database)
         {
-            var logsToInsert = new EFInsertBatch<ClickTempEntity>(database, telemetry);
+            var logsToInsert = new EFInsertBatch<ClickTempEntity>(database, logger);
 
             // Only process click events
             foreach (var p in events.Rows)
@@ -28,7 +28,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                     }
                     else
                     {
-                        telemetry.LogWarning("Found invalid click data");
+                        logger.LogWarning("Found invalid click data");
                     }
                 }
             }

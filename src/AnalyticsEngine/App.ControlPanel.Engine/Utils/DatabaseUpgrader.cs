@@ -19,7 +19,7 @@ namespace App.ControlPanel.Engine
             var buildLabel = Common.Entities.BuildConstants.BuildLabel;
 
             log?.Invoke($"Build '{buildLabel}' - begin database upgrade.");
-            log?.Invoke($"[{DateTime.Now}]: Connecting to database @ '{initInfo.ConnectionString}' with Entity Framework context initializer set to 'MigrateDatabaseToLatestVersion'...");
+            log?.Invoke($"[{DateTime.Now}]: Connecting to database @ '{StringUtils.RedactSqlConnectionString(initInfo.ConnectionString)}' with Entity Framework context initializer set to 'MigrateDatabaseToLatestVersion'...");
 
             // Update schema with EF migration
             try

@@ -1,4 +1,4 @@
-﻿using Azure.Messaging.ServiceBus;
+using Azure.Messaging.ServiceBus;
 using Common.Entities.Config;
 using Common.Entities.Models;
 using DataUtils;
@@ -20,12 +20,12 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<HttpResponseMessage> Post([FromBody] GraphChangeNotificationList changeMsg, string validationToken = "")
         {
             var config = new AppConfig();
-            var telemetry = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(CallRecordWebhookController));
+            var logger = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(CallRecordWebhookController));
 
             // Test ping from Graph?
             if (!string.IsNullOrEmpty(validationToken))
             {
-                telemetry.LogInformation($"{nameof(CallRecordWebhookController)}: test ping from Graph received.");
+                logger.LogInformation($"{nameof(CallRecordWebhookController)}: test ping from Graph received.");
                 var pingTestResponse = new HttpResponseMessage(HttpStatusCode.OK);
                 pingTestResponse.Content = new StringContent(validationToken, System.Text.Encoding.UTF8, "text/plain");
                 return pingTestResponse;
@@ -45,12 +45,12 @@ namespace Web.AnalyticsWeb.Controllers
                     else invalidChangeMsgs++;
 
                 }
-                telemetry.LogInformation($"{nameof(CallRecordWebhookController)} invoked. {changes.Count} valid changes; {invalidChangeMsgs} invalid changes.");
+                logger.LogInformation($"{nameof(CallRecordWebhookController)} invoked. {changes.Count} valid changes; {invalidChangeMsgs} invalid changes.");
 
                 // Service Bus is required to dispatch call notifications. If it's not configured, the calls feature is disabled.
                 if (string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString))
                 {
-                    telemetry.LogError($"{nameof(CallRecordWebhookController)}: Service Bus is not configured. Teams call notifications cannot be processed. Enable Service Bus in the installer to use the Teams calls import.");
+                    logger.LogError($"{nameof(CallRecordWebhookController)}: Service Bus is not configured. Teams call notifications cannot be processed. Enable Service Bus in the installer to use the Teams calls import.");
                     return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
                     {
                         Content = new StringContent("Service Bus is not configured on this deployment; Teams call notifications are disabled.", System.Text.Encoding.UTF8, "text/plain")
@@ -68,12 +68,12 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     try
                     {
-                        await CallQueueProcessor.AddChangeMsgToQueue(changes, telemetry, sbSender);
+                        await CallQueueProcessor.AddChangeMsgToQueue(changes, logger, sbSender);
                     }
                     catch (ServiceBusException ex)
                     {
-                        telemetry.TrackException(ex);
-                        telemetry.LogError($"Error adding change messages to queue: {ex.Message}");
+                        logger.TrackException(ex);
+                        logger.LogError($"Error adding change messages to queue: {ex.Message}");
                         return new HttpResponseMessage(HttpStatusCode.InternalServerError);
                     }
                 }
@@ -89,7 +89,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             else
             {
-                telemetry.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
+                logger.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
                 var errResponse = new HttpResponseMessage(HttpStatusCode.BadRequest);
                 errResponse.Content = new StringContent($"Could not find {nameof(GraphChangeNotificationList)} in body",
                     System.Text.Encoding.UTF8, "text/plain");

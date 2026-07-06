@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Net;
@@ -9,20 +9,20 @@ namespace WebJob.Office365ActivityImporter.Engine
     public class ExceptionHandler
     {
         [Obsolete]
-        public static bool IsThrottlingError(HttpRequestException ex, HttpResponseMessage response, ILogger telemetry)
+        public static bool IsThrottlingError(HttpRequestException ex, HttpResponseMessage response, ILogger logger)
         {
             if (response == null)
             {
                 return false;
             }
             Console.WriteLine($"Got {nameof(HttpRequestException)}. Error = " + ex.Message);
-            if (ex.InnerException != null) telemetry.LogError(ex, "Inner exception = " + ex.InnerException.Message);
+            if (ex.InnerException != null) logger.LogError(ex, "Inner exception = " + ex.InnerException.Message);
 
             string errBody = string.Empty;
             try
             {
                 errBody = response.Content.ReadAsStringAsync().Result;
-                telemetry.LogError("Error Body = " + errBody);
+                logger.LogError("Error Body = " + errBody);
             }
             catch (ObjectDisposedException)
             {

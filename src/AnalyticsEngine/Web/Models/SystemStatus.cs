@@ -1,4 +1,4 @@
-﻿using App.ControlPanel.Engine;
+using App.ControlPanel.Engine;
 using Azure.Messaging.ServiceBus;
 using Common.Entities;
 using Common.Entities.Config;
@@ -159,8 +159,8 @@ namespace Web.AnalyticsWeb.Models
 
             try
             {
-                var telemetry = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(SystemStatus));
-                var callWebhook = new CallWebhook(config, telemetry);
+                var logger = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(SystemStatus));
+                var callWebhook = new CallWebhook(config, logger);
                 var info = await callWebhook.GetCallRecordsSubscriptionInfo(new Uri(webhookUrlString));
 
                 if (info.Exists)

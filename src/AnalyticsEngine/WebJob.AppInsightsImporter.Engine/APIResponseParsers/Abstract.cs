@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -43,7 +43,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
     public abstract class AppInsightsQueryResultCollection<T> where T : BaseAppInsightsQueryResult
     {
-        protected readonly ILogger _debugTracer;
+        protected readonly ILogger _logger;
 
         protected abstract T Build(List<object> rowColumnVals, Dictionary<int, PropertyInfo> propDic);
 
@@ -52,9 +52,9 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>
         /// Construct from AppInsights table, which is a 2d collection of rows & columns, into a typed collection of objects of T
         /// </summary>
-        protected AppInsightsQueryResultCollection(AppInsightsTable fromTable, DateTime fromWhen, ILogger debugTracer)
+        protected AppInsightsQueryResultCollection(AppInsightsTable fromTable, DateTime fromWhen, ILogger logger)
         {
-            _debugTracer = debugTracer;
+            _logger = logger;
 
             // Build column map of properties we can set
             var propDic = new Dictionary<int, PropertyInfo>();
@@ -91,7 +91,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 catch (Exception ex)
                 {
                     // Log and continue so a single malformed row doesn't drop the whole batch
-                    _debugTracer?.LogWarning($"Failed to deserialise {typeof(T).Name} row: {ex.Message}");
+                    _logger?.LogWarning($"Failed to deserialise {typeof(T).Name} row: {ex.Message}");
                 }
                 if (record != null)
                 {
