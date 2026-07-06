@@ -49,12 +49,20 @@ Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing
   is intentionally separate from the importer's `AppInsightsAPIClient` (which is coupled to the importer's
   response parsers) to avoid destabilising the importer; consolidating the two onto one client remains a
   future cleanup.
-- **Web Health tab (in the admin SPA)** — a new `Health` tab in the React admin-app
-  (`Scripts/admin-app/src/pages/HealthPage.tsx` + `api/healthApi.ts` + `types/health.ts`, routed in
-  `App.tsx`), backed by a new `api/Health` endpoint (`HealthAPIController` → `Web/Models/HealthDashboard.cs`,
-  a best-effort, 60 s-cached, cache-stampede-guarded JSON aggregation). It auto-refreshes every 60 s and
-  leads with a single **overall traffic-light** (rolled up by the pure, unit-tested
-  `DataUtils.Health.HealthRollup`). Cards:
+- **Web Health tab (in the admin SPA)** — a `Health` tab in the React admin-app
+  (`Scripts/admin-app/src/pages/HealthPage.tsx` + `components/health/*` + `api/healthApi.ts` +
+  `types/health.ts`, routed in `App.tsx`), backed by the `api/Health` controller (`HealthAPIController` →
+  `Web/Models/Health/HealthService.cs` + `HealthModels.cs`). The page is split into **lazily-loaded
+  sub-section tabs**, each backed by its own independently-cached endpoint
+  (`api/Health/{summary,data,liveness,exceptions,components,config}`, best-effort, 60 s-cached, single-flight
+  per section): the SPA only fetches the sub-section the user opens, and a slow/failing source degrades that
+  one section instead of the whole page. The **Overview** tab leads with the single **overall traffic-light**
+  (rolled up by the pure, unit-tested `DataUtils.Health.HealthRollup`) via the cheap `summary` endpoint, which
+  deliberately **skips the heavy SQL row-count/freshness scans** (it only probes DB reachability with
+  `SELECT 1`). The heavy Data section runs on its own tab with a short per-query `CommandTimeout`, its two big
+  tables scanned in parallel and each folded into a single 24h/7d+freshness pass, so on a very large tenant
+  (whose `audit_events`/`hits` timestamp columns are un-indexed) it degrades to a "scan didn't complete" note
+  rather than hanging the request. Sub-sections:
   - **Import liveness** — `FinishedImportCycle` per job, `FinishedSectionImport` per section,
     `ImporterHeartbeat` (when it lands), **plus a web-tracker `pageViews`-in-App-Insights probe** that tells
     a "tracker not deployed" apart from an "AppInsightsImporter not running".
