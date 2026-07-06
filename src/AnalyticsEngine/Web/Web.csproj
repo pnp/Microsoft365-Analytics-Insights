@@ -187,6 +187,7 @@
     <Compile Include="Controllers\CallRecordWebhookController.cs" />
     <Compile Include="Controllers\HomeController.cs" />
     <Compile Include="Controllers\SiteTokenAPIController.cs" />
+    <Compile Include="Controllers\HealthAPIController.cs" />
     <Compile Include="Controllers\SystemStatusAPIController.cs" />
     <Compile Include="Controllers\TeamsAuthAPIController.cs" />
     <Compile Include="Controllers\UserDataLookupAPIController.cs" />
@@ -197,6 +198,7 @@
     <Compile Include="Models\InstallLogModels.cs" />
     <Compile Include="Models\ProfilingStatusModels.cs" />
     <Compile Include="Models\SystemStatus.cs" />
+    <Compile Include="Models\HealthDashboard.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
     <Compile Include="Models\TeamAuthStatusResponse.cs" />
     <Compile Include="Models\UserDataLookupModels.cs" />
