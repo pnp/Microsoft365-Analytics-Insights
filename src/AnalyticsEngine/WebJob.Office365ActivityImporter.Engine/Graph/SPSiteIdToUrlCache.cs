@@ -59,8 +59,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             try
             {
-                // Try finding from the database 1st so we go easy on Graph
-                var dbRecordBySiteId = await _db.sites.Where(s => s.SiteId.ToLower() == id.ToLower()).SingleOrDefaultAsync();
+                // Try finding from the database 1st so we go easy on Graph.
+                // Compare directly (no .ToLower()): SQL Server's default collation is case-insensitive,
+                // and LOWER() on the column makes the predicate non-SARGable, forcing a full scan of sites.
+                var dbRecordBySiteId = await _db.sites.Where(s => s.SiteId == id).SingleOrDefaultAsync();
                 if (dbRecordBySiteId != null)
                 {
                     return new SPSiteIdToUrl
@@ -73,7 +75,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _logger.LogInformation($"{nameof(SPSiteIdToUrlCache)}: Loaded site URL for {id}");
 
                 // Cache in DB
-                var dbRecordBySiteUrl = await _db.sites.Where(s => s.UrlBase.ToLower() == site.WebUrl.ToLower()).SingleOrDefaultAsync();
+                var dbRecordBySiteUrl = await _db.sites.Where(s => s.UrlBase == site.WebUrl).SingleOrDefaultAsync();
                 if (dbRecordBySiteUrl != null)
                 {
                     dbRecordBySiteUrl.SiteId = id;
