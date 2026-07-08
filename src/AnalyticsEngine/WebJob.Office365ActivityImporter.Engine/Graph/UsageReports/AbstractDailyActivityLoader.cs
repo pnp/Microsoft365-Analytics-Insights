@@ -32,6 +32,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
         public Dictionary<DateTime, List<TUserActivityUserDetail>> LoadedReportPages { get; set; } = new Dictionary<DateTime, List<TUserActivityUserDetail>>();
 
+        /// <summary>
+        /// How many usage-log rows to persist per EF SaveChanges (and per existence query). Kept small enough
+        /// that EF6 never builds millions of insert/update command trees in a single call (which
+        /// OutOfMemoryExceptions at large-tenant scale) and that the per-batch IN clause stays well under SQL
+        /// Server's parameter limit. Settable so tests can exercise the batch boundary cheaply.
+        /// </summary>
+        public int SaveBatchSize { get; set; } = 1000;
+
         public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax)
         {
             // Activity reports don't tend to refresh until a couple of days late. Make sure we collect something useful. 
@@ -72,7 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         public async Task SaveLoadedReportsToSql(ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
         {
             int i = 0; var enUS = new System.Globalization.CultureInfo("en-US");
-            var allInserts = new List<TReportDbType>();
+            var db = lookupCache.DB;
 
             Telemetry.LogInformation($"Saving {this.GetType().Name} for {LoadedReportPages.Keys.Count} dates");
 
@@ -80,139 +88,162 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             // call ran on every 1000-row progress print, making progress O(n^2).
             var totalReports = LoadedReportPages.Sum(kv => kv.Value.Count);
 
-            // Pre-fetch all existing reports across the whole date range in one query - the previous
-            // code issued one EF query per date (up to 28 sequential round-trips per loader run).
-            Dictionary<DateTime, List<TReportDbType>> existingByDate;
-            if (LoadedReportPages.Count > 0)
+            // Persist one day at a time, committing in fixed-size batches. Previously every row across every date
+            // was added to a single context and committed in ONE SaveChangesAsync, and every existing row across
+            // the whole date range was pre-loaded and tracked. At ~200k users x up to 28 days EF6 builds an
+            // insert/update command tree for every pending row at once and throws OutOfMemoryException on a small
+            // App Service (observed on a 7GB P2v2). Reading only one day at a time and flushing in batches keeps
+            // the command-tree build bounded; auto change-detection is turned off so adding a day's rows stays
+            // O(n) instead of O(n^2). AssociatedLookupId is [NotMapped] (it maps to UserID / YammerGroupID per
+            // subclass), so existing rows can only be filtered in SQL by the mapped Date column - we key them by
+            // lookup id in memory.
+            var autoDetectWasEnabled = db.Configuration.AutoDetectChangesEnabled;
+            db.Configuration.AutoDetectChangesEnabled = false;
+            try
             {
-                var minDate = LoadedReportPages.Keys.Min().Date;
-                var maxDate = LoadedReportPages.Keys.Max().Date;
-                var rangeRows = await GetTable(lookupCache.DB)
-                    .Where(t => t.Date >= minDate && t.Date <= maxDate)
-                    .ToListAsync();
-                existingByDate = rangeRows
-                    .GroupBy(r => r.Date.Date)
-                    .ToDictionary(g => g.Key, g => g.ToList());
-            }
-            else
-            {
-                existingByDate = new Dictionary<DateTime, List<TReportDbType>>();
-            }
-
-            // For each day in dataset (Key)
-            foreach (var dateTime in LoadedReportPages.Keys)
-            {
-                // Pre-cache all reports on that date
-                if (!existingByDate.TryGetValue(dateTime.Date, out var allReportsOnDate))
+                foreach (var dateTime in LoadedReportPages.Keys)
                 {
-                    allReportsOnDate = new List<TReportDbType>();
-                }
-
-                // Look through Graph results & compare with already saved reports for this date
-                foreach (var reportPage in LoadedReportPages[dateTime])
-                {
-                    // A usage-report row with no user/group identifier (e.g. a Graph row with a null
-                    // userPrincipalName when report anonymisation is enabled on the tenant) can't be
-                    // matched to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in
-                    // the loop (IdInScope, the id cache and GetOrCreateLookup all assume non-null) -
-                    // otherwise one such row aborts the whole report import and does so every run.
-                    if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
+                    // This day's existing rows, tracked (so updates go through the identity map without attach
+                    // conflicts), keyed in memory by the [NotMapped] AssociatedLookupId.
+                    var existingByLookupId = new Dictionary<int, TReportDbType>();
+                    foreach (var existingRow in await GetTable(db).Where(t => t.Date == dateTime.Date).ToListAsync())
                     {
-                        Telemetry.LogWarning($"Skipping a {typeof(TReportDbType).Name} report row with no lookup identifier (null/empty user or group name).");
-                        continue;
+                        // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.
+                        existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
                     }
 
-                    // Usually we're checking if the user is in scope (Entra ID group memembership for group filter)
-                    var isInScope = await IdInScope(reportPage.LookupFieldValue);
-                    if (!isInScope)
+                    var pendingChanges = 0;
+                    foreach (var reportPage in LoadedReportPages[dateTime])
                     {
-                        Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
-                        continue;   // Skip this record
-                    }
-
-                    // Do we have a cached ID for the lookup?
-                    int? lookupId = null;
-                    bool needsResolve = false;
-                    lock (userEmailToDbIdCache)
-                    {
-                        lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
-                        if (lookupId == null) needsResolve = true;
-                    }
-
-                    if (needsResolve)
-                    {
-                        // Resolve the lookup OUTSIDE the lock. The previous .Result-inside-lock pattern
-                        // held a shared mutex through a full DB round-trip, starving all parallel import
-                        // threads on the same cache.
-                        var lookup = await reportPage.GetOrCreateLookup(lookupCache);
-
-                        // Sanity
-                        if (!lookup.IsSavedToDB)
+                        // A usage-report row with no user/group identifier (e.g. a Graph row with a null
+                        // userPrincipalName when report anonymisation is enabled on the tenant) can't be matched
+                        // to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in the loop.
+                        if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
                         {
-                            throw new InvalidOperationException("Cannot use unsaved lookups for activity records");
+                            Telemetry.LogWarning($"Skipping a {typeof(TReportDbType).Name} report row with no lookup identifier (null/empty user or group name).");
+                            continue;
                         }
 
-                        lock (userEmailToDbIdCache)
+                        // Usually an Entra ID group-membership check for a group filter.
+                        if (!await IdInScope(reportPage.LookupFieldValue))
                         {
-                            // Re-check in case another thread populated it while we were resolving.
-                            lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
-                            if (lookupId == null)
+                            Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
+                            continue;
+                        }
+
+                        var lookupId = await ResolveLookupIdAsync(reportPage, userEmailToDbIdCache, lookupCache);
+
+                        // Output progress every 1000 imports
+                        if (i > 0 && i % 1000 == 0)
+                        {
+                            Console.WriteLine($"{this.GetType().Name}: Saved {i} / {totalReports}");
+                        }
+
+                        // Upsert: reuse the existing row for this (date, lookup) if we have one, else insert.
+                        var isNewLog = !existingByLookupId.TryGetValue(lookupId, out var dateRequestedLog);
+                        if (isNewLog)
+                        {
+                            dateRequestedLog = new TReportDbType() { AssociatedLookupId = lookupId };
+                            existingByLookupId[lookupId] = dateRequestedLog;
+                        }
+
+                        // Set log stats
+                        dateRequestedLog.Date = dateTime.Date;
+
+                        // Example: "2017-08-30"
+                        var activityDate = DateTime.MinValue;
+                        if (!string.IsNullOrEmpty(reportPage.LastActivityDateString))
+                        {
+                            if (DateTime.TryParseExact(reportPage.LastActivityDateString, "yyyy-MM-dd", enUS, System.Globalization.DateTimeStyles.None, out activityDate))
                             {
-                                lookupId = lookup.ID;
-                                userEmailToDbIdCache.AddOrUpdateForName<TReportDbType>(reportPage.LookupFieldValue, lookupId.Value);
+                                dateRequestedLog.LastActivityDate = activityDate;
+                            }
+                            else
+                            {
+                                Telemetry.LogInformation($"Invalid LastActivity value: '{reportPage.LastActivityDateString}'");
+                                dateRequestedLog.LastActivityDate = null;
                             }
                         }
-                    }
+                        PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
 
-                    var dateRequestedLog = allReportsOnDate.FirstOrDefault(t => t.AssociatedLookupId == lookupId.Value);
-
-                    // Output progress every 1000 imports
-                    if (i > 0 && i % 1000 == 0)
-                    {
-                        Console.WriteLine($"{this.GetType().Name}: Saved {i} / {totalReports}");
-                    }
-
-                    // Create new log if necesary
-                    if (dateRequestedLog == null)
-                    {
-                        dateRequestedLog = new TReportDbType()
+                        // Auto-detect is off, so state the change explicitly.
+                        if (isNewLog)
                         {
-                            AssociatedLookupId = lookupId.Value   // date set below
-                        };
-
-                        // Add new logs to list to insert
-                        allInserts.Add(dateRequestedLog);
-                        // Track in the per-date cache so a duplicate within the same import doesn't insert again
-                        allReportsOnDate.Add(dateRequestedLog);
-                    }
-
-                    // Set log stats
-                    dateRequestedLog.Date = dateTime.Date;
-
-                    // Example: "2017-08-30"
-                    var activityDate = DateTime.MinValue;
-                    if (!string.IsNullOrEmpty(reportPage.LastActivityDateString))
-                    {
-                        if (DateTime.TryParseExact(reportPage.LastActivityDateString, "yyyy-MM-dd", enUS, System.Globalization.DateTimeStyles.None, out activityDate))
-                        {
-                            dateRequestedLog.LastActivityDate = activityDate;
+                            GetTable(db).Add(dateRequestedLog);
                         }
                         else
                         {
-                            Telemetry.LogInformation($"Invalid LastActivity value: '{reportPage.LastActivityDateString}'");
-                            dateRequestedLog.LastActivityDate = null;
+                            db.Entry(dateRequestedLog).State = EntityState.Modified;
+                        }
+
+                        i++;
+                        pendingChanges++;
+                        if (pendingChanges >= SaveBatchSize)
+                        {
+                            await db.SaveChangesAsync();
+                            pendingChanges = 0;
                         }
                     }
-                    PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
 
-                    i++;
+                    if (pendingChanges > 0)
+                    {
+                        await db.SaveChangesAsync();
+                    }
+
+                    // Release this day's tracked rows before moving to the next day.
+                    DetachReportLogEntities(db);
                 }
             }
+            finally
+            {
+                db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
+            }
+        }
 
-            // All inserts at once
-            GetTable(lookupCache.DB).AddRange(allInserts);
+        // Resolve the DB id for a report row's user/group lookup, using the shared cross-thread id cache and
+        // only hitting the DB (via GetOrCreateLookup) on a cache miss. Resolution happens OUTSIDE the cache lock:
+        // the previous .Result-inside-lock pattern held a shared mutex through a full DB round-trip, starving all
+        // parallel import threads on the same cache.
+        private async Task<int> ResolveLookupIdAsync(TUserActivityUserDetail reportPage, ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
+        {
+            int? lookupId;
+            lock (userEmailToDbIdCache)
+            {
+                lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
+            }
+            if (lookupId != null)
+            {
+                return lookupId.Value;
+            }
 
-            await lookupCache.DB.SaveChangesAsync();
+            var lookup = await reportPage.GetOrCreateLookup(lookupCache);
+            if (!lookup.IsSavedToDB)
+            {
+                throw new InvalidOperationException("Cannot use unsaved lookups for activity records");
+            }
+
+            lock (userEmailToDbIdCache)
+            {
+                // Re-check in case another thread populated it while we were resolving.
+                lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
+                if (lookupId == null)
+                {
+                    lookupId = lookup.ID;
+                    userEmailToDbIdCache.AddOrUpdateForName<TReportDbType>(reportPage.LookupFieldValue, lookupId.Value);
+                }
+            }
+            return lookupId.Value;
+        }
+
+        // Detach the day's saved usage-log entities so the EF6 change tracker (and the memory it holds) is
+        // released before the next day. Lookup entities (users/groups) are intentionally left tracked so the
+        // shared id cache keeps working.
+        private static void DetachReportLogEntities(AnalyticsEntitiesContext db)
+        {
+            foreach (var entry in db.ChangeTracker.Entries<AbstractUsageActivityLog>().ToList())
+            {
+                entry.State = EntityState.Detached;
+            }
         }
 
         protected virtual Task<bool> IdInScope(string lookupId)
