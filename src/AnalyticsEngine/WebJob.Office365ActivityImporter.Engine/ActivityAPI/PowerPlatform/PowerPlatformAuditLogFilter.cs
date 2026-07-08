@@ -30,7 +30,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 return true;
             }
 
-            logger?.LogInformation($"PowerPlatform: skipping Power Automate event with non-run operation '{operation}'. Only flow-run operations are persisted - extend ActivityImportConstants.PowerPlatformOps.FlowRunOps if this should be tracked.");
+            logger?.LogDebug($"PowerPlatform: skipping Power Automate event with non-run operation '{operation}'. Only flow-run operations are persisted - extend ActivityImportConstants.PowerPlatformOps.FlowRunOps if this should be tracked.");
             return false;
         }
     }

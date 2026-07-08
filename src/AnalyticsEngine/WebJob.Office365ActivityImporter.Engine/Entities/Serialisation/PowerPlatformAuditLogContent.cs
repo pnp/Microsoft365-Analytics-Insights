@@ -261,7 +261,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 var isShare = ActivityImportConstants.PowerPlatformOps.IsPowerAppShareOp(Operation);
                 if (!isLaunch && !isShare)
                 {
-                    logger?.LogInformation($"PowerPlatform admin activity: ignoring PowerApp event with unsupported operation '{Operation}' (id='{Id}'). Only LaunchPowerApp + share operations are persisted today.");
+                    logger?.LogDebug($"PowerPlatform admin activity: ignoring PowerApp event with unsupported operation '{Operation}' (id='{Id}'). Only LaunchPowerApp + share operations are persisted today.");
                     return null;
                 }
                 return ToPowerAppsContent(logger, isShare);
@@ -273,11 +273,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
             if (string.IsNullOrEmpty(resourceType))
             {
-                logger?.LogInformation($"PowerPlatform admin activity: skipping record - no '{ActivityImportConstants.PowerPlatformProps.ResourceType}' property, so this event is not tied to a tracked Power App or Cloud Flow resource (operation='{Operation}', id='{Id}'). This is expected for operations like ApiEndpointCallEvent and connector-only events.");
+                logger?.LogDebug($"PowerPlatform admin activity: skipping record - no '{ActivityImportConstants.PowerPlatformProps.ResourceType}' property, so this event is not tied to a tracked Power App or Cloud Flow resource (operation='{Operation}', id='{Id}'). This is expected for operations like ApiEndpointCallEvent and connector-only events.");
             }
             else
             {
-                logger?.LogInformation($"PowerPlatform admin activity: skipping record with unsupported resource type '{resourceType}' - only PowerApp and CloudFlow are persisted today (operation='{Operation}', id='{Id}').");
+                logger?.LogDebug($"PowerPlatform admin activity: skipping record with unsupported resource type '{resourceType}' - only PowerApp and CloudFlow are persisted today (operation='{Operation}', id='{Id}').");
             }
             return null;
         }
