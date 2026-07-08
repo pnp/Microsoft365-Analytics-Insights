@@ -1,6 +1,5 @@
 using Common.Entities;
 using Common.Entities.Entities.UsageReports;
-using Common.Entities.LookupCaches.Discrete;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -16,13 +15,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
     public class SharePointSitesWeeklyUsageReportLoader : GraphAndSqlAggregateWeeklyUsageReportLoader<SharePointSiteUsageDetail>
     {
         private readonly SPSiteIdToUrlCache _sPSiteIdToUrlCache;
-        private readonly SiteCache _siteCache;
+
+        // Bulk-loaded once in BeginSaveAsync so the per-site save loop needs no DB round-trips:
+        private Dictionary<string, DateTime?> _lastStoredWeekByUrl;   // existing latest week_ending per site URL
+        private Dictionary<string, int> _existingSiteIdByUrl;         // existing site PK per site URL
+        private Dictionary<string, Site> _newSitesByUrl;              // sites created during this run (reused for repeats)
 
         public SharePointSitesWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger logger, SPSiteIdToUrlCache sPSiteIdToUrlCache)
             : base(db, client, logger)
         {
             _sPSiteIdToUrlCache = sPSiteIdToUrlCache;
-            _siteCache = new SiteCache(_context);
         }
 
         public override async Task<IEnumerable<SharePointSiteUsageDetail>> LoadReportData()
@@ -56,27 +58,82 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 
         public override string ReportName => "SharePoint Site Usage";
 
-        protected override async Task<DateTime?> GetLastStoredResultFor(SharePointSiteUsageDetail item)
+        /// <summary>
+        /// One-time bulk pre-load so the save loop does zero per-site DB round-trips, and disable EF change
+        /// auto-detection so adding tens of thousands of rows to the context stays O(n) instead of O(n^2).
+        /// </summary>
+        protected override async Task BeginSaveAsync(IReadOnlyList<SharePointSiteUsageDetail> allItems)
         {
-            var latestLog = await _context.SharePointSiteStats.Where(s => s.Site.UrlBase == item.SiteUrl).OrderByDescending(s => s.ForWeekEnding).FirstOrDefaultAsync();
-            if (latestLog != null)
+            // All known sites (lightweight projection, not tracked) keyed by URL.
+            var existingSites = await _context.sites.AsNoTracking()
+                .Select(s => new { s.ID, s.UrlBase })
+                .ToListAsync();
+
+            _existingSiteIdByUrl = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var urlBySiteId = new Dictionary<int, string>();
+            foreach (var s in existingSites)
             {
-                return latestLog.ForWeekEnding;
+                if (!string.IsNullOrEmpty(s.UrlBase))
+                {
+                    _existingSiteIdByUrl[s.UrlBase] = s.ID;
+                    urlBySiteId[s.ID] = s.UrlBase;
+                }
             }
-            return null;
+
+            // Latest stored week per site in ONE grouped query (replaces the per-site top-1 query that
+            // previously ran once per site - the dominant cost of this import at ~1 query/site).
+            var latestPerSite = await _context.SharePointSiteStats
+                .GroupBy(s => s.SiteId)
+                .Select(g => new { SiteId = g.Key, Latest = g.Max(s => s.ForWeekEnding) })
+                .ToListAsync();
+
+            _lastStoredWeekByUrl = new Dictionary<string, DateTime?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in latestPerSite)
+            {
+                if (urlBySiteId.TryGetValue(row.SiteId, out var url))
+                {
+                    // Keep the greatest week across any sites resolving to the same URL (matches the previous
+                    // OrderByDescending(ForWeekEnding).First() semantics).
+                    if (!_lastStoredWeekByUrl.TryGetValue(url, out var existing)
+                        || (row.Latest.HasValue && (!existing.HasValue || row.Latest.Value > existing.Value)))
+                    {
+                        _lastStoredWeekByUrl[url] = row.Latest;
+                    }
+                }
+            }
+
+            _newSitesByUrl = new Dictionary<string, Site>(StringComparer.OrdinalIgnoreCase);
+            _context.Configuration.AutoDetectChangesEnabled = false;
+        }
+
+        protected override Task EndSaveAsync()
+        {
+            // Always restore, even when nothing was saved, since the context may be reused.
+            _context.Configuration.AutoDetectChangesEnabled = true;
+            return Task.CompletedTask;
+        }
+
+        protected override Task<DateTime?> GetLastStoredResultFor(SharePointSiteUsageDetail item)
+        {
+            DateTime? lastStored = null;
+            if (!string.IsNullOrEmpty(item.SiteUrl) && _lastStoredWeekByUrl != null)
+            {
+                _lastStoredWeekByUrl.TryGetValue(item.SiteUrl, out lastStored);
+            }
+            return Task.FromResult(lastStored);
         }
 
         protected override async Task CommitAllChanges()
         {
+            // Auto-detect is off during the bulk add; run it once here so the pending inserts are picked up.
+            _context.ChangeTracker.DetectChanges();
             await _context.SaveChangesAsync();
         }
 
-        protected override async Task AddItemToSaveList(SharePointSiteUsageDetail item)
+        protected override Task AddItemToSaveList(SharePointSiteUsageDetail item)
         {
-            var site = await _siteCache.GetOrCreateNewResource(item.SiteUrl, new Site { UrlBase = item.SiteUrl });
             var newLog = new SharePointSitesFileWeeklyStats
             {
-                Site = site,
                 ForWeekEnding = item.ReportRefreshDate,
                 ActiveFileCount = item.ActiveFileCount,
                 AnonymousLinkCount = item.AnonymousLinkCount,
@@ -91,7 +148,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
                 VisitedPageCount = item.VisitedPageCount
             };
 
+            if (_existingSiteIdByUrl.TryGetValue(item.SiteUrl, out var existingSiteId))
+            {
+                // Existing site: set the FK directly, no need to load/track the Site entity.
+                newLog.SiteId = existingSiteId;
+            }
+            else if (_newSitesByUrl.TryGetValue(item.SiteUrl, out var newSite))
+            {
+                // A site we already created earlier in this same run.
+                newLog.Site = newSite;
+            }
+            else
+            {
+                // Brand-new site: add it (tracked) and attach via navigation so EF inserts it and fills the FK.
+                var site = new Site { UrlBase = item.SiteUrl };
+                _context.sites.Add(site);
+                _newSitesByUrl[item.SiteUrl] = site;
+                newLog.Site = site;
+            }
+
             _context.SharePointSiteStats.Add(newLog);
+            return Task.CompletedTask;
         }
     }
 }
