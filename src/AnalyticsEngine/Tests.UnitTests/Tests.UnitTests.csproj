@@ -163,6 +163,7 @@
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserAppLoader.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
+    <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="GraphImportTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
