@@ -17,6 +17,7 @@ namespace DataUtils.Http
         private DateTime? _nextCallEarliestTime = null;
         private int _concurrentCalls = 0, _throttledCalls = 0, _completedCalls = 0;
         private int _maxRetries = 10;
+        private int _maxRetryAfterWaitSeconds = 180;
         private object _concurrentCallsObj = new object(), _throttledCallsObject = new object(), _completedCallsObject = new object(), _maxRetriesObj = new object();
 
 
@@ -98,8 +99,19 @@ namespace DataUtils.Http
                     var waitValue = response.GetRetryAfterHeaderSeconds();
                     if (!ignoreRetryHeader && waitValue.HasValue)
                     {
-                        secondsToWait = waitValue.Value;
-                        _logger.LogInformation($"{THROTTLE_ERROR} for {url}. Waiting to retry for attempt #{retries}, {secondsToWait} seconds (from 'retry-after' header)...");
+                        // Honour 'retry-after', but cap it: a single very large (or buggy) value would otherwise
+                        // block this thread for that entire duration (we saw multi-minute stalls in usage-report
+                        // paging). Capping breaks one huge sleep into shorter, observable waits + retries.
+                        var cap = MaxRetryAfterWaitSeconds;
+                        secondsToWait = Math.Min(waitValue.Value, cap);
+                        if (waitValue.Value > cap)
+                        {
+                            _logger.LogWarning($"{THROTTLE_ERROR} for {url}. 'retry-after' header asked for {waitValue.Value}s; capping wait at {cap}s for attempt #{retries}.");
+                        }
+                        else
+                        {
+                            _logger.LogInformation($"{THROTTLE_ERROR} for {url}. Waiting to retry for attempt #{retries}, {secondsToWait} seconds (from 'retry-after' header)...");
+                        }
                     }
                     else
                     {
@@ -156,6 +168,28 @@ namespace DataUtils.Http
                 lock (_maxRetriesObj)
                 {
                     _maxRetries = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Upper bound (seconds) on how long a single 'retry-after' back-off will sleep. A very large or buggy
+        /// header value would otherwise stall the calling thread for its whole duration.
+        /// </summary>
+        public int MaxRetryAfterWaitSeconds
+        {
+            get
+            {
+                lock (_maxRetriesObj)
+                {
+                    return _maxRetryAfterWaitSeconds;
+                }
+            }
+            set
+            {
+                lock (_maxRetriesObj)
+                {
+                    _maxRetryAfterWaitSeconds = value;
                 }
             }
         }
