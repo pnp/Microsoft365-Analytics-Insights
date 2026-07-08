@@ -176,6 +176,99 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Two report rows for the same *new* site in one run must map to a single created site (the
+        /// _newSitesByUrl reuse branch), not insert the site twice.
+        /// </summary>
+        [TestMethod]
+        public async Task SharePointSitesUsageLoader_DuplicateNewSiteInSameRun_CreatesOneSite()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var thisSunday = new DateTime(2024, 2, 25);
+            var url = $"https://contoso.sharepoint.com/sites/dup-{DateTime.Now.Ticks}";
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var loader = new SharePointSitesWeeklyUsageReportLoader(db, null, logger, null);
+                var data = new List<SharePointSiteUsageDetail>
+                {
+                    new SharePointSiteUsageDetail { SiteUrl = url, FileCount = 1 },
+                    new SharePointSiteUsageDetail { SiteUrl = url, FileCount = 2 },
+                };
+                data[0].ReportRefreshDate = thisSunday;
+                data[1].ReportRefreshDate = thisSunday;
+
+                var saved = await loader.SaveLoadedReportsIfRefreshOnDay(DayOfWeek.Sunday, data);
+                Assert.AreEqual(2, saved);
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var sites = await db.sites.Where(s => s.UrlBase == url).ToListAsync();
+                Assert.AreEqual(1, sites.Count, "The two same-URL rows must map to a single new site, not duplicate sites");
+                var rows = await db.SharePointSiteStats.Where(s => s.Site.UrlBase == url).ToListAsync();
+                Assert.AreEqual(2, rows.Count, "Both weekly rows should attach to the one site");
+            }
+        }
+
+        /// <summary>
+        /// A report URL whose case differs from the stored site URL must still resolve to the existing site
+        /// (the URL dictionaries are OrdinalIgnoreCase, matching SQL Server's case-insensitive collation),
+        /// so we don't create a duplicate site.
+        /// </summary>
+        [TestMethod]
+        public async Task SharePointSitesUsageLoader_MatchesExistingSiteUrlCaseInsensitively()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var thisSunday = new DateTime(2024, 2, 25);
+            var lastSunday = new DateTime(2024, 2, 18);
+            var storedUrl = $"https://contoso.sharepoint.com/sites/CaseTest-{DateTime.Now.Ticks}";
+            var reportUrl = storedUrl.ToUpperInvariant();   // same site, different case (as Graph might return)
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var site = new Site { UrlBase = storedUrl };
+                db.sites.Add(site);
+                db.SharePointSiteStats.Add(new SharePointSitesFileWeeklyStats { Site = site, ForWeekEnding = lastSunday });
+                await db.SaveChangesAsync();
+
+                var loader = new SharePointSitesWeeklyUsageReportLoader(db, null, logger, null);
+                var data = new List<SharePointSiteUsageDetail> { new SharePointSiteUsageDetail { SiteUrl = reportUrl } };
+                data[0].ReportRefreshDate = thisSunday;
+
+                var saved = await loader.SaveLoadedReportsIfRefreshOnDay(DayOfWeek.Sunday, data);
+                Assert.AreEqual(1, saved, "The newer week should be saved");
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // SQL collation is case-insensitive, so this returns every site CI-equal to storedUrl - a
+                // duplicate insert (with the upper-cased URL) would make this 2.
+                var sites = await db.sites.Where(s => s.UrlBase == storedUrl).ToListAsync();
+                Assert.AreEqual(1, sites.Count, "Case-differing report URL must reuse the existing site, not create a duplicate");
+                var siteId = sites[0].ID;
+                var rows = await db.SharePointSiteStats.Where(s => s.SiteId == siteId).ToListAsync();
+                Assert.AreEqual(2, rows.Count, "Existing site should now have the old and the new week");
+            }
+        }
+
+        /// <summary>
+        /// The base save loop must call EndSaveAsync in its finally even when the save throws - for the real
+        /// SharePoint loader that is what restores EF auto change-detection on the (possibly reused) context.
+        /// </summary>
+        [TestMethod]
+        public async Task SaveLoadedReportsIfRefreshOnDay_CallsEndSaveEvenWhenSaveThrows()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var loader = new ThrowingFakeWeeklyUsageReportLoader(logger);
+            var data = new List<FakeStats> { new FakeStats { RandoId = "1", ReportRefreshDateString = "2024-02-25" } }; // a Sunday
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => loader.SaveLoadedReportsIfRefreshOnDay(DayOfWeek.Sunday, data));
+
+            Assert.IsTrue(loader.EndSaveCalled, "EndSaveAsync must run in the finally even when the save loop throws");
+        }
+
+        /// <summary>
         /// Tests the saving on the right day of week logic works
         /// </summary>
         [TestMethod]
