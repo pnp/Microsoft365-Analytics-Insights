@@ -132,4 +132,28 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public string RandoId { get; set; }
         public override string OfficeUniqueIdField => RandoId;
     }
+
+    /// <summary>
+    /// Throws from the save loop so tests can verify the base class still calls EndSaveAsync (which, for the
+    /// real SharePoint loader, restores EF auto change-detection) via its finally block.
+    /// </summary>
+    internal class ThrowingFakeWeeklyUsageReportLoader : AbstractAggregateWeeklyUsageReportLoader<FakeStats>
+    {
+        public bool EndSaveCalled { get; private set; }
+        public ThrowingFakeWeeklyUsageReportLoader(ILogger logger) : base(logger) { }
+        public override string ReportGraphURL => "fake throwing URL";
+        public override string ReportName => "Throwing Fake Usage";
+
+        public override Task<AggregateResourceUsageDetail<FakeStats>> LoadReportDataForUrl(string requestUrl)
+            => Task.FromResult(new AggregateResourceUsageDetail<FakeStats> { Stats = new List<FakeStats>() });
+
+        protected override Task<DateTime?> GetLastStoredResultFor(FakeStats item) => Task.FromResult<DateTime?>(null);
+        protected override Task CommitAllChanges() => Task.CompletedTask;
+        protected override Task AddItemToSaveList(FakeStats item) => throw new InvalidOperationException("boom");
+        protected override Task EndSaveAsync()
+        {
+            EndSaveCalled = true;
+            return Task.CompletedTask;
+        }
+    }
 }
