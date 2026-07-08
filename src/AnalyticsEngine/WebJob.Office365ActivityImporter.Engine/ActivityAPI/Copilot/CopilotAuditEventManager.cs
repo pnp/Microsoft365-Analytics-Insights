@@ -113,7 +113,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             if (eventMeetings > 0 || eventFiles > 0 || eventChats > 0)
             {
-                _logger.LogInformation($"Event {baseOfficeEvent.Id}: staged {eventChats} chat(s), {eventMeetings} meeting(s), {eventFiles} file(s).");
+                _logger.LogDebug($"Event {baseOfficeEvent.Id}: staged {eventChats} chat(s), {eventMeetings} meeting(s), {eventFiles} file(s).");
             }
             else
             {
