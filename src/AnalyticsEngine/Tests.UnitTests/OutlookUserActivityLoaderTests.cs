@@ -4,6 +4,7 @@ using Common.Entities.LookupCaches;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
@@ -96,6 +97,64 @@ namespace Tests.UnitTests
                 Assert.AreEqual(detail2.SendCount, secondLog.SendCount);
                 Assert.AreEqual(detail2.ReceiveCount, secondLog.ReceiveCount);
                 Assert.AreEqual(detail2.ReadCount, secondLog.ReadCount);
+            }
+        }
+
+        /// <summary>
+        /// The batched, per-date upsert in SaveLoadedReportsToSql must still insert every row and update
+        /// (not duplicate) on re-save, even when a day's rows span multiple SaveChanges batches. This is the
+        /// behaviour that replaced the single all-rows-at-once SaveChangesAsync that OutOfMemoryExceptioned at
+        /// ~200k-user scale.
+        /// </summary>
+        [TestMethod]
+        public async Task OutlookUserActivityLoader_SaveLoadedReportsToSql_BatchingUpsertsAcrossBoundary()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Configuration.LazyLoadingEnabled = false;
+
+                var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
+                var loader = new OutlookUserActivityLoader(null, groupsCache, new UserGroupsFilterModel("FakeGroup1;FakeGroup2"), logger);
+                loader.SaveBatchSize = 2;   // force several batches for the five rows below (2 + 2 + 1)
+
+                var testDate = DateTime.UtcNow.Date.AddDays(-3);
+                var runId = DateTime.UtcNow.Ticks;
+                var upns = Enumerable.Range(0, 5).Select(n => $"batchuser{n}_{runId}@unit.test".ToLower()).ToList();
+
+                List<OutlookUserActivityUserDetail> BuildPage(int readCount) => upns.Select(u => new OutlookUserActivityUserDetail
+                {
+                    UserPrincipalName = u,
+                    LastActivityDateString = testDate.ToString("yyyy-MM-dd"),
+                    ReadCount = readCount,
+                    ReceiveCount = 7,
+                    SendCount = 3,
+                }).ToList();
+
+                var userIdCache = new ConcurrentLookupDbIdsCache();
+                var userCache = new UserCache(db);
+
+                // ACT 1: insert five rows across three batches
+                loader.LoadedReportPages.Clear();
+                loader.LoadedReportPages.Add(testDate, BuildPage(5));
+                await loader.SaveLoadedReportsToSql(userIdCache, userCache);
+
+                var userIds = await db.users.Where(u => upns.Contains(u.UserPrincipalName)).Select(u => u.ID).ToListAsync();
+                Assert.AreEqual(5, userIds.Count, "All five users should be created");
+
+                var logs = await db.OutlookUsageActivityLogs.Where(l => userIds.Contains(l.UserID) && l.Date == testDate).ToListAsync();
+                Assert.AreEqual(5, logs.Count, "Five logs should be inserted across batch boundaries");
+                Assert.IsTrue(logs.All(l => l.ReadCount == 5), "Inserted values should match");
+
+                // ACT 2: re-save with changed stats -> update (not duplicate) across batches
+                loader.LoadedReportPages.Clear();
+                loader.LoadedReportPages.Add(testDate, BuildPage(99));
+                await loader.SaveLoadedReportsToSql(userIdCache, userCache);
+
+                var logsAfter = await db.OutlookUsageActivityLogs.Where(l => userIds.Contains(l.UserID) && l.Date == testDate).ToListAsync();
+                Assert.AreEqual(5, logsAfter.Count, "Re-saving must update, not duplicate, across batches");
+                Assert.IsTrue(logsAfter.All(l => l.ReadCount == 99), "Existing rows should be updated to the new values");
             }
         }
     }
