@@ -96,6 +96,34 @@ namespace DataUtils
         }
 
         /// <summary>
+        /// True only if the copilot doc context id looks like a SharePoint/OneDrive URL we could resolve to a
+        /// file via Graph. Filters out contexts that can never be an SPO file - e.g. https://securitycopilot.microsoft.com,
+        /// other non-SharePoint hosts, and local file paths (C:\...\Olk\Attachments\...) - so we don't fire a
+        /// doomed Graph lookup for them on every import.
+        /// </summary>
+        public static bool IsResolvableSpoFileUrl(string copilotDocContextId)
+        {
+            if (string.IsNullOrWhiteSpace(copilotDocContextId))
+            {
+                return false;
+            }
+            if (!IsValidAbsoluteUrl(copilotDocContextId))
+            {
+                return false;
+            }
+            var uri = new Uri(copilotDocContextId);
+
+            // Excludes file:// (local paths like C:\Users\...\Olk\Attachments), mailto:, etc.
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            {
+                return false;
+            }
+
+            // SharePoint Online and OneDrive for Business are always *.sharepoint.com (incl. -my.sharepoint.com).
+            return uri.Host.EndsWith(".sharepoint.com", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// To form path required by https://learn.microsoft.com/en-us/graph/api/site-get
         /// From "https://test.sharepoint.com/sites/test" returns "test.sharepoint.com:/sites/test"
         /// Or, from root site "https://test.sharepoint.com" returns "root"

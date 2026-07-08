@@ -116,6 +116,7 @@
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
+    <Compile Include="GraphFileMetadataLoaderTests.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
     <Compile Include="DuplicateUrlTests.cs" />
@@ -126,6 +127,7 @@
     <Compile Include="CopilotTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
+    <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
     <Compile Include="LookupCacheBatchProcessingTests.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
