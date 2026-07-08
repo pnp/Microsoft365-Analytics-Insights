@@ -1,10 +1,13 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
+using Common.Entities.Entities.UsageReports;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
@@ -95,6 +98,80 @@ namespace Tests.UnitTests
                     item.ReportRefreshDate = DateTime.Now;
                 }
                 await loader.SaveLoadedReportsIfRefreshOnDay(DateTime.Now.DayOfWeek, data);
+            }
+        }
+
+        /// <summary>
+        /// Regression for the bulk-preload / change-tracking rewrite of the SharePoint Site Usage save loop.
+        /// Verifies the day-of-week gate, "only save when newer than last stored", existing-site FK reuse,
+        /// new-site creation, and that EF auto change-detection is restored afterwards - all without any
+        /// per-site DB round-trip. Runs SaveLoadedReportsIfRefreshOnDay directly (no Graph client needed).
+        /// </summary>
+        [TestMethod]
+        public async Task SharePointSitesUsageLoader_SavesNewReusesExistingAndSkipsCurrent()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+
+            // 2024-02-25 is a Sunday; 2024-02-18 the Sunday before.
+            var thisSunday = new DateTime(2024, 2, 25);
+            var lastSunday = new DateTime(2024, 2, 18);
+            Assert.AreEqual(DayOfWeek.Sunday, thisSunday.DayOfWeek);
+
+            var suffix = DateTime.Now.Ticks.ToString();
+            var urlExistingStale = $"https://contoso.sharepoint.com/sites/stale-{suffix}";
+            var urlExistingCurrent = $"https://contoso.sharepoint.com/sites/current-{suffix}";
+            var urlBrandNew = $"https://contoso.sharepoint.com/sites/new-{suffix}";
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // Existing site whose latest stored week is older than this Sunday -> should get a new row (reusing the site FK).
+                var siteStale = new Site { UrlBase = urlExistingStale };
+                db.sites.Add(siteStale);
+                db.SharePointSiteStats.Add(new SharePointSitesFileWeeklyStats { Site = siteStale, ForWeekEnding = lastSunday });
+
+                // Existing site already stored for this Sunday -> should be skipped (no duplicate).
+                var siteCurrent = new Site { UrlBase = urlExistingCurrent };
+                db.sites.Add(siteCurrent);
+                db.SharePointSiteStats.Add(new SharePointSitesFileWeeklyStats { Site = siteCurrent, ForWeekEnding = thisSunday });
+                await db.SaveChangesAsync();
+
+                var loader = new SharePointSitesWeeklyUsageReportLoader(db, null, logger, null);
+                var data = new List<SharePointSiteUsageDetail>
+                {
+                    new SharePointSiteUsageDetail { SiteUrl = urlExistingStale, FileCount = 10 },
+                    new SharePointSiteUsageDetail { SiteUrl = urlExistingCurrent, FileCount = 20 },
+                    new SharePointSiteUsageDetail { SiteUrl = urlBrandNew, FileCount = 30 },
+                    // Not a Sunday refresh -> must be ignored entirely.
+                    new SharePointSiteUsageDetail { SiteUrl = urlBrandNew, FileCount = 99, ReportRefreshDateString = "2024-02-24" },
+                };
+                data[0].ReportRefreshDate = thisSunday;
+                data[1].ReportRefreshDate = thisSunday;
+                data[2].ReportRefreshDate = thisSunday;
+
+                var saved = await loader.SaveLoadedReportsIfRefreshOnDay(DayOfWeek.Sunday, data);
+
+                // Only the stale-existing and the brand-new site should have been saved.
+                Assert.AreEqual(2, saved, "Should save the stale-existing and the brand-new site, and skip the already-current one and the non-Sunday row");
+
+                // Auto change-detection must be back on for anyone reusing this context.
+                Assert.IsTrue(db.Configuration.AutoDetectChangesEnabled, "AutoDetectChangesEnabled must be restored after the save");
+            }
+
+            // Re-open a fresh context to assert what actually landed in the DB.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var staleRows = await db.SharePointSiteStats.Where(s => s.Site.UrlBase == urlExistingStale).ToListAsync();
+                Assert.AreEqual(2, staleRows.Count, "Existing stale site should now have both the old and the new week");
+                Assert.IsTrue(staleRows.Any(r => r.ForWeekEnding == thisSunday), "New week row should exist for the stale site");
+
+                var currentRows = await db.SharePointSiteStats.Where(s => s.Site.UrlBase == urlExistingCurrent).ToListAsync();
+                Assert.AreEqual(1, currentRows.Count, "Already-current site must not get a duplicate row");
+
+                var newSite = await db.sites.SingleOrDefaultAsync(s => s.UrlBase == urlBrandNew);
+                Assert.IsNotNull(newSite, "Brand-new site should have been created");
+                var newRows = await db.SharePointSiteStats.Where(s => s.Site.UrlBase == urlBrandNew).ToListAsync();
+                Assert.AreEqual(1, newRows.Count, "Brand-new site should have exactly one week row (the non-Sunday row is ignored)");
+                Assert.AreEqual(30, newRows[0].FileCount);
             }
         }
 
