@@ -4,6 +4,7 @@ using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 using System;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 
@@ -14,17 +15,25 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
     /// </summary>
     public class GraphFileMetadataLoader : ICopilotMetadataLoader
     {
-        private readonly GraphServiceClient _graphServiceClient;
+        private readonly ISpoGraphClient _spoGraphClient;
         private readonly SiteGraphCache _siteGraphCache;
         private readonly UserGraphCache _userGraphCache;
         private readonly ILogger _logger;
 
+        // Copilot context ids that resolved to nothing this session - don't waste Graph calls re-resolving them.
+        private readonly ConcurrentDictionary<string, byte> _unresolvableContextIds = new ConcurrentDictionary<string, byte>();
+
         public GraphFileMetadataLoader(GraphServiceClient graphServiceClient, ILogger logger)
+            : this(new GraphSpoClient(graphServiceClient), logger)
         {
-            _graphServiceClient = graphServiceClient;
+        }
+
+        public GraphFileMetadataLoader(ISpoGraphClient spoGraphClient, ILogger logger)
+        {
+            _spoGraphClient = spoGraphClient;
             _logger = logger;
-            _siteGraphCache = new SiteGraphCache(graphServiceClient);
-            _userGraphCache = new UserGraphCache(graphServiceClient);
+            _siteGraphCache = new SiteGraphCache(spoGraphClient);
+            _userGraphCache = new UserGraphCache(spoGraphClient);
         }
 
         public async Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
@@ -32,7 +41,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             // Requires OnlineMeetings.Read.All and https://learn.microsoft.com/en-us/graph/cloud-communication-online-meeting-application-access-policy#configure-application-access-policy
             try
             {
-                var meeting = await _graphServiceClient.Users[userGuid].OnlineMeetings[meetingId].GetAsync();
+                var meeting = await _spoGraphClient.GetOnlineMeetingAsync(userGuid, meetingId);
 
                 return new MeetingMetadata(meeting);
             }
@@ -43,8 +52,33 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
         }
 
-        // Example: https://m365cp123890-my.sharepoint.com/personal/sambetts_m365cp123890_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7B0D86F64F-8435-430C-8979-FF46C00F7ACB%7D&file=Presentation.pptx&action=edit&mobileredirect=true
         public async Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotDocContextId, string eventUpn)
+        {
+            // Skip anything that can't be a SharePoint/OneDrive file (securitycopilot.microsoft.com, local
+            // Outlook attachment paths, other hosts) before doing any Graph work - these fail on every import.
+            if (!StringUtils.IsResolvableSpoFileUrl(copilotDocContextId))
+            {
+                _logger.LogDebug("Copilot context '{ctx}' is not a resolvable SharePoint/OneDrive URL; skipping Graph lookup", copilotDocContextId);
+                return null;
+            }
+
+            // Don't re-resolve a context we've already failed to resolve this session.
+            if (_unresolvableContextIds.ContainsKey(copilotDocContextId))
+            {
+                _logger.LogDebug("Copilot context '{ctx}' was already unresolvable this session; skipping Graph lookup", copilotDocContextId);
+                return null;
+            }
+
+            var result = await ResolveSpoFileInfoAsync(copilotDocContextId, eventUpn);
+            if (result == null)
+            {
+                _unresolvableContextIds.TryAdd(copilotDocContextId, 0);
+            }
+            return result;
+        }
+
+        // Example: https://m365cp123890-my.sharepoint.com/personal/sambetts_m365cp123890_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7B0D86F64F-8435-430C-8979-FF46C00F7ACB%7D&file=Presentation.pptx&action=edit&mobileredirect=true
+        private async Task<SpoDocumentFileInfo> ResolveSpoFileInfoAsync(string copilotDocContextId, string eventUpn)
         {
             var siteUrl = StringUtils.GetSiteUrl(copilotDocContextId);
             if (siteUrl == null) return null;
@@ -77,56 +111,30 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             var driveItemId = StringUtils.GetDriveItemId(copilotDocContextId);
 
-            ListItem item = null;
             var site = await _siteGraphCache.GetResourceOrNullIfNotExists(spSiteId);
             if (driveItemId != null)
             {
                 try
                 {
-                    item = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items[driveItemId]
-                        .GetAsync(rc => { rc.QueryParameters.Expand = new[] { "fields" }; });
+                    var item = await _spoGraphClient.GetListItemByIdAsync(spSiteId, spListId, driveItemId);
+                    return new SpoDocumentFileInfo(item, site);
                 }
                 catch (ODataError ex)
                 {
                     _logger.LogWarning(ex, "Error getting file info for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
                     return null;
                 }
-
-                return new SpoDocumentFileInfo(item, site);
             }
             else
             {
-                // We might have a direct URL as the copilot context ID, so we need to search for the item in the list.
+                // We might have a direct URL as the copilot context ID, so search the list for a matching item.
                 // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_onmicrosoft_com/Documents/MyDoc.docx
                 try
                 {
-                    // Currently we can't filter by webUrl, so we have to get all items and filter client side.
-                    // Walk all pages so we can still resolve file context in large lists.
-                    var firstPage = await _graphServiceClient.Sites[spSiteId].Lists[spListId].Items
-                        .GetAsync(rc => { rc.QueryParameters.Select = new[] { "id", "webUrl" }; });
-                    if (firstPage?.Value != null)
+                    var matchedItem = await _spoGraphClient.FindListItemByWebUrlAsync(spSiteId, spListId, copilotDocContextId);
+                    if (matchedItem != null)
                     {
-                        ListItem matchedItem = null;
-                        var iterator = PageIterator<ListItem, ListItemCollectionResponse>.CreatePageIterator(
-                            _graphServiceClient,
-                            firstPage,
-                            i =>
-                            {
-                                if (i.WebUrl == copilotDocContextId)
-                                {
-                                    matchedItem = i;
-                                    return false;
-                                }
-
-                                return true;
-                            });
-
-                        await iterator.IterateAsync();
-
-                        if (matchedItem != null)
-                        {
-                            return new SpoDocumentFileInfo(matchedItem, site);
-                        }
+                        return new SpoDocumentFileInfo(matchedItem, site);
                     }
                 }
                 catch (ODataError ex)
@@ -151,8 +159,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             // Needs Files.Read.All
             try
             {
-                return await _graphServiceClient.Users[eventUpn].Drive
-                    .GetAsync(rc => { rc.QueryParameters.Select = new[] { "SharePointIds" }; })
+                return await _spoGraphClient.GetUserDriveAsync(eventUpn)
                     ?? throw new ArgumentOutOfRangeException(eventUpn);
             }
             catch (ODataError ex)
@@ -175,8 +182,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             Drive siteDrive = null;
             try
             {
-                siteDrive = await _graphServiceClient.Sites[siteAddress].Drive
-                    .GetAsync(rc => { rc.QueryParameters.Select = new[] { "SharePointIds" }; })
+                siteDrive = await _spoGraphClient.GetSiteDriveAsync(siteAddress)
                     ?? throw new ArgumentOutOfRangeException(siteAddress);
             }
             catch (ODataError)
@@ -190,7 +196,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 Site site = null;
                 try
                 {
-                    site = await _graphServiceClient.Sites[siteAddress].GetAsync() ?? throw new ArgumentOutOfRangeException(siteAddress);
+                    site = await _spoGraphClient.GetSiteAsync(siteAddress) ?? throw new ArgumentOutOfRangeException(siteAddress);
                 }
                 catch (ODataError ex)
                 {
@@ -202,8 +208,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     try
                     {
                         // Try one more time using site ID
-                        siteDrive = await _graphServiceClient.Sites[site.Id].Drive
-                            .GetAsync(rc => { rc.QueryParameters.Select = new[] { "SharePointIds" }; })
+                        siteDrive = await _spoGraphClient.GetSiteDriveAsync(site.Id)
                             ?? throw new ArgumentOutOfRangeException(siteAddress);
                     }
                     catch (ODataError)
