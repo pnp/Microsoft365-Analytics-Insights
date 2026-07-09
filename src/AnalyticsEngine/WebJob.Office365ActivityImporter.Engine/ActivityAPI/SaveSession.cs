@@ -18,11 +18,22 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     {
         private CopilotAuditEventManager _copilotEventResolver = null;
         private PowerPlatformAuditEventManager _powerPlatformEventResolver = null;
-        private readonly GraphAppIndentityOAuthContext _authContext;
+        private GraphAppIndentityOAuthContext _authContext;
+        private readonly ICopilotMetadataLoader _injectedCopilotLoader;
         private readonly ILogger _logger;
         private readonly AppConfig _appConfig;
 
         public SaveSession(ILogger logger, AnalyticsEntitiesContext db, AppConfig appConfig)
+            : this(logger, db, appConfig, null)
+        {
+        }
+
+        /// <summary>
+        /// <paramref name="copilotLoader"/> (optional) lets the caller inject a run-scoped Copilot metadata
+        /// loader so its Graph caches persist across every batch. When null, a per-session loader is created
+        /// (original behaviour).
+        /// </summary>
+        public SaveSession(ILogger logger, AnalyticsEntitiesContext db, AppConfig appConfig, ICopilotMetadataLoader copilotLoader)
         {
             _logger = logger;
             this.Database = db;
@@ -31,13 +42,21 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 
             this.SharePointLookupManager = new SharePointLookupManager(Database);
             this.StreamLookupManager = new StreamLookupManager(Database);
-            _authContext = new GraphAppIndentityOAuthContext(logger, appConfig.ClientID, appConfig.TenantGUID.ToString(), appConfig.ClientSecret, appConfig.KeyVaultUrl, appConfig.UseClientCertificate);
+            _injectedCopilotLoader = copilotLoader;
+            if (copilotLoader == null)
+            {
+                _authContext = new GraphAppIndentityOAuthContext(logger, appConfig.ClientID, appConfig.TenantGUID.ToString(), appConfig.ClientSecret, appConfig.KeyVaultUrl, appConfig.UseClientCertificate);
+            }
         }
 
         internal async Task Init()
         {
-            await _authContext.InitClientCredential();
-            var loader = new GraphFileMetadataLoader(new GraphServiceClient(_authContext.Creds), _logger);
+            ICopilotMetadataLoader loader = _injectedCopilotLoader;
+            if (loader == null)
+            {
+                await _authContext.InitClientCredential();
+                loader = new GraphFileMetadataLoader(new GraphServiceClient(_authContext.Creds), _logger);
+            }
             _copilotEventResolver = new CopilotAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, loader, _logger);
             _powerPlatformEventResolver = new PowerPlatformAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);
         }

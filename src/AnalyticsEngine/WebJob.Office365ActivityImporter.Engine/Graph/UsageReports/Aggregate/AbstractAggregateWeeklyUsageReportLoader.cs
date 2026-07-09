@@ -88,43 +88,73 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 
         public async Task<int> SaveLoadedReportsIfRefreshOnDay(DayOfWeek uptoDay, IEnumerable<T> data)
         {
-            var itemsSaved = 0;
-            foreach (var item in data)
+            // Materialise once so we can both hand the full set to BeginSaveAsync (for bulk pre-loading)
+            // and iterate it below.
+            var items = data as IReadOnlyList<T> ?? data.ToList();
+
+            // Give subclasses a chance to bulk-load existing state in a single query instead of doing a
+            // per-item DB round-trip in GetLastStoredResultFor / AddItemToSaveList. For large tenants this
+            // is the difference between one query and tens of thousands (one per site).
+            await BeginSaveAsync(items);
+
+            try
             {
-                // Only save new data if it's on our day of the week
-                if (item.ReportRefreshDate.DayOfWeek == uptoDay)
+                var itemsSaved = 0;
+                var alreadyUpToDate = 0;
+                var notRefreshedOnDay = 0;
+
+                foreach (var item in items)
                 {
-                    // What's the last date we have stored for this item?  
-                    var itemLastDate = await GetLastStoredResultFor(item);
-                    if (!itemLastDate.HasValue || itemLastDate.Value < item.ReportRefreshDate)
+                    // Only save new data if it's on our day of the week
+                    if (item.ReportRefreshDate.DayOfWeek == uptoDay)
                     {
-                        Telemetry.LogInformation($"Saving {ReportName} for ID '{item.OfficeUniqueIdField}' as report was refreshed on {item.ReportRefreshDateString} (a {uptoDay})");
-                        await AddItemToSaveList(item);
-                        itemsSaved++;
+                        // What's the last date we have stored for this item?
+                        var itemLastDate = await GetLastStoredResultFor(item);
+                        if (!itemLastDate.HasValue || itemLastDate.Value < item.ReportRefreshDate)
+                        {
+                            await AddItemToSaveList(item);
+                            itemsSaved++;
+                        }
+                        else
+                        {
+                            alreadyUpToDate++;
+                        }
                     }
                     else
                     {
-                        Telemetry.LogInformation($"Not saving {ReportName} for ID '{item.OfficeUniqueIdField}' as last saved report was refreshed on {itemLastDate.Value.ToString("dd-MM-yyyy")} " +
-                            $"and this report was refreshed on {item.ReportRefreshDate.ToString("dd-MM-yyyy")}");
+                        notRefreshedOnDay++;
                     }
                 }
-                else
-                {
-                    Telemetry.LogInformation($"Not saving {ReportName} for ID '{item.OfficeUniqueIdField}' as report was refreshed for this item on {item.ReportRefreshDateString} (a {item.ReportRefreshDate.DayOfWeek})");
-                }
-            }
 
-            if (itemsSaved > 0)
-            {
-                Telemetry.LogInformation($"Saving {itemsSaved} items to SQL for {ReportName} reports");
-                await CommitAllChanges();
+                // Per-item logging here produced one INFO trace per report row (tens of thousands for a
+                // large SharePoint tenant), which floods App Insights and slows the run. Log a summary instead.
+                Telemetry.LogInformation($"{ReportName}: considered {items.Count} item(s) - saving {itemsSaved} new weekly report(s); " +
+                    $"{alreadyUpToDate} already up to date; {notRefreshedOnDay} not refreshed on a {uptoDay}.");
+
+                if (itemsSaved > 0)
+                {
+                    Telemetry.LogInformation($"Saving {itemsSaved} items to SQL for {ReportName} reports");
+                    await CommitAllChanges();
+                }
+                return itemsSaved;
             }
-            else
+            finally
             {
-                Telemetry.LogInformation($"Finished processing {ReportName} reports. No weekly reports to save");
+                await EndSaveAsync();
             }
-            return itemsSaved;
         }
+
+        /// <summary>
+        /// Called once before the save loop with every item under consideration. Override to bulk pre-load
+        /// existing DB state (and e.g. tune change-tracking) so per-item lookups become in-memory. Default: no-op.
+        /// </summary>
+        protected virtual Task BeginSaveAsync(IReadOnlyList<T> allItems) => Task.CompletedTask;
+
+        /// <summary>
+        /// Called once after the save loop (in a finally) so overrides can restore any state changed in
+        /// <see cref="BeginSaveAsync"/> even when nothing was saved. Default: no-op.
+        /// </summary>
+        protected virtual Task EndSaveAsync() => Task.CompletedTask;
 
         public abstract Task<AggregateResourceUsageDetail<T>> LoadReportDataForUrl(string requestUrl);
     }
