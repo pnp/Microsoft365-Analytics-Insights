@@ -41,6 +41,11 @@ namespace Tests.UnitTests
 
             using (var httpClient = new AutoThrottleHttpClient(new TimeoutHttpMessageHandler(), logger))
             {
+                // Don't retry - we're testing the loader's handling of a download that ultimately times out,
+                // not the AutoThrottleHttpClient retry loop (covered by AutoThrottleHttpClientTests). Retrying
+                // 10x with back-off would make this test take ~90s.
+                httpClient.MaxRetries = 1;
+
                 var loader = new ActivityReportWebLoader(httpClient, logger, Guid.Empty.ToString());
                 var metadata = new ActivityReportInfo { ContentUri = new Uri("https://contoso.example/audit/content") };
 
