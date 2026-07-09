@@ -1,8 +1,10 @@
+using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
+using Microsoft.Graph;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -40,6 +42,16 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// Single-permit; held only for the duration of <c>CommitAll</c>'s SQL phase.
         /// </summary>
         private static SemaphoreSlim _sqlSaveSemaphore = new SemaphoreSlim(1);      // Make sure we're only saving one thread at a time
+
+        // Run-scoped Copilot Graph metadata loader, shared across every batch so its Graph caches (resolved
+        // files, users, sites, and unresolvable contexts) persist for the whole import instead of being rebuilt
+        // per batch. Lazily built once; best-effort (null on failure -> each SaveSession falls back to its own).
+        private ICopilotMetadataLoader _sharedCopilotLoader;
+        private bool _sharedCopilotLoaderTried;
+        private readonly SemaphoreSlim _sharedLoaderInitLock = new SemaphoreSlim(1, 1);
+
+        // How many Copilot file contexts to resolve concurrently while pre-warming the cache (outside the SQL lock).
+        private const int PrewarmConcurrency = 8;
 
         public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig)
         {
@@ -83,6 +95,17 @@ namespace WebJob.Office365ActivityImporter.Engine
 #endif
             var allStats = new ImportStat();
 
+            // Warm the run-scoped Copilot Graph metadata cache in PARALLEL, before taking the single-permit SQL
+            // lock. The per-event ProcessExtendedProperties pass below runs serially inside that lock, and for
+            // Copilot file events it calls Graph (network). Resolving those ahead of time - overlapping across
+            // batches and within a batch - turns the in-lock calls into cache hits, so the lock is held only for
+            // SQL work, not network round-trips.
+            var sharedLoader = await GetSharedCopilotLoaderAsync();
+            if (sharedLoader != null)
+            {
+                await PrewarmCopilotFileMetadataAsync(activities, sharedLoader);
+            }
+
             // Allow only one save at a time otherwise we'll get errors when we try and create the temp table without clearing it down 1st
             await _sqlSaveSemaphore.WaitAsync();
 
@@ -95,7 +118,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                     using (var db = new AnalyticsEntitiesContext(con))
                     {
                         // Add all activity data to staging table
-                        var stats = await SaveToSqlAllTheThings(activities, db, con, cache);
+                        var stats = await SaveToSqlAllTheThings(activities, db, con, cache, sharedLoader);
                         allStats.AddStats(stats);
                     }
                 }
@@ -109,9 +132,107 @@ namespace WebJob.Office365ActivityImporter.Engine
         }
 
         /// <summary>
+        /// Lazily build the run-scoped Copilot metadata loader (once). Best-effort: on any failure (e.g. no Graph
+        /// creds in a test) returns null and callers fall back to the per-session loader. Thread-safe.
+        /// </summary>
+        private async Task<ICopilotMetadataLoader> GetSharedCopilotLoaderAsync()
+        {
+            if (_sharedCopilotLoaderTried)
+            {
+                return _sharedCopilotLoader;
+            }
+            await _sharedLoaderInitLock.WaitAsync();
+            try
+            {
+                if (!_sharedCopilotLoaderTried)
+                {
+                    try
+                    {
+                        var auth = new GraphAppIndentityOAuthContext(_logger, _appConfig.ClientID, _appConfig.TenantGUID.ToString(), _appConfig.ClientSecret, _appConfig.KeyVaultUrl, _appConfig.UseClientCertificate);
+                        await auth.InitClientCredential();
+                        _sharedCopilotLoader = new GraphFileMetadataLoader(new GraphServiceClient(auth.Creds), _logger);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Could not build a run-scoped Copilot metadata loader; falling back to per-batch loaders.");
+                        _sharedCopilotLoader = null;
+                    }
+                    _sharedCopilotLoaderTried = true;
+                }
+            }
+            finally
+            {
+                _sharedLoaderInitLock.Release();
+            }
+            return _sharedCopilotLoader;
+        }
+
+        /// <summary>
+        /// Resolve the file metadata for this batch's Copilot file contexts concurrently, warming the shared
+        /// loader's cache. Errors are swallowed - the authoritative resolution + logging happens in the serial
+        /// ProcessExtendedProperties pass (this only pre-populates the cache).
+        /// </summary>
+        private async Task PrewarmCopilotFileMetadataAsync(ActivityReportSet activities, ICopilotMetadataLoader loader)
+        {
+            var fileContexts = ExtractCopilotFileContexts(activities);
+            if (fileContexts.Count == 0) return;
+
+            using (var throttle = new SemaphoreSlim(PrewarmConcurrency))
+            {
+                var tasks = fileContexts.Select(async kvp =>
+                {
+                    await throttle.WaitAsync();
+                    try
+                    {
+                        await loader.GetSpoFileInfo(kvp.Key, kvp.Value);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Copilot metadata prewarm failed for context {ctx} (will retry in the serial pass)", kvp.Key);
+                    }
+                    finally
+                    {
+                        throttle.Release();
+                    }
+                });
+                await Task.WhenAll(tasks);
+            }
+        }
+
+        /// <summary>
+        /// The distinct (fileContextId -> eventUpn) map to pre-resolve for a batch. Mirrors
+        /// <c>CopilotAuditEventManager</c>: only the first file-type context per event is used; a Teams meeting
+        /// context ends file processing for that event; Teams chat contexts are additive (not files).
+        /// </summary>
+        internal static Dictionary<string, string> ExtractCopilotFileContexts(IEnumerable<AbstractAuditLogContent> activities)
+        {
+            var fileContexts = new Dictionary<string, string>();
+            foreach (var copilot in activities.OfType<CopilotAuditLogContent>())
+            {
+                var contexts = copilot.CopilotEventData?.Contexts;
+                if (contexts == null) continue;
+                foreach (var context in contexts)
+                {
+                    if (context == null) continue;
+                    // Type is checked before the id guard so a (typically non-null) meeting/chat context
+                    // controls flow exactly as CopilotAuditEventManager does, even if its id were null.
+                    if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING) break;   // meeting ends file/meeting processing
+                    if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT) continue;   // chat is additive, not a file
+                    // First file-type context for this event (a null-id file resolves to nothing, so skip it but still stop).
+                    if (context.Id != null && !fileContexts.ContainsKey(context.Id))
+                    {
+                        fileContexts[context.Id] = copilot.UserId;
+                    }
+                    break;
+                }
+            }
+            return fileContexts;
+        }
+
+        /// <summary>
         /// Fill up staging table & return import result
         /// </summary>
-        private async Task<ImportStat> SaveToSqlAllTheThings(ActivityReportSet activities, AnalyticsEntitiesContext db, SqlConnection con, ActivityImportCache cache)
+        private async Task<ImportStat> SaveToSqlAllTheThings(ActivityReportSet activities, AnalyticsEntitiesContext db, SqlConnection con, ActivityImportCache cache, ICopilotMetadataLoader sharedCopilotLoader)
         {
             var listOfActivitiesSavedToSQL = new ConcurrentBag<AbstractAuditLogContent>();
             var logsToInsert = new EFInsertBatch<AuditLogTempEntity>(db, _logger);
@@ -174,8 +295,9 @@ namespace WebJob.Office365ActivityImporter.Engine
 
             #region Add Extra Metadata
 
-            // Add metadata the traditional way with EF. By now should have all the sites saved. 
-            var saveSession = new SaveSession(_logger, db, _appConfig);
+            // Add metadata the traditional way with EF. By now should have all the sites saved.
+            // Pass the run-scoped Copilot loader so per-event Graph resolution hits the cache warmed above.
+            var saveSession = new SaveSession(_logger, db, _appConfig, sharedCopilotLoader);
             await saveSession.Init();
 
             int metaSaveIdx = 0, changesMadeCount = 0;
