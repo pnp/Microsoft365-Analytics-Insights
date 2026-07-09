@@ -21,7 +21,15 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly ILogger _logger;
 
         // Copilot context ids that resolved to nothing this session - don't waste Graph calls re-resolving them.
-        private readonly ConcurrentDictionary<string, byte> _unresolvableContextIds = new ConcurrentDictionary<string, byte>();
+        // Case-insensitive so a failed prewarm (keyed off the raw event UserId) isn't re-attempted in the serial
+        // pass under a differently-cased UPN (UPNs are case-insensitive).
+        private readonly ConcurrentDictionary<string, byte> _unresolvableContextIds =
+            new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+
+        // Positive cache of resolved file info, keyed by copilot doc context id. Run-scoped: the same file
+        // context recurs across many audit batches, so caching avoids repeat Graph resolution every batch.
+        private readonly ConcurrentDictionary<string, SpoDocumentFileInfo> _fileInfoByContext =
+            new ConcurrentDictionary<string, SpoDocumentFileInfo>(StringComparer.OrdinalIgnoreCase);
 
         public GraphFileMetadataLoader(GraphServiceClient graphServiceClient, ILogger logger)
             : this(new GraphSpoClient(graphServiceClient), logger)
@@ -62,20 +70,40 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 return null;
             }
 
-            // Don't re-resolve a context we've already failed to resolve this session.
-            if (_unresolvableContextIds.ContainsKey(copilotDocContextId))
+            // Cache key: a personal OneDrive ("-my") file is resolved through the *event user's* own drive, so
+            // the result is user-specific - key those per (context, upn). A shared-site file is resolved
+            // independently of the user, so key those by context alone (dedupes across all users who touched it).
+            var cacheKey = FileCacheKey(copilotDocContextId, eventUpn);
+
+            // Already resolved this context earlier in the run? Return the cached result (no Graph call).
+            if (_fileInfoByContext.TryGetValue(cacheKey, out var cached))
             {
-                _logger.LogDebug("Copilot context '{ctx}' was already unresolvable this session; skipping Graph lookup", copilotDocContextId);
+                return cached;
+            }
+
+            // Don't re-resolve a context we've already failed to resolve this run.
+            if (_unresolvableContextIds.ContainsKey(cacheKey))
+            {
+                _logger.LogDebug("Copilot context '{ctx}' was already unresolvable this run; skipping Graph lookup", copilotDocContextId);
                 return null;
             }
 
             var result = await ResolveSpoFileInfoAsync(copilotDocContextId, eventUpn);
             if (result == null)
             {
-                _unresolvableContextIds.TryAdd(copilotDocContextId, 0);
+                _unresolvableContextIds.TryAdd(cacheKey, 0);
+            }
+            else
+            {
+                _fileInfoByContext.TryAdd(cacheKey, result);
             }
             return result;
         }
+
+        // Personal OneDrive ("-my") files depend on the event user's drive, so include the upn in the key;
+        // shared-site files don't, so key by context alone.
+        private static string FileCacheKey(string copilotDocContextId, string eventUpn)
+            => StringUtils.IsMySiteUrl(copilotDocContextId) ? copilotDocContextId + "\n" + (eventUpn ?? string.Empty) : copilotDocContextId;
 
         // Example: https://m365cp123890-my.sharepoint.com/personal/sambetts_m365cp123890_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7B0D86F64F-8435-430C-8979-FF46C00F7ACB%7D&file=Presentation.pptx&action=edit&mobileredirect=true
         private async Task<SpoDocumentFileInfo> ResolveSpoFileInfoAsync(string copilotDocContextId, string eventUpn)
@@ -127,19 +155,20 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             else
             {
-                // We might have a direct URL as the copilot context ID, so search the list for a matching item.
+                // We might have a direct URL as the copilot context ID. Resolve it straight to a driveItem via
+                // the Graph /shares endpoint (one call) instead of paging the whole document library to URL-match.
                 // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_onmicrosoft_com/Documents/MyDoc.docx
                 try
                 {
-                    var matchedItem = await _spoGraphClient.FindListItemByWebUrlAsync(spSiteId, spListId, copilotDocContextId);
-                    if (matchedItem != null)
+                    var driveItem = await _spoGraphClient.GetDriveItemByUrlAsync(copilotDocContextId);
+                    if (driveItem != null)
                     {
-                        return new SpoDocumentFileInfo(matchedItem, site);
+                        return new SpoDocumentFileInfo(driveItem, site);
                     }
                 }
                 catch (ODataError ex)
                 {
-                    _logger.LogWarning(ex, "Error getting items info for list {spListId} on site {siteUrl}", spListId, siteUrl);
+                    _logger.LogWarning(ex, "Error resolving driveItem for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
                     return null;
                 }
 

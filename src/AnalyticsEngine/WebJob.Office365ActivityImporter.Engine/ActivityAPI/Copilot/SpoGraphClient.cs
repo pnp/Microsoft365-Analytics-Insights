@@ -1,5 +1,6 @@
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using System;
 using System.Threading.Tasks;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
@@ -27,8 +28,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>A single list item by its id (fields expanded).</summary>
         Task<ListItem> GetListItemByIdAsync(string siteId, string listId, string itemId);
 
-        /// <summary>Find a list item whose WebUrl matches, or null if none. Encapsulates paging so it can be optimised later.</summary>
-        Task<ListItem> FindListItemByWebUrlAsync(string siteId, string listId, string webUrl);
+        /// <summary>
+        /// Resolve a full SharePoint/OneDrive URL directly to its driveItem via the Graph /shares endpoint,
+        /// or null if it can't be resolved. One call - avoids paging an entire document library to URL-match.
+        /// </summary>
+        Task<DriveItem> GetDriveItemByUrlAsync(string url);
 
         Task<User> GetUserAsync(string userId);
     }
@@ -61,33 +65,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         public Task<ListItem> GetListItemByIdAsync(string siteId, string listId, string itemId)
             => _graphServiceClient.Sites[siteId].Lists[listId].Items[itemId].GetAsync(rc => { rc.QueryParameters.Expand = new[] { "fields" }; });
 
-        public async Task<ListItem> FindListItemByWebUrlAsync(string siteId, string listId, string webUrl)
+        public Task<DriveItem> GetDriveItemByUrlAsync(string url)
         {
-            // Currently we can't server-side filter list items by webUrl, so we page and match client side.
-            // Walk all pages so we can still resolve file context in large lists.
-            var firstPage = await _graphServiceClient.Sites[siteId].Lists[listId].Items
-                .GetAsync(rc => { rc.QueryParameters.Select = new[] { "id", "webUrl" }; });
-            if (firstPage?.Value == null)
-            {
-                return null;
-            }
-
-            ListItem matchedItem = null;
-            var iterator = PageIterator<ListItem, ListItemCollectionResponse>.CreatePageIterator(
-                _graphServiceClient,
-                firstPage,
-                i =>
-                {
-                    if (i.WebUrl == webUrl)
-                    {
-                        matchedItem = i;
-                        return false;
-                    }
-                    return true;
-                });
-
-            await iterator.IterateAsync();
-            return matchedItem;
+            // https://learn.microsoft.com/en-us/graph/api/shares-get - encode the URL as an unpadded base64url
+            // "u!" share id, then read its driveItem. Resolves any SPO/OneDrive URL in one call.
+            var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(url));
+            var shareId = "u!" + base64.TrimEnd('=').Replace('/', '_').Replace('+', '-');
+            return _graphServiceClient.Shares[shareId].DriveItem.GetAsync();
         }
 
         public Task<User> GetUserAsync(string userId)
