@@ -35,6 +35,7 @@
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
+    <Compile Include="CopilotPrewarmExtractionTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
     <Compile Include="CopilotTestBase.cs" />
     <Compile Include="PageUpdateManagerPerfTests.cs" />
@@ -109,6 +110,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
@@ -116,6 +118,7 @@
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
+    <Compile Include="GraphFileMetadataLoaderTests.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
     <Compile Include="DuplicateUrlTests.cs" />
@@ -126,6 +129,7 @@
     <Compile Include="CopilotTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
+    <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
     <Compile Include="LookupCacheBatchProcessingTests.cs" />
     <Compile Include="OutlookUserActivityLoaderTests.cs" />
@@ -163,6 +167,7 @@
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserAppLoader.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
+    <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="GraphImportTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
