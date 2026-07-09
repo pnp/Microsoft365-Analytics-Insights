@@ -110,6 +110,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
