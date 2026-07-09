@@ -35,6 +35,7 @@
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
+    <Compile Include="CopilotPrewarmExtractionTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
     <Compile Include="CopilotTestBase.cs" />
     <Compile Include="PageUpdateManagerPerfTests.cs" />
