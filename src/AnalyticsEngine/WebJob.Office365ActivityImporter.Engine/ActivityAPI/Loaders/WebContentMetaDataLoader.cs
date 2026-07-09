@@ -67,55 +67,72 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             {
                 string nextPageUri = null;
 
-                // Get this batch
-                using (var response = await _httpClient.GetAsyncWithThrottleRetries(currentUri, _logger))
+                // Get this batch. A timeout surfaces as a cancelled task (HttpClient.Timeout elapsed) and a
+                // persistent HTTP error surfaces as HttpRequestException once throttle-retries are exhausted;
+                // both are wrapped in the try so a single hung/failed page doesn't crash the whole import.
+                HttpResponseMessage response = null;
+                string responseFromServer = null;
+                try
                 {
-                    // Read the content.  
-                    var responseFromServer = await response.Content.ReadAsStringAsync();
+                    response = await _httpClient.GetAsyncWithThrottleRetries(currentUri, _logger);
+
+                    // Read the content.
+                    responseFromServer = await response.Content.ReadAsStringAsync();
+
+                    response.EnsureSuccessStatusCode();
+
+                    // More data to get for events?
+                    if (response.Headers.Contains(NEXT_PAGE_PARAM))
+                    {
+                        nextPageUri = response.Headers.GetValues(NEXT_PAGE_PARAM).First();
+                    }
+                }
+                catch (HttpRequestException ex)
+                {
+                    Interlocked.Increment(ref _metadataDownloadErrors);
+                    _logger.LogError(ex, $"Error downloading metadata {currentUri} with error '{ex.Message}'. " +
+                        $"If this happens every time, this may be an issue. Ignoring for now.");
+#if DEBUG
+                    _logger.LogInformation("DEBUG: Response body was:\n" + responseFromServer);
+#endif
+                    break; // Exit the loop on error
+                }
+                catch (TaskCanceledException ex)
+                {
+                    // HTTP timeout (HttpClient.Timeout elapsed) surfaces as a cancelled task. Treat it as a
+                    // transient download failure so a single hung request doesn't crash the whole import; the
+                    // metadata is retried on the next cycle.
+                    Interlocked.Increment(ref _metadataDownloadErrors);
+                    _logger.LogError(ex, $"Timed out downloading metadata {currentUri}: '{ex.Message}'. Will try again on next cycle.");
+                    break; // Exit the loop on error
+                }
+                finally
+                {
+                    response?.Dispose();
+                }
+
+                // Process the response for this URL
+                if (!string.IsNullOrEmpty(responseFromServer))
+                {
+                    // Deserialise the results from the HTTP response
                     try
                     {
-                        response.EnsureSuccessStatusCode();
+                        var responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
 
-                        // More data to get for events?
-                        if (response.Headers.Contains(NEXT_PAGE_PARAM))
+                        if (responseMeta != null && responseMeta.Count > 0)
                         {
-                            nextPageUri = response.Headers.GetValues(NEXT_PAGE_PARAM).First();
-                        }
-                    }
-                    catch (HttpRequestException ex)
-                    {
-                        Interlocked.Increment(ref _metadataDownloadErrors);
-                        _logger.LogError(ex, $"Error downloading metadata {currentUri} with error '{ex.Message}'. " +
-                            $"If this happens every time, this may be an issue. Ignoring for now.");
-#if DEBUG
-                        _logger.LogInformation("DEBUG: Response body was:\n" + responseFromServer);
-#endif
-                        break; // Exit the loop on error
-                    }
-
-                    // Process the response for this URL
-                    if (!string.IsNullOrEmpty(responseFromServer))
-                    {
-                        // Deserialise the results from the HTTP response
-                        try
-                        {
-                            var responseMeta = JsonConvert.DeserializeObject<List<ActivityReportInfo>>(responseFromServer);
-
-                            if (responseMeta != null && responseMeta.Count > 0)
+                            // Add our own batch ID variable to each response
+                            foreach (var metaData in responseMeta)
                             {
-                                // Add our own batch ID variable to each response
-                                foreach (var metaData in responseMeta)
-                                {
-                                    metaData.BatchID = batchId;
-                                }
-
-                                allResults.AddRange(responseMeta);
+                                metaData.BatchID = batchId;
                             }
+
+                            allResults.AddRange(responseMeta);
                         }
-                        catch (JsonSerializationException)
-                        {
-                            _logger.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
-                        }
+                    }
+                    catch (JsonSerializationException)
+                    {
+                        _logger.LogError($"Could not deserialise to list of {nameof(ActivityReportInfo)} response: '{responseFromServer}'");
                     }
                 }
 

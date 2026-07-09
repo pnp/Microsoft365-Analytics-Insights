@@ -55,6 +55,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 _logger.LogError(ex, $"Got error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
                 return new WebActivityReportSet();
             }
+            catch (TaskCanceledException ex)
+            {
+                // An HTTP timeout (HttpClient.Timeout elapsed) surfaces as a cancelled task. Treat it like any
+                // other transient download failure - log it, count it, and skip this report so a single slow or
+                // hung request doesn't crash the whole audit-log import. The item is retried on the next cycle.
+                Interlocked.Increment(ref _reportDownloadErrors);
+                _logger.LogError(ex, $"Timed out downloading {metadata.ContentUri}: '{ex.Message}'. Will try again on next cycle.");
+                return new WebActivityReportSet();
+            }
 
             // Use 'using' to ensure response is disposed and memory is freed
             using (response)
