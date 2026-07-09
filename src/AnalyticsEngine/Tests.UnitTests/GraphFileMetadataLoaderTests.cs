@@ -58,16 +58,16 @@ namespace Tests.UnitTests
             Assert.AreEqual("Report.docx", result.Filename);
             Assert.AreEqual("docx", result.Extension);
             Assert.AreEqual(1, fake.GetListItemByIdCalls);
-            Assert.AreEqual(0, fake.FindListItemByWebUrlCalls, "With a driveItemId we must NOT enumerate the whole list");
+            Assert.AreEqual(0, fake.GetDriveItemByUrlCalls, "With a driveItemId we resolve by id, not via the /shares URL path");
         }
 
         [TestMethod]
-        public async Task GetSpoFileInfo_WithoutDriveItemId_ResolvesViaWebUrlSearch()
+        public async Task GetSpoFileInfo_WithoutDriveItemId_ResolvesViaSharesApiNotEnumeration()
         {
             var ctx = "https://contoso.sharepoint.com/sites/x/Shared Documents/General/Notes.xlsx";
             var fake = new FakeSpoGraphClient
             {
-                OnFindListItemByWebUrl = (s, l, url) => new ListItem { WebUrl = url }
+                OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
             };
             var loader = NewLoader(fake);
 
@@ -75,7 +75,7 @@ namespace Tests.UnitTests
 
             Assert.IsNotNull(result);
             Assert.AreEqual("xlsx", result.Extension);
-            Assert.AreEqual(1, fake.FindListItemByWebUrlCalls);
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "A direct-URL context resolves in one /shares call");
             Assert.AreEqual(0, fake.GetListItemByIdCalls);
         }
 
@@ -85,7 +85,7 @@ namespace Tests.UnitTests
             var ctx = "https://contoso-my.sharepoint.com/personal/user_contoso_com/Documents/Plan.docx";
             var fake = new FakeSpoGraphClient
             {
-                OnFindListItemByWebUrl = (s, l, url) => new ListItem { WebUrl = url }
+                OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
             };
             var loader = NewLoader(fake);
 
@@ -102,7 +102,7 @@ namespace Tests.UnitTests
             var ctx = "https://contoso.sharepoint.com/sites/x/Shared Documents/Missing.docx";
             var fake = new FakeSpoGraphClient
             {
-                OnFindListItemByWebUrl = (s, l, url) => null   // never matches
+                OnGetDriveItemByUrl = url => null   // never resolves
             };
             var loader = NewLoader(fake);
 
@@ -111,7 +111,48 @@ namespace Tests.UnitTests
 
             Assert.IsNull(first);
             Assert.IsNull(second);
-            Assert.AreEqual(1, fake.FindListItemByWebUrlCalls, "A context that failed to resolve must not be re-resolved within the session");
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "A context that failed to resolve must not be re-resolved within the run");
+        }
+
+        [TestMethod]
+        public async Task GetSpoFileInfo_ResolvedContext_IsPositivelyCachedAcrossCalls()
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/x/Shared Documents/General/Report.docx";
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
+            };
+            var loader = NewLoader(fake);
+
+            var first = await loader.GetSpoFileInfo(ctx, "user@contoso.com");
+            var second = await loader.GetSpoFileInfo(ctx, "user@contoso.com");
+
+            Assert.IsNotNull(first);
+            Assert.IsNotNull(second);
+            Assert.AreEqual("Report.docx", second.Filename);
+            // Same run-scoped loader: the second call is a pure cache hit (no repeat Graph resolution).
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "A resolved context must be cached and not re-resolved");
+            Assert.AreEqual(1, fake.GetSiteDriveCalls, "Site drive resolution should also happen only once");
+        }
+
+        [TestMethod]
+        public async Task GetSpoFileInfo_MySiteContext_CachedPerUserNotAliasedAcrossUsers()
+        {
+            // A personal OneDrive ("-my") file is resolved through the event user's own drive, so two different
+            // users referencing the same URL must resolve independently (not share a cached result), while the
+            // same user twice must be a cache hit.
+            var ctx = "https://contoso-my.sharepoint.com/personal/alice_contoso_com/Documents/Shared.docx";
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
+            };
+            var loader = NewLoader(fake);
+
+            await loader.GetSpoFileInfo(ctx, "alice@contoso.com");
+            await loader.GetSpoFileInfo(ctx, "alice@contoso.com");   // same user -> cache hit
+            await loader.GetSpoFileInfo(ctx, "bob@contoso.com");     // different user -> resolves again
+
+            Assert.AreEqual(2, fake.GetUserDriveCalls, "My-site contexts must cache per user: 1 for alice (cached on repeat) + 1 for bob");
         }
 
         [TestMethod]

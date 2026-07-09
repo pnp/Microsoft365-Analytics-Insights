@@ -16,11 +16,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public int GetSiteDriveCalls { get; private set; }
         public int GetSiteCalls { get; private set; }
         public int GetListItemByIdCalls { get; private set; }
-        public int FindListItemByWebUrlCalls { get; private set; }
+        public int GetDriveItemByUrlCalls { get; private set; }
         public int GetUserCalls { get; private set; }
 
         public int TotalCalls => GetOnlineMeetingCalls + GetUserDriveCalls + GetSiteDriveCalls + GetSiteCalls
-            + GetListItemByIdCalls + FindListItemByWebUrlCalls + GetUserCalls;
+            + GetListItemByIdCalls + GetDriveItemByUrlCalls + GetUserCalls;
 
         private static Drive DriveWithIds => new Drive { SharePointIds = new SharepointIds { SiteId = "site-guid", ListId = "list-guid" } };
 
@@ -31,7 +31,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public Func<string, Site> OnGetSite = siteIdentifier => new Site { Id = siteIdentifier, WebUrl = "https://contoso.sharepoint.com/sites/x" };
         public Func<string, string, string, ListItem> OnGetListItemById = (siteId, listId, itemId) =>
             new ListItem { WebUrl = "https://contoso.sharepoint.com/sites/x/Shared Documents/file.docx" };
-        public Func<string, string, string, ListItem> OnFindListItemByWebUrl = (siteId, listId, webUrl) => new ListItem { WebUrl = webUrl };
+        public Func<string, DriveItem> OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url };
         public Func<string, User> OnGetUser = userId => new User { Id = "user-guid" };
 
         public Task<OnlineMeeting> GetOnlineMeetingAsync(string userId, string meetingId)
@@ -64,10 +64,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.FromResult(OnGetListItemById(siteId, listId, itemId));
         }
 
-        public Task<ListItem> FindListItemByWebUrlAsync(string siteId, string listId, string webUrl)
+        public Task<DriveItem> GetDriveItemByUrlAsync(string url)
         {
-            FindListItemByWebUrlCalls++;
-            return Task.FromResult(OnFindListItemByWebUrl(siteId, listId, webUrl));
+            GetDriveItemByUrlCalls++;
+            return Task.FromResult(OnGetDriveItemByUrl(url));
         }
 
         public Task<User> GetUserAsync(string userId)
