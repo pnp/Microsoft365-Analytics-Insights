@@ -81,12 +81,16 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_copilot_resource_types
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_sensitivity_labels_label_id' AND object_id = OBJECT_ID('dbo.sensitivity_labels'))
     CREATE UNIQUE NONCLUSTERED INDEX IX_sensitivity_labels_label_id ON sensitivity_labels(label_id);
 
--- Parse JSON once into a temp table to avoid redundant OPENJSON/JSON_VALUE across 6 passes
+-- Parse JSON once into a temp table to avoid redundant OPENJSON/JSON_VALUE across 6 passes.
+-- resource_id / resource_name / site_url are trimmed to 850 chars to match their lookup columns
+-- (nvarchar(850) after migration IndexCopilotAccessedResourceLookups, so they can be indexed - the
+-- join/de-dup keys below). Trimming here keeps the value consistent between the DISTINCT insert and the
+-- resolve join so de-duplication still works, and guarantees no over-width value hits the narrowed column.
 SELECT 
     imports.event_id,
-    JSON_VALUE(ar.value, '$.Id') AS resource_id,
-    JSON_VALUE(ar.value, '$.Name') AS resource_name,
-    JSON_VALUE(ar.value, '$.SiteUrl') AS site_url,
+    LEFT(JSON_VALUE(ar.value, '$.Id'), 850) AS resource_id,
+    LEFT(JSON_VALUE(ar.value, '$.Name'), 850) AS resource_name,
+    LEFT(JSON_VALUE(ar.value, '$.SiteUrl'), 850) AS site_url,
     JSON_VALUE(ar.value, '$.Type') AS resource_type,
     JSON_VALUE(ar.value, '$.SensitivityLabelId') AS sensitivity_label_id
 INTO #parsed_accessed_resources
@@ -177,14 +181,24 @@ LEFT JOIN sensitivity_labels slabel
     ON slabel.label_id = par.sensitivity_label_id;
 
 
--- Process AccessedResources: Insert junction table records linking events to accessed resources
--- EXCEPT handles NULL equality natively and is far more efficient than row-by-row NOT EXISTS with OR IS NULL
+-- Process AccessedResources: Insert junction table records linking events to accessed resources.
+-- Keyed NOT EXISTS on copilot_chat_id (seeks via IX_copilot_chat_id to just this chat's existing rows)
+-- instead of EXCEPT-ing against the WHOLE junction table, which forced a full scan/sort of the entire
+-- (millions-of-rows) table every batch. The NULL-safe INTERSECT compares the resolved tuple exactly like
+-- EXCEPT did (NULLs equal). DISTINCT de-duplicates repeated resources within the batch.
 INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id)
-SELECT event_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id
-FROM #resolved_accessed_resources
-EXCEPT
-SELECT copilot_chat_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id
-FROM copilot_event_accessed_resources;
+SELECT DISTINCT r.event_id, r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id
+FROM #resolved_accessed_resources r
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM copilot_event_accessed_resources x
+    WHERE x.copilot_chat_id = r.event_id
+      AND EXISTS (
+          SELECT x.resource_id_id, x.resource_name_id, x.resource_site_url_id, x.resource_type_id, x.sensitivity_label_id
+          INTERSECT
+          SELECT r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id
+      )
+);
 
 DROP TABLE #parsed_accessed_resources;
 DROP TABLE #resolved_accessed_resources;

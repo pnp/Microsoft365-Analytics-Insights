@@ -219,7 +219,11 @@ namespace WebJob.Office365ActivityImporter.Engine
                     if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING) break;   // meeting ends file/meeting processing
                     if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT) continue;   // chat is additive, not a file
                     // First file-type context for this event (a null-id file resolves to nothing, so skip it but still stop).
-                    if (context.Id != null && !fileContexts.ContainsKey(context.Id))
+                    // Also skip contexts Graph can never resolve (local C:\ / UNC / DataAgent) so the concurrent
+                    // prewarm doesn't fire a guaranteed-miss round-trip for each one (mirrors TryAddFileAsync).
+                    if (context.Id != null
+                        && !CopilotAuditEventManager.ShouldSkipGraphFileLookup(context.Id)
+                        && !fileContexts.ContainsKey(context.Id))
                     {
                         fileContexts[context.Id] = copilot.UserId;
                     }
