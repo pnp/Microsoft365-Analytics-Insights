@@ -15,6 +15,7 @@ import Spinner from './components/Spinner';
 
 // Code-split the pages so each route is a separate chunk (smaller initial load).
 const HomePage = lazy(() => import('./pages/HomePage'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const TeamsPermissionsPage = lazy(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazy(() => import('./pages/UserLookupPage'));
 const ProfilingStatusPage = lazy(() => import('./pages/ProfilingStatusPage'));
@@ -59,17 +60,19 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const selectedTab = location.pathname.startsWith('/teams')
-    ? 'teams'
-    : location.pathname.startsWith('/user-lookup')
-      ? 'user-lookup'
-      : location.pathname.startsWith('/profiling')
-        ? 'profiling'
-        : location.pathname.startsWith('/install-log')
-          ? 'install-log'
-          : location.pathname.startsWith('/health')
-            ? 'health'
-            : 'home';
+  const selectedTab = location.pathname.startsWith('/reports')
+    ? 'reports'
+    : location.pathname.startsWith('/teams')
+      ? 'teams'
+      : location.pathname.startsWith('/user-lookup')
+        ? 'user-lookup'
+        : location.pathname.startsWith('/profiling')
+          ? 'profiling'
+          : location.pathname.startsWith('/install-log')
+            ? 'install-log'
+            : location.pathname.startsWith('/health')
+              ? 'health'
+              : 'home';
 
   const onTabSelect: SelectTabEventHandler = (_event, data) => {
     navigate(`/${data.value}`);
@@ -98,6 +101,7 @@ export default function App() {
       <div className={styles.tabBar}>
         <TabList selectedValue={selectedTab} onTabSelect={onTabSelect} size="large">
           <Tab value="home">Home</Tab>
+          <Tab value="reports">Reports</Tab>
           <Tab value="teams">Teams Permissions</Tab>
           <Tab value="user-lookup">User Data Lookup</Tab>
           <Tab value="profiling">Profiling</Tab>
@@ -117,6 +121,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/home" replace />} />
             <Route path="/home" element={<HomePage />} />
+            <Route path="/reports" element={<ReportsPage />} />
             <Route path="/teams" element={<TeamsPermissionsPage />} />
             <Route path="/user-lookup" element={<UserLookupPage />} />
             <Route path="/profiling" element={<ProfilingStatusPage />} />
