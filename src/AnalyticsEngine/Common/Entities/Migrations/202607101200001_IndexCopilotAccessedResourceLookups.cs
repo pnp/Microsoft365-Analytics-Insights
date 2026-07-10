@@ -39,9 +39,15 @@ namespace Common.Entities.Migrations
     /// each (table, column, index) is independently guarded, skips missing objects, is a no-op when
     /// already <c>nvarchar(850)</c> with the index present, truncates any (extremely rare)
     /// over-width value to 850 before the ALTER (a truncated value still de-duplicates to the same
-    /// key, so we trim rather than abort the customer's upgrade), and builds the index <c>ONLINE</c>
-    /// on editions that support it. Runs outside the EF transaction (suppressTransaction: true) and
-    /// Configuration.cs sets CommandTimeout = 0 so a large table's ALTER/index build won't time out.
+    /// key, so we trim rather than abort the customer's upgrade). Both the ALTER COLUMN and the index
+    /// build attempt <c>ONLINE</c> (non-blocking) first on editions that support it (Enterprise / Azure
+    /// SQL DB / MI) and fall back to a normal offline operation on any failure - so it also completes on
+    /// Express / Standard / LocalDB (dev), where the offline ALTER holds a schema lock for its duration
+    /// (run large upgrades in a maintenance window with the importer stopped). The ONLINE attempt is
+    /// wrapped in TRY/CATCH via sp_executesql, which makes the "ONLINE not supported" error catchable so
+    /// the fallback is reliable. Runs outside the EF transaction (suppressTransaction: true) and
+    /// Configuration.cs sets CommandTimeout = 0 so a large table's ALTER/index build won't time out; the
+    /// migration is idempotent so an interrupted upgrade converges cleanly on re-run.
     /// </summary>
     public partial class IndexCopilotAccessedResourceLookups : DbMigration
     {
@@ -73,7 +79,19 @@ DECLARE @tbl sysname, @col sysname, @ix sysname;
 DECLARE @typeName sysname, @maxLength smallint;
 DECLARE @alreadyNarrow bit, @indexExists bit;
 DECLARE @rowCount bigint, @trunc int, @edition int;
-DECLARE @sql nvarchar(max), @online nvarchar(40);
+DECLARE @sql nvarchar(max);
+DECLARE @canOnline bit, @onlineDone bit;
+
+-- Decide once whether ONLINE index/column operations are even attemptable. They require Enterprise (3),
+-- Azure SQL DB (5) or Azure SQL MI (8); Express/Standard/LocalDB (e.g. dev) do NOT support them. We still
+-- wrap each ONLINE attempt in TRY/CATCH below (via sp_executesql, which makes the edition error catchable)
+-- so that even on a capable edition where a specific ONLINE operation is unsupported (notably shrinking an
+-- nvarchar(max) LOB column on some versions) the migration falls back to an offline build rather than failing.
+SET @edition = CAST(SERVERPROPERTY('EngineEdition') AS int);
+SET @canOnline = CASE WHEN @edition IN (3, 5, 8) THEN 1 ELSE 0 END;
+SET @msg = @migration + N': EngineEdition=' + CAST(@edition AS nvarchar(10)) + N'; ONLINE operations '
+    + CASE WHEN @canOnline = 1 THEN N'will be attempted (with offline fallback).' ELSE N'not supported on this edition - using offline (a schema lock is held during ALTER COLUMN; run large upgrades in a maintenance window).' END;
+RAISERROR(@msg, 0, 1) WITH NOWAIT;
 
 WHILE @seq <= @maxSeq
 BEGIN
@@ -140,24 +158,66 @@ BEGIN
     IF @alreadyNarrow = 0
     BEGIN
         SET @stepStart = SYSUTCDATETIME();
-        SET @msg = @migration + N': altering ' + @tbl + N'.' + @col + N' to nvarchar(' + CAST(@maxLen AS nvarchar(10)) + N') NULL...';
-        RAISERROR(@msg, 0, 1) WITH NOWAIT;
-        SET @sql = N'ALTER TABLE [dbo].[' + @tbl + N'] ALTER COLUMN [' + @col + N'] nvarchar(850) NULL;';
-        EXEC sp_executesql @sql;
-        SET @msg = @migration + N': ALTER COLUMN completed in ' + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
+        SET @onlineDone = 0;
+
+        -- Attempt a non-blocking ONLINE ALTER first on capable editions. If it isn't supported (edition, or the
+        -- nvarchar(max) -> nvarchar(850) LOB shrink itself), the CATCH logs it and we retry offline below - which
+        -- also re-surfaces any genuine (non-ONLINE) failure instead of masking it.
+        IF @canOnline = 1
+        BEGIN
+            BEGIN TRY
+                SET @msg = @migration + N': altering ' + @tbl + N'.' + @col + N' to nvarchar(' + CAST(@maxLen AS nvarchar(10)) + N') NULL WITH (ONLINE = ON)...';
+                RAISERROR(@msg, 0, 1) WITH NOWAIT;
+                SET @sql = N'ALTER TABLE [dbo].[' + @tbl + N'] ALTER COLUMN [' + @col + N'] nvarchar(850) NULL WITH (ONLINE = ON);';
+                EXEC sp_executesql @sql;
+                SET @onlineDone = 1;
+            END TRY
+            BEGIN CATCH
+                SET @msg = @migration + N': ONLINE ALTER of ' + @tbl + N'.' + @col + N' unavailable (' + ERROR_MESSAGE() + N'); retrying offline.';
+                RAISERROR(@msg, 0, 1) WITH NOWAIT;
+            END CATCH
+        END
+
+        IF @onlineDone = 0
+        BEGIN
+            SET @msg = @migration + N': altering ' + @tbl + N'.' + @col + N' to nvarchar(' + CAST(@maxLen AS nvarchar(10)) + N') NULL (offline - holds a schema-modification lock; on large tables run in a maintenance window with the importer stopped)...';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+            SET @sql = N'ALTER TABLE [dbo].[' + @tbl + N'] ALTER COLUMN [' + @col + N'] nvarchar(850) NULL;';
+            EXEC sp_executesql @sql;
+        END
+
+        SET @msg = @migration + N': ALTER COLUMN completed in ' + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20))
+            + N'ms (' + CASE WHEN @onlineDone = 1 THEN N'online' ELSE N'offline' END + N').';
         RAISERROR(@msg, 0, 1) WITH NOWAIT;
     END
 
-    -- Create the supporting index. ONLINE = ON on editions that support it (Enterprise=3, Azure SQL DB=5,
-    -- Azure SQL MI=8) so existing readers/writers aren't blocked; offline elsewhere.
-    SET @edition = CAST(SERVERPROPERTY('EngineEdition') AS int);
-    SET @online = CASE WHEN @edition IN (3, 5, 8) THEN N' WITH (ONLINE = ON)' ELSE N'' END;
+    -- Create the supporting index, ONLINE (non-blocking) where possible, else offline. Same TRY/CATCH fallback
+    -- so the upgrade completes on every edition (including Express / LocalDB used for dev).
     SET @stepStart = SYSUTCDATETIME();
-    SET @msg = @migration + N': EngineEdition=' + CAST(@edition AS nvarchar(10)) + N'. Creating [' + @ix + N']...';
-    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-    SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N'])' + @online + N';';
-    EXEC sp_executesql @sql;
-    SET @msg = @migration + N': [' + @ix + N'] created in ' + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
+    SET @onlineDone = 0;
+    IF @canOnline = 1
+    BEGIN
+        BEGIN TRY
+            SET @msg = @migration + N': creating [' + @ix + N'] WITH (ONLINE = ON)...';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+            SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']) WITH (ONLINE = ON);';
+            EXEC sp_executesql @sql;
+            SET @onlineDone = 1;
+        END TRY
+        BEGIN CATCH
+            SET @msg = @migration + N': ONLINE index build of [' + @ix + N'] unavailable (' + ERROR_MESSAGE() + N'); retrying offline.';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        END CATCH
+    END
+    IF @onlineDone = 0
+    BEGIN
+        SET @msg = @migration + N': creating [' + @ix + N'] (offline)...';
+        RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']);';
+        EXEC sp_executesql @sql;
+    END
+    SET @msg = @migration + N': [' + @ix + N'] created in ' + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20))
+        + N'ms (' + CASE WHEN @onlineDone = 1 THEN N'online' ELSE N'offline' END + N').';
     RAISERROR(@msg, 0, 1) WITH NOWAIT;
 END
 
