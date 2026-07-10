@@ -7,6 +7,8 @@ using System.Data.SqlClient;
 using System.Diagnostics;
 using Tests.FakeDataGen.Seeding;
 using UnitTests.FakeLoaderClasses;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.FakeDataGen.StressTests
@@ -29,17 +31,33 @@ namespace Tests.FakeDataGen.StressTests
             "https://contoso.sharepoint.com/sites/legal"
         };
 
+        // A response can be Classic (1 credit), Generative (2) or TenantGraph (10). Mirrors the audit schema.
+        private static readonly string[] ResponseTypes = { "Classic", "Generative", "TenantGraph" };
+
+        // Model names surfaced in ModelTransparencyDetails. DEEP_LEO drives premium (deep-reasoning) billing.
+        private static readonly string[] ModelNames = { "gpt-4o", "gpt-4o-mini", "gpt-4.1", "DEEP_LEO" };
+
+        // Synthetic document-name fragments. Deliberately includes non-Latin (Greek) text so round-trip /
+        // truncation bugs surface in the nvarchar staging + merge path rather than in a customer tenant
+        // (SharePoint/OneDrive names routinely contain scripts like Greek). See repo character-set convention.
+        private static readonly string[] DocNameFragments =
+        {
+            "QuarterlyReport", "Budget", "Roadmap", "Καλημέρα κόσμε", "Σχέδιο", "Ετήσια Ανασκόπηση",
+            "Proposal", "MeetingNotes", "Análisis", "Presupuesto", "戦略計画", "プレゼン"
+        };
+
         protected override StressTestResult Execute()
         {
             Console.WriteLine("\n=== Copilot Event Import Stress Test Configuration ===\n");
 
-            int totalEvents = GetIntegerInput("Total copilot events to generate", 5000, 1, 1000000);
-            int batchSize = GetIntegerInput("Events per commit batch", 500, 1, 100000);
-            int maxResourcesPerEvent = GetIntegerInput("Max accessed resources per event", 5, 0, 50);
-            int distinctUsers = GetIntegerInput("Distinct users to seed (with departments, job titles, licenses)", 1000, 1, 200000);
-            bool includeAgents = GetBooleanInput("Include agent data", true);
-            bool collectGarbageEachBatch = GetBooleanInput("Force GC after each batch", false);
-            bool verbose = GetBooleanInput("Verbose output", false);
+            int totalEvents = GetIntegerInput("Total copilot events to generate", 5000, 1, 1000000, "STRESS_TOTAL_EVENTS");
+            int batchSize = GetIntegerInput("Events per commit batch", 500, 1, 100000, "STRESS_BATCH_SIZE");
+            int maxResourcesPerEvent = GetIntegerInput("Max accessed resources per event", 5, 0, 50, "STRESS_MAX_RESOURCES");
+            int maxMessagesPerEvent = GetIntegerInput("Max response messages per event", 6, 0, 500, "STRESS_MAX_MESSAGES");
+            int distinctUsers = GetIntegerInput("Distinct users to seed (with departments, job titles, licenses)", 1000, 1, 200000, "STRESS_DISTINCT_USERS");
+            bool includeAgents = GetBooleanInput("Include agent data", true, "STRESS_INCLUDE_AGENTS");
+            bool collectGarbageEachBatch = GetBooleanInput("Force GC after each batch", false, "STRESS_GC_EACH_BATCH");
+            bool verbose = GetBooleanInput("Verbose output", false, "STRESS_VERBOSE");
 
             // Use connection string from command-line args (passed via BaseStressTest.ConnectionString)
             string connectionString = ConnectionString;
@@ -47,7 +65,7 @@ namespace Tests.FakeDataGen.StressTests
 
             if (!string.IsNullOrEmpty(connectionString))
             {
-                commitToSql = GetBooleanInput("DB connection string provided. Commit batches to SQL", true);
+                commitToSql = GetBooleanInput("DB connection string provided. Commit batches to SQL", true, "STRESS_COMMIT_SQL");
             }
             else
             {
@@ -60,11 +78,11 @@ namespace Tests.FakeDataGen.StressTests
             Console.WriteLine($"  Total events: {totalEvents:N0}");
             Console.WriteLine($"  Batches: {batchCount:N0} x {batchSize:N0} events");
             Console.WriteLine($"  Up to {(long)totalEvents * maxResourcesPerEvent:N0} accessed resource records");
+            Console.WriteLine($"  Up to {(long)totalEvents * maxMessagesPerEvent:N0} response-message records");
             Console.WriteLine($"  Distinct users: {distinctUsers:N0} (seeded with departments, job titles, company, location + licenses)");
             Console.WriteLine($"  Mode: {(commitToSql ? "Full pipeline (staging + SQL commit)" : "Staging only (in-memory)")}");
             Console.WriteLine();
-            Console.WriteLine("Press any key to start test...");
-            Console.ReadKey();
+            PauseIfInteractive("Press any key to start test...");
             Console.WriteLine();
 
             if (commitToSql)
@@ -119,7 +137,7 @@ namespace Tests.FakeDataGen.StressTests
 
                     try
                     {
-                        long batchEvents = RunBatch(eventsThisBatch, maxResourcesPerEvent, includeAgents, commitToSql, connectionString, userCatalogue, random);
+                        long batchEvents = RunBatch(eventsThisBatch, maxResourcesPerEvent, maxMessagesPerEvent, includeAgents, commitToSql, connectionString, userCatalogue, random);
 
                         totalEventsProcessed += batchEvents;
                         _memoryMonitor.UpdatePeak();
@@ -183,7 +201,7 @@ namespace Tests.FakeDataGen.StressTests
             return result;
         }
 
-        private long RunBatch(int eventCount, int maxResourcesPerEvent, bool includeAgents,
+        private long RunBatch(int eventCount, int maxResourcesPerEvent, int maxMessagesPerEvent, bool includeAgents,
             bool commitToSql, string connectionString, IReadOnlyList<string> userCatalogue, Random random)
         {
             // Use a fake connection string for staging-only mode; real one for SQL commits
@@ -214,7 +232,7 @@ namespace Tests.FakeDataGen.StressTests
                     }
                 };
 
-                var auditRecord = GenerateRandomCopilotEvent(random, maxResourcesPerEvent, includeAgents);
+                var auditRecord = GenerateRandomCopilotEvent(random, maxResourcesPerEvent, maxMessagesPerEvent, includeAgents);
                 manager.SaveSingleCopilotEventToSqlStaging(auditRecord, commonEvent).GetAwaiter().GetResult();
             }
 
@@ -313,7 +331,7 @@ WHERE u.user_name = @upn;";
             }
         }
 
-        private CopilotAuditLogContent GenerateRandomCopilotEvent(Random random, int maxResourcesPerEvent, bool includeAgents)
+        private CopilotAuditLogContent GenerateRandomCopilotEvent(Random random, int maxResourcesPerEvent, int maxMessagesPerEvent, bool includeAgents)
         {
             var appHost = AppHosts[random.Next(AppHosts.Length)];
             var resourceCount = random.Next(0, maxResourcesPerEvent + 1);
@@ -324,11 +342,13 @@ WHERE u.user_name = @upn;";
                 var resource = new AccessedResource
                 {
                     Id = $"resource-{Guid.NewGuid():N}",
-                    Name = $"StressDoc{random.Next(1, 10000)}.{GetRandomExtension(random)}",
-                    Type = ResourceTypes[random.Next(ResourceTypes.Length)]
+                    Name = $"{DocNameFragments[random.Next(DocNameFragments.Length)]} {random.Next(1, 10000)}.{GetRandomExtension(random)}",
+                    Type = ResourceTypes[random.Next(ResourceTypes.Length)],
+                    Action = random.NextDouble() < 0.8 ? "Read" : "Edit",
+                    ListItemUniqueId = Guid.NewGuid().ToString()
                 };
 
-                // ~60% of resources have a SiteUrl
+                // ~60% of resources have a SiteUrl (incl. a non-Latin path to exercise Unicode round-trips)
                 if (random.NextDouble() < 0.6)
                 {
                     resource.SiteUrl = SiteUrls[random.Next(SiteUrls.Length)];
@@ -349,7 +369,11 @@ WHERE u.user_name = @upn;";
                 {
                     AppHost = appHost,
                     AccessedResources = accessedResources
-                }
+                },
+                // Populate the parsed event so messages_json + model_transparency_json are exercised - these
+                // are the blobs the chat-only merge (common_upsert_copilot_agents.sql) re-parses with OPENJSON,
+                // so a realistic before/after must include them (the previous generator left them null).
+                ParsedAuditEvent = BuildParsedEvent(random, accessedResources, maxMessagesPerEvent)
             };
 
             if (includeAgents && random.NextDouble() < 0.3)
@@ -361,7 +385,73 @@ WHERE u.user_name = @upn;";
                 content.IsCustomAgent = random.NextDouble() < 0.5;
             }
 
+            content.Cost = BuildCost(content.ParsedAuditEvent);
             return content;
+        }
+
+        /// <summary>
+        /// Builds a realistic parsed Copilot event: a multi-turn conversation (prompt + response per turn,
+        /// only responses are billable / serialized) plus 1-2 transparency models. Mirrors the shape of real
+        /// BizChat chat-only events, which carry the largest messages_json blobs.
+        /// </summary>
+        private static CopilotAuditEvent BuildParsedEvent(Random random, List<AccessedResource> accessedResources, int maxMessagesPerEvent)
+        {
+            var responseCount = maxMessagesPerEvent <= 0 ? 0 : random.Next(1, maxMessagesPerEvent + 1);
+
+            var messages = new List<Message>(responseCount * 2);
+            for (int m = 0; m < responseCount; m++)
+            {
+                // User prompt (not billable, filtered out before SQL) ...
+                messages.Add(new Message { Id = Guid.NewGuid().ToString(), IsPrompt = true });
+                // ... followed by the Copilot response (billable, serialized to messages_json).
+                messages.Add(new Message
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    IsPrompt = false,
+                    Type = ResponseTypes[random.Next(ResponseTypes.Length)]
+                });
+            }
+
+            var models = new List<ModelTransparencyDetail>
+            {
+                new ModelTransparencyDetail { ModelName = ModelNames[random.Next(ModelNames.Length)] }
+            };
+            if (random.NextDouble() < 0.25)
+            {
+                models.Add(new ModelTransparencyDetail { ModelName = ModelNames[random.Next(ModelNames.Length)] });
+            }
+
+            return new CopilotAuditEvent
+            {
+                AccessedResources = accessedResources,
+                Messages = messages,
+                ModelTransparencyDetails = models,
+                AnswerType = ResponseTypes[random.Next(ResponseTypes.Length)]
+            };
+        }
+
+        /// <summary>
+        /// Builds a non-trivial cost estimate so copilot_credit_estimate_json is exercised. New instance every
+        /// call - never the shared <see cref="CopilotCreditEstimation.NoCost"/> singleton.
+        /// </summary>
+        private static CopilotCreditEstimation BuildCost(CopilotAuditEvent parsed)
+        {
+            int responses = 0;
+            if (parsed?.Messages != null)
+            {
+                foreach (var msg in parsed.Messages)
+                {
+                    if (!msg.IsPrompt) responses++;
+                }
+            }
+
+            return new CopilotCreditEstimation
+            {
+                GenerativeAnswers = responses,
+                TotalCredits = responses * 2,
+                CreditBreakdown = new Dictionary<string, int> { { "GenerativeAnswers", responses * 2 } },
+                ModelsUsed = parsed?.ModelTransparencyDetails?.ConvertAll(m => m.ModelName) ?? new List<string>()
+            };
         }
 
         private static string GetRandomExtension(Random random)

@@ -22,6 +22,14 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
     /// </summary>
     public class CopilotAuditEventManager : IDisposable
     {
+        // Chunk size for the staging-table inserts. ParallelListProcessor spreads the batch across one
+        // connection per chunk (capped at its own max), so a smaller chunk => more parallel inserts. The
+        // default (10000) meant a single thread for every realistic Copilot batch (<= a couple thousand rows),
+        // serializing every row's insert round-trip. On Azure SQL those round-trips are network-latency-bound,
+        // so parallelizing them is a large win; on LocalDB (no latency) it's a no-op. Kept modest so we don't
+        // open an excessive number of connections for the shared global temp table.
+        private const int STAGING_INSERTS_PER_THREAD = 200;
+
         private readonly ICopilotMetadataLoader _copilotEventAdaptor;
         private readonly ILogger _logger;
         private readonly InsertBatch<SPCopilotLogTempEntity> _copilotInsertsSP;
@@ -158,7 +166,26 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         {
             try
             {
-                var spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
+                // Skip the Graph lookup for contexts that can never resolve to a SharePoint/OneDrive file
+                // (local drive paths like C:\..., UNC \\server\share, the "DataAgent" sentinel). On one large
+                // customer's export these accounted for a chunk of the "No file info found" warnings - each a doomed
+                // Graph round-trip (network + throttling risk) that always returned nothing. We still stage the row
+                // exactly as a null lookup would (so reporting is unchanged), just without the call. Any other
+                // context (URL, opaque id, or empty) is resolved exactly as before.
+                SpoDocumentFileInfo spFileInfo = null;
+                if (ShouldSkipGraphFileLookup(contextId))
+                {
+                    _logger.LogTrace($"Skipping Graph file lookup for non-SharePoint copilot context id {contextId} (event {baseOfficeEvent.Id})");
+                }
+                else
+                {
+                    spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
+                    if (spFileInfo == null)
+                    {
+                        _logger.LogWarning($"No file info found for copilot context type with id {contextId} (event {baseOfficeEvent.Id})");
+                    }
+                }
+
                 _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
                 {
                     EventId = baseOfficeEvent.Id,
@@ -178,10 +205,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
                     CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
                 });
-                if (spFileInfo == null)
-                {
-                    _logger.LogWarning($"No file info found for copilot context type with id {contextId} (event {baseOfficeEvent.Id})");
-                }
                 return true; // staged regardless
             }
             catch (Exception ex)
@@ -189,6 +212,45 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 _logger.LogWarning(ex, $"Failed to stage file metadata for event {baseOfficeEvent.Id} context {contextId}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// True when <paramref name="contextId"/> is a known reference that Graph can never resolve to a
+        /// SharePoint / OneDrive file - a local drive path (<c>C:\...</c>), a UNC path
+        /// (<c>\\server\share</c>) or the <c>DataAgent</c> sentinel - so the lookup should be skipped.
+        /// Copilot events routinely reference such non-SharePoint contexts (a user asking Copilot about a file
+        /// on their desktop); resolving them via Graph is a guaranteed miss. Deliberately conservative: returns
+        /// false (i.e. still attempt) for anything else, including URLs, opaque ids and null/empty - so behaviour
+        /// is unchanged for every context except the clearly-non-SharePoint ones.
+        /// </summary>
+        public static bool ShouldSkipGraphFileLookup(string contextId)
+        {
+            if (string.IsNullOrWhiteSpace(contextId))
+            {
+                return false;
+            }
+
+            var id = contextId.Trim();
+
+            // Local drive path, e.g. C:\Users\... or D:/...
+            if (id.Length >= 3 && char.IsLetter(id[0]) && id[1] == ':' && (id[2] == '\\' || id[2] == '/'))
+            {
+                return true;
+            }
+
+            // UNC path, e.g. \\server\share\...
+            if (id.StartsWith("\\\\", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // Known non-file sentinel.
+            if (id.Equals("DataAgent", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private void AddChatOnly(CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
@@ -316,9 +378,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             _logger.LogDebug($"Committing batch: {_totalFilesCount} file(s), {_totalMeetingsCount} meeting(s), {_totalChatOnlyCount} chat-only event(s) to SQL.");
 
-            await _copilotInsertsSP.SaveToStagingTable(docsMergeSql);
-            await _copilotInsertsTeams.SaveToStagingTable(teamsMergeSql);
-            await _copilotInsertsChatsNoContext.SaveToStagingTable(chatOnlyMergeSql);
+            await _copilotInsertsSP.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, docsMergeSql);
+            await _copilotInsertsTeams.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, teamsMergeSql);
+            await _copilotInsertsChatsNoContext.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, chatOnlyMergeSql);
 
             // Clear lists & counters for next batch
             _copilotInsertsSP.Rows.Clear();
