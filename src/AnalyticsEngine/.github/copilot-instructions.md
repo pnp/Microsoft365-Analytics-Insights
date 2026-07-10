@@ -74,12 +74,17 @@ Canonical examples: `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` (`urls.full
    - Even on a capable edition a specific `ONLINE` op can be rejected (notably shrinking an `nvarchar(max)` LOB column). So **attempt `ONLINE`, and fall back to a normal offline op on any failure**; the offline retry re-surfaces a genuine (non-`ONLINE`) error rather than masking it.
    - **Gotcha:** the *"Online index operations can only be performed in Enterprise edition…"* error **aborts the batch and is NOT catchable by `TRY/CATCH`** for a plain statement — but **IS catchable when the statement runs via `EXEC sp_executesql`**. So issue `ONLINE` attempts through `sp_executesql` inside `TRY/CATCH`.
 6. **`ALTER COLUMN` is an offline, table-rewriting, schema-locked operation unless `ONLINE` succeeds** — on a large table it blocks all access for its duration. Migrations run via the installer / `DatabaseUpgrader.CheckDbUpgraded` (not the web-jobs), so tell operators to run large upgrades in a **maintenance window with the importer stopped**. Index builds are non-blocking only when `ONLINE` succeeds.
-7. **Adding-a-migration checklist:**
+7. **Ship a standalone manual SQL upgrade script with every release that has a schema migration.** Some customers/DBAs upgrade the database **by hand** (in a controlled maintenance window) instead of running the installer, so every schema migration must also be published as a runnable script and **attached to the GitHub release**. Put it next to the migration as `<migrationid>.manual.sql` (e.g. `202607101200001_IndexCopilotAccessedResourceLookups.manual.sql`) containing:
+   - the migration's `Up` SQL **verbatim** (which is why the `Up_Sql` is kept as a `public const` — idempotent, guarded, edition-aware online/offline), then
+   - a **guarded `__MigrationHistory` stamp** so EF (`DatabaseUpgrader` / `MigrateDatabaseToLatestVersion`) and the web-app Health page treat it as applied. When the migration reuses the previous snapshot (see rule 1), the stamp just **copies the predecessor's row** — `INSERT ... SELECT '<new id>', ContextKey, Model, ProductVersion FROM __MigrationHistory WHERE MigrationId = '<prev id>'` — because the `Model` blob is byte-identical; no need to embed it. Guard with `IF NOT EXISTS (... WHERE MigrationId = '<new id>')` and verify the predecessor row exists.
+   - Validate the script before shipping: it must apply from the prior state, stamp `__MigrationHistory` (Model matching the predecessor), and be a **no-op on re-run**.
+8. **Adding-a-migration checklist:**
    - The migration id/timestamp (`yyyyMMddHHmmssf`, 15 digits) must sort **after** the current latest migration.
    - Register all three files in `Common/Entities/Entities.csproj`: `.cs` as `<Compile>`, `.Designer.cs` as `<Compile>` with `<DependentUpon>`, `.resx` as `<EmbeddedResource>` with `<DependentUpon>`.
+   - Add the manual SQL upgrade script (rule 7) and attach it to the release.
    - Update any test that hard-codes the latest migration id (e.g. `UrlFullUrlMigrationPipelineTests.LatestId`).
    - Some tables are created **only by migrations**, not by `Common/Entities/Resources/Create DB.sql` — check which, and update `Create DB.sql` too if the table is defined there.
-8. **C# verbatim-string gotcha:** SQL held in a C# `@"..."` string must **double every `"`** (or avoid them) — a single stray `"` (e.g. inside a SQL comment) silently terminates the string and produces confusing compile errors far from the real spot.
+9. **C# verbatim-string gotcha:** SQL held in a C# `@"..."` string must **double every `"`** (or avoid them) — a single stray `"` (e.g. inside a SQL comment) silently terminates the string and produces confusing compile errors far from the real spot.
 
 ## Installer (App.ControlPanel) UI automation & screenshots
 
