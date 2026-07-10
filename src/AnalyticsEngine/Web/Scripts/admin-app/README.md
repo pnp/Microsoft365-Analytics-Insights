@@ -41,6 +41,7 @@ analytics. If `SiteTokenAPI` can't return a token, the SPA falls back to client-
 | `o365AnalyticsSystemStatusAPI` | `api/SystemStatus` | System status / configuration for the Home page. |
 | `o365AnalyticsInstallLogAPI` | `api/InstallLog` | Install log (config history from `sys_configs`) for the Install Log page. |
 | `o365AnalyticsProfilingStatusAPI` | `api/ProfilingStatus` | Profiling data freshness + paged `profiling.TraceLogs` for the Profiling page. |
+| `o365AnalyticsReportsAPI` | `api/Reports` | Lite in-app reports: enabled areas (`/areas`) + weekly usage charts per area (`/copilot`, `/usage`, `/spo-audit`, `/web-traffic`, `/calls`, `/emails`). |
 
 ## Local development
 

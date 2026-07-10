@@ -24,6 +24,8 @@ declare global {
     o365AnalyticsInstallLogAPI: string;
     /** Base endpoint for the profiling status (data freshness + trace logs) API. */
     o365AnalyticsProfilingStatusAPI: string;
+    /** Base endpoint for the lite in-app Reports API (enabled areas + weekly usage charts). */
+    o365AnalyticsReportsAPI: string;
     /** Endpoint for the system-health ("is it working?") API. */
     o365AnalyticsHealthAPI: string;
   }
