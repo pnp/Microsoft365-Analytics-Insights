@@ -16,6 +16,13 @@
         AppInsightsImporter.zip       -> /site/wwwroot/app_data/jobs/continuous/AppInsightsImporter/
         Website.zip                   -> /site/wwwroot/
 
+    With -RunDbUpgrade it also runs the three-step database upgrade (EF migrations +
+    custom SQL scripts + org-URL seeding) that AnalyticsInstaller.exe normally handles.
+    The upgrade runs entirely inside the App Service as a triggered web-job, so no local
+    execution of the installer is needed. The web-job is built on the fly from the
+    ControlPanelApp.zip release asset (no new binary to deploy) and removed automatically
+    after the run reports success or failure.
+
     Sources are either:
       * downloaded from this repo's GitHub Releases (like LatestStableSoftwarePackageDownloadTask), or
       * taken from a local folder of pre-downloaded zips (-SourceFolder).
@@ -74,6 +81,29 @@
     credentials - only -WebAppName (and optionally -ScmHostName or -PublishProfilePath
     to pin the SCM host). Handy for triaging a 403 from a VM on the VNet.
 
+.PARAMETER RunDbUpgrade
+    After deploying content, run the database upgrade (EF migrations + custom SQL scripts
+    + org-URL seeding) inside the App Service as a triggered web-job.
+
+    The web-job is assembled on the fly from ControlPanelApp.zip (the signed
+    AnalyticsInstaller.exe release asset) plus a PowerShell run.ps1 wrapper, deployed
+    to the App Service triggered web-jobs folder, triggered via the Kudu API, and polled
+    until it completes. The full job log is echoed to the console and the script exits
+    non-zero if the upgrade fails.
+
+    Requires the App Service 'SPOInsightsEntities' connection string to be already
+    configured (Portal -> Configuration -> Connection strings). The connection string
+    identity must have DDL rights (ALTER TABLE, CREATE TABLE, etc.) as migrations may
+    run schema changes.
+
+    This switch can be combined with -SkipWebsite/-SkipWebJobs to run only the DB upgrade
+    without deploying web-job or website content (e.g. when binaries were already deployed
+    and only a schema upgrade is needed).
+
+.PARAMETER DbUpgradeTimeoutMin
+    Maximum minutes to wait for the database upgrade web-job to complete. Default 60.
+    Long-running migrations (large tables, many pending versions) may need a higher value.
+
 .PARAMETER PublishProfilePath
     Path to a downloaded App Service publish profile (*.PublishSettings XML).
 
@@ -127,6 +157,14 @@
     # Deploy and then diagnose whether the app is reachable privately from this machine.
     .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\p.PublishSettings -VerifySiteReachable
 
+.EXAMPLE
+    # Deploy everything AND run the DB upgrade in one pass.
+    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\contoso-analytics.PublishSettings -RunDbUpgrade
+
+.EXAMPLE
+    # Run ONLY the DB upgrade (skip web-job/website content - binaries already current).
+    .\Deploy-AppServiceContent.ps1 -WebAppName contoso-analytics -PublishProfilePath .\contoso-analytics.PublishSettings -SkipWebsite -SkipWebJobs -RunDbUpgrade
+
 .NOTES
     Requires network access to api.github.com (unless -SourceFolder) and to the
     App Service SCM endpoint (https://<app>.scm.azurewebsites.net).
@@ -150,6 +188,8 @@ param(
     [switch] $SkipWebsite,
     [switch] $SkipWebJobs,
     [switch] $RestartWebJobs,
+    [switch] $RunDbUpgrade,
+    [int]    $DbUpgradeTimeoutMin = 60,
     [switch] $DownloadOnly,
     [switch] $DiagnoseOnly,
 
@@ -258,15 +298,23 @@ function Invoke-WithRetry {
 # ------------------------------------------------------------- component model ---
 function Get-Components {
     $all = @(
-        [pscustomobject]@{ Name = 'Website';                   ZipFile = 'Website.zip';                   Kind = 'website'; JobName = $null;                        RemotePath = '/site/wwwroot/' }
-        [pscustomobject]@{ Name = 'Office365ActivityImporter'; ZipFile = 'Office365ActivityImporter.zip'; Kind = 'webjob';  JobName = 'Office365ActivityImporter';  RemotePath = '/site/wwwroot/app_data/jobs/continuous/Office365ActivityImporter/' }
-        [pscustomobject]@{ Name = 'AppInsightsImporter';       ZipFile = 'AppInsightsImporter.zip';       Kind = 'webjob';  JobName = 'AppInsightsImporter';        RemotePath = '/site/wwwroot/app_data/jobs/continuous/AppInsightsImporter/' }
+        [pscustomobject]@{ Name = 'Website';                   ZipFile = 'Website.zip';                   Kind = 'website';   JobName = $null;                        RemotePath = '/site/wwwroot/' }
+        [pscustomobject]@{ Name = 'Office365ActivityImporter'; ZipFile = 'Office365ActivityImporter.zip'; Kind = 'webjob';    JobName = 'Office365ActivityImporter';  RemotePath = '/site/wwwroot/app_data/jobs/continuous/Office365ActivityImporter/' }
+        [pscustomobject]@{ Name = 'AppInsightsImporter';       ZipFile = 'AppInsightsImporter.zip';       Kind = 'webjob';    JobName = 'AppInsightsImporter';        RemotePath = '/site/wwwroot/app_data/jobs/continuous/AppInsightsImporter/' }
+        [pscustomobject]@{ Name = 'ControlPanelApp';           ZipFile = 'ControlPanelApp.zip';           Kind = 'installer'; JobName = $null;                        RemotePath = $null }
     )
     $selected = $all | Where-Object {
-        ($_.Kind -eq 'website' -and -not $SkipWebsite) -or
-        ($_.Kind -eq 'webjob'  -and -not $SkipWebJobs)
+        ($_.Kind -eq 'website'   -and -not $SkipWebsite) -or
+        ($_.Kind -eq 'webjob'    -and -not $SkipWebJobs) -or
+        ($_.Kind -eq 'installer' -and $RunDbUpgrade)
     }
-    if (-not $selected) { throw 'Nothing to deploy: both -SkipWebsite and -SkipWebJobs were specified.' }
+    $deployableContent = @($selected | Where-Object { $_.Kind -ne 'installer' })
+    if ($deployableContent.Count -eq 0 -and -not $RunDbUpgrade) {
+        throw 'Nothing to deploy: both -SkipWebsite and -SkipWebJobs were specified.'
+    }
+    if ($deployableContent.Count -eq 0 -and $RunDbUpgrade) {
+        # DB-upgrade-only run: still need to acquire the installer package.
+    }
     return , @($selected)
 }
 
@@ -628,7 +676,180 @@ function Get-ContinuousWebJobs {
     } catch { return @() }
 }
 
-# ------------------------------------------------------ reachability / DNS check ---
+# ---------------------------------------------------------- DB upgrade web-job ---
+# The PowerShell entry-point embedded into every DbUpgrade triggered web-job package.
+# It is written to a temp file by New-DbUpgradeZip and included in the deployed zip.
+$script:DbUpgradeRunScript = @'
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    DbUpgrade triggered web-job entry point.
+    Reads the SQL connection string that App Service injects from the portal
+    Configuration -> Connection strings, constructs a DatabaseUpgradeInfo payload,
+    and delegates to AnalyticsInstaller.exe --initdb to run EF migrations, custom
+    SQL scripts, and org-URL seeding.
+    Exit 0 = success; non-zero = failure (Kudu records the run as Failed).
+#>
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+
+function Write-Ts { param([string]$m) Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) }
+
+Write-Ts 'DbUpgrade web-job starting.'
+
+# App Service exposes named connection strings as environment variables with a type
+# prefix. Try each variant that operators might have used for SPOInsightsEntities.
+$connStr = $null
+foreach ($prefix in @('SQLAZURECONNSTR_', 'SQLCONNSTR_', 'CUSTOMCONNSTR_')) {
+    $v = [System.Environment]::GetEnvironmentVariable("${prefix}SPOInsightsEntities")
+    if ($v) { $connStr = $v; Write-Ts "Found connection string via prefix '$prefix'."; break }
+}
+if (-not $connStr) {
+    Write-Error ("Could not find connection string 'SPOInsightsEntities'. " +
+        "Ensure it is set in App Service -> Configuration -> Connection strings " +
+        "(type SQL Azure, SQL Server, or Custom; name exactly 'SPOInsightsEntities').")
+    exit 1
+}
+
+# Serialize DatabaseUpgradeInfo to JSON and base64-encode it.
+# This matches App.ControlPanel.Engine.Models.DatabaseUpgradeInfo / Base64Serialisable<T>.
+$json   = ConvertTo-Json -Compress @{ ConnectionString = $connStr; OrgURLs = @() }
+$base64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($json))
+
+# AnalyticsInstaller.exe must be in the same folder as this script.
+$exe = Join-Path $PSScriptRoot 'AnalyticsInstaller.exe'
+if (-not (Test-Path -LiteralPath $exe)) {
+    Write-Error "AnalyticsInstaller.exe not found at '$exe'."
+    exit 1
+}
+
+Write-Ts 'Launching: AnalyticsInstaller.exe --initdb <connection-string-redacted>'
+& $exe --initdb $base64
+$rc = $LASTEXITCODE
+if ($rc -ne 0) {
+    Write-Error "Database upgrade failed (AnalyticsInstaller.exe exited $rc)."
+    exit $rc
+}
+Write-Ts 'Database upgrade completed successfully.'
+exit 0
+'@
+
+function New-DbUpgradeZip {
+    # Combines a normalised ControlPanelApp zip (installer exe + deps) with the embedded
+    # run.ps1 wrapper into a single zip suitable for deployment as a triggered web-job.
+    param([string] $InstallerZip, [string] $DestZip)
+
+    if (Test-Path -LiteralPath $DestZip) { Remove-Item -LiteralPath $DestZip -Force }
+
+    $src = [System.IO.Compression.ZipFile]::OpenRead($InstallerZip)
+    try {
+        $dest = [System.IO.Compression.ZipFile]::Open($DestZip, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            # Copy all installer files (AnalyticsInstaller.exe + dependencies).
+            foreach ($e in @($src.Entries)) {
+                if ([string]::IsNullOrEmpty($e.Name)) { continue }   # skip directory entries
+                $newEntry = $dest.CreateEntry($e.FullName, [System.IO.Compression.CompressionLevel]::Optimal)
+                $inStream = $e.Open(); $outStream = $newEntry.Open()
+                try { $inStream.CopyTo($outStream) } finally { $outStream.Dispose(); $inStream.Dispose() }
+            }
+            # Add the PowerShell entry-point wrapper.
+            $runEntry    = $dest.CreateEntry('run.ps1', [System.IO.Compression.CompressionLevel]::Optimal)
+            $runStream   = $runEntry.Open()
+            $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($script:DbUpgradeRunScript)
+            try { $runStream.Write($scriptBytes, 0, $scriptBytes.Length) } finally { $runStream.Dispose() }
+        } finally { $dest.Dispose() }
+    } finally { $src.Dispose() }
+    return $DestZip
+}
+
+function Invoke-DbUpgrade {
+    # Deploys the DbUpgrade triggered web-job, fires it, polls until completion, echoes
+    # the Kudu log, and throws on failure so the caller's catch block handles the exit.
+    param(
+        [string]    $ScmHost,
+        [hashtable] $Headers,
+        [string]    $InstallerZip,
+        [string]    $WorkDir,
+        [int]       $TimeoutMinutes
+    )
+
+    $jobName   = 'DbUpgrade'
+    $jobPath   = "/site/wwwroot/app_data/jobs/triggered/$jobName/"
+    $dbZipPath = Join-Path $WorkDir "DbUpgrade.zip"
+
+    # Build the web-job package on the fly.
+    Write-Info "Building $jobName web-job package..."
+    New-DbUpgradeZip -InstallerZip $InstallerZip -DestZip $dbZipPath | Out-Null
+    Write-Ok  "  Package ready: $dbZipPath"
+
+    # Deploy the package to the triggered web-job path.
+    Write-Info "Deploying $jobName triggered web-job to $jobPath ..."
+    Invoke-KuduZipDeploy -ScmHost $ScmHost -Headers $Headers -RemotePath $jobPath -ZipPath $dbZipPath
+    Write-Ok "  $jobName web-job deployed."
+
+    # Trigger the job.
+    Write-Info "Triggering $jobName web-job..."
+    $triggerUri = "https://$ScmHost/api/triggeredwebjobs/$jobName/run"
+    try {
+        Invoke-RestMethod -Method Post -Uri $triggerUri -Headers $Headers -TimeoutSec 30 | Out-Null
+    } catch {
+        $status = Get-HttpStatus $_
+        if ($status -eq 200 -or $status -eq 202) { <# success: some hosts return 200 instead of 202 #> }
+        else { throw "Failed to trigger $jobName web-job: $(Get-ExceptionSummary $_)" }
+    }
+    Write-Ok "  $jobName web-job triggered."
+
+    # Poll history until the run finishes or we time out.
+    Write-Step "Waiting for $jobName web-job to complete (timeout: ${TimeoutMinutes}m)"
+    $historyUri   = "https://$ScmHost/api/triggeredwebjobs/$jobName/history"
+    $deadline     = (Get-Date).AddMinutes($TimeoutMinutes)
+    $pollInterval = 10    # seconds
+    $latestRun    = $null
+
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds $pollInterval
+        try {
+            $history = Invoke-RestMethod -Method Get -Uri $historyUri -Headers $Headers -TimeoutSec 30
+            $runs    = if ($history.PSObject.Properties['runs']) { @($history.runs) } else { @() }
+            if ($runs.Count -gt 0) {
+                $latestRun   = $runs | Sort-Object -Property start_time -Descending | Select-Object -First 1
+                $runStatus   = if ($latestRun.PSObject.Properties['status']) { $latestRun.status } else { 'Unknown' }
+                Write-Info "  [$jobName] status: $runStatus"
+                if ($runStatus -ne 'Running') { break }
+            } else {
+                Write-Info "  [$jobName] waiting for run to register..."
+            }
+        } catch {
+            Write-WarnMsg "Polling $jobName history failed ($(Get-ExceptionSummary $_)); will retry..."
+        }
+    }
+
+    # Fetch and echo the job log.
+    if ($latestRun -and $latestRun.PSObject.Properties['output_url'] -and $latestRun.output_url) {
+        Write-Step "$jobName web-job output"
+        try {
+            $log = Invoke-RestMethod -Method Get -Uri $latestRun.output_url -Headers $Headers -TimeoutSec 60
+            ($log -split "`n") | ForEach-Object { Write-Host "  $_" }
+        } catch {
+            Write-WarnMsg "Could not fetch $jobName log: $(Get-ExceptionSummary $_)"
+        }
+    }
+
+    # Evaluate result.
+    if (-not $latestRun) {
+        throw "$jobName web-job did not produce a history entry within ${TimeoutMinutes} minutes."
+    }
+    $finalStatus = if ($latestRun.PSObject.Properties['status']) { $latestRun.status } else { 'Unknown' }
+    if ($finalStatus -eq 'Running') {
+        throw "$jobName web-job is still running after ${TimeoutMinutes} minutes; check the Kudu dashboard."
+    }
+    if ($finalStatus -ne 'Success') {
+        throw "$jobName web-job finished with status '$finalStatus'. See the log above for details."
+    }
+    Write-Ok "$jobName web-job completed successfully (status: $finalStatus)."
+}
+
+
 function Get-IpClass {
     param([string] $Ip)
     try { $addr = [System.Net.IPAddress]::Parse($Ip) } catch { return 'unknown' }
@@ -838,6 +1059,7 @@ try {
     Write-Info ("Deploying      : {0}" -f (@(
         if (-not $SkipWebsite) { 'website' }
         if (-not $SkipWebJobs) { 'web-jobs' }
+        if ($RunDbUpgrade)     { 'DB upgrade' }
     ) -join ', '))
     if ($DownloadOnly) { Write-Info 'Mode           : download/normalise only (no deploy)' }
 
@@ -882,8 +1104,12 @@ try {
     Write-Ok 'SCM endpoint reachable and authenticated.'
 
     # 4) Deploy. Website first so subsequent web-job uploads are never clobbered.
-    Write-Step 'Deploying content'
-    foreach ($c in $components) {
+    #    Installer components are handled separately by the DB upgrade step.
+    $deployComponents = @($components | Where-Object { $_.Kind -ne 'installer' })
+    if ($deployComponents.Count -gt 0) {
+        Write-Step 'Deploying content'
+    }
+    foreach ($c in $deployComponents) {
         $target = "https://$($auth.ScmHost) => $($c.RemotePath)"
         if (-not $PSCmdlet.ShouldProcess($target, "Deploy $($c.Name)")) {
             Write-Info "  [WhatIf] would deploy $($c.Name) to $($c.RemotePath)"
@@ -896,7 +1122,7 @@ try {
         Write-Ok "  Deployed $($c.Name)."
     }
 
-    # 5) Verify web-jobs (best effort).
+    # 5) Verify continuous web-jobs (best effort).
     if (-not $SkipWebJobs -and $PSCmdlet.ShouldProcess($auth.ScmHost, 'Verify continuous web-jobs')) {
         Write-Step 'Verifying web-jobs'
         $jobs = Get-ContinuousWebJobs -ScmHost $auth.ScmHost -Headers $auth.Headers
@@ -910,7 +1136,26 @@ try {
         }
     }
 
-    # 6) Optional private-networking diagnostic.
+    # 6) Optional DB upgrade (triggered web-job inside the App Service).
+    if ($RunDbUpgrade) {
+        Write-Step 'Running database upgrade'
+        $installerComp = @($components | Where-Object { $_.Kind -eq 'installer' }) | Select-Object -First 1
+        if (-not $installerComp -or -not $installerComp.NormalizedZip) {
+            throw 'Internal error: installer component not found; this is a bug in Get-Components.'
+        }
+        if (-not $PSCmdlet.ShouldProcess("https://$($auth.ScmHost)", 'Run DbUpgrade triggered web-job')) {
+            Write-Info '  [WhatIf] would deploy DbUpgrade web-job, trigger it, and poll for completion.'
+        } else {
+            Invoke-DbUpgrade `
+                -ScmHost        $auth.ScmHost `
+                -Headers        $auth.Headers `
+                -InstallerZip   $installerComp.NormalizedZip `
+                -WorkDir        $normalizedDir `
+                -TimeoutMinutes $DbUpgradeTimeoutMin
+        }
+    }
+
+    # 7) Optional private-networking diagnostic.
     if ($VerifySiteReachable) {
         Test-SiteReachability -ScmHost $auth.ScmHost
     }
@@ -918,7 +1163,10 @@ try {
     Write-Step 'Deployment complete'
     Write-Ok "https://$WebAppName.azurewebsites.net/"
     if (-not $DownloadOnly) {
-        Write-Info 'Note: this deploys content only. App settings, connection strings and DB schema are managed separately (installer / DatabaseUpgrader).'
+        $notes = @()
+        if (-not $RunDbUpgrade) { $notes += 'DB schema upgrade: run again with -RunDbUpgrade, or use the installer.' }
+        $notes += 'App settings and connection strings are managed separately (portal / ARM / installer).'
+        $notes | ForEach-Object { Write-Info "Note: $_" }
     }
 } catch {
     Write-Host ''
