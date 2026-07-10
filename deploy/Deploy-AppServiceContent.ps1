@@ -753,9 +753,9 @@ function New-DbUpgradeZip {
                 try { $inStream.CopyTo($outStream) } finally { $outStream.Dispose(); $inStream.Dispose() }
             }
             # Add the PowerShell entry-point wrapper.
-            $runEntry    = $dest.CreateEntry('run.ps1', [System.IO.Compression.CompressionLevel]::Optimal)
-            $runStream   = $runEntry.Open()
             $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($script:DbUpgradeRunScript)
+            $runEntry  = $dest.CreateEntry('run.ps1', [System.IO.Compression.CompressionLevel]::Optimal)
+            $runStream = $runEntry.Open()
             try { $runStream.Write($scriptBytes, 0, $scriptBytes.Length) } finally { $runStream.Dispose() }
         } finally { $dest.Dispose() }
     } finally { $src.Dispose() }
