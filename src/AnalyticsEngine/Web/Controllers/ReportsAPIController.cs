@@ -40,7 +40,11 @@ namespace Web.AnalyticsWeb.Controllers
         private const int QueryTimeoutSecs = 25;
 
         private const int DefaultMonths = 3;
-        private const int MaxMonths = 24;
+
+        // This is a "basic activity" view, not a full analytics tool, so the window is capped at 6
+        // months. That keeps the charts light and, once the base-table date columns are indexed,
+        // makes the window a real cost lever (a shorter period then reads proportionally less).
+        private const int MaxMonths = 6;
 
         private const string CacheKeyPrefix = "Reports::Area::";
 
