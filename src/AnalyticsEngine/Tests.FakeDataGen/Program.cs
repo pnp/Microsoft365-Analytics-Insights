@@ -41,7 +41,14 @@ namespace Tests.FakeDataGen
         {
             PrintBanner();
 
-            string connectionString = args.Length > 0 ? string.Join(" ", args) : null;
+            // Pull optional flags out first so they aren't mistaken for connection-string fragments.
+            //   Tests.FakeDataGen.exe "<SQL Connection String>" --run copilot
+            // A non-empty --run launches that stress test non-interactively (env-var config) and exits with
+            // code 0/1, so baseline-vs-optimised perf runs can be scripted and compared repeatably.
+            var argList = new List<string>(args);
+            string directRun = TakeOptionValue(argList, "--run");
+
+            string connectionString = argList.Count > 0 ? string.Join(" ", argList) : null;
             if (!string.IsNullOrEmpty(connectionString))
             {
                 DisplayConnectionInfo(connectionString);
@@ -50,9 +57,15 @@ namespace Tests.FakeDataGen
             {
                 Console.WriteLine("No SQL connection string provided.");
                 Console.WriteLine("Stress tests that don't need SQL will still run; everything else will be disabled.");
-                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\"");
+                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|activityapi|powerplatform|sentemail|useractivity>]");
             }
             Console.WriteLine();
+
+            if (!string.IsNullOrEmpty(directRun))
+            {
+                Environment.ExitCode = RunTestDirect(directRun, new RunContext(connectionString)) ? 0 : 1;
+                return;
+            }
 
             var ctx = new RunContext(connectionString);
 
@@ -162,6 +175,81 @@ namespace Tests.FakeDataGen
                 ctx.EnsureDbUpgraded();
             }
             test.Run();
+        }
+
+        /// <summary>
+        /// Stress tests that can be launched non-interactively via <c>--run &lt;name&gt;</c>. Keyed by a short
+        /// stable name so scripted perf comparisons don't depend on menu ordering.
+        /// </summary>
+        private static readonly Dictionary<string, Func<BaseStressTest>> DirectRunnableTests =
+            new Dictionary<string, Func<BaseStressTest>>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "copilot", () => new CopilotStressTest() },
+                { "activityapi", () => new ActivityAPIStressTest() },
+                { "powerplatform", () => new PowerPlatformStressTest() },
+                { "sentemail", () => new SentEmailImporterStressTest() },
+                { "useractivity", () => new UserActivityStressTest() },
+            };
+
+        /// <summary>
+        /// Runs a single stress test non-interactively (config via environment variables) and returns whether
+        /// it succeeded, so the host can set its process exit code. Used for scripted before/after perf runs.
+        /// </summary>
+        private static bool RunTestDirect(string name, RunContext ctx)
+        {
+            if (!DirectRunnableTests.TryGetValue(name.Trim(), out var factory))
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Unknown --run test '{name}'. Known: {string.Join(", ", DirectRunnableTests.Keys)}");
+                Console.ResetColor();
+                return false;
+            }
+
+            var test = factory();
+            test.NonInteractive = true;
+            test.ConnectionString = ctx.ConnectionString;
+
+            try
+            {
+                if (test.RequiresDatabase)
+                {
+                    ctx.EnsureDbUpgraded();
+                }
+                test.Run();
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"\nERROR: {ex.Message}");
+                Console.WriteLine($"Stack Trace:\n{ex.StackTrace}");
+                Console.ResetColor();
+                return false;
+            }
+
+            return test.LastResult != null && test.LastResult.Success;
+        }
+
+        /// <summary>
+        /// Removes <paramref name="optionName"/> and its following value from <paramref name="argList"/> and
+        /// returns that value (null if the option is absent). Lets flags coexist with a space-containing
+        /// connection string passed as the remaining args.
+        /// </summary>
+        private static string TakeOptionValue(List<string> argList, string optionName)
+        {
+            int idx = argList.FindIndex(a => string.Equals(a, optionName, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0)
+            {
+                return null;
+            }
+
+            string value = null;
+            if (idx + 1 < argList.Count)
+            {
+                value = argList[idx + 1];
+                argList.RemoveAt(idx + 1);
+            }
+            argList.RemoveAt(idx);
+            return value;
         }
 
         private static void RunCopilotActivityGenerator(string connectionString)
