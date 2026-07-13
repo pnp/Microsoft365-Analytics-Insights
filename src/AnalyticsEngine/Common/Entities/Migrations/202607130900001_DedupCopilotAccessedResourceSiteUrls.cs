@@ -49,11 +49,13 @@ DECLARE @migration nvarchar(100) = N'DedupCopilotAccessedResourceSiteUrls';
 DECLARE @start datetime2(3) = SYSUTCDATETIME();
 DECLARE @stepStart datetime2(3);
 DECLARE @msg nvarchar(2000);
-DECLARE @rows int;
 DECLARE @batch int = 4000;
 DECLARE @done bigint;
 DECLARE @dupCount bigint;
 DECLARE @normCount bigint;
+DECLARE @lastId int;
+DECLARE @curMax int;
+DECLARE @nextLog bigint;
 
 SET @msg = @migration + N': starting at ' + CONVERT(nvarchar(30), @start, 121) + N' UTC.';
 RAISERROR(@msg, 0, 1) WITH NOWAIT;
@@ -105,68 +107,126 @@ BEGIN
     RETURN;
 END
 
--- 1) Re-point junction rows from duplicate site_url ids to their canonical id (batched, FK-safe).
+-- Materialise each phase's exact work-set ONCE, keyed so the loops below batch by a seek instead of
+-- re-scanning #map / the junction on every iteration. The previous version re-scanned the target on
+-- every batch (depleting UPDATE/DELETE TOP), which is O(N^2) - the junction re-point dominated a
+-- multi-hour run at scale. Each loop now walks its work-set in key order and touches only the matching
+-- target rows by their clustered PK: O(N) overall.
+
+-- Junction rows to re-point, with their target canonical id (one pass, seeking via IX_resource_site_url_id).
+IF OBJECT_ID('tempdb..#repoint') IS NOT NULL DROP TABLE #repoint;
+SELECT j.id AS junction_id, m.canonical_id
+INTO #repoint
+FROM dbo.copilot_event_accessed_resources j
+INNER JOIN #map m ON j.resource_site_url_id = m.id
+WHERE m.id <> m.canonical_id;
+CREATE UNIQUE CLUSTERED INDEX IX_repoint_id ON #repoint(junction_id);
+
+-- Canonical rows whose stored value still carries the token (need rewriting to the path).
+IF OBJECT_ID('tempdb..#normwork') IS NOT NULL DROP TABLE #normwork;
+SELECT m.id, m.norm_path
+INTO #normwork
+FROM #map m
+INNER JOIN dbo.copilot_event_accessed_resource_site_urls s ON s.id = m.id
+WHERE m.id = m.canonical_id AND s.site_url <> m.norm_path;
+CREATE UNIQUE CLUSTERED INDEX IX_normwork_id ON #normwork(id);
+
+-- Duplicate rows to delete once the junction no longer references them.
+IF OBJECT_ID('tempdb..#dupids') IS NOT NULL DROP TABLE #dupids;
+SELECT m.id
+INTO #dupids
+FROM #map m
+WHERE m.id <> m.canonical_id;
+CREATE UNIQUE CLUSTERED INDEX IX_dupids_id ON #dupids(id);
+
+DROP TABLE #norm;
+DROP TABLE #map;
+
+-- 1) Re-point junction rows from duplicate site_url ids to their canonical id (FK-safe). Batched by the
+--    #repoint key range so each batch seeks the junction by its clustered PK instead of scanning it.
 SET @stepStart = SYSUTCDATETIME();
-SET @done = 0;
-SET @rows = 1;
-WHILE @rows > 0
+SET @done = 0; SET @lastId = -1; SET @nextLog = 200000;
+WHILE 1 = 1
 BEGIN
-    UPDATE TOP (@batch) j
-        SET j.resource_site_url_id = m.canonical_id
+    SET @curMax = NULL;
+    SELECT @curMax = MAX(junction_id) FROM
+        (SELECT TOP (@batch) junction_id FROM #repoint WHERE junction_id > @lastId ORDER BY junction_id) x;
+    IF @curMax IS NULL BREAK;
+
+    UPDATE j
+        SET j.resource_site_url_id = r.canonical_id
     FROM dbo.copilot_event_accessed_resources j
-    INNER JOIN #map m ON j.resource_site_url_id = m.id AND m.id <> m.canonical_id;
-    SET @rows = @@ROWCOUNT;
-    SET @done = @done + @rows;
-    IF @done % 200000 = 0 OR @rows = 0
+    INNER JOIN #repoint r ON r.junction_id = j.id
+    WHERE r.junction_id > @lastId AND r.junction_id <= @curMax;
+
+    SET @done = @done + @@ROWCOUNT;
+    SET @lastId = @curMax;
+    IF @done >= @nextLog
     BEGIN
         SET @msg = @migration + N': re-pointed ' + CAST(@done AS nvarchar(20)) + N' junction row(s)...';
         RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        SET @nextLog = @nextLog + 200000;
     END
 END
 SET @msg = @migration + N': junction re-point done (' + CAST(@done AS nvarchar(20)) + N' rows) in '
     + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
 RAISERROR(@msg, 0, 1) WITH NOWAIT;
 
--- 2) Normalise the surviving canonical rows' value to the path (batched).
+-- 2) Normalise the surviving canonical rows' value to the path. Batched by the #normwork key range.
 SET @stepStart = SYSUTCDATETIME();
-SET @done = 0;
-SET @rows = 1;
-WHILE @rows > 0
+SET @done = 0; SET @lastId = -1;
+WHILE 1 = 1
 BEGIN
-    UPDATE TOP (@batch) s
-        SET s.site_url = m.norm_path
+    SET @curMax = NULL;
+    SELECT @curMax = MAX(id) FROM
+        (SELECT TOP (@batch) id FROM #normwork WHERE id > @lastId ORDER BY id) x;
+    IF @curMax IS NULL BREAK;
+
+    UPDATE s
+        SET s.site_url = w.norm_path
     FROM dbo.copilot_event_accessed_resource_site_urls s
-    INNER JOIN #map m ON s.id = m.id AND m.id = m.canonical_id AND s.site_url <> m.norm_path;
-    SET @rows = @@ROWCOUNT;
-    SET @done = @done + @rows;
+    INNER JOIN #normwork w ON w.id = s.id
+    WHERE w.id > @lastId AND w.id <= @curMax;
+
+    SET @done = @done + @@ROWCOUNT;
+    SET @lastId = @curMax;
 END
 SET @msg = @migration + N': normalised ' + CAST(@done AS nvarchar(20)) + N' canonical row(s) in '
     + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
 RAISERROR(@msg, 0, 1) WITH NOWAIT;
 
--- 3) Delete the now-unreferenced duplicate rows (batched). Safe: every junction row was re-pointed above.
+-- 3) Delete the now-unreferenced duplicate rows. Batched by the #dupids key range. Safe: every junction
+--    row was re-pointed above.
 SET @stepStart = SYSUTCDATETIME();
-SET @done = 0;
-SET @rows = 1;
-WHILE @rows > 0
+SET @done = 0; SET @lastId = -1; SET @nextLog = 200000;
+WHILE 1 = 1
 BEGIN
-    DELETE TOP (@batch) s
+    SET @curMax = NULL;
+    SELECT @curMax = MAX(id) FROM
+        (SELECT TOP (@batch) id FROM #dupids WHERE id > @lastId ORDER BY id) x;
+    IF @curMax IS NULL BREAK;
+
+    DELETE s
     FROM dbo.copilot_event_accessed_resource_site_urls s
-    INNER JOIN #map m ON s.id = m.id AND m.id <> m.canonical_id;
-    SET @rows = @@ROWCOUNT;
-    SET @done = @done + @rows;
-    IF @done % 200000 = 0 OR @rows = 0
+    INNER JOIN #dupids d ON d.id = s.id
+    WHERE d.id > @lastId AND d.id <= @curMax;
+
+    SET @done = @done + @@ROWCOUNT;
+    SET @lastId = @curMax;
+    IF @done >= @nextLog
     BEGIN
         SET @msg = @migration + N': deleted ' + CAST(@done AS nvarchar(20)) + N' duplicate site_url row(s)...';
         RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        SET @nextLog = @nextLog + 200000;
     END
 END
 SET @msg = @migration + N': deleted ' + CAST(@done AS nvarchar(20)) + N' duplicate row(s) in '
     + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
 RAISERROR(@msg, 0, 1) WITH NOWAIT;
 
-DROP TABLE #norm;
-DROP TABLE #map;
+DROP TABLE #repoint;
+DROP TABLE #normwork;
+DROP TABLE #dupids;
 
 SET @msg = @migration + N': finished in '
     + CAST(DATEDIFF(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
