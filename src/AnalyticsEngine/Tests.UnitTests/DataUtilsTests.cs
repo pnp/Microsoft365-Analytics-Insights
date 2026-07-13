@@ -654,6 +654,53 @@ namespace Tests.UnitTests
             Assert.IsTrue(t.Elapsed == TimeSpan.Zero);
         }
 
+        // Days must only appear when the run took a day or more, otherwise a multi-day
+        // import is misreported as just its hours component (e.g. "14 hours" for a 1d 14h run).
+        [TestMethod]
+        public void JobTimerFormatElapsedDays()
+        {
+            // Under a day: no "day(s)" mentioned
+            var under = JobTimer.FormatElapsed("Audit events import", new TimeSpan(0, 14, 28, 44));
+            Assert.AreEqual("Audit events import: 14 hours, 28 mins, and 44 seconds.", under);
+            Assert.IsFalse(under.Contains("day"));
+
+            // A day or more: days are included up front
+            var over = JobTimer.FormatElapsed("Audit events import", new TimeSpan(2, 14, 28, 44));
+            Assert.AreEqual("Audit events import: 2 days, 14 hours, 28 mins, and 44 seconds.", over);
+        }
+
+        // The FinishedImportCycle custom event carries the elapsed time in its "context" dimension via the
+        // same StopAndPrintElapsed -> ToString -> FormatElapsed path as the trace log, so the days handling
+        // applies there too. This pins that wiring so the custom event can't silently drop days on its own.
+        [TestMethod]
+        public void JobTimerFinishedEventContextUsesFormatElapsed()
+        {
+            var trace = AnalyticsLogger.ConsoleOnlyTracer();
+            var t = new JobTimer(trace, "Import cycle");
+
+            var originalOut = Console.Out;
+            var captured = new System.IO.StringWriter();
+            try
+            {
+                Console.SetOut(captured);
+                t.Start();
+                Thread.Sleep(10);
+                t.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+
+            var output = captured.ToString();
+            // e.g. New event 'FinishedImportCycle'; 'context=Import cycle: 0 hours, 0 mins, and 0 seconds.'.
+            StringAssert.Contains(output, "New event 'FinishedImportCycle'");
+            StringAssert.Contains(output, "context=Import cycle: ");
+            StringAssert.Contains(output, " hours, ");
+            StringAssert.Contains(output, " mins, and ");
+            StringAssert.Contains(output, " seconds.");
+        }
+
         [TestMethod]
         public void TrimStringFromStart()
         {
