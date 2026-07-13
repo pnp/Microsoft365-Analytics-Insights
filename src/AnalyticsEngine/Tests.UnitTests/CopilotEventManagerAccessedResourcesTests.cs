@@ -1,5 +1,6 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
+using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -492,6 +493,172 @@ namespace Tests.UnitTests
                     .ToListAsync();
 
                 Assert.AreEqual(2, junctionRecords.Count, "Should have 2 junction records with the shared SiteUrl");
+            }
+        }
+
+        /// <summary>
+        /// The Copilot audit SiteUrl carries a volatile per-access token (e.g. <c>?xsdata=...</c>), so two
+        /// accesses to the SAME site arrive as different strings. The merge normalises SiteUrl to its path
+        /// (strips the query string / #fragment) before de-dup, so they must collapse to ONE site_urls row
+        /// (stored WITHOUT the token) rather than ballooning the dimension with a near-unique row per access.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManagerAccessedResourcesSiteUrlTokenNormalizationTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resource_site_urls', 'U')").FirstOrDefault().GetValueOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources SiteUrls table does not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                var commonEvent1 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "SiteUrl Token Norm 1" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@siteurltoken1.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+                var commonEvent2 = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "SiteUrl Token Norm 2" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@siteurltoken2.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+                db.AuditEventsCommon.AddRange(new[] { commonEvent1, commonEvent2 });
+                await db.SaveChangesAsync();
+
+                // Same site, different volatile xsdata token each access (one even includes a #fragment).
+                var sitePath = "https://contoso.sharepoint.com/sites/Καλημέρα-site";
+                var url1 = sitePath + "?xsdata=AAA111BBB222CCC333&web=1";
+                var url2 = sitePath + "?xsdata=ZZZ999YYY888&sourcedoc=%7Bguid%7D#heading";
+
+                var mgr = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+                await mgr.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource { Id = "res-token-1", Name = "Doc1.docx", Type = "Document", SiteUrl = url1 }
+                        }
+                    }
+                }, commonEvent1);
+                await mgr.CommitAllChanges();
+
+                mgr = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+                await mgr.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Excel",
+                        AccessedResources = new List<AccessedResource>
+                        {
+                            new AccessedResource { Id = "res-token-2", Name = "Doc2.xlsx", Type = "Spreadsheet", SiteUrl = url2 }
+                        }
+                    }
+                }, commonEvent2);
+                await mgr.CommitAllChanges();
+
+                // Both accesses must collapse to the single normalised path (token stripped, Unicode intact).
+                var pathRows = await db.CopilotAccessedResourceSiteUrls.Where(s => s.SiteUrl == sitePath).ToListAsync();
+                Assert.AreEqual(1, pathRows.Count, "The two tokenised SiteUrls should de-duplicate to one path row");
+
+                var tokenRows = await db.CopilotAccessedResourceSiteUrls.Where(s => s.SiteUrl.Contains("xsdata")).ToListAsync();
+                Assert.AreEqual(0, tokenRows.Count, "No site_url row should still contain the volatile xsdata token");
+
+                var junctionRecords = await db.CopilotEventAccessedResources
+                    .Include(ar => ar.ResourceSiteUrl)
+                    .Where(ar => ar.ResourceSiteUrl.SiteUrl == sitePath)
+                    .ToListAsync();
+                Assert.AreEqual(2, junctionRecords.Count, "Both accesses should reference the single normalised site row");
+            }
+        }
+
+        /// <summary>
+        /// End-to-end test of the DedupCopilotAccessedResourceSiteUrls migration: seeds PRE-normalisation
+        /// duplicate rows (the same site with different volatile tokens, as older imports stored them) plus
+        /// junction rows referencing each, runs the migration SQL, and asserts they collapse to one canonical
+        /// (path) row with the junction re-pointed to it - and that a re-run is a no-op (idempotent).
+        /// </summary>
+        [TestMethod]
+        public async Task DedupCopilotAccessedResourceSiteUrlsMigration_CollapsesTokenisedDuplicates()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                if (db.Database.SqlQuery<int?>("SELECT OBJECT_ID('dbo.copilot_event_accessed_resource_site_urls', 'U')").FirstOrDefault().GetValueOrDefault() == 0)
+                {
+                    Assert.Inconclusive("AccessedResources SiteUrls table does not exist. Run migration first.");
+                    return;
+                }
+
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                // A real chat-only event => a copilot_chats row, so the junction's copilot_chat_id FK resolves.
+                var ev = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.Now,
+                    Operation = new EventOperation { Name = "Dedup Mig Op" + DateTime.Now.Ticks },
+                    User = new User { AzureAdId = "test", UserPrincipalName = "test@dedupmig.com" + DateTime.Now.Ticks },
+                    Id = Guid.NewGuid()
+                };
+                db.AuditEventsCommon.Add(ev);
+                await db.SaveChangesAsync();
+                var mgr = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+                await mgr.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent { CopilotEventData = new CopilotEventData { AppHost = "Word" } }, ev);
+                await mgr.CommitAllChanges();
+
+                // Seed three tokenised variants of the SAME site (as pre-normalisation imports would have) plus
+                // one already-clean path row - four rows that must collapse to one.
+                var path = "https://contoso.sharepoint.com/sites/dedup-Καλημέρα-" + Guid.NewGuid().ToString("N");
+                db.Database.ExecuteSqlCommand(
+                    "INSERT INTO copilot_event_accessed_resource_site_urls (site_url) VALUES (@p0),(@p1),(@p2),(@p3)",
+                    path + "?xsdata=AAA111", path + "?xsdata=BBB222&web=1", path + "#frag", path);
+
+                var siteUrlIds = db.Database.SqlQuery<int>(
+                    "SELECT id FROM copilot_event_accessed_resource_site_urls WHERE site_url LIKE @p0 ORDER BY id",
+                    path + "%").ToList();
+                Assert.AreEqual(4, siteUrlIds.Count, "Pre-condition: 4 seeded site_url rows");
+
+                foreach (var sid in siteUrlIds)
+                {
+                    db.Database.ExecuteSqlCommand(
+                        "INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_site_url_id) VALUES (@p0, @p1)",
+                        ev.Id, sid);
+                }
+
+                // Run the migration clean-up SQL.
+                db.Database.ExecuteSqlCommand(DedupCopilotAccessedResourceSiteUrls.Up_Sql);
+
+                // Exactly one surviving row for the path, stored token-free.
+                var surviving = db.Database.SqlQuery<int>(
+                    "SELECT COUNT(*) FROM copilot_event_accessed_resource_site_urls WHERE site_url = @p0", path).First();
+                Assert.AreEqual(1, surviving, "The four tokenised rows should collapse to one canonical path row");
+
+                var stillTokened = db.Database.SqlQuery<int>(
+                    "SELECT COUNT(*) FROM copilot_event_accessed_resource_site_urls WHERE site_url LIKE @p0", path + "?%").First();
+                Assert.AreEqual(0, stillTokened, "No tokenised site_url rows should remain");
+
+                // All four junction rows must now point at that single surviving row (FK intact, none orphaned).
+                var canonicalId = db.Database.SqlQuery<int>(
+                    "SELECT id FROM copilot_event_accessed_resource_site_urls WHERE site_url = @p0", path).First();
+                var junctionToCanonical = db.Database.SqlQuery<int>(
+                    "SELECT COUNT(*) FROM copilot_event_accessed_resources WHERE copilot_chat_id = @p0 AND resource_site_url_id = @p1",
+                    ev.Id, canonicalId).First();
+                Assert.AreEqual(4, junctionToCanonical, "All junction rows should be re-pointed to the canonical row");
+
+                // Idempotent: a second run changes nothing.
+                db.Database.ExecuteSqlCommand(DedupCopilotAccessedResourceSiteUrls.Up_Sql);
+                var afterRerun = db.Database.SqlQuery<int>(
+                    "SELECT COUNT(*) FROM copilot_event_accessed_resource_site_urls WHERE site_url = @p0", path).First();
+                Assert.AreEqual(1, afterRerun, "Re-running the migration should be a no-op");
             }
         }
 

@@ -86,16 +86,33 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_sensitivity_labels_lab
 -- (nvarchar(850) after migration IndexCopilotAccessedResourceLookups, so they can be indexed - the
 -- join/de-dup keys below). Trimming here keeps the value consistent between the DISTINCT insert and the
 -- resolve join so de-duplication still works, and guarantees no over-width value hits the narrowed column.
+-- site_url is additionally NORMALISED to its path (everything before the first '?' or '#' is kept, the
+-- query string / #fragment dropped) BEFORE de-dup: the Copilot audit SiteUrl carries a volatile per-access
+-- token (e.g. xsdata), so without this the same site is a near-unique string every access and the
+-- site_urls dimension balloons to millions of rows (one per access) instead of one per site. Mirrors
+-- StringUtils.RemoveXsDataParam / EnsureUrlWithinLength's "reduce to path" step. See issue #122.
 SELECT 
     imports.event_id,
     LEFT(JSON_VALUE(ar.value, '$.Id'), 850) AS resource_id,
     LEFT(JSON_VALUE(ar.value, '$.Name'), 850) AS resource_name,
-    LEFT(JSON_VALUE(ar.value, '$.SiteUrl'), 850) AS site_url,
+    LEFT(np.site_url_path, 850) AS site_url,
     JSON_VALUE(ar.value, '$.Type') AS resource_type,
     JSON_VALUE(ar.value, '$.SensitivityLabelId') AS sensitivity_label_id
 INTO #parsed_accessed_resources
 FROM [${STAGING_TABLE_ACTIVITY}] imports
 CROSS APPLY OPENJSON(imports.accessed_resources_json) ar
+CROSS APPLY (SELECT JSON_VALUE(ar.value, '$.SiteUrl') AS raw_site_url) rs
+CROSS APPLY (
+    -- Keep just the path: strip from the first '?' or '#' onward. NULLIF turns CHARINDEX's "not found"
+    -- (0) into NULL so MIN ignores it; when neither is present the whole value is kept.
+    SELECT CASE WHEN rs.raw_site_url IS NULL THEN NULL
+                ELSE LEFT(rs.raw_site_url,
+                          ISNULL((SELECT MIN(pos) FROM (VALUES
+                                     (NULLIF(CHARINDEX('?', rs.raw_site_url), 0)),
+                                     (NULLIF(CHARINDEX('#', rs.raw_site_url), 0))) q(pos)) - 1,
+                                  LEN(rs.raw_site_url)))
+           END AS site_url_path
+) np
 WHERE imports.accessed_resources_json IS NOT NULL;
 
 
