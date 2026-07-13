@@ -105,6 +105,80 @@ namespace Tests.UnitTests
             }
         }
 
+        // The Copilot merge (common_upsert_copilot_agents.sql) carries optional per-step timing that only
+        // activates when dbo.copilot_merge_step_timings exists (see copilot_merge_step_timings.sql). This
+        // verifies (a) timing rows are written for the real merge and (b) rows_affected is captured
+        // correctly - guarding the regression where @@ROWCOUNT read inside "IF @dbg=1 INSERT ... VALUES
+        // (@@ROWCOUNT)" is reset by the IF predicate and silently logged as 0.
+        [TestMethod]
+        public async Task CopilotMergeStepTimingInstrumentationTest()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+                await ClearAccessedResources(db);
+
+                // Enable instrumentation by creating the diagnostics table (schema mirrors copilot_merge_step_timings.sql).
+                db.Database.ExecuteSqlCommand(
+                    "IF OBJECT_ID('dbo.copilot_merge_step_timings','U') IS NOT NULL DROP TABLE dbo.copilot_merge_step_timings; " +
+                    "CREATE TABLE dbo.copilot_merge_step_timings (id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY, " +
+                    "captured_at DATETIME2(3) NOT NULL DEFAULT SYSUTCDATETIME(), batch_id UNIQUEIDENTIFIER NOT NULL, " +
+                    "staging_table NVARCHAR(128) NOT NULL, step_name VARCHAR(64) NOT NULL, duration_ms INT NOT NULL, rows_affected INT NULL);");
+
+                try
+                {
+                    var copilotEventManager = new CopilotAuditEventManager(_config.ConnectionStrings.DatabaseConnectionString, new FakeCopilotMetadataLoader(), _logger);
+
+                    var commonEvent = new CommonAuditEvent
+                    {
+                        TimeStamp = DateTime.Now,
+                        Operation = new EventOperation { Name = "Timing Instrumentation Op" + DateTime.Now.Ticks },
+                        User = new User { AzureAdId = "test", UserPrincipalName = "timing@user.com" + DateTime.Now.Ticks },
+                        Id = Guid.NewGuid()
+                    };
+                    db.AuditEventsCommon.Add(commonEvent);
+                    await db.SaveChangesAsync();
+
+                    await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+                    {
+                        CopilotEventData = new CopilotEventData
+                        {
+                            AppHost = "Word",
+                            AccessedResources = new List<AccessedResource>
+                            {
+                                new AccessedResource
+                                {
+                                    Id = "timing-res-1",
+                                    Name = "TimingDoc.docx",
+                                    Type = "Document",
+                                    // Greek + a volatile ?xsdata token exercises the site_url normalisation inside the timed path.
+                                    SiteUrl = "https://contoso.sharepoint.com/sites/eng/Καλημέρα.docx?xsdata=tok1",
+                                    SensitivityLabelId = "timing-label-1"
+                                }
+                            }
+                        }
+                    }, commonEvent);
+
+                    await copilotEventManager.CommitAllChanges();
+
+                    var steps = db.Database.SqlQuery<string>("SELECT step_name FROM dbo.copilot_merge_step_timings").ToList();
+                    Assert.IsTrue(steps.Contains("insert_junction"), "insert_junction step should be timed");
+                    Assert.IsTrue(steps.Contains("insert_site_urls"), "insert_site_urls step should be timed");
+                    Assert.IsTrue(steps.Contains("TOTAL"), "TOTAL row should be recorded");
+
+                    // rows_affected must reflect the real @@ROWCOUNT (the one event inserts one junction row),
+                    // not the 0 produced by the IF-predicate reset bug.
+                    var junctionRows = db.Database.SqlQuery<int>(
+                        "SELECT ISNULL(MAX(rows_affected), 0) FROM dbo.copilot_merge_step_timings WHERE step_name = 'insert_junction'").Single();
+                    Assert.IsTrue(junctionRows >= 1, $"insert_junction rows_affected should be >= 1 but was {junctionRows}");
+                }
+                finally
+                {
+                    db.Database.ExecuteSqlCommand("IF OBJECT_ID('dbo.copilot_merge_step_timings','U') IS NOT NULL DROP TABLE dbo.copilot_merge_step_timings;");
+                }
+            }
+        }
+
         [TestMethod]
         public async Task CopilotEventManagerAccessedResourcesPartialDataTest()
         {
