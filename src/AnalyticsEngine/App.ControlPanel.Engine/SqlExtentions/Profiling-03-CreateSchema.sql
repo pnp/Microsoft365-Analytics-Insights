@@ -1096,7 +1096,7 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     SUM(private_chat_count),
     SUM(team_chat_count),
     SUM(calls_count),
@@ -1117,7 +1117,7 @@ BEGIN
     SUM(urgent_messages)
   FROM dbo.teams_user_activity_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1218,14 +1218,14 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     SUM(viewed_or_edited),
     SUM(synced),
     SUM(shared_internally),
     SUM(shared_externally)
   FROM dbo.onedrive_user_activity_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1284,14 +1284,14 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     SUM(viewed_or_edited),
     SUM(synced),
     SUM(shared_internally),
     SUM(shared_externally)
   FROM dbo.sharepoint_user_activity_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1351,7 +1351,7 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     SUM(email_send_count),
     SUM(email_receive_count),
     SUM(email_read_count),
@@ -1359,7 +1359,7 @@ BEGIN
     SUM(meeting_interacted_count)
   FROM dbo.outlook_user_activity_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1420,13 +1420,13 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     SUM(posted_count),
     SUM(read_count),
     SUM(liked_count)
   FROM dbo.yammer_user_activity_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1488,7 +1488,7 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     -- multiplication here converts the BIT column into an INT so the aggregation works
     MAX(1 * used_web),
     MAX(1 * used_mac),
@@ -1503,7 +1503,7 @@ BEGIN
     MAX(1 * used_android)
   FROM dbo.teams_user_device_usage_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1607,7 +1607,7 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     MAX(1 * windows),
     MAX(1 * mac),
     MAX(1 * mobile),
@@ -1644,7 +1644,7 @@ BEGIN
     MAX(1 * teams_web)
   FROM dbo.platform_user_activity_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1797,7 +1797,7 @@ BEGIN
   )
   SELECT
     "user_id",
-    @StartDate,
+    DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE)),
     MAX(1 * used_web + 1 * used_others + 1 * used_win_phone + 1 * used_android
       + 1 * used_ipad + 1 * used_iphone + 1 * used_others),
     MAX(1 * used_web),
@@ -1809,7 +1809,7 @@ BEGIN
     MAX(1 * used_iphone)
   FROM dbo.yammer_device_activity_log
   WHERE @StartDate <= "date" AND "date" <= @EndDate
-  GROUP BY "user_id";
+  GROUP BY "user_id", DATEADD(DAY, -(DATEDIFF(DAY, '19000101', "date") % 7), CAST("date" AS DATE));
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -1900,7 +1900,7 @@ BEGIN
       FROM (
         SELECT
           app_host,
-          @StartDate AS "date",
+          DATEADD(DAY, -(DATEDIFF(DAY, '19000101', au.time_stamp) % 7), CAST(au.time_stamp AS DATE)) AS "date",
           "user_id",
           event_id
         FROM dbo.copilot_chats AS c
@@ -1969,7 +1969,7 @@ BEGIN
     events AS (
       SELECT
         "user_id",
-        @StartDate AS "date",
+        DATEADD(DAY, -(DATEDIFF(DAY, '19000101', au.time_stamp) % 7), CAST(au.time_stamp AS DATE)) AS "date",
         c.event_id AS chat_id,
         f.copilot_chat_id AS has_file,
         m.copilot_chat_id AS has_meeting
@@ -2020,7 +2020,7 @@ BEGIN
   )
   SELECT
     a."user_id",
-    @StartDate,
+    a."date",
     SUM(c.chat_count),
     SUM(c.meeting_count),
     SUM(c.file_count),
@@ -2046,8 +2046,8 @@ BEGIN
     SUM(copilot_whiteboard),
     SUM(copilot_word)
   FROM host_activities AS a
-    JOIN event_counts AS c ON a."user_id" = c."user_id"
-  GROUP BY a."user_id";
+    JOIN event_counts AS c ON a."user_id" = c."user_id" AND a."date" = c."date"
+  GROUP BY a."user_id", a."date";
 
   /* tsqllint-disable warning update-where */
   UPDATE t
@@ -2157,23 +2157,26 @@ END
 GO
 
 CREATE PROCEDURE profiling.usp_CompileWeekActivityRows
-(
-  -- Start day of the week to aggregate
-  @Monday DATE
-)
 AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    EXEC profiling.usp_Trace '[usp_CompileWeekActivityRows] Starting: %s', @Monday;
+    EXEC profiling.usp_Trace '[usp_CompileWeekActivityRows] Starting';
 
-    INSERT INTO profiling.ActivitiesWeekly
+    INSERT INTO profiling.ActivitiesWeekly ("user_id", MetricDate, Metric, [Sum])
     SELECT
       "user_id",
-      @Monday AS MetricDate,
+      "date" AS MetricDate,
       Metric,
       SUM(VALUE) AS Sum
-    FROM #ActivitiesStaging AS Pivoted
+    FROM (
+      SELECT s.*
+      FROM #ActivitiesStaging AS s
+      WHERE NOT EXISTS (
+        SELECT 1 FROM profiling.ActivitiesWeekly AS a
+        WHERE a."user_id" = s."user_id" AND a.MetricDate = s."date"
+      )
+    ) AS Pivoted
     UNPIVOT (
       -- Convert columns into rows
       VALUE FOR Metric IN (
@@ -2237,7 +2240,7 @@ BEGIN
         "Copilot App Word"
       )
     ) AS Unpivoted
-    GROUP BY "user_id", Metric;
+    GROUP BY "user_id", "date", Metric;
   END TRY
   BEGIN CATCH
     DECLARE @ErrorMessage NVARCHAR(4000);
@@ -2258,15 +2261,11 @@ END
 GO
 
 CREATE PROCEDURE profiling.usp_CompileWeekActivityColumns
-(
-  -- Start day of the week to aggregate
-  @Monday DATE
-)
 AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    EXEC profiling.usp_Trace '[usp_CompileWeekActivityColumns] Starting: %s', @Monday;
+    EXEC profiling.usp_Trace '[usp_CompileWeekActivityColumns] Starting';
 
     INSERT INTO profiling.ActivitiesWeeklyColumns
     (
@@ -2333,7 +2332,7 @@ BEGIN
     )
     SELECT
       "user_id",
-      @Monday AS "date",
+      "date",
       "OneDrive Viewed/Edited",
       "OneDrive Synced",
       "OneDrive Shared Internally",
@@ -2392,7 +2391,11 @@ BEGIN
       "Copilot App VivaGoals",
       "Copilot App Whiteboard",
       "Copilot App Word"
-    FROM #ActivitiesStaging;
+    FROM #ActivitiesStaging AS s
+    WHERE NOT EXISTS (
+      SELECT 1 FROM profiling.ActivitiesWeeklyColumns AS c
+      WHERE c."user_id" = s."user_id" AND c."date" = s."date"
+    );
   END TRY
   BEGIN CATCH
     DECLARE @ErrorMessage NVARCHAR(4000);
@@ -2406,36 +2409,30 @@ GO
 -- Aggregates a week of usage. Data in columns
 -- ===========================================
 
+IF OBJECT_ID(N'profiling.usp_CompileUsageRange') IS NOT NULL
+BEGIN
+  DROP PROCEDURE profiling.usp_CompileUsageRange;
+END
+GO
+
 IF OBJECT_ID(N'profiling.usp_CompileUsageWeek') IS NOT NULL
 BEGIN
   DROP PROCEDURE profiling.usp_CompileUsageWeek;
 END
 GO
 
-CREATE PROCEDURE profiling.usp_CompileUsageWeek
+CREATE PROCEDURE profiling.usp_CompileUsageRange
 (
-  -- Start day of the week to aggregate
-  @Monday DATE
+  @StartDate DATE,
+  @EndDate DATE
 )
 AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    EXEC profiling.usp_Trace '[usp_CompileUsageWeek] Starting: %s', @Monday;
+    EXEC profiling.usp_Trace '[usp_CompileUsageRange] Starting: %s to %s', @StartDate, @EndDate;
 
-    DECLARE
-      @Sunday DATE = DATEADD(DAY, 6, @Monday),
-      @ColumnsDone INT = 0;
-    
-    -- Check if the data has already been aggregated
-    SELECT @ColumnsDone = COUNT(DATE)
-    FROM profiling.UsageWeekly
-    WHERE "date" = @Monday;
-    
-    -- If the data has not been aggregated, do it
-    IF @ColumnsDone = 0
-    BEGIN
-      CREATE TABLE #UsageStaging
+    CREATE TABLE #UsageStaging
       (
         "user_id" INT NOT NULL,
         "date" DATETIME NOT NULL,
@@ -2491,9 +2488,9 @@ BEGIN
         "Yammer Used iPad" BIT NOT NULL DEFAULT 0,
         "Yammer Used iPhone" BIT NOT NULL DEFAULT 0
       );
-      EXECUTE profiling.usp_UpsertTeamsDevices @Monday, @Sunday;
-      EXECUTE profiling.usp_UpsertM365Apps @Monday, @Sunday;
-      EXECUTE profiling.usp_UpsertYammerDevices @Monday, @Sunday;
+      EXECUTE profiling.usp_UpsertTeamsDevices @StartDate, @EndDate;
+      EXECUTE profiling.usp_UpsertM365Apps @StartDate, @EndDate;
+      EXECUTE profiling.usp_UpsertYammerDevices @StartDate, @EndDate;
 
       INSERT INTO profiling.UsageWeekly
       (
@@ -2553,7 +2550,7 @@ BEGIN
       )
       SELECT
         "user_id",
-        @Monday AS "date",
+        "date",
         "Teams Used Web",
         "Teams Used Mac",
         "Teams Used Windows",
@@ -2605,15 +2602,18 @@ BEGIN
         "Yammer Used Android",
         "Yammer Used iPad",
         "Yammer Used iPhone"
-      FROM #UsageStaging;
+      FROM #UsageStaging AS s
+      WHERE NOT EXISTS (
+        SELECT 1 FROM profiling.UsageWeekly AS u
+        WHERE u."user_id" = s."user_id" AND u."date" = s."date"
+      );
 
       DROP TABLE #UsageStaging;
-    END
   END TRY
   BEGIN CATCH
     DECLARE @ErrorMessage NVARCHAR(4000);
     SELECT @ErrorMessage = ERROR_MESSAGE();
-    EXEC profiling.usp_Trace 'Catch [usp_CompileUsageWeek]: %s', @ErrorMessage;
+    EXEC profiling.usp_Trace 'Catch [usp_CompileUsageRange]: %s', @ErrorMessage;
     IF OBJECT_ID('tempdb..#UsageStaging') IS NOT NULL
     BEGIN
       DROP TABLE #UsageStaging;
@@ -2622,9 +2622,28 @@ BEGIN
 END;
 GO
 
+-- Backwards-compatible single-week wrapper (used by tests and any external callers).
+CREATE PROCEDURE profiling.usp_CompileUsageWeek
+(
+  @Monday DATE
+)
+AS
+BEGIN
+  SET NOCOUNT ON;
+  DECLARE @Sunday DATE = DATEADD(DAY, 6, @Monday);
+  EXECUTE profiling.usp_CompileUsageRange @Monday, @Sunday;
+END;
+GO
+
 -- ===================================
 -- Aggregates a week of analytics data
 -- ===================================
+
+IF OBJECT_ID(N'profiling.usp_CompileActivityRange') IS NOT NULL
+BEGIN
+  DROP PROCEDURE profiling.usp_CompileActivityRange;
+END
+GO
 
 IF OBJECT_ID(N'profiling.usp_CompileActivityWeek') IS NOT NULL
 BEGIN
@@ -2632,34 +2651,18 @@ BEGIN
 END
 GO
 
-CREATE PROCEDURE profiling.usp_CompileActivityWeek
+CREATE PROCEDURE profiling.usp_CompileActivityRange
 (
-  -- Start day of the week to aggregate
-  @Monday DATE
+  @StartDate DATE,
+  @EndDate DATE
 )
 AS
 BEGIN
   SET NOCOUNT ON;
   BEGIN TRY
-    EXEC profiling.usp_Trace '[usp_CompileActivityWeek] Starting: %s', @Monday;
+    EXEC profiling.usp_Trace '[usp_CompileActivityRange] Starting: %s to %s', @StartDate, @EndDate;
 
-    DECLARE
-      @Sunday DATE = DATEADD(DAY, 6, @Monday),
-      @RowsDone INT = 0,
-      @ColumnsDone INT = 0;
-
-    -- Check if the data has already been aggregated
-    SELECT @ColumnsDone = COUNT("date")
-    FROM profiling.ActivitiesWeeklyColumns
-    WHERE "date" = @Monday;
-
-    SELECT @RowsDone = COUNT(MetricDate)
-    FROM profiling.ActivitiesWeekly
-    WHERE MetricDate = @Monday;
-
-    IF @RowsDone = 0 OR @ColumnsDone = 0
-    BEGIN
-      CREATE TABLE #ActivitiesStaging
+    CREATE TABLE #ActivitiesStaging
       (
         "user_id" BIGINT,
         "date" DATE,
@@ -2724,35 +2727,40 @@ BEGIN
       );
 
       -- Insert only the activities between the dates
-      EXECUTE profiling.usp_UpsertTeams @Monday, @Sunday;
-      EXECUTE profiling.usp_UpsertOneDrive @Monday, @Sunday;
-      EXECUTE profiling.usp_UpsertSharePoint @Monday, @Sunday;
-      EXECUTE profiling.usp_UpsertOutlook @Monday, @Sunday;
-      EXECUTE profiling.usp_UpsertYammer @Monday, @Sunday;
-      EXECUTE profiling.usp_UpsertCopilot @Monday, @Sunday;
+      EXECUTE profiling.usp_UpsertTeams @StartDate, @EndDate;
+      EXECUTE profiling.usp_UpsertOneDrive @StartDate, @EndDate;
+      EXECUTE profiling.usp_UpsertSharePoint @StartDate, @EndDate;
+      EXECUTE profiling.usp_UpsertOutlook @StartDate, @EndDate;
+      EXECUTE profiling.usp_UpsertYammer @StartDate, @EndDate;
+      EXECUTE profiling.usp_UpsertCopilot @StartDate, @EndDate;
 
-      IF @ColumnsDone = 0
-      BEGIN
-        EXECUTE profiling.usp_CompileWeekActivityColumns @Monday;
-      END
-
-      IF @RowsDone = 0
-      BEGIN
-        EXECUTE profiling.usp_CompileWeekActivityRows @Monday;
-      END
+      EXECUTE profiling.usp_CompileWeekActivityColumns;
+      EXECUTE profiling.usp_CompileWeekActivityRows;
 
       DROP TABLE #ActivitiesStaging;
-    END
   END TRY
   BEGIN CATCH
     DECLARE @ErrorMessage NVARCHAR(4000);
     SELECT @ErrorMessage = ERROR_MESSAGE();
-    EXEC profiling.usp_Trace '[usp_CompileActivityWeek] Catch: %s', @ErrorMessage;
+    EXEC profiling.usp_Trace '[usp_CompileActivityRange] Catch: %s', @ErrorMessage;
     IF OBJECT_ID('tempdb..#ActivitiesStaging') IS NOT NULL
     BEGIN
       DROP TABLE #ActivitiesStaging;
     END
   END CATCH;
+END;
+GO
+
+-- Backwards-compatible single-week wrapper (used by tests and any external callers).
+CREATE PROCEDURE profiling.usp_CompileActivityWeek
+(
+  @Monday DATE
+)
+AS
+BEGIN
+  SET NOCOUNT ON;
+  DECLARE @Sunday DATE = DATEADD(DAY, 6, @Monday);
+  EXECUTE profiling.usp_CompileActivityRange @Monday, @Sunday;
 END;
 GO
 
@@ -2809,16 +2817,14 @@ BEGIN
     @Monday,
     @ThisWeeksMonday;
 
-  WHILE @ThisWeeksMonday > @Monday
+  -- Compile every outstanding week in a single set-based pass: each source log is
+  -- scanned once for the whole [First..Last] range and bucketed to its week, instead
+  -- of being re-scanned once per week.
+  IF @ThisWeeksMonday > @Monday
   BEGIN
-    DECLARE @Sunday DATE = DATEADD(DAY, 6, @Monday);
-
-    EXEC profiling.usp_Trace 'Week from %s to %s', @Monday, @Sunday;
-
-    EXECUTE profiling.usp_CompileActivityWeek @Monday;
-    EXECUTE profiling.usp_CompileUsageWeek @Monday;
-
-    SELECT @Monday = DATEADD(DAY, 7, @Monday);
+    DECLARE @LastSunday DATE = DATEADD(DAY, -1, @ThisWeeksMonday);
+    EXECUTE profiling.usp_CompileActivityRange @Monday, @LastSunday;
+    EXECUTE profiling.usp_CompileUsageRange @Monday, @LastSunday;
   END
 
   -- Cleanup. Remove data in the tables before the retention date
