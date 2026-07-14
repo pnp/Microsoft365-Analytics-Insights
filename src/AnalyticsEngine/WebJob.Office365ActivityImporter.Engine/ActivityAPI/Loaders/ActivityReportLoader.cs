@@ -53,7 +53,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             {
                 Interlocked.Increment(ref _reportDownloadErrors);
                 _logger.LogError(ex, $"Got error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
-                return new WebActivityReportSet();
+                return new WebActivityReportSet { DownloadComplete = false };
             }
             catch (TaskCanceledException ex)
             {
@@ -62,7 +62,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 // hung request doesn't crash the whole audit-log import. The item is retried on the next cycle.
                 Interlocked.Increment(ref _reportDownloadErrors);
                 _logger.LogError(ex, $"Timed out downloading {metadata.ContentUri}: '{ex.Message}'. Will try again on next cycle.");
-                return new WebActivityReportSet();
+                return new WebActivityReportSet { DownloadComplete = false };
             }
 
             // Use 'using' to ensure response is disposed and memory is freed
@@ -88,7 +88,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                         if (jsonReader.TokenType != JsonToken.StartArray)
                         {
                             // Empty or non-array response - treat as no data, consistent with prior behaviour
-                            // when JArray.LoadAsync returned an empty/null result.
+                            // when JArray.LoadAsync returned an empty/null result. Mark incomplete so a
+                            // (malformed / unexpected) non-array response is NOT checkpointed and is retried.
+                            logs.DownloadComplete = false;
                             return logs;
                         }
 
@@ -107,9 +109,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                             catch (JsonReaderException ex)
                             {
                                 // A single malformed object will desync the reader; bail out of the stream
-                                // so we don't accidentally mis-parse subsequent siblings.
+                                // so we don't accidentally mis-parse subsequent siblings. This is a PARTIAL
+                                // result (some events parsed, tail dropped), so mark it incomplete - the blob
+                                // must be re-downloaded next cycle, not checkpointed on the partial prefix.
                                 Interlocked.Increment(ref _reportDownloadErrors);
                                 _logger.LogWarning($"Invalid JSON object in stream from URL '{newUri}': {ex.Message}. Aborting stream for this batch.");
+                                logs.DownloadComplete = false;
                                 break;
                             }
 
@@ -121,13 +126,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 {
                     Interlocked.Increment(ref _reportDownloadErrors);
                     _logger.LogError($"Out of memory streaming response from {metadata.ContentUri}. Will try again on next cycle.");
-                    return new WebActivityReportSet();
+                    return new WebActivityReportSet { DownloadComplete = false };
                 }
                 catch (JsonReaderException ex)
                 {
                     Interlocked.Increment(ref _reportDownloadErrors);
                     _logger.LogWarning($"Invalid JSON response for URL '{newUri}': {ex.Message}. Ignoring");
-                    return new WebActivityReportSet();
+                    return new WebActivityReportSet { DownloadComplete = false };
                 }
 
                 logs.OriginalMetadata = metadata;

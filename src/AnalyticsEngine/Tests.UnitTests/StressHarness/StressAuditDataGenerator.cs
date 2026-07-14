@@ -52,6 +52,10 @@ namespace Tests.UnitTests.StressHarness
         /// batches in parallel (shared-table writes still serialised).</summary>
         public int MaxConcurrentSaves { get; set; } = 1;
 
+        /// <summary>Percent of blobs whose download "fails" (loader returns an empty, DownloadComplete=false
+        /// set). Used to validate that failed downloads are NOT checkpointed and are re-processed next cycle.</summary>
+        public int FailedBlobPercent { get; set; } = 0;
+
         public string InScopePrefix { get; set; } = "https://contoso.sharepoint.com/sites/inscope";
         public string OutOfScopePrefix { get; set; } = "https://contoso.sharepoint.com/sites/other";
 
