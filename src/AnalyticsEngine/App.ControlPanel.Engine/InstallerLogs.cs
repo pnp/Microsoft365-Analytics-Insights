@@ -13,11 +13,19 @@ namespace App.ControlPanel.Engine
         public static void AddToWindowsEventLog(string msg, bool isError)
         {
             var buildLabel = Common.Entities.BuildConstants.BuildLabel;
-            using (var eventLog = new EventLog("Application"))
+            Console.WriteLine(msg);
+            try
             {
-                eventLog.Source = "Application";
-                Console.WriteLine(msg);
-                eventLog.WriteEntry($"{buildLabel} - {msg}", isError ? EventLogEntryType.Error : EventLogEntryType.Information, InstallerConstants.EVENT_LOG_CATEGORY_ID, 1);
+                using (var eventLog = new EventLog("Application"))
+                {
+                    eventLog.Source = "Application";
+                    eventLog.WriteEntry($"{buildLabel} - {msg}", isError ? EventLogEntryType.Error : EventLogEntryType.Information, InstallerConstants.EVENT_LOG_CATEGORY_ID, 1);
+                }
+            }
+            catch
+            {
+                // Windows Event Log is not available in all hosting environments (e.g. App Service
+                // web-jobs run under a restricted identity). Console output already happened above.
             }
         }
     }
