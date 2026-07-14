@@ -26,13 +26,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly UserGroupsCache _userGroupsCache;
         private readonly GraphAppIndentityOAuthContext _graphAppIndentityOAuthContext;
         private readonly GraphServiceClient _graphClient;
+        private readonly ISingleDateStore _activityReportsLastImportedStore;
 
-        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings)
+        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null)
             : base(logger, settings)
         {
             _userGroupsCache = userGroupsCache;
             _graphAppIndentityOAuthContext = graphAppIndentityOAuthContext;
             _graphClient = graphClient;
+            _activityReportsLastImportedStore = activityReportsLastImportedStore;
         }
 
 
@@ -144,27 +146,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             var MIN_WAIT = TimeSpan.FromDays(1);
 
+            // Throttle the whole activity/usage-report phase (all daily loaders + the weekly SharePoint sites
+            // loader) to run at most once a day. The store is injected so it survives across import cycles:
+            // Redis when configured, otherwise an in-memory fallback (see ActivityReportsLastImportedStoreFactory).
+            // When no store is supplied (e.g. unit tests) we don't throttle and always import.
             DateTime? lastImportedDate = null;
-            UserActivityLastImportedRedisSingleDateLoader lastImportedDateLoader = null;
-            if (!string.IsNullOrEmpty(_settings.ConnectionStrings.RedisConnectionString))
+            var lastImportedStore = _activityReportsLastImportedStore;
+            if (lastImportedStore != null)
             {
-                lastImportedDateLoader = new UserActivityLastImportedRedisSingleDateLoader(_settings.ConnectionStrings.RedisConnectionString, _settings.TenantGUID.ToString(), _settings.ClientID, _settings.ClientSecret);
-
-                // Clear "last imported" date in redis if no data in DB
+                // Clear the "last imported" date if there's no activity data in the DB at all, so a fresh or
+                // wiped database imports immediately instead of waiting out a stale timestamp. EXISTS (AnyAsync)
+                // is used rather than COUNT(*) because this only needs "is the table empty" and runs every cycle.
                 using (var db = new AnalyticsEntitiesContext())
                 {
-                    var teamsActivityCountAll = await db.TeamUserActivityLogs.CountAsync();
-                    if (teamsActivityCountAll == 0)
+                    var anyActivityData = await db.TeamUserActivityLogs.AnyAsync();
+                    if (!anyActivityData)
                     {
-                        await lastImportedDateLoader.DeleteDt();
+                        await lastImportedStore.DeleteDt();
                     }
                 }
 
-                lastImportedDate = await lastImportedDateLoader.GetLastDT();
+                lastImportedDate = await lastImportedStore.GetLastDT();
             }
             else
             {
-                _logger.LogWarning("No Redis connection string - cannot find last date for imported for activity reports.");
+                _logger.LogWarning("No activity-reports throttle store configured - cannot check last import date; will import this cycle.");
             }
 
             var runImport = (lastImportedDate == null || DateTime.Now.Subtract(lastImportedDate.Value) > MIN_WAIT);
@@ -232,10 +238,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
-                // Remember last import date
-                if (lastImportedDateLoader != null)
+                // Remember last import date so the next cycle within the throttle window is skipped.
+                if (lastImportedStore != null)
                 {
-                    await lastImportedDateLoader.SaveDT();
+                    await lastImportedStore.SaveDT();
                 }
 
                 _logger.LogInformation($"Activity reports imported. Will run again in {MIN_WAIT.TotalHours} hours");
