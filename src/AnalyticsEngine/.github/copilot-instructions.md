@@ -46,7 +46,7 @@ When writing or reviewing such code, call this out in the PR description / revie
 
 ### Default behaviour: the context does NOT apply migrations in Release builds
 - `new AnalyticsEntitiesContext()` (the parameterless constructor) only auto-applies migrations when compiled in **DEBUG** (it sets `MigrateDatabaseToLatestVersion<...>`). In **Release** the initializer is `CreateDatabaseIfNotExists<>` — no migrations are run.
-- In production the schema is brought up to date explicitly by `DatabaseUpgrader.CheckDbUpgraded` (called from the WebJob bootstraps and the installer). Never assume `new AnalyticsEntitiesContext()` will run migrations at runtime.
+- In production the schema is brought up to date explicitly by `DatabaseUpgrader.CheckDbUpgraded` (called from the installer — `AnalyticsInstaller.exe --initdb` — and from `Tests.FakeDataGen`; the web-jobs do **not** call it). Never assume `new AnalyticsEntitiesContext()` will run migrations at runtime.
 - The `// THIS IS BAD` comment on the DEBUG branch is intentional; the production path uses the explicit upgrader so test/dev failures aren't masked by silent auto-migrations.
 
 ### `AutomaticMigrationsEnabled = true` + an outdated snapshot ⇒ `AutomaticDataLossException`
