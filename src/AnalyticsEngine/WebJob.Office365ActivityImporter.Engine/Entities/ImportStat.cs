@@ -17,6 +17,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         public int Total { get; set; }
 
         /// <summary>
+        /// Number of content blobs skipped this cycle because the blob-level checkpoint had already
+        /// recorded them as fully committed in a previous cycle (so they weren't re-downloaded).
+        /// </summary>
+        public int BlobsSkipped { get; set; }
+
+        /// <summary>
         /// Number of metadata/summary download failures from the Activity API
         /// </summary>
         public int MetadataDownloadErrors { get; set; }
@@ -40,6 +46,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.DownloadErrors += statsToAdd.DownloadErrors;
             this.MetadataDownloadErrors += statsToAdd.MetadataDownloadErrors;
             this.ReportDownloadErrors += statsToAdd.ReportDownloadErrors;
+            this.BlobsSkipped += statsToAdd.BlobsSkipped;
             this.Total += statsToAdd.Total;
         }
 
@@ -50,6 +57,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
                 $"already processed: {this.ProcessedAlready.ToString("n0")}, " +
                 $"URLs out of scope (orgs table): {this.URLsOutOfScope.ToString("n0")}, " +
                 $"users out of scope: {this.UsersOutOfScope.ToString("n0")}, " +
+                $"blobs skipped (checkpoint): {this.BlobsSkipped.ToString("n0")}, " +
                 $"errors: {this.DownloadErrors.ToString("n0")}, " +
                 $"metadata download errors: {this.MetadataDownloadErrors.ToString("n0")}, " +
                 $"report download errors: {this.ReportDownloadErrors.ToString("n0")}, " +

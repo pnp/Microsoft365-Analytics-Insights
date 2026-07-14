@@ -316,6 +316,10 @@
     <Compile Include="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.Designer.cs">
       <DependentUpon>202607130900001_DedupCopilotAccessedResourceSiteUrls.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.cs" />
+    <Compile Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.Designer.cs">
+      <DependentUpon>202607141000001_IndexAuditEventsTimeStamp.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -468,6 +472,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.resx">
       <DependentUpon>202607130900001_DedupCopilotAccessedResourceSiteUrls.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.resx">
+      <DependentUpon>202607141000001_IndexAuditEventsTimeStamp.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

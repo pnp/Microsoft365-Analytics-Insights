@@ -132,9 +132,21 @@ namespace WebJob.Office365ActivityImporter
                 // Start new O365 activity download session
                 // Reduced from 20000 to 5000, then to 2000 to prevent OutOfMemoryException with large datasets
                 const int MAX_IMPORTS_PER_BATCH = 2000;
-                var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH);
 
-                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings);
+                // Concurrent-save mode is opt-in and OFF by default (1 = the original strictly-serial save).
+                // Set AUDIT_MAX_CONCURRENT_SAVES > 1 to let batches commit in parallel (sharded staging;
+                // shared-table writes still serialised). Validate in a non-production environment before use.
+                int maxConcurrentSaves = 1;
+                var concurrentSavesEnv = Environment.GetEnvironmentVariable("AUDIT_MAX_CONCURRENT_SAVES");
+                if (!string.IsNullOrWhiteSpace(concurrentSavesEnv) && int.TryParse(concurrentSavesEnv.Trim(), out int parsedConcurrentSaves) && parsedConcurrentSaves > 1)
+                {
+                    maxConcurrentSaves = parsedConcurrentSaves;
+                    _logger.LogInformation($"Activity import: concurrent-save mode enabled (AUDIT_MAX_CONCURRENT_SAVES={maxConcurrentSaves}).");
+                }
+
+                var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH, maxConcurrentSaves);
+
+                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves);
                 try
                 {
                     var stats = await importer.LoadReportsAndSave(sqlAdaptor);
