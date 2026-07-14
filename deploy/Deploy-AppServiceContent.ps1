@@ -101,8 +101,9 @@
     and only a schema upgrade is needed).
 
 .PARAMETER DbUpgradeTimeoutMin
-    Maximum minutes to wait for the database upgrade web-job to complete. Default 60.
-    Long-running migrations (large tables, many pending versions) may need a higher value.
+    Maximum minutes to wait for the database upgrade web-job to complete. Default 1440 (24 hours).
+    SQL migrations on large databases can run for many hours; lower this only if you are confident
+    migrations complete quickly in your environment.
 
 .PARAMETER PublishProfilePath
     Path to a downloaded App Service publish profile (*.PublishSettings XML).
@@ -189,7 +190,7 @@ param(
     [switch] $SkipWebJobs,
     [switch] $RestartWebJobs,
     [switch] $RunDbUpgrade,
-    [int]    $DbUpgradeTimeoutMin = 60,
+    [int]    $DbUpgradeTimeoutMin = 1440,
     [switch] $DownloadOnly,
     [switch] $DiagnoseOnly,
 
