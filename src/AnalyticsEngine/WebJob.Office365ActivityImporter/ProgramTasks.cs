@@ -28,12 +28,14 @@ namespace WebJob.Office365ActivityImporter
         private readonly AppConfig _settings;
         private ManualGraphCallClient _manualGraphCallClient = null;
         private GraphUserGroupsCache _graphUserGroupsCache = null;
+        private readonly ISingleDateStore _activityReportsLastImportedStore;
 
-        public ProgramTasks(AnalyticsLogger logger, AppConfig settings)
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null)
         {
             _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             _logger = logger;
             _settings = settings;
+            _activityReportsLastImportedStore = activityReportsLastImportedStore;
         }
 
         internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl)
@@ -58,7 +60,7 @@ namespace WebJob.Office365ActivityImporter
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings);
+            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore);
 
             try
             {
