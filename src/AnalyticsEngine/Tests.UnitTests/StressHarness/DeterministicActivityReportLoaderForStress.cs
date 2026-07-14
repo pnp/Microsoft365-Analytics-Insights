@@ -34,9 +34,17 @@ namespace Tests.UnitTests.StressHarness
             }
 
             int blobIndex = StressBlobId.Parse(metadata.ContentId);
-            var set = StressAuditDataGenerator.GenerateBlobEvents(_cfg, blobIndex);
-
             Interlocked.Increment(ref _blobsLoaded);
+
+            // Simulate a failed/partial download for a deterministic subset: an empty set flagged
+            // DownloadComplete=false. The importer must NOT checkpoint these (they'd be permanently lost),
+            // so they must be re-downloaded next cycle.
+            if (_cfg.FailedBlobPercent > 0 && (blobIndex % 100) < _cfg.FailedBlobPercent)
+            {
+                return new WebActivityReportSet { DownloadComplete = false };
+            }
+
+            var set = StressAuditDataGenerator.GenerateBlobEvents(_cfg, blobIndex);
             Interlocked.Add(ref _eventsGenerated, set.Count);
             return set;
         }

@@ -34,6 +34,7 @@ namespace Tests.FakeDataGen.StressTests
                 PreSeedHistoricalAuditEvents = GetIntegerInput("Pre-seed historical audit_events rows (models a large table)", 0, 0, 100000000, "STRESS_PRESEED_AUDIT_EVENTS"),
                 UseBlobCheckpoint = GetBooleanInput("Use blob-level checkpoint (opt B)", true, "STRESS_BLOB_CHECKPOINT"),
                 MaxConcurrentSaves = GetIntegerInput("Max concurrent SQL saves (opt C; 1 = serial)", 1, 1, 64, "STRESS_MAX_CONCURRENT_SAVES"),
+                FailedBlobPercent = GetIntegerInput("Percent of blob downloads to simulate as failed", 0, 0, 100, "STRESS_FAILED_BLOB_PERCENT"),
                 BaseTimeUtc = DateTime.UtcNow
             };
             int maxSavesPerBatch = GetIntegerInput("Max events per commit batch", 2000, 1, 100000, "STRESS_MAX_SAVES_PER_BATCH");

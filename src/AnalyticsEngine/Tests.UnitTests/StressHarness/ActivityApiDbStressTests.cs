@@ -56,6 +56,7 @@ namespace Tests.UnitTests.StressHarness
                 PreSeedHistoricalAuditEvents = EnvInt("STRESS_PRESEED_AUDIT_EVENTS", 0),
                 UseBlobCheckpoint = IsTruthy(Env("STRESS_BLOB_CHECKPOINT") ?? "true"),
                 MaxConcurrentSaves = EnvInt("STRESS_MAX_CONCURRENT_SAVES", 1),
+                FailedBlobPercent = EnvInt("STRESS_FAILED_BLOB_PERCENT", 0),
                 BaseTimeUtc = DateTime.UtcNow
             };
             int maxSavesPerBatch = EnvInt("STRESS_MAX_SAVES_PER_BATCH", 2000);
@@ -95,11 +96,26 @@ namespace Tests.UnitTests.StressHarness
 
                 if (data.UseBlobCheckpoint)
                 {
-                    // Blob checkpoint (opt B): WARM re-runs the same window, so every blob COLD committed is
-                    // skipped - nothing is re-downloaded and the cycle is near-instant on the save side.
-                    Assert.AreEqual(result.Cold.BlobsLoaded, result.Warm.MergedStats.BlobsSkipped, "WARM should skip exactly the blobs COLD committed.");
-                    Assert.AreEqual(0, result.Warm.BlobsLoaded, "WARM should re-download no blobs when the checkpoint is enabled.");
-                    Assert.AreEqual(0, result.Warm.EventsGenerated, "WARM should generate no events when all blobs are checkpointed.");
+                    if (data.FailedBlobPercent > 0)
+                    {
+                        // Failed-download blobs must NOT be checkpointed - they must be re-downloaded next
+                        // cycle (data-loss regression guard). The successfully-committed blobs are skipped.
+                        int failedBlobs = 0;
+                        for (int i = 0; i < data.BlobCount; i++)
+                        {
+                            if (i % 100 < data.FailedBlobPercent) failedBlobs++;
+                        }
+                        Assert.AreEqual(failedBlobs, result.Warm.BlobsLoaded, "WARM should re-download exactly the failed-download blobs (a failed download must never be checkpointed).");
+                        Assert.AreEqual(result.Cold.BlobsLoaded - failedBlobs, result.Warm.MergedStats.BlobsSkipped, "WARM should skip only the successfully-committed blobs.");
+                    }
+                    else
+                    {
+                        // Blob checkpoint (opt B): WARM re-runs the same window, so every blob COLD committed is
+                        // skipped - nothing is re-downloaded and the cycle is near-instant on the save side.
+                        Assert.AreEqual(result.Cold.BlobsLoaded, result.Warm.MergedStats.BlobsSkipped, "WARM should skip exactly the blobs COLD committed.");
+                        Assert.AreEqual(0, result.Warm.BlobsLoaded, "WARM should re-download no blobs when the checkpoint is enabled.");
+                        Assert.AreEqual(0, result.Warm.EventsGenerated, "WARM should generate no events when all blobs are checkpointed.");
+                    }
                 }
                 else
                 {
