@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -71,8 +72,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
 
         private async Task MarkAsync(IReadOnlyCollection<string> blobIds)
         {
-            await _store.MarkProcessedAsync(blobIds);
-            Interlocked.Add(ref _markedDone, blobIds.Count);
+            // Best-effort: a checkpoint write failure must not fail the import. If we fail to record a blob,
+            // it is simply re-processed next cycle (its events dedup against audit_events), which is safe.
+            try
+            {
+                await _store.MarkProcessedAsync(blobIds);
+                Interlocked.Add(ref _markedDone, blobIds.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, $"Blob checkpoint: failed to record {blobIds.Count} processed blob(s); they will be re-processed next cycle.");
+            }
         }
     }
 }

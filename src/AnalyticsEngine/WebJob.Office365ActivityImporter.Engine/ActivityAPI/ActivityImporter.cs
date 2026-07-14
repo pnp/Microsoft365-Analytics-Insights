@@ -47,15 +47,44 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 
             var allSummaries = await ContentMetaDataLoader.GetChangesSummary(active, timeChunks);
 
+            // De-duplicate summaries by content-blob id. TimeChunkOverlapMinutes (default 5) means a blob
+            // created in the overlap window is listed by two adjacent time-chunks, and GetChangesSummary
+            // concatenates per-(contentType x chunk) results without deduping - so the same blob would be
+            // downloaded twice and its events streamed in twice. In serial mode the per-batch import cache
+            // catches the second copy; under concurrent saves (opt C) two in-flight batches can both carry
+            // the same event id and collide on the audit_events primary key, failing the cycle. Deduping the
+            // summaries here removes the duplicate at the source (and avoids the redundant download).
+            if (allSummaries.Count > 1)
+            {
+                int beforeDedup = allSummaries.Count;
+                var seenBlobIds = new HashSet<string>();
+                allSummaries = allSummaries.Where(s => string.IsNullOrEmpty(s.BlobId) || seenBlobIds.Add(s.BlobId)).ToList();
+                int duplicateSummaries = beforeDedup - allSummaries.Count;
+                if (duplicateSummaries > 0)
+                {
+                    _logger.LogInformation($"Audit events import: de-duplicated {duplicateSummaries.ToString("n0")} overlapping content-blob summary link(s).");
+                }
+            }
+
             // Blob-level checkpoint: skip re-downloading content blobs already fully committed in a previous
             // cycle (consecutive cycles overlap almost entirely). A blob is only recorded as done once all
-            // its events are committed, so skipping it here can never drop un-saved data.
+            // its events are committed, so skipping it here can never drop un-saved data. The checkpoint is a
+            // best-effort OPTIMISATION: a store failure must never fail the import - we just process every
+            // blob this cycle (and marking is likewise best-effort in BlobCommitTracker).
             BlobCommitTracker blobTracker = null;
             if (_processedBlobStore != null)
             {
                 int beforeFilter = allSummaries.Count;
-                var alreadyProcessed = await _processedBlobStore.GetProcessedBlobIdsAsync();
-                if (alreadyProcessed.Count > 0)
+                ISet<string> alreadyProcessed = null;
+                try
+                {
+                    alreadyProcessed = await _processedBlobStore.GetProcessedBlobIdsAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning($"Audit events import: blob checkpoint read failed ({ex.Message}); processing all content blobs this cycle.");
+                }
+                if (alreadyProcessed != null && alreadyProcessed.Count > 0)
                 {
                     allSummaries = allSummaries
                         .Where(s => { var id = s.BlobId; return string.IsNullOrEmpty(id) || !alreadyProcessed.Contains(id); })
@@ -152,7 +181,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 
                 // Tag each event with its source blob and register the blob's event count BEFORE queueing
                 // for save, so the checkpoint tracker can record the blob once all its events are committed.
-                if (blobTracker != null)
+                // ONLY track a blob whose download COMPLETED cleanly: a failed or partial download returns
+                // zero / a prefix of events, and registering it (a zero count marks a blob done immediately)
+                // would checkpoint it and skip it next cycle - permanently losing the un-downloaded events.
+                // Leaving an incomplete blob's events untagged means it is never checkpointed, so it is
+                // re-downloaded next cycle (any events it did commit dedup against audit_events).
+                if (blobTracker != null && metaReports.DownloadComplete)
                 {
                     var blobId = job.BlobId;
                     if (!string.IsNullOrEmpty(blobId))
