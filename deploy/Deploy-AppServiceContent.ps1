@@ -16,12 +16,13 @@
         AppInsightsImporter.zip       -> /site/wwwroot/app_data/jobs/continuous/AppInsightsImporter/
         Website.zip                   -> /site/wwwroot/
 
-    With -RunDbUpgrade it also runs the three-step database upgrade (EF migrations +
-    custom SQL scripts + org-URL seeding) that AnalyticsInstaller.exe normally handles.
-    The upgrade runs entirely inside the App Service as a triggered web-job, so no local
-    execution of the installer is needed. The web-job is built on the fly from the
-    ControlPanelApp.zip release asset (no new binary to deploy) and removed automatically
-    after the run reports success or failure.
+    With -RunDbUpgrade it also runs the two-step database schema upgrade (EF migrations +
+    custom SQL scripts) that AnalyticsInstaller.exe normally handles, and optionally seeds
+    org URLs when -OrgUrls is supplied. The upgrade runs entirely inside the App Service as
+    a triggered web-job, so no local execution of the installer is needed. The web-job is
+    built on the fly from the ControlPanelApp.zip release asset (no new binary to deploy);
+    it is removed automatically after a successful run and left in place on failure so you
+    can inspect it in the Kudu dashboard.
 
     Sources are either:
       * downloaded from this repo's GitHub Releases (like LatestStableSoftwarePackageDownloadTask), or
@@ -82,14 +83,19 @@
     to pin the SCM host). Handy for triaging a 403 from a VM on the VNet.
 
 .PARAMETER RunDbUpgrade
-    After deploying content, run the database upgrade (EF migrations + custom SQL scripts
-    + org-URL seeding) inside the App Service as a triggered web-job.
+    After deploying content, run the database schema upgrade (EF migrations + custom SQL
+    scripts, plus org-URL seeding when -OrgUrls is supplied) inside the App Service as a
+    triggered web-job.
 
     The web-job is assembled on the fly from ControlPanelApp.zip (the signed
     AnalyticsInstaller.exe release asset) plus a PowerShell run.ps1 wrapper, deployed
     to the App Service triggered web-jobs folder, triggered via the Kudu API, and polled
-    until it completes. The full job log is echoed to the console and the script exits
-    non-zero if the upgrade fails.
+    until it completes. The run.ps1 wrapper launches AnalyticsInstaller.exe with
+    Start-Process (the exe is a GUI-subsystem app, so the plain call operator would not
+    wait for it or capture its exit code), streams its output live, and propagates its real
+    exit code. The full job log is echoed to the console and the script exits non-zero if
+    the upgrade fails. On success the web-job is removed; on failure it is left in place for
+    inspection.
 
     Requires the App Service 'SPOInsightsEntities' connection string to be already
     configured (Portal -> Configuration -> Connection strings). The connection string
@@ -99,6 +105,16 @@
     This switch can be combined with -SkipWebsite/-SkipWebJobs to run only the DB upgrade
     without deploying web-job or website content (e.g. when binaries were already deployed
     and only a schema upgrade is needed).
+
+    NOTE: a triggered web-job is stopped by App Service after WEBJOBS_IDLE_TIMEOUT seconds
+    (default 120) of no output. The wrapper emits a periodic heartbeat while the migration
+    runs to avoid this, but for very long migrations also consider raising WEBJOBS_IDLE_TIMEOUT
+    in the App Service application settings.
+
+.PARAMETER OrgUrls
+    Optional list of organisation SharePoint root URLs to seed into the org_urls table as
+    part of -RunDbUpgrade (mirrors the org-URL seeding the installer performs). When omitted,
+    no org URLs are seeded and only the schema upgrade (EF migrations + custom SQL) runs.
 
 .PARAMETER DbUpgradeTimeoutMin
     Maximum minutes to wait for the database upgrade web-job to complete. Default 1440 (24 hours).
@@ -191,6 +207,7 @@ param(
     [switch] $RestartWebJobs,
     [switch] $RunDbUpgrade,
     [int]    $DbUpgradeTimeoutMin = 1440,
+    [string[]] $OrgUrls = @(),
     [switch] $DownloadOnly,
     [switch] $DiagnoseOnly,
 
@@ -688,7 +705,7 @@ $script:DbUpgradeRunScript = @'
     Reads the SQL connection string that App Service injects from the portal
     Configuration -> Connection strings, constructs a DatabaseUpgradeInfo payload,
     and delegates to AnalyticsInstaller.exe --initdb to run EF migrations, custom
-    SQL scripts, and org-URL seeding.
+    SQL scripts, and (optionally) org-URL seeding.
     Exit 0 = success; non-zero = failure (Kudu records the run as Failed).
 #>
 $ErrorActionPreference = 'Stop'
@@ -706,29 +723,88 @@ foreach ($prefix in @('SQLAZURECONNSTR_', 'SQLCONNSTR_', 'CUSTOMCONNSTR_')) {
     if ($v) { $connStr = $v; Write-Ts "Found connection string via prefix '$prefix'."; break }
 }
 if (-not $connStr) {
-    Write-Error ("Could not find connection string 'SPOInsightsEntities'. " +
+    $host.UI.WriteErrorLine("Could not find connection string 'SPOInsightsEntities'. " +
         "Ensure it is set in App Service -> Configuration -> Connection strings " +
         "(type SQL Azure, SQL Server, or Custom; name exactly 'SPOInsightsEntities').")
     exit 1
 }
 
+# Org URLs to seed. New-DbUpgradeZip substitutes the __ORGURLS__ token with a quoted,
+# comma-separated list built from the caller's -OrgUrls parameter (empty by default, in
+# which case DatabaseUpgradeInfo.EnsureOrgURLs is a no-op and no seeding is attempted).
+$orgUrls = @(__ORGURLS__)
+
 # Serialize DatabaseUpgradeInfo to JSON and base64-encode it.
 # This matches App.ControlPanel.Engine.Models.DatabaseUpgradeInfo / Base64Serialisable<T>.
-$json   = ConvertTo-Json -Compress @{ ConnectionString = $connStr; OrgURLs = @() }
+$json   = ConvertTo-Json -Compress @{ ConnectionString = $connStr; OrgURLs = $orgUrls }
 $base64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($json))
 
 # AnalyticsInstaller.exe must be in the same folder as this script.
 $exe = Join-Path $PSScriptRoot 'AnalyticsInstaller.exe'
 if (-not (Test-Path -LiteralPath $exe)) {
-    Write-Error "AnalyticsInstaller.exe not found at '$exe'."
+    $host.UI.WriteErrorLine("AnalyticsInstaller.exe not found at '$exe'.")
     exit 1
 }
 
 Write-Ts 'Launching: AnalyticsInstaller.exe --initdb <connection-string-redacted>'
-& $exe --initdb $base64
-$rc = $LASTEXITCODE
+
+# IMPORTANT: AnalyticsInstaller.exe is a GUI-subsystem (WinExe) application. The PowerShell
+# call operator (& $exe) does NOT wait for such a process and does NOT surface its real exit
+# code or stdout - it returns immediately with $LASTEXITCODE = 0, which would make a failed
+# migration look successful and truncate the web-job before the upgrade actually finishes.
+# Launch via Start-Process -PassThru (no -Wait) so we can (a) read the true ExitCode after it
+# exits, and (b) stream its redirected stdout/stderr live below. The live output also keeps
+# resetting the App Service web-job idle timer (WEBJOBS_IDLE_TIMEOUT) so a long-running
+# migration is not killed for being "idle".
+$outFile = Join-Path $PSScriptRoot 'dbupgrade.stdout.log'
+$errFile = Join-Path $PSScriptRoot 'dbupgrade.stderr.log'
+foreach ($f in @($outFile, $errFile)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
+
+$proc = Start-Process -FilePath $exe -ArgumentList @('--initdb', $base64) `
+    -PassThru -NoNewWindow -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+
+# Cache the process handle immediately: in Windows PowerShell 5.1 (the web-job runtime),
+# Start-Process -PassThru disposes the underlying handle once the process exits, after which
+# $proc.ExitCode comes back $null. Touching .Handle here forces it to be retained so we can
+# read the real exit code below.
+$null = $proc.Handle
+
+# Tail the redirected logs. Files are opened share-read-write so we can read while the exe
+# is still writing; $offsets tracks how far we have already echoed for each file.
+$offsets = @{ $outFile = [long]0; $errFile = [long]0 }
+function Show-NewText {
+    param([string] $Path, [string] $Prefix)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    try { $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite) }
+    catch { return }   # transient sharing violation - pick it up on the next poll / final flush
+    try {
+        [void]$fs.Seek($offsets[$Path], [System.IO.SeekOrigin]::Begin)
+        $sr   = New-Object System.IO.StreamReader($fs)
+        $text = $sr.ReadToEnd()
+        $offsets[$Path] = $fs.Position
+        $sr.Dispose()
+        foreach ($line in ($text -split "`r?`n")) { if ($line.Length -gt 0) { Write-Host ($Prefix + $line) } }
+    } finally { $fs.Dispose() }
+}
+
+$lastBeat = Get-Date
+while (-not $proc.HasExited) {
+    Start-Sleep -Seconds 3
+    Show-NewText -Path $outFile -Prefix '  '
+    Show-NewText -Path $errFile -Prefix '  [stderr] '
+    if (((Get-Date) - $lastBeat).TotalSeconds -ge 30) {
+        Write-Ts ('...still upgrading (elapsed {0:hh\:mm\:ss})...' -f ((Get-Date) - $proc.StartTime))
+        $lastBeat = Get-Date
+    }
+}
+$proc.WaitForExit()
+# Final flush of anything written between the last poll and process exit.
+Show-NewText -Path $outFile -Prefix '  '
+Show-NewText -Path $errFile -Prefix '  [stderr] '
+
+$rc = $proc.ExitCode
 if ($rc -ne 0) {
-    Write-Error "Database upgrade failed (AnalyticsInstaller.exe exited $rc)."
+    $host.UI.WriteErrorLine("Database upgrade failed (AnalyticsInstaller.exe exited $rc).")
     exit $rc
 }
 Write-Ts 'Database upgrade completed successfully.'
@@ -738,9 +814,17 @@ exit 0
 function New-DbUpgradeZip {
     # Combines a normalised ControlPanelApp zip (installer exe + deps) with the embedded
     # run.ps1 wrapper into a single zip suitable for deployment as a triggered web-job.
-    param([string] $InstallerZip, [string] $DestZip)
+    param([string] $InstallerZip, [string] $DestZip, [string[]] $OrgUrls = @())
 
     if (Test-Path -LiteralPath $DestZip) { Remove-Item -LiteralPath $DestZip -Force }
+
+    # Build the run.ps1 text, substituting the org-URL list into the __ORGURLS__ placeholder
+    # as a quoted, comma-separated PowerShell array literal (single quotes doubled to escape).
+    $orgUrlsLiteral = ''
+    if ($OrgUrls -and @($OrgUrls).Count -gt 0) {
+        $orgUrlsLiteral = (@($OrgUrls) | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ', '
+    }
+    $runScriptText = $script:DbUpgradeRunScript.Replace('__ORGURLS__', $orgUrlsLiteral)
 
     $src = [System.IO.Compression.ZipFile]::OpenRead($InstallerZip)
     try {
@@ -754,7 +838,7 @@ function New-DbUpgradeZip {
                 try { $inStream.CopyTo($outStream) } finally { $outStream.Dispose(); $inStream.Dispose() }
             }
             # Add the PowerShell entry-point wrapper.
-            $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($script:DbUpgradeRunScript)
+            $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($runScriptText)
             $runEntry  = $dest.CreateEntry('run.ps1', [System.IO.Compression.CompressionLevel]::Optimal)
             $runStream = $runEntry.Open()
             try { $runStream.Write($scriptBytes, 0, $scriptBytes.Length) } finally { $runStream.Dispose() }
@@ -763,30 +847,54 @@ function New-DbUpgradeZip {
     return $DestZip
 }
 
+function Remove-DbUpgradeWebJob {
+    # Best-effort removal of the triggered web-job (and the embedded signed installer) so we
+    # don't leave the binary deployed on the App Service. Non-fatal: a leftover job is harmless.
+    param([string] $ScmHost, [hashtable] $Headers, [string] $JobName)
+    try {
+        Invoke-RestMethod -Method Delete -Uri "https://$ScmHost/api/triggeredwebjobs/$JobName" -Headers $Headers -TimeoutSec 30 | Out-Null
+        Write-Ok "  Removed $JobName web-job."
+    } catch {
+        Write-WarnMsg "Could not remove $JobName web-job (leftover under /site/wwwroot/app_data/jobs/triggered/$JobName): $(Get-ExceptionSummary $_)"
+    }
+}
+
 function Invoke-DbUpgrade {
     # Deploys the DbUpgrade triggered web-job, fires it, polls until completion, echoes
     # the Kudu log, and throws on failure so the caller's catch block handles the exit.
+    # On success the web-job is removed; on failure it is left in place for inspection.
     param(
         [string]    $ScmHost,
         [hashtable] $Headers,
         [string]    $InstallerZip,
         [string]    $WorkDir,
-        [int]       $TimeoutMinutes
+        [int]       $TimeoutMinutes,
+        [string[]]  $OrgUrls = @()
     )
 
-    $jobName   = 'DbUpgrade'
-    $jobPath   = "/site/wwwroot/app_data/jobs/triggered/$jobName/"
-    $dbZipPath = Join-Path $WorkDir "DbUpgrade.zip"
+    $jobName    = 'DbUpgrade'
+    $jobPath    = "/site/wwwroot/app_data/jobs/triggered/$jobName/"
+    $dbZipPath  = Join-Path $WorkDir "DbUpgrade.zip"
+    $historyUri = "https://$ScmHost/api/triggeredwebjobs/$jobName/history"
 
     # Build the web-job package on the fly.
     Write-Info "Building $jobName web-job package..."
-    New-DbUpgradeZip -InstallerZip $InstallerZip -DestZip $dbZipPath | Out-Null
+    New-DbUpgradeZip -InstallerZip $InstallerZip -DestZip $dbZipPath -OrgUrls $OrgUrls | Out-Null
     Write-Ok  "  Package ready: $dbZipPath"
 
     # Deploy the package to the triggered web-job path.
     Write-Info "Deploying $jobName triggered web-job to $jobPath ..."
     Invoke-KuduZipDeploy -ScmHost $ScmHost -Headers $Headers -RemotePath $jobPath -ZipPath $dbZipPath
     Write-Ok "  $jobName web-job deployed."
+
+    # Record any pre-existing run ids so we can tell the run we are about to trigger apart from
+    # a historical run left over from a previous (e.g. failed) attempt, and never report a stale
+    # run's result.
+    $priorRunIds = @()
+    try {
+        $existing = Invoke-RestMethod -Method Get -Uri $historyUri -Headers $Headers -TimeoutSec 30
+        if ($existing.PSObject.Properties['runs']) { $priorRunIds = @($existing.runs | ForEach-Object { $_.id }) }
+    } catch { }
 
     # Trigger the job.
     Write-Info "Triggering $jobName web-job..."
@@ -800,9 +908,8 @@ function Invoke-DbUpgrade {
     }
     Write-Ok "  $jobName web-job triggered."
 
-    # Poll history until the run finishes or we time out.
+    # Poll history until the new run finishes or we time out.
     Write-Step "Waiting for $jobName web-job to complete (timeout: ${TimeoutMinutes}m)"
-    $historyUri   = "https://$ScmHost/api/triggeredwebjobs/$jobName/history"
     $deadline     = (Get-Date).AddMinutes($TimeoutMinutes)
     $pollInterval = 10    # seconds
     $latestRun    = $null
@@ -811,9 +918,11 @@ function Invoke-DbUpgrade {
         Start-Sleep -Seconds $pollInterval
         try {
             $history = Invoke-RestMethod -Method Get -Uri $historyUri -Headers $Headers -TimeoutSec 30
-            $runs    = if ($history.PSObject.Properties['runs']) { @($history.runs) } else { @() }
-            if ($runs.Count -gt 0) {
-                $latestRun   = $runs | Sort-Object -Property start_time -Descending | Select-Object -First 1
+            $allRuns = if ($history.PSObject.Properties['runs']) { @($history.runs) } else { @() }
+            # Ignore runs that already existed before we triggered.
+            $newRuns = @($allRuns | Where-Object { $priorRunIds -notcontains $_.id })
+            if ($newRuns.Count -gt 0) {
+                $latestRun   = $newRuns | Sort-Object -Property start_time -Descending | Select-Object -First 1
                 $runStatus   = if ($latestRun.PSObject.Properties['status']) { $latestRun.status } else { 'Unknown' }
                 Write-Info "  [$jobName] status: $runStatus"
                 if ($runStatus -ne 'Running') { break }
@@ -836,18 +945,25 @@ function Invoke-DbUpgrade {
         }
     }
 
-    # Evaluate result.
+    # Evaluate result. On any non-success outcome, leave the web-job deployed so the operator
+    # can inspect or re-run it from the Kudu dashboard.
     if (-not $latestRun) {
+        Write-WarnMsg "$jobName web-job left deployed at $jobPath for inspection."
         throw "$jobName web-job did not produce a history entry within ${TimeoutMinutes} minutes."
     }
     $finalStatus = if ($latestRun.PSObject.Properties['status']) { $latestRun.status } else { 'Unknown' }
     if ($finalStatus -eq 'Running') {
+        Write-WarnMsg "$jobName web-job left deployed at $jobPath for inspection."
         throw "$jobName web-job is still running after ${TimeoutMinutes} minutes; check the Kudu dashboard."
     }
     if ($finalStatus -ne 'Success') {
+        Write-WarnMsg "$jobName web-job left deployed at $jobPath for inspection."
         throw "$jobName web-job finished with status '$finalStatus'. See the log above for details."
     }
     Write-Ok "$jobName web-job completed successfully (status: $finalStatus)."
+
+    # Success: remove the web-job (and its embedded installer) from the App Service.
+    Remove-DbUpgradeWebJob -ScmHost $ScmHost -Headers $Headers -JobName $jobName
 }
 
 
@@ -1152,7 +1268,8 @@ try {
                 -Headers        $auth.Headers `
                 -InstallerZip   $installerComp.NormalizedZip `
                 -WorkDir        $normalizedDir `
-                -TimeoutMinutes $DbUpgradeTimeoutMin
+                -TimeoutMinutes $DbUpgradeTimeoutMin `
+                -OrgUrls        $OrgUrls
         }
     }
 
