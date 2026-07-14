@@ -63,7 +63,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     if (nextUrl != null)
                     {
                         pageCount++;
-                        logger.LogInformation($"Loading {typeof(T).Name} results page #{pageCount}...");
+                        // Per-page logging floods the log on large pulls (thousands of pages/cycle), so log
+                        // each page at Debug and only a coarse progress line at Information every 50 pages.
+                        if (pageCount % 50 == 0)
+                        {
+                            logger.LogInformation($"Loading {typeof(T).Name} results page #{pageCount}...");
+                        }
+                        else
+                        {
+                            logger.LogDebug($"Loading {typeof(T).Name} results page #{pageCount}...");
+                        }
                     }
                     else
                     {

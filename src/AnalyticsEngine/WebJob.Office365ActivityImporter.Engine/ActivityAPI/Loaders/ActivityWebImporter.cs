@@ -1,6 +1,7 @@
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Http;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 {
@@ -14,7 +15,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private WebContentMetaDataLoader _contentMetaDataLoader;
         private ActivitySubscriptionManager _activitySubscriptionManager;
 
-        public ActivityWebImporter(AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch) : base(settings, logger, maxSavesPerBatch)
+        public ActivityWebImporter(AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch, int maxConcurrentSaves = 1)
+            : base(settings, logger, maxSavesPerBatch, ProcessedBlobStoreFactory.Create(settings, logger), maxConcurrentSaves)
         {
             var auth = new ActivityAPIAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, logger);

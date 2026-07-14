@@ -125,5 +125,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     {
         [JsonProperty("contentCreated")]
         public DateTime Created { get; set; }
+
+        /// <summary>
+        /// Stable id of this content blob, used by the blob-level checkpoint to skip re-downloading blobs
+        /// already fully committed in a previous cycle. Null when the summary type has no such id (the
+        /// checkpoint then simply never skips it). Concrete summary types (e.g. <c>ActivityReportInfo</c>)
+        /// override this to expose their content id.
+        /// </summary>
+        [JsonIgnore]
+        public virtual string BlobId => null;
     }
 }

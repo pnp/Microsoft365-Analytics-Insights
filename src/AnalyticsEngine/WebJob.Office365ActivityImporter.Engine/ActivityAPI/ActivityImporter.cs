@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 
@@ -16,13 +17,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     public abstract class ActivityImporter<SUMMARYTYPE> : AbstractApiLoader where SUMMARYTYPE : BaseActivityReportInfo
     {
         private readonly int _maxSavesPerBatch;
+        private readonly IProcessedBlobStore _processedBlobStore;
+        private readonly int _maxConcurrentSaves;
         private int _reportSummariesTotal = 0;
         private int _reportSummariesProcessed = 0;
         private int _lastReportedPercentDone = 0;
 
-        public ActivityImporter(AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch) : base(logger, settings)
+        public ActivityImporter(AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch, IProcessedBlobStore processedBlobStore = null, int maxConcurrentSaves = 1) : base(logger, settings)
         {
             _maxSavesPerBatch = maxSavesPerBatch;
+            _processedBlobStore = processedBlobStore;
+            _maxConcurrentSaves = Math.Max(1, maxConcurrentSaves);
         }
 
         public abstract IActivityReportLoader<SUMMARYTYPE> ReportLoader { get; }
@@ -42,6 +47,25 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 
             var allSummaries = await ContentMetaDataLoader.GetChangesSummary(active, timeChunks);
 
+            // Blob-level checkpoint: skip re-downloading content blobs already fully committed in a previous
+            // cycle (consecutive cycles overlap almost entirely). A blob is only recorded as done once all
+            // its events are committed, so skipping it here can never drop un-saved data.
+            BlobCommitTracker blobTracker = null;
+            if (_processedBlobStore != null)
+            {
+                int beforeFilter = allSummaries.Count;
+                var alreadyProcessed = await _processedBlobStore.GetProcessedBlobIdsAsync();
+                if (alreadyProcessed.Count > 0)
+                {
+                    allSummaries = allSummaries
+                        .Where(s => { var id = s.BlobId; return string.IsNullOrEmpty(id) || !alreadyProcessed.Contains(id); })
+                        .ToList();
+                }
+                allStats.BlobsSkipped = beforeFilter - allSummaries.Count;
+                _logger.LogInformation($"Audit events import: blob checkpoint skipped {allStats.BlobsSkipped.ToString("n0")} of {beforeFilter.ToString("n0")} content blobs already committed in a previous cycle.");
+                blobTracker = new BlobCommitTracker(_processedBlobStore, _logger);
+            }
+
             // Remember total so we can report on progress when threads finish loading a chunk
             lock (this)
             {
@@ -57,7 +81,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                     allStats.AddStats(stats);
                 }
 
-            });
+                // Record blobs whose events are now all committed (safe to skip next cycle).
+                if (blobTracker != null)
+                {
+                    await blobTracker.OnBatchCommittedAsync(reportChunk);
+                }
+
+            }, blobTracker);
 
             // Capture error counts from loaders
             if (ContentMetaDataLoader is WebContentMetaDataLoader webMetaLoader)
@@ -91,7 +121,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         /// <summary>
         /// Process a new chunk of report summaries
         /// </summary>
-        public async Task LoadFullReportsFromActivityApi(List<SUMMARYTYPE> reportSummaries, IActivityReportLoader<SUMMARYTYPE> activityReportLoader, Func<List<AbstractAuditLogContent>, Task> newReportsLoadedCallback)
+        public async Task LoadFullReportsFromActivityApi(List<SUMMARYTYPE> reportSummaries, IActivityReportLoader<SUMMARYTYPE> activityReportLoader, Func<List<AbstractAuditLogContent>, Task> newReportsLoadedCallback, BlobCommitTracker blobTracker = null)
         {
             // Sanity
             if (reportSummaries.Count == 0)
@@ -99,25 +129,38 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 return;
             }
 
-            // Only generate saves in batches of MAX_REPORTS_PER_THREAD. Call
-            var listBatchProcessor = new ListBatchProcessor<AbstractAuditLogContent>(_maxSavesPerBatch, async (newChunk) => await newReportsLoadedCallback(newChunk));
+            // Only generate saves in batches of MAX_REPORTS_PER_THREAD. In concurrent-save mode
+            // (_maxConcurrentSaves > 1) up to that many batches commit in parallel.
+            var listBatchProcessor = new ListBatchProcessor<AbstractAuditLogContent>(_maxSavesPerBatch, async (newChunk) => await newReportsLoadedCallback(newChunk), _maxConcurrentSaves);
 
             // For each summary chunk, load full reports in parallel. Reduced chunk size to 1000 to prevent OOM with large datasets
             var loader = new ParallelListProcessor<SUMMARYTYPE>(1000);
 
             // Load in parallel & call parent func on listBatchProcessor to save
             await loader.ProcessListInParallel(reportSummaries.OrderByDescending(j => j.Created),
-                async (threadListChunk, threadIndex) => await ProcessSummaryChunkAsync(threadListChunk, listBatchProcessor, activityReportLoader),
+                async (threadListChunk, threadIndex) => await ProcessSummaryChunkAsync(threadListChunk, listBatchProcessor, activityReportLoader, blobTracker),
                     threads => _logger.LogInformation($"Audit events import: full-loading activity reports from {reportSummaries.Count.ToString("n0")} links, across {threads.ToString("n0")} thread(s)..."));
 
             await listBatchProcessor.Flush();
         }
 
-        private async Task ProcessSummaryChunkAsync(List<SUMMARYTYPE> summariesToLoad, ListBatchProcessor<AbstractAuditLogContent> listBatchProcessor, IActivityReportLoader<SUMMARYTYPE> activityReportLoader)
+        private async Task ProcessSummaryChunkAsync(List<SUMMARYTYPE> summariesToLoad, ListBatchProcessor<AbstractAuditLogContent> listBatchProcessor, IActivityReportLoader<SUMMARYTYPE> activityReportLoader, BlobCommitTracker blobTracker)
         {
             foreach (var job in summariesToLoad)
             {
                 var metaReports = await activityReportLoader.Load(job);
+
+                // Tag each event with its source blob and register the blob's event count BEFORE queueing
+                // for save, so the checkpoint tracker can record the blob once all its events are committed.
+                if (blobTracker != null)
+                {
+                    var blobId = job.BlobId;
+                    if (!string.IsNullOrEmpty(blobId))
+                    {
+                        foreach (var ev in metaReports) ev.SourceContentId = blobId;
+                        await blobTracker.RegisterAsync(blobId, metaReports.Count);
+                    }
+                }
 
                 await listBatchProcessor.AddRange(metaReports);
 

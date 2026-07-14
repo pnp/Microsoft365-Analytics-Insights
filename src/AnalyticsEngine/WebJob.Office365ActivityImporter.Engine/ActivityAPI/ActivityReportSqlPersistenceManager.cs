@@ -39,9 +39,21 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// Process-wide gate that serializes writes to the staging tables. Intentionally <c>static</c> so that
         /// multiple <see cref="ActivityReportSqlPersistenceManager"/> instances (e.g. one per content type or
         /// per parallel batch) cannot interleave SQL inserts/merges into the shared staging schema.
-        /// Single-permit; held only for the duration of <c>CommitAll</c>'s SQL phase.
+        /// Single-permit; held only for the duration of <c>CommitAll</c>'s SQL phase. Used only in the
+        /// default (serial) mode; see <see cref="_maxConcurrentSaves"/>.
         /// </summary>
         private static SemaphoreSlim _sqlSaveSemaphore = new SemaphoreSlim(1);      // Make sure we're only saving one thread at a time
+
+        // --- Concurrent-save mode (opt-in; _maxConcurrentSaves > 1) ------------------------------------
+        // When enabled, each CommitAll uses its OWN sharded staging table so multiple saves can build +
+        // load their staging table in parallel (bounded by _saveConcurrencyGate). The parts that write
+        // SHARED tables - the merge (lookup + fact inserts) and the metadata pass (webs/sites, etc.) -
+        // are still serialised across all saves by _sharedWriteSemaphore, so there is no shared-table
+        // race. Default is 1, which preserves the original strictly-serial behaviour exactly (single
+        // static _sqlSaveSemaphore, no sharding).
+        private readonly int _maxConcurrentSaves;
+        private readonly SemaphoreSlim _saveConcurrencyGate;
+        private static readonly SemaphoreSlim _sharedWriteSemaphore = new SemaphoreSlim(1, 1);
 
         // Run-scoped Copilot Graph metadata loader, shared across every batch so its Graph caches (resolved
         // files, users, sites, and unresolvable contexts) persist for the whole import instead of being rebuilt
@@ -53,13 +65,18 @@ namespace WebJob.Office365ActivityImporter.Engine
         // How many Copilot file contexts to resolve concurrently while pre-warming the cache (outside the SQL lock).
         private const int PrewarmConcurrency = 8;
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig)
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1)
         {
             _filterConfig = filterConfig;
             _userGroupsCache = userGroupsCache;
             _logger = logger;
             _appConfig = appConfig;
             _userGroupsFilter = new UserGroupsFilterModel(appConfig.UserGroupsFilter);
+            _maxConcurrentSaves = Math.Max(1, maxConcurrentSaves);
+            if (_maxConcurrentSaves > 1)
+            {
+                _saveConcurrencyGate = new SemaphoreSlim(_maxConcurrentSaves, _maxConcurrentSaves);
+            }
         }
 
         /// <summary>
@@ -106,26 +123,52 @@ namespace WebJob.Office365ActivityImporter.Engine
                 await PrewarmCopilotFileMetadataAsync(activities, sharedLoader);
             }
 
-            // Allow only one save at a time otherwise we'll get errors when we try and create the temp table without clearing it down 1st
-            await _sqlSaveSemaphore.WaitAsync();
-
-            // Create our own connection & context to use it
-            try
+            if (_maxConcurrentSaves == 1)
             {
-                using (var con = new SqlConnection(_defaultConnectionString))
+                // Default (serial) mode: one save at a time, using the shared staging table. Exactly the
+                // original behaviour - the whole save (staging create + load + merge + metadata) is
+                // serialised by the static semaphore.
+                await _sqlSaveSemaphore.WaitAsync();
+                try
                 {
-                    con.Open();
-                    using (var db = new AnalyticsEntitiesContext(con))
+                    using (var con = new SqlConnection(_defaultConnectionString))
                     {
-                        // Add all activity data to staging table
-                        var stats = await SaveToSqlAllTheThings(activities, db, con, cache, sharedLoader);
-                        allStats.AddStats(stats);
+                        con.Open();
+                        using (var db = new AnalyticsEntitiesContext(con))
+                        {
+                            var stats = await SaveToSqlAllTheThings(activities, db, con, cache, sharedLoader, null, null);
+                            allStats.AddStats(stats);
+                        }
                     }
                 }
+                finally
+                {
+                    _sqlSaveSemaphore.Release();
+                }
             }
-            finally
+            else
             {
-                _sqlSaveSemaphore.Release();        // Whatever happens, make sure we release the semaphore 
+                // Concurrent mode: multiple saves run in parallel (bounded by _saveConcurrencyGate), each
+                // with its OWN sharded staging table. Only the shared-table writes (merge + metadata) are
+                // serialised, via _sharedWriteSemaphore passed into SaveToSqlAllTheThings.
+                await _saveConcurrencyGate.WaitAsync();
+                try
+                {
+                    var shardedStagingTable = "##import_staging_event_lookups_" + Guid.NewGuid().ToString("N");
+                    using (var con = new SqlConnection(_defaultConnectionString))
+                    {
+                        con.Open();
+                        using (var db = new AnalyticsEntitiesContext(con))
+                        {
+                            var stats = await SaveToSqlAllTheThings(activities, db, con, cache, sharedLoader, shardedStagingTable, _sharedWriteSemaphore);
+                            allStats.AddStats(stats);
+                        }
+                    }
+                }
+                finally
+                {
+                    _saveConcurrencyGate.Release();
+                }
             }
 
             return allStats;
@@ -236,7 +279,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// <summary>
         /// Fill up staging table & return import result
         /// </summary>
-        private async Task<ImportStat> SaveToSqlAllTheThings(ActivityReportSet activities, AnalyticsEntitiesContext db, SqlConnection con, ActivityImportCache cache, ICopilotMetadataLoader sharedCopilotLoader)
+        private async Task<ImportStat> SaveToSqlAllTheThings(ActivityReportSet activities, AnalyticsEntitiesContext db, SqlConnection con, ActivityImportCache cache, ICopilotMetadataLoader sharedCopilotLoader, string stagingTableName, SemaphoreSlim mergeLock)
         {
             var listOfActivitiesSavedToSQL = new ConcurrentBag<AbstractAuditLogContent>();
             var logsToInsert = new EFInsertBatch<AuditLogTempEntity>(db, _logger);
@@ -293,12 +336,38 @@ namespace WebJob.Office365ActivityImporter.Engine
 #if DEBUG
             Console.WriteLine("\nDEBUG: Merging activity staging table...");
 #endif
-            // Merge to normal tables
-            var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", ActivityImportConstants.STAGING_TABLE_ACTIVITY);
-            await logsToInsert.SaveToStagingTable(mergeSQL);
+            // Merge to normal tables. In concurrent mode each save has its own sharded staging table
+            // (stagingTableName) and mergeLock serialises ONLY the merge (which writes shared lookup/fact
+            // tables); the parallel staging LOAD inside SaveToStagingTable runs unlocked.
+            var effectiveStagingTable = stagingTableName ?? ActivityImportConstants.STAGING_TABLE_ACTIVITY;
+            var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", effectiveStagingTable);
+            await logsToInsert.SaveToStagingTable(10000, mergeSQL, stagingTableName, mergeLock);
 
             #region Add Extra Metadata
 
+            // The metadata pass writes SHARED tables (webs/sites via ProcessExtendedProperties, plus the
+            // Copilot / Power Platform commits), so in concurrent mode it is serialised by the same lock.
+            if (mergeLock != null) await mergeLock.WaitAsync();
+            try
+            {
+                await SaveMetadataAsync(db, listOfActivitiesSavedToSQL, sharedCopilotLoader);
+            }
+            finally
+            {
+                if (mergeLock != null) mergeLock.Release();
+            }
+
+            #endregion
+
+            return stats;
+        }
+
+        /// <summary>
+        /// The EF metadata pass (webs/sites + workload-specific resolvers). Extracted so the concurrent-save
+        /// path can wrap it in the shared-write lock. Writes shared tables, so callers serialise it.
+        /// </summary>
+        private async Task SaveMetadataAsync(AnalyticsEntitiesContext db, ConcurrentBag<AbstractAuditLogContent> listOfActivitiesSavedToSQL, ICopilotMetadataLoader sharedCopilotLoader)
+        {
             // Add metadata the traditional way with EF. By now should have all the sites saved.
             // Pass the run-scoped Copilot loader so per-event Graph resolution hits the cache warmed above.
             var saveSession = new SaveSession(_logger, db, _appConfig, sharedCopilotLoader);
@@ -359,10 +428,6 @@ namespace WebJob.Office365ActivityImporter.Engine
 
             // Save metadata updates
             await saveSession.CommitAllChanges();
-
-            #endregion
-
-            return stats;
         }
     }
 

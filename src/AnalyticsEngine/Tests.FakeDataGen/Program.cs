@@ -27,6 +27,8 @@ namespace Tests.FakeDataGen
             // Stress tests
             new MenuItem("ActivityAPI import stress test", MenuCategory.StressTest,
                 ctx => RunStressTest(new ActivityAPIStressTest(), ctx)),
+            new MenuItem("ActivityAPI import stress test (DB-backed, COLD+WARM)", MenuCategory.StressTest,
+                ctx => RunStressTest(new ActivityApiDbStressTest(), ctx)),
             new MenuItem("Copilot event import stress test", MenuCategory.StressTest,
                 ctx => RunStressTest(new CopilotStressTest(), ctx)),
             new MenuItem("Power Platform event import stress test", MenuCategory.StressTest,
@@ -57,7 +59,7 @@ namespace Tests.FakeDataGen
             {
                 Console.WriteLine("No SQL connection string provided.");
                 Console.WriteLine("Stress tests that don't need SQL will still run; everything else will be disabled.");
-                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|activityapi|powerplatform|sentemail|useractivity>]");
+                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|activityapi|activityapidb|powerplatform|sentemail|useractivity>]");
             }
             Console.WriteLine();
 
@@ -186,6 +188,7 @@ namespace Tests.FakeDataGen
             {
                 { "copilot", () => new CopilotStressTest() },
                 { "activityapi", () => new ActivityAPIStressTest() },
+                { "activityapidb", () => new ActivityApiDbStressTest() },
                 { "powerplatform", () => new PowerPlatformStressTest() },
                 { "sentemail", () => new SentEmailImporterStressTest() },
                 { "useractivity", () => new UserActivityStressTest() },

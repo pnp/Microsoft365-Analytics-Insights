@@ -182,7 +182,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
                     if (spFileInfo == null)
                     {
-                        _logger.LogWarning($"No file info found for copilot context type with id {contextId} (event {baseOfficeEvent.Id})");
+                        // Expected and high-volume: many copilot contexts (e.g. securitycopilot.microsoft.com
+                        // hosts) are not resolvable SharePoint files, so Graph legitimately returns nothing.
+                        // These were ~thousands of warnings per cycle; log at Debug so they don't drown real
+                        // warnings. The row is still staged exactly as a null lookup (reporting unchanged).
+                        _logger.LogDebug($"No file info found for copilot context type with id {contextId} (event {baseOfficeEvent.Id})");
                     }
                 }
 
