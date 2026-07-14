@@ -1120,7 +1120,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "Teams Private Chats" = tvp.private_chat_count,
     "Teams Team Chats" = tvp.team_chat_count,
@@ -1228,7 +1228,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "OneDrive Viewed/Edited" = tvp.viewed_or_edited,
     "OneDrive Synced" = tvp.synced,
@@ -1294,7 +1294,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "SPO Viewed/Edited" = tvp.viewed_or_edited,
     "SPO Synced" = tvp.synced,
@@ -1362,7 +1362,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "Emails Sent" = tvp.email_send_count,
     "Emails Received" = tvp.email_receive_count,
@@ -1429,7 +1429,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "Yammer Posted" = tvp.posted_count,
     "Yammer Read" = tvp.read_count,
@@ -1506,7 +1506,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "Teams Used Web" = staging.used_web,
     "Teams Used Mac" = staging.used_mac,
@@ -1647,7 +1647,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "Office Windows" = staging.windows,
     "Office Mac" = staging.mac,
@@ -1812,7 +1812,7 @@ BEGIN
   GROUP BY "user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "Yammer Platform Count" = staging.used_count,
     "Yammer Used Web" = staging.used_web,
@@ -2050,7 +2050,7 @@ BEGIN
   GROUP BY a."user_id";
 
   /* tsqllint-disable warning update-where */
-  UPDATE t WITH (UPDLOCK, SERIALIZABLE)
+  UPDATE t
   SET
     "Copilot Chats" = tvp.copilot_chats,
     "Copilot Meetings" = tvp.copilot_meetings,
