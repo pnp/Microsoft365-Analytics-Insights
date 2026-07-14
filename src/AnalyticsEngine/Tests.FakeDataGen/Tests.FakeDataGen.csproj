@@ -54,6 +54,7 @@
     <Compile Include="Seeding\SeedDataCatalogue.cs" />
     <Compile Include="Seeding\UserMetadataSeeder.cs" />
     <Compile Include="StressTests\ActivityAPIStressTest.cs" />
+    <Compile Include="StressTests\ActivityApiDbStressTest.cs" />
     <Compile Include="StressTests\BaseStressTest.cs" />
     <Compile Include="StressTests\CopilotStressTest.cs" />
     <Compile Include="StressTests\MemoryMonitor.cs" />

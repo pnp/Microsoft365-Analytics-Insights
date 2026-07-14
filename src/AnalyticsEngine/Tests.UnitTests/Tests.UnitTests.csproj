@@ -151,6 +151,14 @@
     <Compile Include="ShrinkUrlsFullUrlColumnMigrationTests.cs" />
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
+    <Compile Include="StressHarness\ActivityApiDbStressRunner.cs" />
+    <Compile Include="StressHarness\ActivityApiDbStressTests.cs" />
+    <Compile Include="StressHarness\CountingActivityReportPersistenceManager.cs" />
+    <Compile Include="StressHarness\DeterministicActivityImporterForStress.cs" />
+    <Compile Include="StressHarness\DeterministicActivityReportLoaderForStress.cs" />
+    <Compile Include="StressHarness\DeterministicContentMetaDataLoaderForStress.cs" />
+    <Compile Include="StressHarness\StressAppConfigFactory.cs" />
+    <Compile Include="StressHarness\StressAuditDataGenerator.cs" />
     <Compile Include="EntityTests.cs" />
     <Compile Include="FakeControllers\FakePageableResultsController.cs" />
     <Compile Include="FakeControllers\FakeCallsController.cs" />

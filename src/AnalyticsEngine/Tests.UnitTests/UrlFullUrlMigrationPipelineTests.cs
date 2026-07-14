@@ -39,8 +39,9 @@ namespace Tests.UnitTests
         // The most recent migration - updated whenever a newer one is added, since these pipeline tests
         // assert the DB reaches the true latest migration after MigrateToLatest(). UrlFullUrlNvarchar (which
         // performs the urls.full_url nvarchar(850) conversion asserted below) still runs as part of the path;
-        // IndexCopilotAccessedResourceLookups is a later, unrelated schema-only migration.
-        private const string LatestId = "202607130900001_DedupCopilotAccessedResourceSiteUrls";
+        // IndexAuditEventsTimeStamp is a later, unrelated schema-only migration (indexes on the audit-event
+        // datetime columns).
+        private const string LatestId = "202607141000001_IndexAuditEventsTimeStamp";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
