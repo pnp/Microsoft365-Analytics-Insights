@@ -199,6 +199,7 @@
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
     <Compile Include="RedisSingleDateLoader.cs" />
+    <Compile Include="SingleDateStore.cs" />
     <Compile Include="StatsUploader\AnonUsageStatsModelLoader.cs" />
     <Compile Include="StatsUploader\BaseClasses.cs" />
     <Compile Include="StatsUploader\InMemoryStatsDatesLoader.cs" />
