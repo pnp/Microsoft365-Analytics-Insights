@@ -30,7 +30,12 @@
         Credential,
 
         /// <summary>DNS / endpoint reachability for configured resources.</summary>
-        Dns
+        Dns,
+
+        /// <summary>Audit-importer processed-blob checkpoint durability. Healthy = durable Azure Table store;
+        /// Degraded = fell back to the in-memory store (dedupes within this process but is lost on restart,
+        /// so the overlapping API lookback window is re-downloaded after every restart/redeploy).</summary>
+        BlobCheckpoint
     }
 
     /// <summary>
