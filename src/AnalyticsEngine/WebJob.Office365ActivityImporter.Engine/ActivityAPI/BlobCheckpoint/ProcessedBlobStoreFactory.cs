@@ -28,7 +28,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogWarning(ex, "Blob checkpoint: could not initialise the Azure Table store; falling back to in-memory (persists only while this process runs).");
+                    logger?.LogError(ex, "Blob checkpoint: could not initialise the Azure Table store; falling back to in-memory (persists only while this process runs).");
                 }
             }
             else
