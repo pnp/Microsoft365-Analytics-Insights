@@ -1,4 +1,6 @@
 using Common.Entities.Config;
+using DataUtils;
+using DataUtils.Health;
 using Microsoft.Extensions.Logging;
 using System;
 
@@ -24,16 +26,35 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
             {
                 try
                 {
-                    return new AzureTableProcessedBlobStore(storageConn, retention, logger);
+                    var store = new AzureTableProcessedBlobStore(storageConn, retention, logger);
+                    (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Healthy,
+                        "Durable Azure Table checkpoint active.");
+                    return store;
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "Blob checkpoint: could not initialise the Azure Table store; falling back to in-memory (persists only while this process runs).");
+                    // Inline the exception detail (type + flattened inner-exception chain) into the message
+                    // itself. The ILogger/App Insights provider routes the exception object to a separate
+                    // 'exception' telemetry item, so a trace-only log export shows this line with no reason
+                    // otherwise. Matches the rest of the codebase (e.g. ActivityReportLoader). The likely
+                    // causes are called out so operators can act without pulling the exceptions table.
+                    var detail = ex.Message;
+                    for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
+                        detail += " -> " + inner.Message;
+                    logger?.LogError(ex, $"Blob checkpoint: could not initialise the Azure Table store ({ex.GetType().Name}: {detail}); " +
+                        "falling back to in-memory (dedupes across cycles but only for the life of this process - lost on restart/redeploy). " +
+                        "Check the Storage connection string is valid and the account's Table service is reachable: " +
+                        "shared-key access enabled, and storage firewall / private endpoint / selected-networks not blocking the importer.");
+                    // Surface the degraded (non-durable) checkpoint on the Health page instead of only in the log.
+                    (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Degraded,
+                        $"Azure Table init failed ({ex.GetType().Name}); using non-durable in-memory checkpoint (lost on restart). See importer error log.");
                 }
             }
             else
             {
                 logger?.LogInformation("Blob checkpoint: no storage connection string configured; using an in-memory store (persists across cycles only while this process runs).");
+                (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Degraded,
+                    "No Storage connection string configured; using non-durable in-memory checkpoint (lost on restart).");
             }
 
             return new InMemoryProcessedBlobStore(retention);

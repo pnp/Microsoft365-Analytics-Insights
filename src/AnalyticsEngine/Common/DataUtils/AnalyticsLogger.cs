@@ -189,6 +189,11 @@ namespace DataUtils
             var message = string.Empty;
             if (formatter != null) message += formatter(state, exception);
 
+            // Capture the Exception explicitly. The default ILogger formatter drops the Exception object, so a
+            // LogError(ex, "...") would otherwise send only the message text (as a trace) and lose the type /
+            // stack trace entirely - it is NOT recorded as App Insights exception telemetry unless we do this.
+            if (exception != null) TrackException(exception);
+
             if (logLevel == LogLevel.Debug)
             {
                 LogInformation(message);
