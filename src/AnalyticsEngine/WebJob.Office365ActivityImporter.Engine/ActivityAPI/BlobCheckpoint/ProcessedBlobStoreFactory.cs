@@ -27,6 +27,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
                 try
                 {
                     var store = new AzureTableProcessedBlobStore(storageConn, retention, logger);
+                    logger?.LogInformation("Blob checkpoint: durable Azure Table store initialised (processed blobs persist across restarts).");
                     (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Healthy,
                         "Durable Azure Table checkpoint active.");
                     return store;
