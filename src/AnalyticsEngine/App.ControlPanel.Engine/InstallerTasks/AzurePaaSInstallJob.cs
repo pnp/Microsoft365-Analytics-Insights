@@ -354,6 +354,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "blob", subnetId, logger, tagDic);
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.blob.core.windows.net", vnetId, storagePeName, logger, tagDic);
 
+                // Storage - table sub-resource. The audit-import blob checkpoint (ProcessedBlobStoreFactory /
+                // AzureTableProcessedBlobStore) uses Azure Table storage; without its own private endpoint the
+                // table endpoint is unreachable on private deployments (403 AuthorizationFailure) and the
+                // importer silently falls back to a non-durable in-memory checkpoint.
+                var storageTablePeName = peNames.GetNameOrDefault(peNames.StorageTable, $"pe-{config.StorageAccountName}-table");
+                AddPrivateEndpointTask(storageTablePeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.Storage/storageAccounts/{config.StorageAccountName}",
+                    "table", subnetId, logger, tagDic);
+                if (deployDns) AddPrivateDnsZoneTask("privatelink.table.core.windows.net", vnetId, storageTablePeName, logger, tagDic);
+
                 // Key Vault
                 var kvPeName = peNames.GetNameOrDefault(peNames.KeyVault, $"pe-{config.KeyVaultName}-vault");
                 AddPrivateEndpointTask(kvPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.KeyVault/vaults/{config.KeyVaultName}",

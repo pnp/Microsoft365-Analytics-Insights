@@ -186,6 +186,7 @@ namespace Common.Entities.Installer
         public string AppService { get; set; } = string.Empty;
         public string Redis { get; set; } = string.Empty;
         public string Storage { get; set; } = string.Empty;
+        public string StorageTable { get; set; } = string.Empty;
         public string KeyVault { get; set; } = string.Empty;
         public string ServiceBus { get; set; } = string.Empty;
         public string CognitiveServices { get; set; } = string.Empty;
