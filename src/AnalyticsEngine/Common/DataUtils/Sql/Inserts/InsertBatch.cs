@@ -119,7 +119,7 @@ namespace DataUtils.Sql.Inserts
                         }
                         catch (SqlException ex)
                         {
-                            throw new BatchSaveException($"Couldn't merge batch insert using given SQL: {ex.Message}");
+                            throw new BatchSaveException($"Couldn't merge batch insert using given SQL: {ex.Message}", ex);
                         }
                     }
                     finally

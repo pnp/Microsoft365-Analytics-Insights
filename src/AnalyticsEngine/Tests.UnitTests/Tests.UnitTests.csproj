@@ -145,6 +145,7 @@
     <Compile Include="AppInsightsQueryTableTests.cs" />
     <Compile Include="HealthRollupTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
+    <Compile Include="TransientSqlRetryTests.cs" />
     <Compile Include="AuditTests.cs" />
     <Compile Include="AddAuditEventsOperationIndexMigrationTests.cs" />
     <Compile Include="AddAuditEventsOperationFKMigrationTests.cs" />

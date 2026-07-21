@@ -81,5 +81,11 @@ namespace DataUtils.Sql
         public BatchSaveException(string message) : base(message)
         {
         }
+
+        // Keep the originating SqlException so callers (e.g. TransientSqlRetry) can tell a dropped-connection
+        // fault apart from a constraint violation and decide whether to retry.
+        public BatchSaveException(string message, Exception innerException) : base(message, innerException)
+        {
+        }
     }
 }

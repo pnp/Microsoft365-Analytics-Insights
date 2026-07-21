@@ -251,7 +251,10 @@ namespace WebJob.Office365ActivityImporter
                     catch (Exception ex)
                     {
                         logger.TrackException(ex);
-                        Console.WriteLine($"Got exception on {nameof(ProgramTasks.DownloadActivityData)}: {ex.Message}");
+                        // Also emit a trace (TrackException goes to a separate telemetry stream): a save/merge
+                        // failure that escapes here means the whole cycle was aborted. Batch-level failures are
+                        // now isolated in LoadReportsAndSave, so reaching here indicates a non-batch failure.
+                        logger.LogError($"Audit import cycle ABORTED by an unhandled exception in {nameof(ProgramTasks.DownloadActivityData)}: {ex.Message}. The cycle will restart on the next timer interval.");
                     }
 #endif
                 }
