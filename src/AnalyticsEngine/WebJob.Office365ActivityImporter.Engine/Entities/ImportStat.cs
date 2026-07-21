@@ -32,6 +32,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// </summary>
         public int ReportDownloadErrors { get; set; }
 
+        /// <summary>
+        /// Number of save batches that permanently failed this cycle (after transient-SQL retries) and were
+        /// skipped so the rest of the cycle could continue. Their content blobs are NOT checkpointed, so they
+        /// are retried on the next import cycle.
+        /// </summary>
+        public int FailedBatches { get; set; }
+
+        /// <summary>
+        /// Approximate number of audit events in the batches counted by <see cref="FailedBatches"/> (those
+        /// events were not saved this cycle; they will be re-attempted next cycle).
+        /// </summary>
+        public int FailedBatchEvents { get; set; }
+
         public List<TimePeriod> ForTimeSlots { get; set; }
 
         public void AddStats(ImportStat statsToAdd)
@@ -47,6 +60,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.MetadataDownloadErrors += statsToAdd.MetadataDownloadErrors;
             this.ReportDownloadErrors += statsToAdd.ReportDownloadErrors;
             this.BlobsSkipped += statsToAdd.BlobsSkipped;
+            this.FailedBatches += statsToAdd.FailedBatches;
+            this.FailedBatchEvents += statsToAdd.FailedBatchEvents;
             this.Total += statsToAdd.Total;
         }
 
@@ -58,6 +73,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
                 $"URLs out of scope (orgs table): {this.URLsOutOfScope.ToString("n0")}, " +
                 $"users out of scope: {this.UsersOutOfScope.ToString("n0")}, " +
                 $"blobs skipped (checkpoint): {this.BlobsSkipped.ToString("n0")}, " +
+                $"failed batches: {this.FailedBatches.ToString("n0")} (~{this.FailedBatchEvents.ToString("n0")} events, will retry next cycle), " +
                 $"errors: {this.DownloadErrors.ToString("n0")}, " +
                 $"metadata download errors: {this.MetadataDownloadErrors.ToString("n0")}, " +
                 $"report download errors: {this.ReportDownloadErrors.ToString("n0")}, " +

@@ -1,5 +1,6 @@
 using Common.Entities.Config;
 using DataUtils;
+using DataUtils.Sql;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -104,16 +105,41 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 
             await LoadFullReportsFromActivityApi(allSummaries, ReportLoader, async (reportChunk) =>
             {
-                var stats = await activityReportPersistenceManager.CommitAll(new WebActivityReportSet(reportChunk));
-                lock (allStats)
+                try
                 {
-                    allStats.AddStats(stats);
-                }
+                    // Retry transient SQL faults (a dropped/unrecoverable connection, timeout, deadlock, Azure
+                    // SQL throttling/failover) so a momentary blip doesn't discard the batch and abort the
+                    // cycle. CommitAll is safe to re-run: the merge SQL is idempotent (NOT EXISTS guards) and
+                    // the metadata pass uses get-or-create lookups, and each attempt opens fresh connections.
+                    var stats = await TransientSqlRetry.ExecuteWithRetryAsync(
+                        () => activityReportPersistenceManager.CommitAll(new WebActivityReportSet(reportChunk)),
+                        maxAttempts: 4, _logger, "Audit events import: batch save");
 
-                // Record blobs whose events are now all committed (safe to skip next cycle).
-                if (blobTracker != null)
+                    lock (allStats)
+                    {
+                        allStats.AddStats(stats);
+                    }
+
+                    // Record blobs whose events are now all committed (safe to skip next cycle).
+                    if (blobTracker != null)
+                    {
+                        await blobTracker.OnBatchCommittedAsync(reportChunk);
+                    }
+                }
+                catch (Exception ex)
                 {
-                    await blobTracker.OnBatchCommittedAsync(reportChunk);
+                    // Isolate the failure: one batch that can't be saved (even after retries, or a
+                    // non-transient error such as a constraint violation) must NOT abort the whole cycle.
+                    // We deliberately do not call OnBatchCommittedAsync, so this batch's content blobs stay
+                    // un-checkpointed and are re-attempted next cycle (any events that did save dedup against
+                    // audit_events). Log loudly and carry on with the remaining batches.
+                    lock (allStats)
+                    {
+                        allStats.FailedBatches++;
+                        allStats.FailedBatchEvents += reportChunk.Count;
+                    }
+                    _logger.LogError($"Audit events import: batch save FAILED after retries for {reportChunk.Count.ToString("n0")} event(s) - {ex.Message}. " +
+                        $"Skipping this batch and continuing; its content blobs are NOT checkpointed and will be retried next cycle.");
                 }
 
             }, blobTracker);
@@ -140,6 +166,20 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 _logger.LogWarning($"Audit events import: DOWNLOAD ERRORS DETECTED - {allStats.MetadataDownloadErrors} metadata download failures, " +
                     $"{allStats.ReportDownloadErrors} report download failures. Some data may be missing from this import cycle. " +
                     $"These items will be retried on the next import cycle.");
+            }
+
+            // Make a partial import unmistakable in the traces. Before batch isolation, a save failure aborted
+            // the whole cycle and the only signal was the raw exception - operators saw "processed 3%..." then
+            // a silent restart. Now every cycle ends with an explicit outcome line.
+            if (allStats.FailedBatches > 0)
+            {
+                _logger.LogError($"Audit events import: COMPLETED WITH FAILURES - {allStats.FailedBatches.ToString("n0")} save batch(es) " +
+                    $"(~{allStats.FailedBatchEvents.ToString("n0")} event(s)) could not be committed this cycle after retries. Their content blobs were NOT " +
+                    $"checkpointed and will be retried next cycle, so this cycle did not import all available data.");
+            }
+            else
+            {
+                _logger.LogInformation("Audit events import: all save batches committed successfully this cycle.");
             }
 
             timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
