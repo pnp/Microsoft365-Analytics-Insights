@@ -289,7 +289,7 @@ namespace Tests.UnitTests
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var userAUpn = $"usera_employee{timestamp}@contoso.com";
-            var managerBUpn = $"beatriz_brown{timestamp}@contoso.com";
+            var managerBUpn = $"managerb_manager{timestamp}@contoso.com";
             var userAId = Guid.NewGuid().ToString(); var managerBId = Guid.NewGuid().ToString();
 
             using (var cleanupDb = new AnalyticsEntitiesContext())
@@ -493,7 +493,7 @@ namespace Tests.UnitTests
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
                 var allTestUsers = await finalVerifyDb.users.Include(u => u.Manager).Where(u => u.UserPrincipalName == managerUpn || u.UserPrincipalName == employeeUpn).ToListAsync();
-                Assert.AreEqual(2, allTestUsers.Count, "Carlos should NOT be duplicated despite AAD ID mismatch");
+                Assert.AreEqual(2, allTestUsers.Count, "The manager should NOT be duplicated despite AAD ID mismatch");
                 Assert.AreEqual(managerUpn, allTestUsers.First(u => u.UserPrincipalName == employeeUpn).Manager.UserPrincipalName);
             }
         }
