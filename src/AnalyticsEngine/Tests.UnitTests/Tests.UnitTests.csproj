@@ -144,6 +144,8 @@
     <Compile Include="UsageStatsTests.cs" />
     <Compile Include="AppInsightsQueryTableTests.cs" />
     <Compile Include="HealthRollupTests.cs" />
+    <Compile Include="AuditImportFailureHarness.cs" />
+    <Compile Include="AuditImportFailureHandlingTests.cs" />
     <Compile Include="DataUtilsTests.cs" />
     <Compile Include="TransientSqlRetryTests.cs" />
     <Compile Include="AuditTests.cs" />
