@@ -35,6 +35,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         public abstract ContentMetaDataLoader<SUMMARYTYPE> ContentMetaDataLoader { get; }
         public abstract IActivitySubscriptionManager ActivitySubscriptionManager { get; }
 
+        // Retry policy for a batch save that hits a transient SQL fault (a dropped/unrecoverable connection,
+        // timeout, deadlock, or Azure SQL throttling/failover). Overridable so tests can shrink the backoff
+        // to milliseconds; the defaults are chosen so a brief DB blip is ridden out without materially
+        // slowing a healthy cycle.
+        protected virtual int BatchSaveMaxAttempts => 4;
+        protected virtual TimeSpan BatchSaveRetryBaseDelay => TimeSpan.FromSeconds(3);
+
 
         public async Task<ImportStat> LoadReportsAndSave(IActivityReportPersistenceManager activityReportPersistenceManager)
         {
@@ -113,7 +120,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                     // the metadata pass uses get-or-create lookups, and each attempt opens fresh connections.
                     var stats = await TransientSqlRetry.ExecuteWithRetryAsync(
                         () => activityReportPersistenceManager.CommitAll(new WebActivityReportSet(reportChunk)),
-                        maxAttempts: 4, _logger, "Audit events import: batch save");
+                        BatchSaveMaxAttempts, _logger, "Audit events import: batch save", BatchSaveRetryBaseDelay);
 
                     lock (allStats)
                     {
