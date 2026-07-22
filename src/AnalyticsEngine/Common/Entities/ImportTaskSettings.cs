@@ -99,6 +99,14 @@ namespace Common.Entities
         [ImportProp]
         public bool Copilot { get; set; } = false;
 
+        /// <summary>
+        /// Import the Power Platform workload - PowerApps / Power Automate / Power BI / Copilot Studio
+        /// (also delivered via the Audit.General activity feed). Opt-in (default false) as it is a newer
+        /// workload; when off, these events are dropped at dispatch (not imported, and no staging merges run).
+        /// </summary>
+        [ImportProp]
+        public bool ImportPowerPlatform { get; set; } = false;
+
         IEnumerable<PropertyInfo> GetImportProps()
         {
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));
@@ -135,7 +143,8 @@ namespace Common.Entities
         public string ToActivityApiContentTypesString()
         {
             var types = new List<string>();
-            if (Copilot) types.Add(CONTENT_TYPE_AUDIT_GENERAL);
+            // Copilot and Power Platform are both delivered via the Audit.General feed.
+            if (Copilot || ImportPowerPlatform) types.Add(CONTENT_TYPE_AUDIT_GENERAL);
             if (ActivityLog) types.Add(CONTENT_TYPE_AUDIT_SHAREPOINT);
             return types.Count > 0 ? string.Join(SEP, types) : CONTENT_TYPE_AUDIT_SHAREPOINT;
         }

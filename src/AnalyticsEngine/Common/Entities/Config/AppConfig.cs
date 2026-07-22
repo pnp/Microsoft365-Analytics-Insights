@@ -53,6 +53,12 @@ namespace Common.Entities.Config
                 ? daysBeforeNowToDownload
                 : 6;
 
+            // Resolve Copilot file/meeting metadata from Graph. Default true so behaviour is unchanged unless
+            // a tenant opts out. (The Power Platform workload is toggled separately on ImportJobSettings.)
+            this.ResolveCopilotResourceMetadata = bool.TryParse(ConfigurationManager.AppSettings.Get("ResolveCopilotResourceMetadata"), out var resolveCopilotResourceMetadata)
+                ? resolveCopilotResourceMetadata
+                : true;
+
             // Optional: how many days before today to start reading hits from App Insights.
             // Can be overridden via the -readHitsDaysBeforeToday command line argument.
             var readHitsDaysBeforeTodayString = ConfigurationManager.AppSettings.Get("ReadHitsDaysBeforeToday");
@@ -153,6 +159,15 @@ namespace Common.Entities.Config
         public string ContentTypesString { get; set; }
 
         public int DaysBeforeNowToDownload { get; set; }
+
+        /// <summary>
+        /// Resolve Copilot file + meeting resource metadata from the Graph (file name/site, meeting
+        /// name/date). Default true. When false, Copilot interactions are still imported with their agent
+        /// metadata (agent id/name/type, cost, messages, accessed resources) but the per-event Graph
+        /// resolution is skipped - removing serial, network-bound calls from the save path. Set false when
+        /// only Copilot agent-level reporting is needed.
+        /// </summary>
+        public bool ResolveCopilotResourceMetadata { get; set; }
 
         /// <summary>
         /// Optional: how many days before today to start reading hits from App Insights.

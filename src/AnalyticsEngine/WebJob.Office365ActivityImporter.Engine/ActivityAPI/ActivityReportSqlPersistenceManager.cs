@@ -117,8 +117,11 @@ namespace WebJob.Office365ActivityImporter.Engine
             // Copilot file events it calls Graph (network). Resolving those ahead of time - overlapping across
             // batches and within a batch - turns the in-lock calls into cache hits, so the lock is held only for
             // SQL work, not network round-trips.
+            // Skip the prewarm entirely when Copilot resource resolution is disabled - the save path makes no
+            // Graph resource calls in that mode (every Copilot event is staged agent-metadata-only), so there
+            // is nothing to warm.
             var sharedLoader = await GetSharedCopilotLoaderAsync();
-            if (sharedLoader != null)
+            if (sharedLoader != null && _appConfig.ResolveCopilotResourceMetadata)
             {
                 await PrewarmCopilotFileMetadataAsync(activities, sharedLoader);
             }
@@ -350,7 +353,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             if (mergeLock != null) await mergeLock.WaitAsync();
             try
             {
-                await SaveMetadataAsync(db, listOfActivitiesSavedToSQL, sharedCopilotLoader);
+                await SaveMetadataAsync(db, listOfActivitiesSavedToSQL, sharedCopilotLoader, stats);
             }
             finally
             {
@@ -366,7 +369,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// The EF metadata pass (webs/sites + workload-specific resolvers). Extracted so the concurrent-save
         /// path can wrap it in the shared-write lock. Writes shared tables, so callers serialise it.
         /// </summary>
-        private async Task SaveMetadataAsync(AnalyticsEntitiesContext db, ConcurrentBag<AbstractAuditLogContent> listOfActivitiesSavedToSQL, ICopilotMetadataLoader sharedCopilotLoader)
+        private async Task SaveMetadataAsync(AnalyticsEntitiesContext db, ConcurrentBag<AbstractAuditLogContent> listOfActivitiesSavedToSQL, ICopilotMetadataLoader sharedCopilotLoader, ImportStat stats)
         {
             // Add metadata the traditional way with EF. By now should have all the sites saved.
             // Pass the run-scoped Copilot loader so per-event Graph resolution hits the cache warmed above.
@@ -374,6 +377,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             await saveSession.Init();
 
             int metaSaveIdx = 0, changesMadeCount = 0;
+            double copilotResolveMs = 0;   // per-event Copilot resolution time (the Graph file/meeting calls)
 #if DEBUG
             Console.WriteLine($"\nDEBUG: Updating metadata for {listOfActivitiesSavedToSQL.Count.ToString("n0")} saved events...");
 #endif
@@ -415,7 +419,11 @@ namespace WebJob.Office365ActivityImporter.Engine
                         metaSaveIdx++;
                         continue;
                     }
+                    // Time the Copilot per-event work separately - this is where the Graph file/meeting
+                    // resolution happens - so its cost shows up in the per-cycle summary.
+                    var copilotSw = log is CopilotAuditLogContent ? System.Diagnostics.Stopwatch.StartNew() : null;
                     var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _logger);
+                    if (copilotSw != null) { copilotSw.Stop(); copilotResolveMs += copilotSw.Elapsed.TotalMilliseconds; }
                     if (changesMade)
                         changesMadeCount++;
 
@@ -428,6 +436,11 @@ namespace WebJob.Office365ActivityImporter.Engine
 
             // Save metadata updates
             await saveSession.CommitAllChanges();
+
+            // Surface the per-workload sub-costs (summed across batches in the cycle summary): the Copilot
+            // per-event resolution measured above, and the Power Platform staging-merge cost.
+            stats.SaveCopilotResolveMs = copilotResolveMs;
+            stats.SavePowerPlatformMs = saveSession.LastPowerPlatformCommitMs;
         }
     }
 

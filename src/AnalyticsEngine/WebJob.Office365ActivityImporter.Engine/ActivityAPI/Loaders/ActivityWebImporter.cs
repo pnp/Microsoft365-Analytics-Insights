@@ -20,7 +20,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         {
             var auth = new ActivityAPIAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, logger);
-            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, logger, settings.TenantGUID.ToString());
+            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, logger, settings.TenantGUID.ToString(), settings.ImportJobSettings?.ImportPowerPlatform ?? false);
             _contentMetaDataLoader = new WebContentMetaDataLoader(logger, httpClient, settings);
             _activitySubscriptionManager = new ActivitySubscriptionManager(settings, logger, httpClient);
         }
@@ -31,7 +31,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         /// </summary>
         public ActivityWebImporter(ConfidentialClientApplicationThrottledHttpClient httpClient, AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch) : base(settings, logger, maxSavesPerBatch)
         {
-            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, logger, settings.TenantGUID.ToString());
+            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, logger, settings.TenantGUID.ToString(), settings.ImportJobSettings?.ImportPowerPlatform ?? false);
             _contentMetaDataLoader = new WebContentMetaDataLoader(logger, httpClient, settings);
             _activitySubscriptionManager = new ActivitySubscriptionManager(settings, logger, httpClient);
         }

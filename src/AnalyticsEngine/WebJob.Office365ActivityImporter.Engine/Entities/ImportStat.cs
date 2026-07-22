@@ -45,6 +45,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// </summary>
         public int FailedBatchEvents { get; set; }
 
+        /// <summary>
+        /// Per-workload save sub-costs (milliseconds, summed across batches this cycle), so the per-cycle
+        /// summary can show what the optional workloads cost:
+        ///   <see cref="SaveCopilotResolveMs"/>  - the Copilot per-event Graph resolution (file + meeting).
+        ///   <see cref="SavePowerPlatformMs"/>    - the Power Platform staging-table merges.
+        /// Both are zero when the corresponding workload / resolution is disabled.
+        /// </summary>
+        public double SaveCopilotResolveMs { get; set; }
+        public double SavePowerPlatformMs { get; set; }
+
         public List<TimePeriod> ForTimeSlots { get; set; }
 
         public void AddStats(ImportStat statsToAdd)
@@ -62,6 +72,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.BlobsSkipped += statsToAdd.BlobsSkipped;
             this.FailedBatches += statsToAdd.FailedBatches;
             this.FailedBatchEvents += statsToAdd.FailedBatchEvents;
+            this.SaveCopilotResolveMs += statsToAdd.SaveCopilotResolveMs;
+            this.SavePowerPlatformMs += statsToAdd.SavePowerPlatformMs;
             this.Total += statsToAdd.Total;
         }
 
