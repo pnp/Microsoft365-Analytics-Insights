@@ -22,13 +22,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private AutoThrottleHttpClient _httpClient;
         private readonly ILogger _logger;
         private readonly string _tenantId;
+        private readonly bool _importPowerPlatform;
         private int _reportDownloadErrors = 0;
 
-        public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger logger, string tenantId)
+        public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger logger, string tenantId, bool importPowerPlatform = true)
         {
             _httpClient = httpClient;
             _logger = logger;
             _tenantId = tenantId;
+            _importPowerPlatform = importPowerPlatform;
         }
 
         /// <summary>
@@ -191,7 +193,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             // thin IO + batching layer.
             try
             {
-                thisAuditLogReport = AuditLogContentDispatcher.Dispatch(reportItem, logBase, _logger);
+                thisAuditLogReport = AuditLogContentDispatcher.Dispatch(reportItem, logBase, _logger, _importPowerPlatform);
             }
             catch (JsonReaderException ex)
             {

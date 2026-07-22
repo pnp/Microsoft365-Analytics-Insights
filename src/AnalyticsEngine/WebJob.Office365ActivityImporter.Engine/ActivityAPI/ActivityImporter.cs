@@ -195,6 +195,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 $"dedup+scope {(allStats.SaveDedupMs / 1000.0).ToString("n1")}s, staging+merge {(allStats.SaveMergeMs / 1000.0).ToString("n1")}s, " +
                 $"metadata {(allStats.SaveMetadataMs / 1000.0).ToString("n1")}s.");
 
+            // Optional-workload save costs this cycle (aggregate across batches). Both are zero when the
+            // workload / resolution is disabled - this is how we tell whether Copilot resource resolution or
+            // Power Platform is meaningfully extending the import, rather than guessing.
+            _logger.LogInformation($"Audit events import: optional-workload save cost - Copilot resource resolution " +
+                $"{(allStats.SaveCopilotResolveMs / 1000.0).ToString("n1")}s, Power Platform {(allStats.SavePowerPlatformMs / 1000.0).ToString("n1")}s.");
+
             timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
 
             return allStats;
