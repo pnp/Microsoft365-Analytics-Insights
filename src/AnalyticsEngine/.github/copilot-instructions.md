@@ -11,6 +11,9 @@
 ## Project Guidelines
 - User prefers to keep the existing InsertBatch row-by-row implementation rather than replacing it with SqlBulkCopy.
 
+## Installer config schema — bump `CONFIG_VERSION` on every change
+Whenever you change the **installer's saved config schema** — any add / remove / rename of a persisted property on `BaseSolutionInstallConfig`, `SolutionInstallConfig`, `TargetSolutionConfig` or `ImportTaskSettings` (a new import toggle, a new Azure-resource field, etc.) — you **must** bump `CONFIG_VERSION` in [`Common/Entities/Installer/BaseSolutionInstallConfig.cs`](../Common/Entities/Installer/BaseSolutionInstallConfig.cs). Use `Major.Minor.Patch`: **minor** for additive / back-compatible changes, **major** for breaking ones. Add a one-line entry to the `// History:` comment next to the constant describing what changed. This value becomes the `ConfigSchemaVersion` stamped into every saved `*.json` config, so keeping it in step with the schema is how config compatibility is reasoned about across upgrades. Do this in the **same** change that alters the schema — don't leave it to a follow-up.
+
 ## Character set support (Unicode / Greek)
 - **Every data structure that can hold customer text MUST support the full Unicode range, including non-Latin scripts such as Greek.** SharePoint/OneDrive URLs, file names, titles, user/display names, search terms etc. routinely contain characters like `Καλημέρα κόσμε` (e.g. `https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.pdf`).
 - In SQL Server / EF, this means **`nvarchar`, never `varchar`** for any column that stores text originating from a customer tenant (URLs, names, paths, free text). `varchar` is single-code-page and silently corrupts characters outside that code page to `?`. This applies to entity columns, staging/temp table columns, `SqlTypeOverride` values, `Create DB.sql`, and migration `ALTER COLUMN` statements.
