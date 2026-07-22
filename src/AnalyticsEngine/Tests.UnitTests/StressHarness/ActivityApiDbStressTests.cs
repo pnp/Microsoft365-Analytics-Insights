@@ -22,6 +22,9 @@ namespace Tests.UnitTests.StressHarness
     ///   STRESS_OUTOFSCOPE_SITES      (default 500)
     ///   STRESS_WINDOW_DAYS           (default 6)
     ///   STRESS_BLOB_LATENCY_MS       (default 0)
+    ///   STRESS_PRESEED_AUDIT_EVENTS  (default 0; historical rows OUT of window - bloats the table only)
+    ///   STRESS_PRESEED_INWINDOW_EVENTS (default 0; standing IN-window backlog - stresses the dedup cache)
+    ///   STRESS_PERBATCH_DEDUP_CACHE  (default false; true = legacy per-batch cache, for before/after runs)
     ///   STRESS_RUN_WARM              (default true)
     /// </summary>
     [TestClass]
@@ -54,6 +57,8 @@ namespace Tests.UnitTests.StressHarness
                 WindowDays = EnvInt("STRESS_WINDOW_DAYS", 6),
                 SimulatedBlobLatencyMs = EnvInt("STRESS_BLOB_LATENCY_MS", 0),
                 PreSeedHistoricalAuditEvents = EnvInt("STRESS_PRESEED_AUDIT_EVENTS", 0),
+                PreSeedInWindowAuditEvents = EnvInt("STRESS_PRESEED_INWINDOW_EVENTS", 0),
+                UsePerBatchDedupCache = IsTruthy(Env("STRESS_PERBATCH_DEDUP_CACHE")),
                 UseBlobCheckpoint = IsTruthy(Env("STRESS_BLOB_CHECKPOINT") ?? "true"),
                 MaxConcurrentSaves = EnvInt("STRESS_MAX_CONCURRENT_SAVES", 1),
                 FailedBlobPercent = EnvInt("STRESS_FAILED_BLOB_PERCENT", 0),

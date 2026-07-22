@@ -41,6 +41,21 @@ namespace Tests.UnitTests.StressHarness
         /// </summary>
         public int PreSeedHistoricalAuditEvents { get; set; }
 
+        /// <summary>
+        /// Optional number of historical rows to pre-seed into audit_events WITHIN the event window (spread
+        /// across <see cref="WindowDays"/>), modelling the production condition: a large standing set of
+        /// already-imported in-window events that the per-batch dedup cache re-materialises into memory on
+        /// EVERY save. This is what makes the per-cycle-cache optimisation measurable - unlike
+        /// <see cref="PreSeedHistoricalAuditEvents"/>, which seeds OUT of window so it only bloats the table.
+        /// Random ids, so they never dedup against the generated events.
+        /// </summary>
+        public int PreSeedInWindowAuditEvents { get; set; }
+
+        /// <summary>When true, the persistence manager rebuilds the dedup cache per batch (the
+        /// pre-optimisation behaviour) instead of once per cycle - lets the harness measure the before/after
+        /// of the per-cycle-cache optimisation in a single build.</summary>
+        public bool UsePerBatchDedupCache { get; set; } = false;
+
         /// <summary>Captured ONCE by the runner; shared by COLD + WARM so timestamps are identical.</summary>
         public DateTime BaseTimeUtc { get; set; }
 
@@ -109,6 +124,13 @@ namespace Tests.UnitTests.StressHarness
             var set = new WebActivityReportSet();
             int startGlobal = blobIndex * cfg.EventsPerBlob;
             int windowMinutes = Math.Max(1, cfg.WindowDays * 24 * 60);
+            // Each blob is a small time-slice, and consecutive blob indices are scattered across the whole
+            // window by a coprime multiplier (a full-period step), so a SAVE BATCH of several blobs spans
+            // ~the entire window - faithfully modelling the real importer, where ~130 threads download blobs
+            // out of order so each 2000-event batch's [Min,Max] CreationTime covers almost the whole window
+            // (which is what makes the per-batch dedup-cache reload materialise ~the entire in-window set).
+            // Deterministic in blobIndex, so COLD and WARM still generate byte-identical timestamps.
+            int blobBaseMinute = (int)(((long)blobIndex * 2654435761L) % windowMinutes);
 
             for (int j = 0; j < cfg.EventsPerBlob; j++)
             {
@@ -147,9 +169,11 @@ namespace Tests.UnitTests.StressHarness
                     SiteUrl = siteUrl,
                     ObjectId = objectId,
                     EventData = "<Event><Id>" + g + "</Id></Event>",
-                    // Stable, in-window timestamp (>= 1h before BaseTimeUtc) so the per-batch cache window
-                    // [oldest-1min, newest+1min] captures COLD's rows on the WARM re-run.
-                    CreationTime = cfg.BaseTimeUtc.AddMinutes(-((g % windowMinutes) + 60)),
+                    // Stable, in-window timestamp: the blob's scattered base minute + a small within-blob
+                    // offset (events in one blob are close in time, blobs are spread across the window). >= 1h
+                    // before BaseTimeUtc so the per-batch cache window [oldest-1min, newest+1min] captures
+                    // COLD's rows on the WARM re-run.
+                    CreationTime = cfg.BaseTimeUtc.AddMinutes(-(((blobBaseMinute + j) % windowMinutes) + 60)),
                     OriginalImportFileContents = "stress"
                 };
 

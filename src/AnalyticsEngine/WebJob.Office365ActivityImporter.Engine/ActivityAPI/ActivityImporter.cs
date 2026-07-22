@@ -189,6 +189,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 _logger.LogInformation("Audit events import: all save batches committed successfully this cycle.");
             }
 
+            // Where did the SQL save time go this cycle? Aggregate across all batches (see ImportStat timing
+            // fields). Makes the save bottleneck visible in the traces so we don't have to infer it.
+            _logger.LogInformation($"Audit events import: save-phase timing (aggregate across {allStats.Total.ToString("n0")} event(s)): " +
+                $"dedup+scope {(allStats.SaveDedupMs / 1000.0).ToString("n1")}s, staging+merge {(allStats.SaveMergeMs / 1000.0).ToString("n1")}s, " +
+                $"metadata {(allStats.SaveMetadataMs / 1000.0).ToString("n1")}s.");
+
             timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
 
             return allStats;

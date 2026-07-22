@@ -76,6 +76,10 @@ namespace Tests.UnitTests.StressHarness
             {
                 PreSeedHistoricalAuditEvents(connectionString, data.PreSeedHistoricalAuditEvents, data.BaseTimeUtc, log);
             }
+            if (data.PreSeedInWindowAuditEvents > 0)
+            {
+                PreSeedInWindowAuditEvents(connectionString, data.PreSeedInWindowAuditEvents, data.BaseTimeUtc, data.WindowDays, log);
+            }
             // Start the blob checkpoint empty so COLD is a true cold start (the in-memory store is static,
             // so it would otherwise carry over from a previous run in the same process).
             if (data.UseBlobCheckpoint)
@@ -110,7 +114,7 @@ namespace Tests.UnitTests.StressHarness
             log($"===== {name} scenario =====");
 
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var appConfig = StressAppConfigFactory.Create(connectionString);
+            var appConfig = StressAppConfigFactory.Create(connectionString, data.WindowDays);
 
             SharePointOrgUrlsFilterConfig spFilter;
             using (var db = new AnalyticsEntitiesContext(connectionString, true, false))
@@ -120,8 +124,9 @@ namespace Tests.UnitTests.StressHarness
             log($"  Whitelist rules loaded: {spFilter.OrgUrlConfigs.Count}");
 
             var realManager = new ActivityReportSqlPersistenceManager(
-                spFilter, new NoUsersHaveGroupsUserGroupsCache(logger), logger, appConfig, data.MaxConcurrentSaves);
+                spFilter, new NoUsersHaveGroupsUserGroupsCache(logger), logger, appConfig, data.MaxConcurrentSaves, data.UsePerBatchDedupCache);
             var countingManager = new CountingActivityReportPersistenceManager(realManager);
+            log($"  Dedup cache mode: {(data.UsePerBatchDedupCache ? "PER-BATCH (legacy: rebuilt every save)" : "PER-CYCLE (built once, reused)")}");
 
             // Production-like: the checkpoint store is selected by the factory from config (empty storage
             // conn -> in-memory). The in-memory store is static, so COLD's marks are visible to WARM.
@@ -312,6 +317,64 @@ namespace Tests.UnitTests.StressHarness
         }
 
         /// <summary>
+        /// Bulk-inserts <paramref name="count"/> rows into audit_events with timestamps spread across the event
+        /// window ([baseTimeUtc - windowDays, baseTimeUtc]), modelling a large standing set of already-imported
+        /// IN-WINDOW events (the production condition). A save batch's dedup query covers [batch oldest, batch
+        /// newest] - almost the whole window - so these rows are what the per-batch cache re-materialises into
+        /// memory on EVERY save; the per-cycle cache loads them once. Random ids, so they never dedup against
+        /// the generated events (they just enlarge the cache the save path must build).
+        /// </summary>
+        private static void PreSeedInWindowAuditEvents(string connectionString, int count, DateTime baseTimeUtc, int windowDays, Action<string> log)
+        {
+            log($"[prep] Pre-seeding {count:N0} IN-WINDOW audit_events rows (models a large standing in-window backlog)...");
+            var sw = Stopwatch.StartNew();
+            int windowMinutes = Math.Max(1, windowDays * 24 * 60);
+            using (var c = new SqlConnection(connectionString))
+            {
+                c.Open();
+
+                const string dummyUpn = "preseed-inwindow@contoso.onmicrosoft.com";
+                using (var cmd = new SqlCommand("IF NOT EXISTS (SELECT 1 FROM users WHERE user_name=@u) INSERT INTO users(user_name) VALUES(@u);", c))
+                {
+                    cmd.Parameters.Add(new SqlParameter("@u", System.Data.SqlDbType.NVarChar, 400) { Value = dummyUpn });
+                    cmd.ExecuteNonQuery();
+                }
+                int userId;
+                using (var cmd = new SqlCommand("SELECT id FROM users WHERE user_name=@u", c))
+                {
+                    cmd.Parameters.Add(new SqlParameter("@u", System.Data.SqlDbType.NVarChar, 400) { Value = dummyUpn });
+                    userId = (int)cmd.ExecuteScalar();
+                }
+
+                const int chunkSize = 250000;
+                int done = 0;
+                while (done < count)
+                {
+                    int take = Math.Min(chunkSize, count - done);
+                    // Spread uniformly across the window: minute offset = ((rn + done) % windowMinutes) + 60, so
+                    // rows land in [baseTimeUtc - windowDays, baseTimeUtc - 60min] (matching the generated
+                    // events' distribution), guaranteeing the per-batch cache query captures them.
+                    using (var cmd = new SqlCommand(
+                        ";WITH n AS (SELECT TOP (@take) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS rn " +
+                        "FROM sys.all_objects a CROSS JOIN sys.all_objects b) " +
+                        "INSERT INTO audit_events (id, user_id, time_stamp) " +
+                        "SELECT NEWID(), @user, DATEADD(minute, -(((rn + @offset) % @windowMinutes) + 60), @baseTime) FROM n;", c)
+                    { CommandTimeout = 0 })
+                    {
+                        cmd.Parameters.Add(new SqlParameter("@take", System.Data.SqlDbType.Int) { Value = take });
+                        cmd.Parameters.Add(new SqlParameter("@user", System.Data.SqlDbType.Int) { Value = userId });
+                        cmd.Parameters.Add(new SqlParameter("@offset", System.Data.SqlDbType.Int) { Value = done });
+                        cmd.Parameters.Add(new SqlParameter("@windowMinutes", System.Data.SqlDbType.Int) { Value = windowMinutes });
+                        cmd.Parameters.Add(new SqlParameter("@baseTime", System.Data.SqlDbType.DateTime) { Value = baseTimeUtc });
+                        cmd.ExecuteNonQuery();
+                    }
+                    done += take;
+                }
+            }
+            log($"[prep] In-window pre-seed done ({count:N0} rows) in {sw.Elapsed.TotalSeconds:F1}s");
+        }
+
+        /// <summary>
         /// Injects/overrides a runtime connection string in <see cref="ConfigurationManager"/> so
         /// <c>new AnalyticsEntitiesContext()</c> (name=SPOInsightsEntities) resolves to our target DB.
         /// </summary>
@@ -353,6 +416,9 @@ namespace Tests.UnitTests.StressHarness
             void Row(string label, string c, string w) => log($"{label,-26}{c,16}{w,16}");
             Row("Wall time (s)", (cold.WallMs / 1000.0).ToString("F1"), warm != null ? (warm.WallMs / 1000.0).ToString("F1") : "-");
             Row("Save phase (s)", (cold.TotalCommitMs / 1000.0).ToString("F1"), warm != null ? (warm.TotalCommitMs / 1000.0).ToString("F1") : "-");
+            Row("  - dedup+scope (s)", (cold.MergedStats.SaveDedupMs / 1000.0).ToString("F1"), warm != null ? (warm.MergedStats.SaveDedupMs / 1000.0).ToString("F1") : "-");
+            Row("  - staging+merge (s)", (cold.MergedStats.SaveMergeMs / 1000.0).ToString("F1"), warm != null ? (warm.MergedStats.SaveMergeMs / 1000.0).ToString("F1") : "-");
+            Row("  - metadata (s)", (cold.MergedStats.SaveMetadataMs / 1000.0).ToString("F1"), warm != null ? (warm.MergedStats.SaveMetadataMs / 1000.0).ToString("F1") : "-");
             Row("Commit batches", cold.CommitAllCalls.ToString("N0"), warm != null ? warm.CommitAllCalls.ToString("N0") : "-");
             Row("Blobs loaded", cold.BlobsLoaded.ToString("N0"), warm != null ? warm.BlobsLoaded.ToString("N0") : "-");
             Row("Blobs skipped (ckpt)", cold.MergedStats.BlobsSkipped.ToString("N0"), warm != null ? warm.MergedStats.BlobsSkipped.ToString("N0") : "-");
@@ -383,6 +449,7 @@ namespace Tests.UnitTests.StressHarness
         {
             log($"  {Name} wall time:      {WallMs / 1000.0:F1}s");
             log($"  {Name} save phase:     {TotalCommitMs / 1000.0:F1}s across {CommitAllCalls:N0} commit batch(es)");
+            log($"  {Name}   breakdown:    dedup+scope {MergedStats.SaveDedupMs / 1000.0:F1}s | staging+merge {MergedStats.SaveMergeMs / 1000.0:F1}s | metadata {MergedStats.SaveMetadataMs / 1000.0:F1}s");
             log($"  {Name} blobs loaded:   {BlobsLoaded:N0}");
             log($"  {Name} blobs skipped:  {MergedStats.BlobsSkipped:N0} (checkpoint)");
             log($"  {Name} events:         {EventsGenerated:N0} generated");
