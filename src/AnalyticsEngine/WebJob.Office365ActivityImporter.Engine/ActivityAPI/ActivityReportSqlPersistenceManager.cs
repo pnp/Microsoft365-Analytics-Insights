@@ -55,6 +55,23 @@ namespace WebJob.Office365ActivityImporter.Engine
         private readonly SemaphoreSlim _saveConcurrencyGate;
         private static readonly SemaphoreSlim _sharedWriteSemaphore = new SemaphoreSlim(1, 1);
 
+        // --- Run-scoped dedup cache (perf: build ONCE per cycle, not per batch) -------------------------
+        // The set of audit-event ids already imported/ignored within the download window. This manager is
+        // created once per import cycle, so the cache is built ONCE (lazily, for the whole window) and kept
+        // current in-memory as each batch saves - replacing the old behaviour of re-querying audit_events on
+        // every CommitAll. A 2000-event batch's [Min,Max] CreationTime spans almost the entire window (events
+        // download out-of-order across ~130 threads), so the per-batch query materialised ~the whole in-window
+        // audit_events set on EVERY batch: the dominant cost, and a large memory spike, at scale. Correctness
+        // is unchanged - the same ids are cached (full window, keyed by id) and the merge SQL's NOT EXISTS
+        // guards remain the authoritative cross-instance/cross-cycle dedup backstop. ActivityImportCache is
+        // internally thread-safe, so one instance is shared safely across concurrent saves.
+        //   _usePerBatchDedupCache is an ops safety-valve (app setting AUDIT_PERBATCH_DEDUP_CACHE=true) that
+        //   restores the old per-batch build without a redeploy; default false = new per-cycle behaviour.
+        private readonly bool _usePerBatchDedupCache;
+        private ActivityImportCache _runImportCache;
+        private bool _runImportCacheBuilt;
+        private readonly SemaphoreSlim _runImportCacheInitLock = new SemaphoreSlim(1, 1);
+
         // Run-scoped Copilot Graph metadata loader, shared across every batch so its Graph caches (resolved
         // files, users, sites, and unresolvable contexts) persist for the whole import instead of being rebuilt
         // per batch. Lazily built once; best-effort (null on failure -> each SaveSession falls back to its own).
@@ -65,7 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         // How many Copilot file contexts to resolve concurrently while pre-warming the cache (outside the SQL lock).
         private const int PrewarmConcurrency = 8;
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1)
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false)
         {
             _filterConfig = filterConfig;
             _userGroupsCache = userGroupsCache;
@@ -73,6 +90,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             _appConfig = appConfig;
             _userGroupsFilter = new UserGroupsFilterModel(appConfig.UserGroupsFilter);
             _maxConcurrentSaves = Math.Max(1, maxConcurrentSaves);
+            _usePerBatchDedupCache = usePerBatchDedupCache;
             if (_maxConcurrentSaves > 1)
             {
                 _saveConcurrencyGate = new SemaphoreSlim(_maxConcurrentSaves, _maxConcurrentSaves);
@@ -86,7 +104,13 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             if (activities.Count > 0)
             {
-                var cache = ActivityImportCache.GetAndBuildNewCache(activities.OldestContent, activities.NewestContent);
+                // Build the dedup cache ONCE per cycle (shared, kept current in-memory) instead of
+                // re-querying audit_events for every batch. The per-batch reload materialised ~the whole
+                // in-window event set each time because a batch spans nearly the whole window. See the field
+                // comment on _runImportCache. The AUDIT_PERBATCH_DEDUP_CACHE safety-valve restores the old path.
+                var cache = _usePerBatchDedupCache
+                    ? ActivityImportCache.GetAndBuildNewCache(activities.OldestContent, activities.NewestContent)
+                    : await GetOrBuildRunImportCacheAsync();
 
                 // Read default connection-string
                 if (string.IsNullOrEmpty(_defaultConnectionString))
@@ -175,6 +199,47 @@ namespace WebJob.Office365ActivityImporter.Engine
             }
 
             return allStats;
+        }
+
+        /// <summary>
+        /// Lazily build the run-scoped dedup cache ONCE per import cycle (this manager is created per cycle),
+        /// covering the whole download window [now - DaysBeforeNowToDownload, now]. Every event processed this
+        /// cycle has a CreationTime inside that window (the API only serves it there) and the cache is keyed by
+        /// event id, so a single full-window load is equivalent to the old per-batch [Min,Max] loads - without
+        /// the massive redundancy. Kept current thereafter in-memory by RememberProcessedEvent /
+        /// RememberNewlyIgnoredEvent as batches save. Thread-safe (double-checked init + a thread-safe cache).
+        /// </summary>
+        private async Task<ActivityImportCache> GetOrBuildRunImportCacheAsync()
+        {
+            if (_runImportCacheBuilt) return _runImportCache;
+            await _runImportCacheInitLock.WaitAsync();
+            try
+            {
+                if (!_runImportCacheBuilt)
+                {
+                    // +1 day of lower margin so an event created just outside the exact window boundary (the
+                    // download window is computed slightly earlier, at cycle start) can never be missed.
+                    var daysBack = Math.Max(_appConfig.DaysBeforeNowToDownload, 1) + 1;
+                    var cacheFrom = DateTime.UtcNow.AddDays(-daysBack);
+                    var cacheTo = DateTime.UtcNow.AddMinutes(2);
+
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var built = ActivityImportCache.GetAndBuildNewCache(cacheFrom, cacheTo);
+                    sw.Stop();
+
+                    _logger.LogInformation($"Audit events import: built run dedup cache from audit_events in " +
+                        $"{sw.Elapsed.TotalSeconds.ToString("n1")}s ({built.ProcessedIdCount.ToString("n0")} already-processed id(s), " +
+                        $"{daysBack}-day window) - reused across all save batches this cycle instead of reloading per batch.");
+
+                    _runImportCache = built;
+                    _runImportCacheBuilt = true;
+                }
+            }
+            finally
+            {
+                _runImportCacheInitLock.Release();
+            }
+            return _runImportCache;
         }
 
         /// <summary>
@@ -291,6 +356,11 @@ namespace WebJob.Office365ActivityImporter.Engine
             var processedIds = new HashSet<Guid>();
             var stats = new ImportStat() { Total = activities.Count };
 
+            // Phase timing, surfaced per cycle so operators can see where the save time actually goes: the
+            // in-memory dedup + scope check, the SQL staging-load + merge, and the EF metadata pass. Aggregated
+            // (summed) across batches in ImportStat.AddStats; in concurrent-save mode the merge/metadata are
+            // serialised by mergeLock so their summed times approximate the real serialised wall-time.
+            var swDedup = System.Diagnostics.Stopwatch.StartNew();
             foreach (var abtractLog in activities)
             {
                 // Don't insert duplicates in same set
@@ -334,6 +404,8 @@ namespace WebJob.Office365ActivityImporter.Engine
                     processedIds.Add(abtractLog.Id);
                 }
             }
+            swDedup.Stop();
+            stats.SaveDedupMs = swDedup.Elapsed.TotalMilliseconds;
 
             // Merge data
 #if DEBUG
@@ -344,12 +416,16 @@ namespace WebJob.Office365ActivityImporter.Engine
             // tables); the parallel staging LOAD inside SaveToStagingTable runs unlocked.
             var effectiveStagingTable = stagingTableName ?? ActivityImportConstants.STAGING_TABLE_ACTIVITY;
             var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", effectiveStagingTable);
+            var swMerge = System.Diagnostics.Stopwatch.StartNew();
             await logsToInsert.SaveToStagingTable(10000, mergeSQL, stagingTableName, mergeLock);
+            swMerge.Stop();
+            stats.SaveMergeMs = swMerge.Elapsed.TotalMilliseconds;
 
             #region Add Extra Metadata
 
             // The metadata pass writes SHARED tables (webs/sites via ProcessExtendedProperties, plus the
             // Copilot / Power Platform commits), so in concurrent mode it is serialised by the same lock.
+            var swMeta = System.Diagnostics.Stopwatch.StartNew();
             if (mergeLock != null) await mergeLock.WaitAsync();
             try
             {
@@ -359,6 +435,8 @@ namespace WebJob.Office365ActivityImporter.Engine
             {
                 if (mergeLock != null) mergeLock.Release();
             }
+            swMeta.Stop();
+            stats.SaveMetadataMs = swMeta.Elapsed.TotalMilliseconds;
 
             #endregion
 
