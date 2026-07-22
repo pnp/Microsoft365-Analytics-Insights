@@ -38,6 +38,7 @@
     <Compile Include="CopilotPrewarmExtractionTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
     <Compile Include="CopilotTestBase.cs" />
+    <Compile Include="WorkloadToggleTests.cs" />
     <Compile Include="PageUpdateManagerPerfTests.cs" />
     <Compile Include="PerfRegressionTests.cs" />
     <Compile Include="SentEmailImporterPipelineTests.cs" />

@@ -47,6 +47,7 @@
             this.lblGUITargetsHeader = new System.Windows.Forms.Label();
             this.chkCopilot = new System.Windows.Forms.CheckBox();
             this.chkSentEmails = new System.Windows.Forms.CheckBox();
+            this.chkPowerPlatform = new System.Windows.Forms.CheckBox();
             this.pnlSolutionSelectionContainer.SuspendLayout();
             this.grpProductCfgInsights.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).BeginInit();
@@ -74,6 +75,7 @@
             this.grpProductCfgInsights.Controls.Add(this.chkUserMetadata);
             this.grpProductCfgInsights.Controls.Add(this.chkCopilot);
             this.grpProductCfgInsights.Controls.Add(this.chkSentEmails);
+            this.grpProductCfgInsights.Controls.Add(this.chkPowerPlatform);
             this.grpProductCfgInsights.Controls.Add(this.chkUserApps);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
@@ -261,6 +263,17 @@
             this.chkSentEmails.Text = "Sent emails";
             this.chkSentEmails.UseVisualStyleBackColor = true;
             // 
+            // chkPowerPlatform
+            // 
+            this.chkPowerPlatform.AutoSize = true;
+            this.chkPowerPlatform.Location = new System.Drawing.Point(4, 287);
+            this.chkPowerPlatform.Margin = new System.Windows.Forms.Padding(2);
+            this.chkPowerPlatform.Name = "chkPowerPlatform";
+            this.chkPowerPlatform.Size = new System.Drawing.Size(140, 17);
+            this.chkPowerPlatform.TabIndex = 25;
+            this.chkPowerPlatform.Text = "Power Platform";
+            this.chkPowerPlatform.UseVisualStyleBackColor = true;
+            // 
             // lblGUITargetsHeader
             // 
             this.lblGUITargetsHeader.AutoSize = true;
@@ -311,5 +324,6 @@
         private System.Windows.Forms.Label lblGUITargetsHeader;
         private System.Windows.Forms.CheckBox chkCopilot;
         private System.Windows.Forms.CheckBox chkSentEmails;
+        private System.Windows.Forms.CheckBox chkPowerPlatform;
     }
 }
