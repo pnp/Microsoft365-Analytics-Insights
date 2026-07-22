@@ -9,7 +9,13 @@ namespace Common.Entities.Installer
     /// </summary>
     public class BaseSolutionInstallConfig : BaseConfig
     {
-        const string CONFIG_VERSION = "1.8.0";
+        // Schema version of the installer's SolutionInstallConfig (the saved *.json config the installer
+        // reads/writes). BUMP THIS whenever the SolutionInstallConfig schema changes - i.e. any add/remove/
+        // rename of a persisted property on BaseSolutionInstallConfig / SolutionInstallConfig /
+        // TargetSolutionConfig / ImportTaskSettings (a new import toggle, a new resource field, etc.). Use
+        // Major.Minor.Patch: minor for additive changes, major for breaking ones.
+        // History: 1.8.0 -> 1.9.0 added ImportTaskSettings.ImportPowerPlatform (opt-in Power Platform workload).
+        const string CONFIG_VERSION = "1.9.0";
 
         public BaseSolutionInstallConfig()
         {
