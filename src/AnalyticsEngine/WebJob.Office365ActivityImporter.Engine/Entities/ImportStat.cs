@@ -45,6 +45,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// </summary>
         public int FailedBatchEvents { get; set; }
 
+        /// <summary>
+        /// Aggregate save-phase timings (milliseconds), summed across all save batches this cycle, so the
+        /// per-cycle summary can show where the SQL save time goes:
+        ///   <see cref="SaveDedupMs"/>    - in-memory dedup + scope check + staging-row build (CPU).
+        ///   <see cref="SaveMergeMs"/>     - SQL staging load + the merge into the normal tables.
+        ///   <see cref="SaveMetadataMs"/>  - the EF metadata pass (webs/sites, Copilot / Power Platform).
+        /// In concurrent-save mode the merge + metadata are serialised by a shared lock, so their summed
+        /// times approximate the real serialised wall-time; dedup runs in parallel so its sum is total CPU.
+        /// </summary>
+        public double SaveDedupMs { get; set; }
+        public double SaveMergeMs { get; set; }
+        public double SaveMetadataMs { get; set; }
+
         public List<TimePeriod> ForTimeSlots { get; set; }
 
         public void AddStats(ImportStat statsToAdd)
@@ -62,6 +75,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.BlobsSkipped += statsToAdd.BlobsSkipped;
             this.FailedBatches += statsToAdd.FailedBatches;
             this.FailedBatchEvents += statsToAdd.FailedBatchEvents;
+            this.SaveDedupMs += statsToAdd.SaveDedupMs;
+            this.SaveMergeMs += statsToAdd.SaveMergeMs;
+            this.SaveMetadataMs += statsToAdd.SaveMetadataMs;
             this.Total += statsToAdd.Total;
         }
 

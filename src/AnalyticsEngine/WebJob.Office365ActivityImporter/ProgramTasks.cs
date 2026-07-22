@@ -148,7 +148,20 @@ namespace WebJob.Office365ActivityImporter
 
                 var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH, maxConcurrentSaves);
 
-                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves);
+                // Safety valve: the dedup cache is built ONCE per cycle by default (it used to be rebuilt from
+                // audit_events for every batch, which materialised ~the whole in-window event set each time -
+                // the dominant save cost at scale). Set AUDIT_PERBATCH_DEDUP_CACHE=true to restore the old
+                // per-batch build without a redeploy if the new path ever misbehaves.
+                bool usePerBatchDedupCache = false;
+                var perBatchCacheEnv = Environment.GetEnvironmentVariable("AUDIT_PERBATCH_DEDUP_CACHE");
+                if (!string.IsNullOrWhiteSpace(perBatchCacheEnv) &&
+                    (perBatchCacheEnv.Trim() == "1" || perBatchCacheEnv.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)))
+                {
+                    usePerBatchDedupCache = true;
+                    _logger.LogWarning("Activity import: per-batch dedup cache ENABLED (AUDIT_PERBATCH_DEDUP_CACHE) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
+                }
+
+                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves, usePerBatchDedupCache);
                 try
                 {
                     var stats = await importer.LoadReportsAndSave(sqlAdaptor);

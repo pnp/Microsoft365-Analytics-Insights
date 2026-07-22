@@ -143,7 +143,28 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             lock (_lock)
             {
-                this.GetCacheChunkForAuditLog(processedDate, CacheType.Processed).Add(id, processedDate);
+                // Indexer (not .Add) so a duplicate id is an idempotent overwrite rather than an
+                // ArgumentException - e.g. an id present in both ignored_audit_events and audit_events when
+                // the cache is loaded, or the same event remembered by two concurrent save batches that now
+                // share this single run-scoped cache.
+                this.GetCacheChunkForAuditLog(processedDate, CacheType.Processed)[id] = processedDate;
+            }
+        }
+
+        /// <summary>
+        /// Total number of processed (imported-or-ignored) event ids currently held, across all hourly
+        /// chunks. Used for telemetry when the run-scoped cache is built (how many ids were loaded).
+        /// </summary>
+        public int ProcessedIdCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    int total = 0;
+                    foreach (var chunk in ProcessedIDs.Values) total += chunk.Count;
+                    return total;
+                }
             }
         }
 
@@ -242,7 +263,9 @@ namespace WebJob.Office365ActivityImporter.Engine
             lock (_lock)
             {
                 Dictionary<Guid, DateTime> theCache = this.GetCacheChunkForAuditLog(auditLogContent, CacheType.Processed);
-                theCache.Add(auditLogContent.Id, auditLogContent.CreationTime);
+                // Indexer (not .Add): idempotent, so the shared run-scoped cache is safe when the same event
+                // id is remembered by two concurrent save batches (a duplicate .Add would throw).
+                theCache[auditLogContent.Id] = auditLogContent.CreationTime;
             }
         }
 
@@ -253,8 +276,9 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             lock (_lock)
             {
-                this.GetCacheChunkForAuditLog(auditLogContent, CacheType.NewlyIgnored).Add(auditLogContent.Id, auditLogContent.CreationTime);
-                this.GetCacheChunkForAuditLog(auditLogContent, CacheType.Processed).Add(auditLogContent.Id, auditLogContent.CreationTime);
+                // Indexer (not .Add): idempotent for the shared run-scoped cache (see RememberProcessedEvent).
+                this.GetCacheChunkForAuditLog(auditLogContent, CacheType.NewlyIgnored)[auditLogContent.Id] = auditLogContent.CreationTime;
+                this.GetCacheChunkForAuditLog(auditLogContent, CacheType.Processed)[auditLogContent.Id] = auditLogContent.CreationTime;
             }
         }
 
