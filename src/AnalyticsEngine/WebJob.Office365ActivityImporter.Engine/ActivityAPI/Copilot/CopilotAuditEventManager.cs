@@ -32,6 +32,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         private readonly ICopilotMetadataLoader _copilotEventAdaptor;
         private readonly ILogger _logger;
+        private readonly bool _resolveResourceMetadata;
         private readonly InsertBatch<SPCopilotLogTempEntity> _copilotInsertsSP;
         private readonly InsertBatch<TeamsCopilotLogTempEntity> _copilotInsertsTeams;
         private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
@@ -42,11 +43,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private int _totalFilesCount;
         private int _totalChatOnlyCount;
 
-        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger)
+        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
         {
             if (string.IsNullOrEmpty(connectionString)) throw new ArgumentException($"'{nameof(connectionString)}' cannot be null or empty.", nameof(connectionString));
             _copilotEventAdaptor = copilotEventAdaptor ?? throw new ArgumentNullException(nameof(copilotEventAdaptor));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _resolveResourceMetadata = resolveResourceMetadata;
             _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
             _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
@@ -61,6 +63,18 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             if (auditRecord == null || baseOfficeEvent == null)
             {
                 _logger.LogWarning("CopilotAuditEventManager received null auditRecord or baseOfficeEvent.");
+                return;
+            }
+
+            // Agent-metadata-only mode: when resource resolution is disabled, stage every interaction as a
+            // chat-only record - which still carries the agent id/name/type, cost, messages and accessed
+            // resources - and skip all file/meeting Graph resolution. This removes the serial, network-bound
+            // Graph calls from the save path for tenants that only want Copilot agent-level reporting.
+            if (!_resolveResourceMetadata)
+            {
+                AddChatOnly(auditRecord, baseOfficeEvent);
+                _totalChatOnlyCount++;
+                _logger.LogTrace($"Event {baseOfficeEvent.Id}: staged agent metadata only (Copilot resource resolution disabled).");
                 return;
             }
 

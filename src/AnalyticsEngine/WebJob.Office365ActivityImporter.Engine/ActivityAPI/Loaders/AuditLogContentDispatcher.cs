@@ -26,9 +26,23 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         /// JSON deserialisation exceptions are intentionally not caught here - the caller already
         /// logs them with the originating workload name and continues to the next record.
         /// </summary>
-        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger)
+        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true)
         {
             if (reportItem == null || logBase == null)
+            {
+                return null;
+            }
+
+            // Power Platform (the unified PowerPlatform record + the legacy per-product PowerApps / Power
+            // Automate / Power BI schemas + Copilot Studio) all arrive via the Audit.General subscription.
+            // When the workload is turned off, drop these events here so they are neither imported (no base
+            // audit_events row) nor staged (no Power Platform merges) - the whole workload's cost is skipped.
+            if (!importPowerPlatform
+                && (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_PLATFORM
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_APPS
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_AUTOMATE
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_BI
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT_STUDIO))
             {
                 return null;
             }
