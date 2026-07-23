@@ -59,7 +59,7 @@ it works with public network access disabled).
 |---|---|---|
 | **`Weekly.ps1`** | The actual aggregation. Opens SQL, `EXEC [profiling].[usp_CompileWeekly] @WeeksToKeep`, 3-hour command timeout. Non-zero return ⇒ `Write-Error`. | `usp_CompileWeekly` |
 | **`Aggregation_Status.ps1`** | Monitoring only. Prints `profiling.*` + `*_activity_log` table row counts and the MIN/MAX dates of the three weekly tables. | 4 `SELECT`s |
-| **`Database_Maintenance.ps1`** | Index/stats maintenance via Ola Hallengren `dbo.IndexOptimize`, scoped to `%.profiling.%` (weekly) or `%.dbo.%_activity_log.%` (activitylog). | `dbo.IndexOptimize` |
+| **`Database_Maintenance.ps1`** | Index/stats maintenance via Ola Hallengren `dbo.IndexOptimize`. `weekly` = **all indexes across the whole database** (`ALL_INDEXES`, incl. core import tables `audit_events`/`users`/`sites` and all `copilot_*`/`event_meta_*`, plus profiling + activity logs), `@UpdateStatistics = 'ALL'`, `@TimeLimit = 9000`. `activitylog` = legacy targeted run for the `*_activity_log` tables (now covered by `weekly`). | `dbo.IndexOptimize` |
 
 `@WeeksToKeep` and the SQL connection come from Automation variables/credentials.
 

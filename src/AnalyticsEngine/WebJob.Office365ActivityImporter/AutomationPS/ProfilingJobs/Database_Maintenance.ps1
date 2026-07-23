@@ -1,5 +1,13 @@
 # Index and statistics maintenance for the database.
 # Depends on the SPs created by this solution: https://ola.hallengren.com/sql-server-index-and-statistics-maintenance.html
+#
+# MaintenanceType:
+#   weekly      - maintains ALL indexes + statistics across the whole database
+#                 (core import tables incl. audit_events / users / sites and all
+#                 copilot_* + event_meta_* tables, plus profiling + activity logs).
+#                 This is the one to schedule weekly.
+#   activitylog - legacy, targeted run for just the *_activity_log usage tables
+#                 (kept for back-compat; 'weekly' already covers these).
 
 param(
     [Parameter(Mandatory=$true)]
@@ -27,15 +35,20 @@ Connection Timeout=60"
 $DatabaseConnection = New-Object System.Data.SqlClient.SqlConnection($SqlConnectionString)
 
 $SqlCmdWeekly = @"
+-- Maintain EVERY index + all statistics across the database. Ola's IndexOptimize
+-- only touches indexes above the fragmentation thresholds, so after the first
+-- pass the weekly run is cheap. @TimeLimit stops it gracefully within the
+-- maintenance window (below the SqlCommand timeout) and it resumes next week.
 EXECUTE dbo.IndexOptimize
 @Databases = 'USER_DATABASES',
-@Indexes = '%.profiling.%',
+@Indexes = 'ALL_INDEXES',
 @FragmentationLow = NULL,
 @FragmentationMedium = 'INDEX_REORGANIZE,INDEX_REBUILD_ONLINE,INDEX_REBUILD_OFFLINE',
 @FragmentationHigh = 'INDEX_REBUILD_ONLINE,INDEX_REBUILD_OFFLINE',
 @FragmentationLevel1 = 5,
 @FragmentationLevel2 = 30,
 @UpdateStatistics = 'ALL',
+@TimeLimit = 9000,
 @MaxDOP = 0
 "@
 
