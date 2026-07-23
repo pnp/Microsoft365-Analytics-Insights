@@ -461,6 +461,9 @@ namespace WebJob.Office365ActivityImporter.Engine
 #endif
             if (listOfActivitiesSavedToSQL.Count > 0)
             {
+                // Time the metadata read-back (EF load of the just-saved audit + SharePoint events) on its own
+                // so it appears in the per-cycle metadata breakdown instead of being folded into the total.
+                var swMetaLoad = System.Diagnostics.Stopwatch.StartNew();
                 var ids = listOfActivitiesSavedToSQL.Select(l => l.Id).ToList();
                 var eventsJustSaved = db.AuditEventsCommon
                     .Include(e => e.User)
@@ -478,6 +481,8 @@ namespace WebJob.Office365ActivityImporter.Engine
                 {
                     saveSession.CachedSpEvents.Add(e.EventID, e);
                 }
+                swMetaLoad.Stop();
+                stats.SaveMetadataLoadMs = swMetaLoad.Elapsed.TotalMilliseconds;
 
                 foreach (var log in listOfActivitiesSavedToSQL)
                 {
@@ -518,7 +523,9 @@ namespace WebJob.Office365ActivityImporter.Engine
             // Surface the per-workload sub-costs (summed across batches in the cycle summary): the Copilot
             // per-event resolution measured above, and the Power Platform staging-merge cost.
             stats.SaveCopilotResolveMs = copilotResolveMs;
+            stats.SaveCopilotCommitMs = saveSession.LastCopilotCommitMs;
             stats.SavePowerPlatformMs = saveSession.LastPowerPlatformCommitMs;
+            stats.SaveEfChangesMs = saveSession.LastEfSaveChangesMs;
         }
     }
 
