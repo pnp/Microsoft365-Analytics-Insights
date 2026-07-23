@@ -195,11 +195,16 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 $"dedup+scope {(allStats.SaveDedupMs / 1000.0).ToString("n1")}s, staging+merge {(allStats.SaveMergeMs / 1000.0).ToString("n1")}s, " +
                 $"metadata {(allStats.SaveMetadataMs / 1000.0).ToString("n1")}s.");
 
-            // Optional-workload save costs this cycle (aggregate across batches). Both are zero when the
-            // workload / resolution is disabled - this is how we tell whether Copilot resource resolution or
-            // Power Platform is meaningfully extending the import, rather than guessing.
-            _logger.LogInformation($"Audit events import: optional-workload save cost - Copilot resource resolution " +
-                $"{(allStats.SaveCopilotResolveMs / 1000.0).ToString("n1")}s, Power Platform {(allStats.SavePowerPlatformMs / 1000.0).ToString("n1")}s.");
+            // Break the metadata phase into its hot-paths so the dominant cost is attributable rather than a
+            // single opaque number. On Copilot-heavy tenants the Copilot SQL commit (the shared accessed-resource
+            // / agents merge) typically dominates; Copilot resolution and Power Platform are zero when disabled.
+            // Costs are summed across batches; in concurrent-save mode these steps are serialised by the shared
+            // write lock, so the sums approximate the real wall-time.
+            _logger.LogInformation($"Audit events import: metadata breakdown - EF-load {(allStats.SaveMetadataLoadMs / 1000.0).ToString("n1")}s, " +
+                $"Copilot resource resolution {(allStats.SaveCopilotResolveMs / 1000.0).ToString("n1")}s, " +
+                $"Copilot SQL commit {(allStats.SaveCopilotCommitMs / 1000.0).ToString("n1")}s, " +
+                $"Power Platform {(allStats.SavePowerPlatformMs / 1000.0).ToString("n1")}s, " +
+                $"EF save-changes {(allStats.SaveEfChangesMs / 1000.0).ToString("n1")}s.");
 
             timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
 

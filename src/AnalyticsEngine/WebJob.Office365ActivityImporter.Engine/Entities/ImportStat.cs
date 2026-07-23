@@ -59,14 +59,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         public double SaveMetadataMs { get; set; }
 
         /// <summary>
-        /// Per-workload save sub-costs (milliseconds, summed across batches this cycle), so the per-cycle
-        /// summary can show what the optional workloads cost:
-        ///   <see cref="SaveCopilotResolveMs"/>  - the Copilot per-event Graph resolution (file + meeting).
-        ///   <see cref="SavePowerPlatformMs"/>    - the Power Platform staging-table merges.
-        /// Both are zero when the corresponding workload / resolution is disabled.
+        /// Sub-breakdown of the metadata phase (<see cref="SaveMetadataMs"/>), in milliseconds, summed across
+        /// batches this cycle, so the per-cycle summary can show where the metadata time actually goes:
+        ///   <see cref="SaveMetadataLoadMs"/>   - EF read-back of the just-saved audit + SharePoint events.
+        ///   <see cref="SaveCopilotResolveMs"/> - Copilot per-event Graph resolution (file + meeting lookups).
+        ///   <see cref="SaveCopilotCommitMs"/>  - the shared Copilot staging load + accessed-resource / agents
+        ///                                        merge SQL. Runs for any batch with Copilot events (even
+        ///                                        chat-only, and regardless of ResolveCopilotResourceMetadata),
+        ///                                        so it is typically the dominant cost on Copilot-heavy tenants.
+        ///   <see cref="SavePowerPlatformMs"/>  - the Power Platform staging-table merges (zero when disabled).
+        ///   <see cref="SaveEfChangesMs"/>      - the final EF SaveChangesAsync (metadata write).
+        /// In concurrent-save mode the merge + metadata are serialised by a shared lock, so these summed times
+        /// approximate the real serialised wall-time.
         /// </summary>
+        public double SaveMetadataLoadMs { get; set; }
         public double SaveCopilotResolveMs { get; set; }
+        public double SaveCopilotCommitMs { get; set; }
         public double SavePowerPlatformMs { get; set; }
+        public double SaveEfChangesMs { get; set; }
 
         public List<TimePeriod> ForTimeSlots { get; set; }
 
@@ -88,8 +98,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.SaveDedupMs += statsToAdd.SaveDedupMs;
             this.SaveMergeMs += statsToAdd.SaveMergeMs;
             this.SaveMetadataMs += statsToAdd.SaveMetadataMs;
+            this.SaveMetadataLoadMs += statsToAdd.SaveMetadataLoadMs;
             this.SaveCopilotResolveMs += statsToAdd.SaveCopilotResolveMs;
+            this.SaveCopilotCommitMs += statsToAdd.SaveCopilotCommitMs;
             this.SavePowerPlatformMs += statsToAdd.SavePowerPlatformMs;
+            this.SaveEfChangesMs += statsToAdd.SaveEfChangesMs;
             this.Total += statsToAdd.Total;
         }
 

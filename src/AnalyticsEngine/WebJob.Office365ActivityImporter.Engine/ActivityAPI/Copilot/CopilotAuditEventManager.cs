@@ -396,9 +396,29 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             _logger.LogDebug($"Committing batch: {_totalFilesCount} file(s), {_totalMeetingsCount} meeting(s), {_totalChatOnlyCount} chat-only event(s) to SQL.");
 
+            // Per-staging-table timing. Each of the three Copilot staging tables runs the shared
+            // accessed-resource / agents merge (common_upsert_copilot_agents.sql), which on Copilot-heavy
+            // tenants is the dominant save cost - so time each separately to see which workload's merge is
+            // expensive (the chat-only path carries accessed resources too, so it is often the largest).
+            var swSp = System.Diagnostics.Stopwatch.StartNew();
             await _copilotInsertsSP.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, docsMergeSql);
+            swSp.Stop();
+            var swTeams = System.Diagnostics.Stopwatch.StartNew();
             await _copilotInsertsTeams.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, teamsMergeSql);
+            swTeams.Stop();
+            var swChat = System.Diagnostics.Stopwatch.StartNew();
             await _copilotInsertsChatsNoContext.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, chatOnlyMergeSql);
+            swChat.Stop();
+
+            var copilotTimingMsg = $"Copilot commit timing: SP-docs {(swSp.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalFilesCount.ToString("n0")} file event(s)), " +
+                $"Teams {(swTeams.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalMeetingsCount.ToString("n0")} meeting event(s)), " +
+                $"chat-only {(swChat.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalChatOnlyCount.ToString("n0")} chat-only event(s)).";
+            // Surface a slow Copilot merge (the usual bottleneck) at Information so it stands out in the traces;
+            // keep routine fast batches at Debug to avoid per-batch noise.
+            if (swSp.Elapsed.TotalMilliseconds + swTeams.Elapsed.TotalMilliseconds + swChat.Elapsed.TotalMilliseconds >= 5000)
+                _logger.LogInformation(copilotTimingMsg);
+            else
+                _logger.LogDebug(copilotTimingMsg);
 
             // Clear lists & counters for next batch
             _copilotInsertsSP.Rows.Clear();

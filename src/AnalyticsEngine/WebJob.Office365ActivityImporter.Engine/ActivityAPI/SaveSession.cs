@@ -79,9 +79,25 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         /// <see cref="CommitAllChanges"/> call, so the save path can report the Power Platform workload's cost.</summary>
         public double LastPowerPlatformCommitMs { get; private set; }
 
+        /// <summary>Time (ms) spent in the Copilot commit (its staging-table load + the shared
+        /// accessed-resource / agents merge SQL) during the last <see cref="CommitAllChanges"/> call. This
+        /// merge runs for every batch that carries Copilot events - including chat-only events, and regardless
+        /// of <c>ResolveCopilotResourceMetadata</c> - so on Copilot-heavy tenants it is often the dominant save
+        /// cost. Surfaced separately so the per-cycle summary can attribute it instead of hiding it in metadata.</summary>
+        public double LastCopilotCommitMs { get; private set; }
+
+        /// <summary>Time (ms) spent in the final EF <c>SaveChangesAsync</c> (the metadata write) during the
+        /// last <see cref="CommitAllChanges"/> call.</summary>
+        public double LastEfSaveChangesMs { get; private set; }
+
         public async Task CommitAllChanges()
         {
+            // Copilot commit = staging-table load + the shared accessed-resource/agents merge SQL. Timed on its
+            // own because it is the usual save bottleneck on Copilot-heavy tenants.
+            var swCopilot = System.Diagnostics.Stopwatch.StartNew();
             await _copilotEventResolver.CommitAllChanges();
+            swCopilot.Stop();
+            LastCopilotCommitMs = swCopilot.Elapsed.TotalMilliseconds;
 
             // Power Platform commit (6 staging-table merges). Skipped when the workload is disabled - no PP
             // events are staged in that case, so this just avoids running the merges against empty tables.
@@ -95,7 +111,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             }
 
             Database.ChangeTracker.DetectChanges();
+            var swEf = System.Diagnostics.Stopwatch.StartNew();
             await this.Database.SaveChangesAsync();
+            swEf.Stop();
+            LastEfSaveChangesMs = swEf.Elapsed.TotalMilliseconds;
         }
     }
 }
