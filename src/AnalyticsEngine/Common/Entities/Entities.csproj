@@ -324,6 +324,10 @@
     <Compile Include="Migrations\202607231000001_IndexSitesSiteId.Designer.cs">
       <DependentUpon>202607231000001_IndexSitesSiteId.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.cs" />
+    <Compile Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.Designer.cs">
+      <DependentUpon>202607231700001_CoverCopilotAccessedResourceDedup.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -482,6 +486,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202607231000001_IndexSitesSiteId.resx">
       <DependentUpon>202607231000001_IndexSitesSiteId.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.resx">
+      <DependentUpon>202607231700001_CoverCopilotAccessedResourceDedup.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
