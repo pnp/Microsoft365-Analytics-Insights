@@ -268,14 +268,15 @@ namespace Tests.FakeDataGen
                 return;
             }
 
-            int count = PromptInt("How many events to generate?", 100, 1, int.MaxValue);
+            int count = PromptInt("How many events to generate?", 5000, 1, int.MaxValue);
+            int userCount = PromptInt("How many users to generate (if the database has none)?", 250, 1, int.MaxValue);
             int agentPercent = PromptInt("Percentage with agents (0-100)", 30, 0, 100);
             int customAgentPercent = PromptInt("Percentage with custom agents (0-100)", 10, 0, 100);
             int copilotLicensePercent = PromptInt("Percentage of users with Copilot licenses (0-100)", 50, 0, 100);
 
             Console.WriteLine();
             var generator = new CopilotActivityGenerator(connectionString);
-            generator.GenerateCopilotActivity(count, customAgentPercent, agentPercent, copilotLicensePercent);
+            generator.GenerateCopilotActivity(count, customAgentPercent, agentPercent, copilotLicensePercent, userCount);
 
             Console.WriteLine();
             Console.WriteLine("Copilot activity generation completed successfully!");
