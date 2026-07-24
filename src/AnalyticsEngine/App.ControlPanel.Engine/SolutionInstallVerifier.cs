@@ -478,6 +478,7 @@ namespace App.ControlPanel.Engine
         private const string DNS_SUFFIX_KEY_VAULT = ".vault.azure.net";
         private const string DNS_SUFFIX_SQL = ".database.windows.net";
         private const string DNS_SUFFIX_STORAGE_BLOB = ".blob.core.windows.net";
+        private const string DNS_SUFFIX_STORAGE_TABLE = ".table.core.windows.net";
         private const string DNS_SUFFIX_APP_SERVICE = ".azurewebsites.net";
         private const string DNS_SUFFIX_REDIS = ".redis.cache.windows.net";
         private const string DNS_SUFFIX_SERVICE_BUS = ".servicebus.windows.net";
@@ -575,7 +576,10 @@ namespace App.ControlPanel.Engine
 
             Add("Key Vault", config.KeyVaultName, DNS_SUFFIX_KEY_VAULT);
             Add("SQL Server", config.SQLServerName, DNS_SUFFIX_SQL);
-            Add("Storage account", config.StorageAccountName, DNS_SUFFIX_STORAGE_BLOB);
+            Add("Storage account (blob)", config.StorageAccountName, DNS_SUFFIX_STORAGE_BLOB);
+            // The audit-import blob checkpoint uses the storage account's Table endpoint, which has its own
+            // private endpoint / DNS zone on private deployments - check it resolves too (see #207 / AzurePaaSInstallJob).
+            Add("Storage account (table)", config.StorageAccountName, DNS_SUFFIX_STORAGE_TABLE);
             Add("App Service", config.AppServiceWebAppName, DNS_SUFFIX_APP_SERVICE);
             Add("Redis cache", config.RedisName, DNS_SUFFIX_REDIS);
             if (config.ServiceBusEnabled)

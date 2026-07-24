@@ -9,6 +9,10 @@ namespace Tests.UnitTests.FakeControllers
 {
     public class Office365FakeController : ApiController
     {
+        // Process-wide counter so every fake content-summary gets a unique contentId across all pages /
+        // time-chunk requests (mirrors real, globally-unique Activity API content blob ids).
+        private static int _fakeContentCounter = 0;
+
         public Office365FakeController()
         {
         }
@@ -77,11 +81,15 @@ namespace Tests.UnitTests.FakeControllers
             string fakeActivity = string.Empty;
             Guid fakeDomain = default(Guid);
 
-            // Taken from a real request 30-5-2018.
+            // Taken from a real request 30-5-2018. Each summary gets a UNIQUE contentId/contentUri (via a
+            // process-wide counter) - real Activity API content blobs each have a distinct id, and the
+            // importer now de-duplicates summaries by contentId (a blob in the time-chunk overlap window is
+            // legitimately listed twice), so reusing one id here would collapse every summary into one blob.
             fakeActivity = "[";
             for (int i = 0; i < Constants.ACTIVITIES_PER_SUMMARY; i++)
             {
-                fakeActivity += "{\"contentUri\":\"https://manage.office.com/api/v1.0/34eb3720-3d40-4da8-9f80-f939e220821c/activity/feed/audit/20180530160628319079931$20180530160628319079931$audit_sharepoint$Audit_SharePoint\",\"contentId\":\"20180530160628319079931$20180530160628319079931$audit_sharepoint$Audit_SharePoint\",\"contentType\":\"Audit.SharePoint\",\"contentCreated\":\"2018-05-30T16:06:28.319Z\",\"contentExpiration\":\"2018-06-06T16:06:28.319Z\"}";
+                var uniqueContentId = "20180530160628319079931$" + System.Threading.Interlocked.Increment(ref _fakeContentCounter) + "$audit_sharepoint$Audit_SharePoint";
+                fakeActivity += "{\"contentUri\":\"https://manage.office.com/api/v1.0/34eb3720-3d40-4da8-9f80-f939e220821c/activity/feed/audit/" + uniqueContentId + "\",\"contentId\":\"" + uniqueContentId + "\",\"contentType\":\"Audit.SharePoint\",\"contentCreated\":\"2018-05-30T16:06:28.319Z\",\"contentExpiration\":\"2018-06-06T16:06:28.319Z\"}";
                 fakeActivity += ",";
             }
             fakeActivity = fakeActivity.TrimEnd(",".ToCharArray());

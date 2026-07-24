@@ -37,6 +37,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// </summary>
         public string OriginalImportFileContents { get; set; }
 
+        /// <summary>
+        /// Transient (not persisted, not serialised) id of the Activity API content blob this event was
+        /// downloaded from. Set by the importer after loading a blob so the blob-level checkpoint can tell
+        /// when every event of a blob has been committed. Never sent by the API.
+        /// </summary>
+        [Newtonsoft.Json.JsonIgnore]
+        public string SourceContentId { get; set; }
+
         public DateTime CreationTime { get; set; }
         public Guid Id { get; set; }
 

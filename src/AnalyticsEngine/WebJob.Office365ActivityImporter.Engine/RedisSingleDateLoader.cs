@@ -8,7 +8,7 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// <summary>
     /// For loading and saving a single date value in Redis
     /// </summary>
-    public class RedisSingleDateLoader
+    public class RedisSingleDateLoader : ISingleDateStore
     {
         private readonly string _key;
         private CacheConnectionManager _cacheConnectionManager = null;

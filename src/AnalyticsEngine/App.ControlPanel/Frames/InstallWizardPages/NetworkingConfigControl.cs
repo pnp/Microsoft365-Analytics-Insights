@@ -45,6 +45,7 @@ namespace App.ControlPanel.Frames.InstallWizard
                 AppService = txtPeApp.Text.Trim(),
                 Redis = txtPeRedis.Text.Trim(),
                 Storage = txtPeStorage.Text.Trim(),
+                StorageTable = txtPeStorageTable.Text.Trim(),
                 KeyVault = txtPeKeyVault.Text.Trim(),
                 ServiceBus = txtPeServiceBus.Text.Trim(),
                 CognitiveServices = txtPeCognitive.Text.Trim(),
@@ -59,6 +60,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             txtPeApp.Text = names.AppService ?? string.Empty;
             txtPeRedis.Text = names.Redis ?? string.Empty;
             txtPeStorage.Text = names.Storage ?? string.Empty;
+            txtPeStorageTable.Text = names.StorageTable ?? string.Empty;
             txtPeKeyVault.Text = names.KeyVault ?? string.Empty;
             txtPeServiceBus.Text = names.ServiceBus ?? string.Empty;
             txtPeCognitive.Text = names.CognitiveServices ?? string.Empty;

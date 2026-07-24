@@ -21,6 +21,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         }
         #endregion
 
+        /// <summary>
+        /// False when the blob download did NOT complete cleanly (transient HTTP/timeout/OOM error, a
+        /// non-array response, or a mid-stream JSON parse abort). The importer must NOT checkpoint a blob
+        /// whose download was incomplete - the returned events are empty or a partial prefix, so marking it
+        /// "processed" would skip it next cycle and permanently lose the un-downloaded events.
+        /// </summary>
+        public bool DownloadComplete { get; set; } = true;
+
         #region Props
 
         /// <summary>
