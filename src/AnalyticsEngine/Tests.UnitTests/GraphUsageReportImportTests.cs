@@ -33,8 +33,11 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 // Test the cache with new site URL & ID
-                var fakeId = $"fake id {DateTime.Now.Ticks}";
-                var fakeUrlNew = $"fake URL {DateTime.Now.Ticks}";
+                // Use GUIDs (not DateTime.Now.Ticks) so the two URLs are guaranteed distinct:
+                // Ticks resolution is coarse, so fakeUrlNew and fakeUrlExisting could collide and
+                // hit the unique IX_url_base index when the second site is inserted below.
+                var fakeId = $"fake id {Guid.NewGuid()}";
+                var fakeUrlNew = $"fake URL {Guid.NewGuid()}";
                 var siteUrlCache = new FakeSPSiteIdToUrlCache(db, logger, fakeUrlNew);
                 var site1 = await siteUrlCache.Load(fakeId);
 
@@ -44,13 +47,13 @@ namespace Tests.UnitTests
                 Assert.AreEqual(fakeId, site1.SiteId);
 
                 // Pre-add a site with just the URL
-                var fakeUrlExisting = $"fake URL {DateTime.Now.Ticks}";
+                var fakeUrlExisting = $"fake URL {Guid.NewGuid()}";
                 db.sites.Add(new Site { SiteId = null, UrlBase = fakeUrlExisting });
                 await db.SaveChangesAsync();
 
                 // Load the site with a new fake ID. Currently in the DB it doesn't have an ID
                 var siteUrlCache2 = new FakeSPSiteIdToUrlCache(db, logger, fakeUrlExisting);
-                var site2 = await siteUrlCache2.Load($"fake id2 {DateTime.Now.Ticks}");
+                var site2 = await siteUrlCache2.Load($"fake id2 {Guid.NewGuid()}");
                 Assert.IsNotNull(site2);
                 Assert.AreEqual(fakeUrlExisting, site2.SiteUrl);
 
