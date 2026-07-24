@@ -70,4 +70,31 @@ namespace UnitTests.FakeLoaderClasses
             throw new InvalidOperationException("Simulated user lookup failure");
         }
     }
+
+    /// <summary>
+    /// Metadata loader that counts how many times each Graph resolution method is called, so a test can
+    /// assert that disabling Copilot resource resolution makes NO Graph calls at all.
+    /// </summary>
+    public class RecordingCopilotMetadataLoader : ICopilotMetadataLoader
+    {
+        public int MeetingCalls;
+        public int FileCalls;
+        public int UserIdCalls;
+
+        public Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
+        {
+            System.Threading.Interlocked.Increment(ref MeetingCalls);
+            return Task.FromResult<MeetingMetadata>(null);
+        }
+        public Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotId, string eventUpn)
+        {
+            System.Threading.Interlocked.Increment(ref FileCalls);
+            return Task.FromResult<SpoDocumentFileInfo>(null);
+        }
+        public Task<string> GetUserIdFromUpn(string userPrincipalName)
+        {
+            System.Threading.Interlocked.Increment(ref UserIdCalls);
+            return Task.FromResult("testId");
+        }
+    }
 }

@@ -22,8 +22,17 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
     /// </summary>
     public class CopilotAuditEventManager : IDisposable
     {
+        // Chunk size for the staging-table inserts. ParallelListProcessor spreads the batch across one
+        // connection per chunk (capped at its own max), so a smaller chunk => more parallel inserts. The
+        // default (10000) meant a single thread for every realistic Copilot batch (<= a couple thousand rows),
+        // serializing every row's insert round-trip. On Azure SQL those round-trips are network-latency-bound,
+        // so parallelizing them is a large win; on LocalDB (no latency) it's a no-op. Kept modest so we don't
+        // open an excessive number of connections for the shared global temp table.
+        private const int STAGING_INSERTS_PER_THREAD = 200;
+
         private readonly ICopilotMetadataLoader _copilotEventAdaptor;
         private readonly ILogger _logger;
+        private readonly bool _resolveResourceMetadata;
         private readonly InsertBatch<SPCopilotLogTempEntity> _copilotInsertsSP;
         private readonly InsertBatch<TeamsCopilotLogTempEntity> _copilotInsertsTeams;
         private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
@@ -34,11 +43,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private int _totalFilesCount;
         private int _totalChatOnlyCount;
 
-        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger)
+        public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
         {
             if (string.IsNullOrEmpty(connectionString)) throw new ArgumentException($"'{nameof(connectionString)}' cannot be null or empty.", nameof(connectionString));
             _copilotEventAdaptor = copilotEventAdaptor ?? throw new ArgumentNullException(nameof(copilotEventAdaptor));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _resolveResourceMetadata = resolveResourceMetadata;
             _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
             _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
             _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
@@ -53,6 +63,18 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             if (auditRecord == null || baseOfficeEvent == null)
             {
                 _logger.LogWarning("CopilotAuditEventManager received null auditRecord or baseOfficeEvent.");
+                return;
+            }
+
+            // Agent-metadata-only mode: when resource resolution is disabled, stage every interaction as a
+            // chat-only record - which still carries the agent id/name/type, cost, messages and accessed
+            // resources - and skip all file/meeting Graph resolution. This removes the serial, network-bound
+            // Graph calls from the save path for tenants that only want Copilot agent-level reporting.
+            if (!_resolveResourceMetadata)
+            {
+                AddChatOnly(auditRecord, baseOfficeEvent);
+                _totalChatOnlyCount++;
+                _logger.LogTrace($"Event {baseOfficeEvent.Id}: staged agent metadata only (Copilot resource resolution disabled).");
                 return;
             }
 
@@ -158,7 +180,30 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         {
             try
             {
-                var spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
+                // Skip the Graph lookup for contexts that can never resolve to a SharePoint/OneDrive file
+                // (local drive paths like C:\..., UNC \\server\share, the "DataAgent" sentinel). On one large
+                // customer's export these accounted for a chunk of the "No file info found" warnings - each a doomed
+                // Graph round-trip (network + throttling risk) that always returned nothing. We still stage the row
+                // exactly as a null lookup would (so reporting is unchanged), just without the call. Any other
+                // context (URL, opaque id, or empty) is resolved exactly as before.
+                SpoDocumentFileInfo spFileInfo = null;
+                if (ShouldSkipGraphFileLookup(contextId))
+                {
+                    _logger.LogTrace($"Skipping Graph file lookup for non-SharePoint copilot context id {contextId} (event {baseOfficeEvent.Id})");
+                }
+                else
+                {
+                    spFileInfo = await _copilotEventAdaptor.GetSpoFileInfo(contextId, baseOfficeEvent.User.UserPrincipalName);
+                    if (spFileInfo == null)
+                    {
+                        // Expected and high-volume: many copilot contexts (e.g. securitycopilot.microsoft.com
+                        // hosts) are not resolvable SharePoint files, so Graph legitimately returns nothing.
+                        // These were ~thousands of warnings per cycle; log at Debug so they don't drown real
+                        // warnings. The row is still staged exactly as a null lookup (reporting unchanged).
+                        _logger.LogDebug($"No file info found for copilot context type with id {contextId} (event {baseOfficeEvent.Id})");
+                    }
+                }
+
                 _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
                 {
                     EventId = baseOfficeEvent.Id,
@@ -178,10 +223,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
                     CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
                 });
-                if (spFileInfo == null)
-                {
-                    _logger.LogWarning($"No file info found for copilot context type with id {contextId} (event {baseOfficeEvent.Id})");
-                }
                 return true; // staged regardless
             }
             catch (Exception ex)
@@ -189,6 +230,45 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 _logger.LogWarning(ex, $"Failed to stage file metadata for event {baseOfficeEvent.Id} context {contextId}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// True when <paramref name="contextId"/> is a known reference that Graph can never resolve to a
+        /// SharePoint / OneDrive file - a local drive path (<c>C:\...</c>), a UNC path
+        /// (<c>\\server\share</c>) or the <c>DataAgent</c> sentinel - so the lookup should be skipped.
+        /// Copilot events routinely reference such non-SharePoint contexts (a user asking Copilot about a file
+        /// on their desktop); resolving them via Graph is a guaranteed miss. Deliberately conservative: returns
+        /// false (i.e. still attempt) for anything else, including URLs, opaque ids and null/empty - so behaviour
+        /// is unchanged for every context except the clearly-non-SharePoint ones.
+        /// </summary>
+        public static bool ShouldSkipGraphFileLookup(string contextId)
+        {
+            if (string.IsNullOrWhiteSpace(contextId))
+            {
+                return false;
+            }
+
+            var id = contextId.Trim();
+
+            // Local drive path, e.g. C:\Users\... or D:/...
+            if (id.Length >= 3 && char.IsLetter(id[0]) && id[1] == ':' && (id[2] == '\\' || id[2] == '/'))
+            {
+                return true;
+            }
+
+            // UNC path, e.g. \\server\share\...
+            if (id.StartsWith("\\\\", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // Known non-file sentinel.
+            if (id.Equals("DataAgent", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private void AddChatOnly(CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
@@ -316,9 +396,29 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             _logger.LogDebug($"Committing batch: {_totalFilesCount} file(s), {_totalMeetingsCount} meeting(s), {_totalChatOnlyCount} chat-only event(s) to SQL.");
 
-            await _copilotInsertsSP.SaveToStagingTable(docsMergeSql);
-            await _copilotInsertsTeams.SaveToStagingTable(teamsMergeSql);
-            await _copilotInsertsChatsNoContext.SaveToStagingTable(chatOnlyMergeSql);
+            // Per-staging-table timing. Each of the three Copilot staging tables runs the shared
+            // accessed-resource / agents merge (common_upsert_copilot_agents.sql), which on Copilot-heavy
+            // tenants is the dominant save cost - so time each separately to see which workload's merge is
+            // expensive (the chat-only path carries accessed resources too, so it is often the largest).
+            var swSp = System.Diagnostics.Stopwatch.StartNew();
+            await _copilotInsertsSP.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, docsMergeSql);
+            swSp.Stop();
+            var swTeams = System.Diagnostics.Stopwatch.StartNew();
+            await _copilotInsertsTeams.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, teamsMergeSql);
+            swTeams.Stop();
+            var swChat = System.Diagnostics.Stopwatch.StartNew();
+            await _copilotInsertsChatsNoContext.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, chatOnlyMergeSql);
+            swChat.Stop();
+
+            var copilotTimingMsg = $"Copilot commit timing: SP-docs {(swSp.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalFilesCount.ToString("n0")} file event(s)), " +
+                $"Teams {(swTeams.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalMeetingsCount.ToString("n0")} meeting event(s)), " +
+                $"chat-only {(swChat.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalChatOnlyCount.ToString("n0")} chat-only event(s)).";
+            // Surface a slow Copilot merge (the usual bottleneck) at Information so it stands out in the traces;
+            // keep routine fast batches at Debug to avoid per-batch noise.
+            if (swSp.Elapsed.TotalMilliseconds + swTeams.Elapsed.TotalMilliseconds + swChat.Elapsed.TotalMilliseconds >= 5000)
+                _logger.LogInformation(copilotTimingMsg);
+            else
+                _logger.LogDebug(copilotTimingMsg);
 
             // Clear lists & counters for next batch
             _copilotInsertsSP.Rows.Clear();

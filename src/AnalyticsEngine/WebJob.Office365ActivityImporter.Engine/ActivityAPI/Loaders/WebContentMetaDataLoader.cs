@@ -173,6 +173,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         [JsonProperty("contentUri")]
         public Uri ContentUri { get; set; }
 
+        /// <summary>The Activity API content id is this blob's checkpoint key.</summary>
+        [JsonIgnore]
+        public override string BlobId => ContentId;
+
 
         /// <summary>
         /// The batch number this activity report was found on. Generated for a specific time-chunk.

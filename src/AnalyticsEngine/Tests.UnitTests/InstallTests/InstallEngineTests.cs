@@ -218,6 +218,7 @@ namespace Tests.UnitTests
             CollectionAssert.Contains(fqdns, "myvault.vault.azure.net");
             CollectionAssert.Contains(fqdns, "mysqlsvr.database.windows.net");
             CollectionAssert.Contains(fqdns, "mystorage.blob.core.windows.net");
+            CollectionAssert.Contains(fqdns, "mystorage.table.core.windows.net");
             CollectionAssert.Contains(fqdns, "myapp.azurewebsites.net");
             CollectionAssert.Contains(fqdns, "mycache.redis.cache.windows.net");
             CollectionAssert.Contains(fqdns, "mysb.servicebus.windows.net");

@@ -28,12 +28,14 @@ namespace WebJob.Office365ActivityImporter
         private readonly AppConfig _settings;
         private ManualGraphCallClient _manualGraphCallClient = null;
         private GraphUserGroupsCache _graphUserGroupsCache = null;
+        private readonly ISingleDateStore _activityReportsLastImportedStore;
 
-        public ProgramTasks(AnalyticsLogger logger, AppConfig settings)
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null)
         {
             _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             _logger = logger;
             _settings = settings;
+            _activityReportsLastImportedStore = activityReportsLastImportedStore;
         }
 
         internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl)
@@ -58,7 +60,7 @@ namespace WebJob.Office365ActivityImporter
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings);
+            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore);
 
             try
             {
@@ -132,9 +134,34 @@ namespace WebJob.Office365ActivityImporter
                 // Start new O365 activity download session
                 // Reduced from 20000 to 5000, then to 2000 to prevent OutOfMemoryException with large datasets
                 const int MAX_IMPORTS_PER_BATCH = 2000;
-                var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH);
 
-                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings);
+                // Concurrent-save mode is opt-in and OFF by default (1 = the original strictly-serial save).
+                // Set AUDIT_MAX_CONCURRENT_SAVES > 1 to let batches commit in parallel (sharded staging;
+                // shared-table writes still serialised). Validate in a non-production environment before use.
+                int maxConcurrentSaves = 1;
+                var concurrentSavesEnv = Environment.GetEnvironmentVariable("AUDIT_MAX_CONCURRENT_SAVES");
+                if (!string.IsNullOrWhiteSpace(concurrentSavesEnv) && int.TryParse(concurrentSavesEnv.Trim(), out int parsedConcurrentSaves) && parsedConcurrentSaves > 1)
+                {
+                    maxConcurrentSaves = parsedConcurrentSaves;
+                    _logger.LogInformation($"Activity import: concurrent-save mode enabled (AUDIT_MAX_CONCURRENT_SAVES={maxConcurrentSaves}).");
+                }
+
+                var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH, maxConcurrentSaves);
+
+                // Safety valve: the dedup cache is built ONCE per cycle by default (it used to be rebuilt from
+                // audit_events for every batch, which materialised ~the whole in-window event set each time -
+                // the dominant save cost at scale). Set AUDIT_PERBATCH_DEDUP_CACHE=true to restore the old
+                // per-batch build without a redeploy if the new path ever misbehaves.
+                bool usePerBatchDedupCache = false;
+                var perBatchCacheEnv = Environment.GetEnvironmentVariable("AUDIT_PERBATCH_DEDUP_CACHE");
+                if (!string.IsNullOrWhiteSpace(perBatchCacheEnv) &&
+                    (perBatchCacheEnv.Trim() == "1" || perBatchCacheEnv.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)))
+                {
+                    usePerBatchDedupCache = true;
+                    _logger.LogWarning("Activity import: per-batch dedup cache ENABLED (AUDIT_PERBATCH_DEDUP_CACHE) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
+                }
+
+                var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves, usePerBatchDedupCache);
                 try
                 {
                     var stats = await importer.LoadReportsAndSave(sqlAdaptor);

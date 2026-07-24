@@ -185,12 +185,18 @@ namespace WebJob.Office365ActivityImporter
                 statsDatesLoader = new InMemoryStatsDatesLoader();
             }
 
+            // Activity/usage reports also run at most once a day. Like the stats throttle above, this needs a
+            // store that survives across cycles - Redis when configured, otherwise an in-memory fallback built
+            // ONCE here (a fresh per-cycle instance would always look "never imported" and re-run the multi-hour
+            // usage-report phase every cycle, even without Redis).
+            ISingleDateStore activityReportsLastImportedStore = ActivityReportsLastImportedStoreFactory.Create(configuredSettings, logger);
+
             // Run app
             while (runAgain)
             {
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(logger, configuredSettings);
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
@@ -245,7 +251,10 @@ namespace WebJob.Office365ActivityImporter
                     catch (Exception ex)
                     {
                         logger.TrackException(ex);
-                        Console.WriteLine($"Got exception on {nameof(ProgramTasks.DownloadActivityData)}: {ex.Message}");
+                        // Also emit a trace (TrackException goes to a separate telemetry stream): a save/merge
+                        // failure that escapes here means the whole cycle was aborted. Batch-level failures are
+                        // now isolated in LoadReportsAndSave, so reaching here indicates a non-batch failure.
+                        logger.LogError($"Audit import cycle ABORTED by an unhandled exception in {nameof(ProgramTasks.DownloadActivityData)}: {ex.Message}. The cycle will restart on the next timer interval.");
                     }
 #endif
                 }

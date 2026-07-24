@@ -61,11 +61,24 @@ namespace Common.Entities
 
             this.Configuration.ProxyCreationEnabled = false;
 
+            // Emit SARGable SQL for `col == value` comparisons. EF6 defaults to C# null semantics, which
+            // translate `where col == @p` into `col = @p OR (col IS NULL AND @p IS NULL)` - a non-SARGable
+            // predicate that forces an index SCAN (e.g. the per-event user lookup by user_name and the site
+            // lookup by site_id were the top-CPU queries on a large tenant, scanning millions of times).
+            // With database null semantics the predicate becomes a plain `col = @p` that can seek the index.
+            // Trade-off: a `col == @p` where @p is null no longer matches rows with a NULL column (SQL, not
+            // C#, semantics) - which these lookups never rely on (you never resolve a user by a null UPN).
+            this.Configuration.UseDatabaseNullSemantics = true;
+
         }
 
         public AnalyticsEntitiesContext(DbConnection sqlConn) : base(sqlConn, true)
         {
             ((System.Data.Entity.Infrastructure.IObjectContextAdapter)this).ObjectContext.CommandTimeout = 0;
+
+            // Keep SARGable comparisons on the save-path context too (this ctor is used by the importer's
+            // CommitAll). See the note in the constructor above.
+            this.Configuration.UseDatabaseNullSemantics = true;
         }
 
         #endregion
