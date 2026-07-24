@@ -87,7 +87,7 @@ BEGIN
     SET @msg = @migration + N': already clean, nothing to do.';
     RAISERROR(@msg, 0, 1) WITH NOWAIT;
     DROP TABLE #norm; DROP TABLE #map;
-    RETURN;
+    GOTO StampHistory;   -- nothing to change, but still record the migration as applied (idempotent no-op)
 END
 
 -- Materialise each phase's exact work-set ONCE, keyed so the loops below batch by a seek instead of
@@ -219,7 +219,10 @@ RAISERROR(@msg, 0, 1) WITH NOWAIT;
 -- Record the migration so EF (DatabaseUpgrader / MigrateDatabaseToLatestVersion) and the web app Health
 -- page treat it as applied. No model change here, so the EF snapshot is byte-identical to the previous
 -- migration's - copy that row's Model / ContextKey / ProductVersion. Guarded so re-running is safe.
+-- Reached both after the clean-up runs AND (via GOTO above) when there was nothing to clean, so a hand-run
+-- always stamps the migration - even on an already-clean database.
 -- =====================================================================================================
+StampHistory:
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202607130900001_DedupCopilotAccessedResourceSiteUrls')
 BEGIN
     IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202607101200001_IndexCopilotAccessedResourceLookups')
