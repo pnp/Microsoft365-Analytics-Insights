@@ -369,13 +369,24 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "vault", subnetId, logger, tagDic);
                 if (deployDns) AddPrivateDnsZoneTask("privatelink.vaultcore.azure.net", vnetId, kvPeName, logger, tagDic);
 
-                // Service Bus
+                // Service Bus. Private endpoints require the Premium SKU: the wrappers skip (with a clear
+                // warning) rather than fail when a pre-existing Standard namespace can't be made private.
                 if (config.ServiceBusEnabled)
                 {
                     var sbPeName = peNames.GetNameOrDefault(peNames.ServiceBus, $"pe-{config.ServiceBusName}-sb");
-                    AddPrivateEndpointTask(sbPeName, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.ServiceBus/namespaces/{config.ServiceBusName}",
-                        "namespace", subnetId, logger, tagDic);
-                    if (deployDns) AddPrivateDnsZoneTask("privatelink.servicebus.windows.net", vnetId, sbPeName, logger, tagDic);
+                    var sbPeConfig = TaskConfig.GetConfigForName(sbPeName)
+                        .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_TARGET_RESOURCE_ID, $"/subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.ServiceBus/namespaces/{config.ServiceBusName}")
+                        .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_GROUP_ID, "namespace")
+                        .AddSetting(PrivateEndpointInstallTask.CONFIG_KEY_SUBNET_ID, subnetId);
+                    this.AddTask(new ServiceBusPrivateEndpointInstallTask(sbPeConfig, logger, Location, tagDic, _serviceBusNamespaceInstallTask));
+
+                    if (deployDns)
+                    {
+                        var sbDnsConfig = TaskConfig.GetConfigForName("privatelink.servicebus.windows.net")
+                            .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_VNET_ID, vnetId)
+                            .AddSetting(PrivateDnsZoneInstallTask.CONFIG_KEY_PE_NAME, sbPeName);
+                        this.AddTask(new ServiceBusPrivateDnsZoneInstallTask(sbDnsConfig, logger, Location, tagDic, _serviceBusNamespaceInstallTask));
+                    }
                 }
 
                 // Cognitive Services (Language/Text Analytics)
