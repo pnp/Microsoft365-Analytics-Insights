@@ -35,7 +35,9 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
             }
             catch (Exception ex)
             {
-                _logger.LogWarning($"{LOG_PREFIX}error uploading anonymised runtime stats - {ex.Message}");
+                // Logged as an error (not a warning): telemetry silently never uploading is exactly the
+                // failure mode this subsystem is blind to, so it needs to be visible in App Insights.
+                _logger.LogError(ex, $"{LOG_PREFIX}error uploading anonymised runtime stats - {ex.Message}");
                 return false;
             }
         }
