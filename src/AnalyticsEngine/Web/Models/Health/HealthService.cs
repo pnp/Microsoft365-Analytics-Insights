@@ -590,14 +590,39 @@ namespace Web.AnalyticsWeb.Models.Health
             }
             catch (Exception ex)
             {
+                var detail = InnermostMessage(ex);
+
+                // A network-layer rejection (rather than an auth failure) in a private deployment almost always
+                // means the namespace has public access disabled but no private endpoint - which needs Premium.
+                // See issue #228; without this hint the 401 reads like an RBAC problem.
+                if (LooksLikeNetworkRejection(detail))
+                {
+                    detail += " This looks like a network-level block rather than a permissions problem: in a private (VNet) deployment "
+                        + "Service Bus must be on the Premium SKU with a private endpoint, otherwise the namespace is unreachable and "
+                        + "Teams calls will not import. Either migrate the namespace to Premium, or re-enable public network access on it.";
+                }
+
                 UpsertComponent(section, new ComponentHealthRow
                 {
                     Component = "ServiceBus",
                     Status = HealthStatusNames.Degraded,
-                    Detail = "Couldn't read the Teams calls queue depth: " + InnermostMessage(ex),
+                    Detail = "Couldn't read the Teams calls queue depth: " + detail,
                     LastSeenUtc = DateTime.UtcNow
                 });
             }
+        }
+
+        /// <summary>
+        /// Service Bus rejects a blocked IP before the token is even validated, so the message mentions IP
+        /// filtering / VNet service endpoints rather than authorisation.
+        /// </summary>
+        private static bool LooksLikeNetworkRejection(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return false;
+            return message.IndexOf("Ip has been prevented", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("IP Filter", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("Virtual Network", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("prevented to connect to the endpoint", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         /// <summary>Adds or replaces a component row by name (runtime checks take precedence over any older telemetry row).</summary>
