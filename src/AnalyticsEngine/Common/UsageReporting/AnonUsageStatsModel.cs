@@ -41,12 +41,20 @@ namespace UsageReporting
         public class TableStat
         {
             public string TableName { get; set; }
+
+            /// <summary>
+            /// Owning SQL schema, so app tables (dbo) can be told apart from profiling ones - and from a
+            /// same-named table in another schema. Null on reports from clients older than this field.
+            /// </summary>
+            public string SchemaName { get; set; }
+
             public decimal TotalSpaceMB { get; set; }
             public long Rows { get; set; }
 
             public override string ToString()
             {
-                return $"{TableName}: {Rows} rows, {TotalSpaceMB}mb";
+                var name = string.IsNullOrEmpty(SchemaName) ? TableName : $"{SchemaName}.{TableName}";
+                return $"{name}: {Rows} rows, {TotalSpaceMB}mb";
             }
         }
 

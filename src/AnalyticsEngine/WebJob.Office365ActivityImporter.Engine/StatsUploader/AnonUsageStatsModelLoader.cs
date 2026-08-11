@@ -9,7 +9,10 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     {
         public static AnonUsageStatsModel Load(Guid tenantId, BaseSolutionInstallConfig lastSettings)
         {
-            var model = new AnonUsageStatsModel() { Generated = DateTime.Now };
+            // UTC: Generated.Ticks feeds both the payload signature and the server-side document id, so a
+            // local-time value would make those inconsistent across servers in different timezones (and shift
+            // by an hour at DST boundaries).
+            var model = new AnonUsageStatsModel() { Generated = DateTime.UtcNow };
             model.AnonClientId = StringUtils.GetHashedStringSimple(tenantId.ToString());
             if (lastSettings != null && lastSettings.SolutionConfig != null)
             {

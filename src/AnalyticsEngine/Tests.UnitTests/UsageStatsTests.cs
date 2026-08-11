@@ -8,7 +8,10 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
 using System.Configuration;
+using System.Data.Entity;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using UsageReporting;
@@ -150,13 +153,22 @@ namespace Tests.UnitTests
                 result = await r.ProcessAndUploadStats();
                 Assert.IsTrue(result);
 
-                // Verify result saved in DB
-                var latestReport = await sqlStatsAdaptor.GetLatestSavedDbStats();
+                // Verify result saved in DB (read the saved report back directly - the builder no longer
+                // exposes a read-back method, it only ever writes).
+                var latestReportJson = await db.TelemetryReports.OrderByDescending(s => s.ReportSubmitted).Select(s => s.Report).FirstOrDefaultAsync();
+                Assert.IsFalse(string.IsNullOrEmpty(latestReportJson));
+                var latestReport = JsonConvert.DeserializeObject<AnonUsageStatsModel>(latestReportJson);
                 Assert.IsNotNull(latestReport);
                 Assert.IsTrue(latestReport.TableStats.Count > 0);
                 Assert.IsFalse(string.IsNullOrEmpty(latestReport.TableStats[0].TableName));
+                Assert.IsFalse(string.IsNullOrEmpty(latestReport.TableStats[0].SchemaName), "Table stats must record the owning schema so dbo tables can be told apart from other schemas");
                 Assert.IsTrue(latestReport.TableStats.Where(s => s.TotalSpaceMB > 0).Any());
                 Assert.IsTrue(latestReport.TableStats.Where(s => s.Rows > 0).Any());
+
+                // One row per table: a table with several indexes must not be reported multiple times
+                var duplicated = latestReport.TableStats.GroupBy(s => $"{s.SchemaName}.{s.TableName}").Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+                Assert.AreEqual(0, duplicated.Count, $"Each table must appear exactly once. Duplicated: {string.Join(", ", duplicated)}");
+
                 Assert.IsNull(latestReport.ConfiguredSolutionsEnabledDescription);
                 Assert.IsTrue(latestReport.ConfiguredImportsEnabledDescription == cfg.SolutionConfig.ImportTaskSettings.ToSettingsString());
             }
@@ -343,6 +355,78 @@ namespace Tests.UnitTests
                 var result = await mgr.ProcessAndFailSilently();
                 Assert.IsFalse(result, "ProcessAndFailSilently must report failure but not throw when the uploader is misconfigured.");
             }
+        }
+
+        /// <summary>
+        /// Issue #206 (1): a rejected upload used to be logged and then treated as a success, so the
+        /// "last uploaded" date advanced and the report wasn't retried for a whole day - telemetry silently lost.
+        /// </summary>
+        [TestMethod]
+        public async Task WebApiStatsUploader_ServerRejectsUpload_Throws()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var model = AnonUsageStatsModelLoader.Load(Guid.NewGuid(), null);
+
+            using (var client = new HttpClient(new StubHandler(HttpStatusCode.InternalServerError)))
+            using (var uploader = new WebApiStatsUploader("https://stats.example/", "shared-secret", logger, client))
+            {
+                await Assert.ThrowsExceptionAsync<HttpRequestException>(
+                    async () => await uploader.UploadToServer(model),
+                    "A non-2xx response must throw so the caller does not register a successful upload.");
+            }
+        }
+
+        [TestMethod]
+        public async Task WebApiStatsUploader_ServerAcceptsUpload_DoesNotThrow()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var model = AnonUsageStatsModelLoader.Load(Guid.NewGuid(), null);
+
+            using (var client = new HttpClient(new StubHandler(HttpStatusCode.OK)))
+            using (var uploader = new WebApiStatsUploader("https://stats.example/", "shared-secret", logger, client))
+            {
+                await uploader.UploadToServer(model);
+            }
+        }
+
+        [TestMethod]
+        public async Task UsageStatsManager_FailedUpload_DoesNotAdvanceTheOnceADayThrottle()
+        {
+            // The MIN_WAIT throttle must only advance on a genuinely successful upload, otherwise a
+            // server-side outage costs a full day of telemetry per failure.
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var tenantId = Guid.NewGuid();
+            var loader = new InMemoryStatsDatesLoader();
+
+            using (var client = new HttpClient(new StubHandler(HttpStatusCode.InternalServerError)))
+            using (var uploader = new WebApiStatsUploader("https://stats.example/", "shared-secret", logger, client))
+            {
+                var mgr = new UsageStatsManager(new AlwaysWorksUsageStatsBuilder(logger, tenantId), loader, uploader, logger);
+
+                Assert.IsFalse(await mgr.ProcessAndFailSilently(), "A rejected upload must be reported as a failure.");
+                Assert.IsNull(await loader.GetLastUploadDt(), "A rejected upload must not register a last-upload date, so the next cycle retries.");
+            }
+        }
+
+        /// <summary>Issue #206 (4): timestamps that feed the payload signature / document id must be UTC.</summary>
+        [TestMethod]
+        public void AnonUsageStatsModelLoader_GeneratedIsUtc()
+        {
+            var model = AnonUsageStatsModelLoader.Load(Guid.NewGuid(), null);
+
+            Assert.IsTrue(model.Generated.HasValue);
+            Assert.AreEqual(DateTimeKind.Utc, model.Generated.Value.Kind, "Generated must be UTC - it feeds the payload signature and the server-side document id.");
+            Assert.IsTrue(Math.Abs((DateTime.UtcNow - model.Generated.Value).TotalMinutes) < 5);
+        }
+
+        /// <summary>Always returns the configured status code, so upload handling can be tested offline.</summary>
+        private class StubHandler : HttpMessageHandler
+        {
+            private readonly HttpStatusCode _status;
+            public StubHandler(HttpStatusCode status) { _status = status; }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+                => Task.FromResult(new HttpResponseMessage(_status) { RequestMessage = request });
         }
     }
 
