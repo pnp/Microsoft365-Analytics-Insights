@@ -207,6 +207,10 @@ namespace App.ControlPanel.Engine
                 {
                     yield return "If warmup failed, browse to the admin site URL manually to confirm the App Service is responding.";
                 }
+                if (msg.Contains("service bus") && msg.Contains("premium"))
+                {
+                    yield return "Service Bus cannot be made private on the Standard SKU. Either migrate the namespace to Premium and re-run the installer, keep public network access enabled on Service Bus, or disable the Teams calls import — otherwise Teams calls will not import.";
+                }
             }
         }
 

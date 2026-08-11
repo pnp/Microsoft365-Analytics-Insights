@@ -124,6 +124,7 @@
     <Compile Include="SPO\SharePointModelBuilder\ValueLookups\JsonObjectToStringLookup.cs" />
     <Compile Include="SPO\SharePointModelBuilder\ValueLookups\ThumbnailImageProvisionAndLookup.cs" />
     <Compile Include="InstallSummary.cs" />
+    <Compile Include="PreInstallAdvisor.cs" />
     <Compile Include="SolutionInstaller.cs" />
     <Compile Include="Models\AzureSubscription.cs" />
     <Compile Include="Models\DatabasePaaSInfo.cs" />
