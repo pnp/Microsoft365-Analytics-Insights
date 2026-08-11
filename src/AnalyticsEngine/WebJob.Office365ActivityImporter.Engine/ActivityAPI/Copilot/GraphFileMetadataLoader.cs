@@ -5,6 +5,8 @@ using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Collections.Concurrent;
+using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 
@@ -31,6 +33,14 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly ConcurrentDictionary<string, SpoDocumentFileInfo> _fileInfoByContext =
             new ConcurrentDictionary<string, SpoDocumentFileInfo>(StringComparer.OrdinalIgnoreCase);
 
+        // Users for whom Graph has told us there's no Teams application access policy for this app. The grant is
+        // per-user (or global), so this is cached per user rather than tenant-wide, and only for this run.
+        private readonly ConcurrentDictionary<string, byte> _usersWithoutMeetingAccessPolicy =
+            new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+
+        // 1 once we've logged the "no application access policy" explanation for this run.
+        private int _meetingAccessPolicyWarningLogged;
+
         public GraphFileMetadataLoader(GraphServiceClient graphServiceClient, ILogger logger)
             : this(new GraphSpoClient(graphServiceClient), logger)
         {
@@ -47,17 +57,68 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         public async Task<MeetingMetadata> GetMeetingInfo(string meetingId, string userGuid)
         {
             // Requires OnlineMeetings.Read.All and https://learn.microsoft.com/en-us/graph/cloud-communication-online-meeting-application-access-policy#configure-application-access-policy
+
+            // A tenant that hasn't granted the application access policy rejects *every* online-meeting read for
+            // that user, so once we've seen it don't keep calling Graph for the same user this run.
+            if (userGuid != null && _usersWithoutMeetingAccessPolicy.ContainsKey(userGuid))
+            {
+                _logger.LogDebug("Skipping meeting lookup for meetingId {meetingId}: no Teams application access policy for this app on the user", meetingId);
+                return null;
+            }
+
             try
             {
                 var meeting = await _spoGraphClient.GetOnlineMeetingAsync(userGuid, meetingId);
 
                 return new MeetingMetadata(meeting);
             }
+            catch (ODataError ex) when (IsMissingApplicationAccessPolicy(ex))
+            {
+                // Expected tenant-configuration condition rather than a product fault, and it hits every
+                // meeting-context Copilot event. Log the actionable explanation once per import run (without the
+                // exception object, so it doesn't dominate exception telemetry) and skip enrichment quietly.
+                if (userGuid != null)
+                {
+                    _usersWithoutMeetingAccessPolicy.TryAdd(userGuid, 0);
+                }
+
+                if (Interlocked.Exchange(ref _meetingAccessPolicyWarningLogged, 1) == 0)
+                {
+                    _logger.LogWarning("Copilot meeting enrichment is unavailable in this tenant: Microsoft Graph reports no Teams application "
+                        + "access policy for this application, so online-meeting details can't be read and meeting metadata will be skipped. "
+                        + "To enable it, grant the importer application an access policy with the Teams PowerShell cmdlets "
+                        + "New-CsApplicationAccessPolicy / Grant-CsApplicationAccessPolicy - see "
+                        + "https://learn.microsoft.com/graph/cloud-communication-online-meeting-application-access-policy. "
+                        + "Further occurrences this import run are logged at debug level only.");
+                }
+                else
+                {
+                    _logger.LogDebug("Skipping meeting info for meetingId {meetingId}: no Teams application access policy for this app on the user", meetingId);
+                }
+
+                return null;
+            }
             catch (ODataError ex)
             {
                 _logger.LogWarning(ex, "Error getting meeting info for meetingId {meetingId}", meetingId);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Is this the "No application access policy found for this app ... on the user" 403 that Graph returns when
+        /// the tenant hasn't run New-CsApplicationAccessPolicy / Grant-CsApplicationAccessPolicy for the importer app?
+        /// </summary>
+        internal static bool IsMissingApplicationAccessPolicy(ODataError ex)
+        {
+            if (ex == null) return false;
+
+            // Some Graph/Kiota paths leave the status code unset (0), so don't require it to be exactly 403 - the
+            // message text is the reliable discriminator; just make sure we never swallow a non-forbidden error.
+            if (ex.ResponseStatusCode != (int)HttpStatusCode.Forbidden && ex.ResponseStatusCode != 0) return false;
+
+            var message = ex.Error?.Message ?? ex.Message ?? string.Empty;
+            return message.IndexOf("application access policy", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public async Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotDocContextId, string eventUpn)
