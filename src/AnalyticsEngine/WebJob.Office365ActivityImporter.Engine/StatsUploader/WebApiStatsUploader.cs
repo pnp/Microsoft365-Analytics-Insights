@@ -18,12 +18,22 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
         private readonly string _url;
         private readonly string _statsApiSecret;
         private readonly ILogger _logger;
+        private readonly HttpClient _client;
 
-        public WebApiStatsUploader(string url, string statsApiSecret, ILogger logger)
+        public WebApiStatsUploader(string url, string statsApiSecret, ILogger logger) : this(url, statsApiSecret, logger, _httpClient)
+        {
+        }
+
+        /// <summary>
+        /// Test seam: lets unit tests supply a client with a stub handler so the non-2xx behaviour can be
+        /// verified without a live endpoint. Production always uses the shared static client.
+        /// </summary>
+        internal WebApiStatsUploader(string url, string statsApiSecret, ILogger logger, HttpClient client)
         {
             _url = url;
             _statsApiSecret = statsApiSecret;
             _logger = logger;
+            _client = client;
         }
 
         public void Dispose()
@@ -38,14 +48,18 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
                 var body = new TelemetryPayload(stats, _statsApiSecret);
                 var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.PostAsync(_url, content);
+                var response = await _client.PostAsync(_url, content);
                 if (response.IsSuccessStatusCode)
                 {
                     _logger.LogInformation($"Uploaded stats to {_url}");
                 }
                 else
                 {
-                    _logger.LogError($"Can't upload stats to API - server returned unexpected response {response.StatusCode}");
+                    // Must throw: the caller only registers the "last uploaded" date - which gates the next
+                    // upload for a whole day - when this method completes without error. Returning normally on a
+                    // rejected upload would silently drop the report and not retry until the next day.
+                    _logger.LogError($"Can't upload stats to API - server returned unexpected response {(int)response.StatusCode} ({response.StatusCode})");
+                    response.EnsureSuccessStatusCode();
                 }
             }
             else

@@ -497,6 +497,19 @@ namespace App.ControlPanel.Frames
                 return;
             }
 
+            // A private deployment can leave Service Bus (and therefore the Teams calls import) unreachable if the
+            // namespace isn't Premium. Make that impossible to miss before a real deployment starts - see issue #228.
+            var serviceBusWarning = PreInstallAdvisor.GetServiceBusPrivateDeploymentWarning(GetConfigFromGUI());
+            if (serviceBusWarning != null)
+            {
+                var proceed = MessageBox.Show(this, serviceBusWarning, "Service Bus cannot be private on Standard SKU",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                if (proceed != DialogResult.Yes)
+                {
+                    return;
+                }
+            }
+
             // Save settings
             (this.ParentForm as MainForm).SaveLastSettings();
 
