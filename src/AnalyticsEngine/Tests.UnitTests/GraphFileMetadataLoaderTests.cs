@@ -1,7 +1,12 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using DataUtils;
+using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
+using System.Collections.Generic;
+using System.Net;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 
@@ -166,6 +171,110 @@ namespace Tests.UnitTests
             Assert.IsNotNull(result);
             Assert.AreEqual("unit test meeting", result.Subject);
             Assert.AreEqual(1, fake.GetOnlineMeetingCalls);
+        }
+
+        /// <summary>
+        /// Issue #215: a tenant without a Teams application access policy gets a 403 on *every* meeting-context
+        /// Copilot event. That's a tenant-configuration prerequisite, not a product fault, so it must be logged
+        /// once per run with actionable guidance (and without an exception object) instead of flooding telemetry.
+        /// </summary>
+        [TestMethod]
+        public async Task GetMeetingInfo_NoApplicationAccessPolicy_LogsOnceWithoutExceptionAndSkipsRepeatGraphCalls()
+        {
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetOnlineMeeting = (userId, meetingId) => throw NoApplicationAccessPolicyError()
+            };
+            var log = new CapturingLogger();
+            var loader = new GraphFileMetadataLoader(fake, log);
+
+            Assert.IsNull(await loader.GetMeetingInfo("19:meeting_a@thread.v2", "user-guid"));
+            Assert.IsNull(await loader.GetMeetingInfo("19:meeting_b@thread.v2", "user-guid"));
+            Assert.IsNull(await loader.GetMeetingInfo("19:meeting_c@thread.v2", "USER-GUID"));
+
+            Assert.AreEqual(1, fake.GetOnlineMeetingCalls, "Graph must not be re-called for a user we know has no access policy");
+
+            var warnings = log.Entries.FindAll(e => e.Level == LogLevel.Warning);
+            Assert.AreEqual(1, warnings.Count, "The missing-policy condition must be logged exactly once per run");
+            StringAssert.Contains(warnings[0].Message, "New-CsApplicationAccessPolicy");
+            Assert.IsNull(warnings[0].Exception, "The warning must not carry the exception, so it isn't counted as exception telemetry");
+        }
+
+        [TestMethod]
+        public async Task GetMeetingInfo_OtherGraphError_StillLoggedWithException()
+        {
+            var otherError = new ODataError
+            {
+                ResponseStatusCode = (int)HttpStatusCode.NotFound,
+                Error = new MainError { Code = "NotFound", Message = "Meeting not found" }
+            };
+            var fake = new FakeSpoGraphClient { OnGetOnlineMeeting = (userId, meetingId) => throw otherError };
+            var log = new CapturingLogger();
+            var loader = new GraphFileMetadataLoader(fake, log);
+
+            Assert.IsNull(await loader.GetMeetingInfo("19:meeting_abc@thread.v2", "user-guid"));
+            Assert.IsNull(await loader.GetMeetingInfo("19:meeting_abc@thread.v2", "user-guid"));
+
+            Assert.AreEqual(2, fake.GetOnlineMeetingCalls, "Unrelated errors must not disable meeting lookups for the user");
+            var warnings = log.Entries.FindAll(e => e.Level == LogLevel.Warning);
+            Assert.AreEqual(2, warnings.Count);
+            Assert.IsNotNull(warnings[0].Exception);
+        }
+
+        [TestMethod]
+        public void IsMissingApplicationAccessPolicy_OnlyMatchesTheAccessPolicyForbidden()
+        {
+            Assert.IsTrue(GraphFileMetadataLoader.IsMissingApplicationAccessPolicy(NoApplicationAccessPolicyError()));
+
+            Assert.IsFalse(GraphFileMetadataLoader.IsMissingApplicationAccessPolicy(new ODataError
+            {
+                ResponseStatusCode = (int)HttpStatusCode.Forbidden,
+                Error = new MainError { Code = "Forbidden", Message = "Insufficient privileges to complete the operation." }
+            }), "A generic 403 is still a real permissions problem and must keep its exception logging");
+
+            Assert.IsFalse(GraphFileMetadataLoader.IsMissingApplicationAccessPolicy(new ODataError
+            {
+                ResponseStatusCode = (int)HttpStatusCode.InternalServerError,
+                Error = new MainError { Code = "ServiceError", Message = "No application access policy found for this app" }
+            }), "Only forbidden (or status-less) errors count");
+
+            Assert.IsFalse(GraphFileMetadataLoader.IsMissingApplicationAccessPolicy(null));
+        }
+
+        private static ODataError NoApplicationAccessPolicyError() => new ODataError
+        {
+            ResponseStatusCode = (int)HttpStatusCode.Forbidden,
+            Error = new MainError
+            {
+                Code = "Forbidden",
+                Message = "No application access policy found for this app 00000000-0000-0000-0000-000000000000 on the user."
+            }
+        };
+
+        /// <summary>Minimal <see cref="ILogger"/> that records level, message and exception for assertions.</summary>
+        private class CapturingLogger : ILogger
+        {
+            public class Entry
+            {
+                public LogLevel Level;
+                public string Message;
+                public Exception Exception;
+            }
+
+            public readonly List<Entry> Entries = new List<Entry>();
+
+            public IDisposable BeginScope<TState>(TState state) => NullScope.Instance;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+            {
+                Entries.Add(new Entry { Level = logLevel, Message = formatter(state, exception), Exception = exception });
+            }
+
+            private class NullScope : IDisposable
+            {
+                public static readonly NullScope Instance = new NullScope();
+                public void Dispose() { }
+            }
         }
     }
 }
