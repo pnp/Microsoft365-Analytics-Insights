@@ -11,53 +11,50 @@ namespace App.ControlPanel
             InitializeComponent();
         }
 
-        public InstallerFtpConfig FtpConfig
+        public InstallerProxyConfig ProxyConfig
         {
             get
             {
                 int port = 0;
-                int.TryParse(txtFtpProxyPort.Text, out port);
+                int.TryParse(txtProxyPort.Text, out port);
 
-                return new InstallerFtpConfig()
+                return new InstallerProxyConfig
                 {
-                    UseFTPS = chkUseFTPS.Checked,
-                    UsePassive = chkFtpPassiveMode.Checked,
-                    ProxyHost = txtFtpProxyHost.Text,
-                    UseFtpProxy = chkFtpProxy.Checked,
-                    ProxyPassword = txtFtpProxyPassword.Text,
-                    ProxyUsername = txtFtpProxyUsername.Text,
-                    ProxyPort = port,
-                    IntegratedAuth = false
+                    Host = txtProxyHost.Text,
+                    UseProxy = chkProxy.Checked,
+                    Password = txtProxyPassword.Text,
+                    Username = txtProxyUsername.Text,
+                    Port = port,
+                    IntegratedAuth = !chkBasicAuthentication.Checked
                 };
             }
             set
             {
-                chkFtpPassiveMode.Checked = value.UsePassive;
-                chkFtpProxy.Checked = value.UseFtpProxy;
-                txtFtpProxyHost.Text = value.ProxyHost;
-                txtFtpProxyPassword.Text = value.ProxyPassword;
-                txtFtpProxyPort.Text = value.ProxyPort.ToString();
-                txtFtpProxyUsername.Text = value.ProxyUsername;
-                opUsernameAndPassword.Checked = !value.IntegratedAuth;
+                chkProxy.Checked = value.UseProxy;
+                txtProxyHost.Text = value.Host;
+                txtProxyPassword.Text = value.Password;
+                txtProxyPort.Text = value.Port.ToString();
+                txtProxyUsername.Text = value.Username;
+                chkBasicAuthentication.Checked = !value.IntegratedAuth;
             }
         }
 
-        private void chkFtpProxy_CheckedChanged(object sender, EventArgs e)
+        private void chkProxy_CheckedChanged(object sender, EventArgs e)
         {
             UpdateResponsiveUIControls();
         }
 
         private void UpdateResponsiveUIControls()
         {
-            grpProxy.Enabled = FtpConfig.UseFtpProxy;
-            chkFtpProxy.Checked = FtpConfig.UseFtpProxy;
+            grpProxy.Enabled = ProxyConfig.UseProxy;
+            chkProxy.Checked = ProxyConfig.UseProxy;
         }
 
         private void btnOk_Click(object sender, EventArgs e)
         {
-            if (!FtpConfig.IsValid)
+            if (!ProxyConfig.IsValid)
             {
-                MessageBox.Show("Invalid FTP proxy configuration", "Input Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Invalid deployment proxy configuration", "Input Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -78,8 +75,8 @@ namespace App.ControlPanel
 
         private void opAuth_CheckedChanged(object sender, EventArgs e)
         {
-            txtFtpProxyUsername.Enabled = opUsernameAndPassword.Checked;
-            txtFtpProxyPassword.Enabled = opUsernameAndPassword.Checked;
+            txtProxyUsername.Enabled = chkBasicAuthentication.Checked;
+            txtProxyPassword.Enabled = chkBasicAuthentication.Checked;
         }
 
     }

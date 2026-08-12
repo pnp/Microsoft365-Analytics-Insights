@@ -119,7 +119,7 @@ Hard-won lessons for driving / screenshotting the built installer (`AnalyticsIns
 - Sending one key sequence then a short retry loop can open the same modal **twice** — send once and poll patiently instead.
 
 ### Solution Tests Configuration
-- Window menu → "Solution Tests Configuration" → "Autodetect from installer configuration" pulls SQL/FTP details from the deployed resources, then pops an **"Autodetect Complete"** MessageBox that must be dismissed *before* "Save" will register. SQL/FTP passwords are masked (`PasswordChar`), so the window is safe to screenshot.
+- Window menu → "Solution Tests Configuration" → "Autodetect from installer configuration" pulls SQL details from the deployed resources, then pops an **"Autodetect Complete"** MessageBox that must be dismissed *before* "Save" will register. The SQL password is masked (`PasswordChar`), so the window is safe to screenshot.
 
 ### Capturing
 - Capture the window region via `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` (tighter than `GetWindowRect`) + `Graphics.CopyFromScreen`. Raise the window first with `SetWindowPos(HWND_TOPMOST)` — more reliable than `SetForegroundWindow` alone.

@@ -2,15 +2,12 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager;
-using Azure.ResourceManager.AppService;
-using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
 using DataUtils;
 using DataUtils.Http;
-using FluentFTP.Exceptions;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -18,24 +15,23 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
-using static App.ControlPanel.Engine.Models.AutodetectedSqlAndFtpDetails;
+using static App.ControlPanel.Engine.Models.AutodetectedSqlDetails;
 
 namespace App.ControlPanel.Engine
 {
     /// <summary>
     /// All the tests we can run to make sure the installer will work
     /// </summary>
-    public class SolutionInstallVerifier : BaseInstallProcessWithFtp
+    public class SolutionInstallVerifier : BaseInstallProcess
     {
         protected TestConfiguration _testConfig;
-        public SolutionInstallVerifier(SolutionInstallConfig config, ILogger logger, InstallerFtpConfig ftpConfig, TestConfiguration testConfig)
-            : base(config, logger, ftpConfig)
+        public SolutionInstallVerifier(SolutionInstallConfig config, ILogger logger, TestConfiguration testConfig)
+            : base(config, logger)
         {
             this._testConfig = testConfig;
         }
@@ -120,8 +116,6 @@ namespace App.ControlPanel.Engine
             {
                 await ExecuteReportFailureAndThrowExceptionIfCritical("Runtime account permission checks", () => VerifyRuntimeAccountAllAPIs());
             }
-            await ExecuteReportFailureAndThrowExceptionIfCritical("FTPS connectivity", () => VerifyFTPS(_ftpConfig, _testConfig));
-
             // Misc checks
             WindowsVersionCheck();
 
@@ -129,39 +123,19 @@ namespace App.ControlPanel.Engine
         }
 
         /// <summary>
-        /// Return FTP deployment details so network tests can be done against the real endpoint, if config is valid.
-        /// We cannot read back the password for SQL, so it must come from config
+        /// Return SQL details so connectivity tests can run against an existing server.
+        /// We cannot read back the SQL password, so it must come from config.
         /// </summary>
-        public async Task<AutodetectedSqlAndFtpDetails> GetFtpAndSQLDetails(string sqlPassword)
+        public async Task<AutodetectedSqlDetails> GetSqlDetails(string sqlPassword)
         {
             if (string.IsNullOrEmpty(sqlPassword))
             {
                 throw new ArgumentException($"'{nameof(sqlPassword)}' cannot be null or empty.", nameof(sqlPassword));
             }
 
-            FtpPublishInfo ftpDetails = null;
-            var (testRg, azCredsValid) = await GetResourceGroupIfValid();
+            var (testRg, _) = await GetResourceGroupIfValid();
             if (testRg != null)
             {
-                FtpDetails ftpInfo = null;
-                var webApp = testRg.GetWebSites().Where(s => s.Data.Name == Config.AppServiceWebAppName).SingleOrDefault();
-                if (webApp != null)
-                {
-                    var ftp = webApp.GetPublishingProfileXmlWithSecrets(new CsmPublishingProfile() { Format = PublishingProfileFormat.Ftp });
-                    using (var ms = new StreamReader(ftp.Value))
-                    {
-                        var profileData = publishData.FromXml(ms);
-                        ftpDetails = profileData.GetPublishFtpsUrl();
-
-                        var ftpUrl = new Uri(ftpDetails.RootUrl);
-                        ftpInfo = new FtpDetails() { Domain = ftpUrl.Host, Password = ftpDetails.Password, Username = ftpDetails.Username };
-                    }
-                }
-                else
-                {
-                    _logger.LogError($"Can't find app-service with name '{Config.AppServiceWebAppName}' in resource-group '{testRg.Data.Name}'");
-                }
-
                 SqlDetails sqlInfo = null;
                 var sqlServer = testRg.GetSqlServers().Where(s => s.Data.Name == Config.SQLServerName).SingleOrDefault();
                 if (sqlServer == null)
@@ -178,25 +152,24 @@ namespace App.ControlPanel.Engine
                     };
                 }
 
-                return new AutodetectedSqlAndFtpDetails() { Ftp = ftpInfo, Sql = sqlInfo };
+                return new AutodetectedSqlDetails { Sql = sqlInfo };
             }
             else
             {
-                _logger.LogError($"Can't find resource-group '{testRg.Data.Name}'");
+                _logger.LogError($"Can't find resource-group '{Config.ResourceGroupName}'");
             }
             return null;
         }
 
         /// <summary>
-        /// Do we have enough config to run the FTP and SQL tests?
+        /// Do we have enough config to autodetect SQL connectivity details?
         /// </summary>
-        public static bool ConfigIsReadyForFtpAndSqlAutodetection(SolutionInstallConfig config)
+        public static bool ConfigIsReadyForSqlAutodetection(SolutionInstallConfig config)
         {
             if (config == null) return false;
 
             var installerAccErrors = config.InstallerAccount?.GetValidationErrors();
             return installerAccErrors != null && installerAccErrors.Count == 0
-                && !string.IsNullOrEmpty(config.AppServiceWebAppName)
                 && !string.IsNullOrEmpty(config.ResourceGroupName)
                 && config.Subscription.IsValidSubscription
                 && !string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername) && !string.IsNullOrEmpty(config.SQLServerName);
@@ -230,58 +203,6 @@ namespace App.ControlPanel.Engine
                 }
             }
             return (null, false);
-        }
-
-        /// <summary>
-        /// Test FTP by uploading a small file to a site. It's the only way to make sure the full port range is working.
-        /// This should probably be done to the customers' own FTP, not the test one we use just for this purpose...
-        /// </summary>
-        async Task VerifyFTPS(InstallerFtpConfig ftpConfig, TestConfiguration testInfo)
-        {
-            if (!testInfo.IsValid)
-            {
-                _logger.LogError($"Can't verify FTPS access - configure a test target in solution tests configuration menu when App Service is created");
-                return;
-            }
-
-            _logger.LogInformation($"Verifying FTPS access to server {testInfo.FtpHostname} on port 990...");
-
-            var success = false;
-            try
-            {
-                // https://github.com/robinrodricks/FluentFTP/wiki/Quick-Start-Example
-                using (var client = FtpClientFactory.GetFtpClient(testInfo.FtpHostname, testInfo.FtpUsername, testInfo.FtpPassword, ftpConfig))
-                {
-                    await client.Connect();
-                    await client.GetListing();
-
-                    var randomFileName = $"{DateTime.Now.Ticks}.txt";
-                    var bytes = System.Text.Encoding.ASCII.GetBytes(randomFileName);
-
-                    await client.UploadBytes(bytes, randomFileName);
-                    await client.DeleteFile(randomFileName);
-
-                    await client.Disconnect();
-                    success = true;
-                }
-            }
-            catch (FtpException ex)
-            {
-                // Nothing
-                _logger.LogError("Got unexpected response from test FTPS server: " + ex.Message);
-                Console.WriteLine(ex);
-            }
-            catch (SocketException ex)
-            {
-                // Fail
-                _logger.LogError($"Got unexpected network response (proxy in use: {ftpConfig.UseFtpProxy}): {ex.Message}");
-                Console.WriteLine(ex);
-            }
-
-            if (success)
-            {
-                _logger.LogInformation("Got expected response from test FTPS server");
-            }
         }
 
         #region Configuration & Key Vault checks
