@@ -7,6 +7,13 @@
         public string Password { get; set; } = string.Empty;
     }
 
+    public class KuduPublishInfo
+    {
+        public string RootUrl { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }
+
     // For autodetecting test resources
     public class AutodetectedSqlAndFtpDetails
     {

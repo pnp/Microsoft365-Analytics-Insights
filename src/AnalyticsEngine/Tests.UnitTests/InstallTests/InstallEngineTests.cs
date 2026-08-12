@@ -18,6 +18,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -115,6 +117,65 @@ namespace Tests.UnitTests
         {
             var data = publishData.FromXml(Properties.Resources.PublishXml);
             Assert.IsNotNull(data);
+        }
+
+        [TestMethod]
+        public void KuduPublishingProfileBuildsHttpsPublishUri()
+        {
+            const string publishXml = @"<publishData>
+                <publishProfile publishMethod=""MSDeploy""
+                                publishUrl=""contoso.scm.azurewebsites.net:443""
+                                userName=""$contoso""
+                                userPWD=""not-a-real-password"" />
+            </publishData>";
+
+            var publishInfo = publishData.FromXml(publishXml).GetKuduPublishInfo();
+            var publishUri = InstallAppServiceContentsTask.BuildKuduPublishUri(publishInfo.RootUrl);
+
+            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/publish?type=zip", publishUri.ToString());
+            Assert.AreEqual("$contoso", publishInfo.Username);
+        }
+
+        [TestMethod]
+        public void AppServiceDeploymentPackageContainsWebsiteAndWebJobs()
+        {
+            var testRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testRoot);
+
+            try
+            {
+                var websiteZip = CreateTestZip(testRoot, "Website", "default.htm");
+                var activityZip = CreateTestZip(testRoot, "Office365ActivityImporter", "job.exe");
+                var appInsightsZip = CreateTestZip(testRoot, "AppInsightsImporter", "job.exe");
+                var sources = new LocalStorageInstallSourceInfo();
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation = websiteZip;
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation = activityZip;
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation = appInsightsZip;
+
+                var package = InstallAppServiceContentsTask.BuildDeploymentPackage(sources, _logger);
+                using (var archive = ZipFile.OpenRead(package.FullName))
+                {
+                    var entries = archive.Entries.Select(entry => entry.FullName.Replace('\\', '/')).ToList();
+                    CollectionAssert.Contains(entries, "default.htm");
+                    CollectionAssert.Contains(entries, "app_data/jobs/continuous/Office365ActivityImporter/job.exe");
+                    CollectionAssert.Contains(entries, "app_data/jobs/continuous/AppInsightsImporter/job.exe");
+                }
+            }
+            finally
+            {
+                Directory.Delete(testRoot, true);
+            }
+        }
+
+        private static string CreateTestZip(string testRoot, string rootDirectoryName, string fileName)
+        {
+            var sourceDirectory = Path.Combine(testRoot, rootDirectoryName);
+            Directory.CreateDirectory(sourceDirectory);
+            System.IO.File.WriteAllText(Path.Combine(sourceDirectory, fileName), "synthetic test content");
+
+            var zipPath = Path.Combine(testRoot, rootDirectoryName + ".zip");
+            ZipFile.CreateFromDirectory(sourceDirectory, zipPath, CompressionLevel.Optimal, true);
+            return zipPath;
         }
 
         [TestMethod]
