@@ -32,20 +32,6 @@ namespace App.ControlPanel.Engine.Models
             }
         }
 
-        public FtpPublishInfo GetPublishFtpsUrl()
-        {
-
-            var ftpProfile = publishProfile.Where(p => p.publishMethod == "FTP").FirstOrDefault();
-            if (ftpProfile != null)
-            {
-                return new FtpPublishInfo { RootUrl = ftpProfile.publishUrl, Username = ftpProfile.userName, Password = ftpProfile.userPWD };
-            }
-            else
-            {
-                throw new Exception("Can't find FTP publishing method");
-            }
-        }
-
         public KuduPublishInfo GetKuduPublishInfo()
         {
             var msDeployProfile = publishProfile.FirstOrDefault(p => p.publishMethod == "MSDeploy");
@@ -115,8 +101,6 @@ namespace App.ControlPanel.Engine.Models
         private string targetDatabaseEngineTypeField;
 
         private string targetServerVersionField;
-
-        private string ftpPassiveModeField;
 
         /// <remarks/>
         public publishDataPublishProfileDatabases databases
@@ -327,19 +311,6 @@ namespace App.ControlPanel.Engine.Models
             }
         }
 
-        /// <remarks/>
-        [System.Xml.Serialization.XmlAttributeAttribute()]
-        public string ftpPassiveMode
-        {
-            get
-            {
-                return this.ftpPassiveModeField;
-            }
-            set
-            {
-                this.ftpPassiveModeField = value;
-            }
-        }
     }
 
     /// <remarks/>

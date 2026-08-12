@@ -101,14 +101,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void FtpConfigIsValid()
+        public void DeploymentProxyConfigIsValid()
         {
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = false, IntegratedAuth = false, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyHost = "test", ProxyPort = -1 }.IsValid);
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyHost = "test", ProxyPort = 1 }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyPort = 1 }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, ProxyHost = "test", ProxyPort = 10, IntegratedAuth = false, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = true, ProxyHost = "test", ProxyPort = 10, IntegratedAuth = true, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig().IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = "proxy.contoso.test", Port = -1 }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = "proxy.contoso.test", Port = 8080 }.IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Port = 8080 }.IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, Host = "proxy.contoso.test", Port = 8080, Username = "installer" }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig { UseProxy = true, Host = "proxy.contoso.test", Port = 8080, Username = "installer", Password = "synthetic-password" }.IsValid);
+        }
+
+        [TestMethod]
+        public void DeploymentProxyConfigLoadsLegacyPreferenceNames()
+        {
+            const string legacyJson = @"{
+                ""UseFtpProxy"": true,
+                ""ProxyHost"": ""proxy.contoso.test"",
+                ""ProxyPort"": 8080,
+                ""IntegratedAuth"": false,
+                ""ProxyUsername"": ""installer"",
+                ""ProxyPassword"": ""synthetic-password""
+            }";
+
+            var config = Newtonsoft.Json.JsonConvert.DeserializeObject<InstallerProxyConfig>(legacyJson);
+
+            Assert.IsTrue(config.UseProxy);
+            Assert.AreEqual("proxy.contoso.test", config.Host);
+            Assert.AreEqual(8080, config.Port);
+            Assert.AreEqual("installer", config.Username);
+            Assert.IsTrue(config.IsValid);
         }
 
 
