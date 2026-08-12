@@ -260,11 +260,17 @@ namespace Web.AnalyticsWeb.Controllers
                 "ORDER BY SeriesName, WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
 
+            var displaySql = DisplaySql(agents, from, agentName);
+            var rowsTask = QueryNamedWeeksAsync(agents, from, agentName, 60);
+
             return new List<Task<ReportChart>>
             {
+                RunGroupedCategoryAsync("copilot-agent-totals", "Top Copilot agents by total executions",
+                    "Total executions for each selected agent across the reporting period.",
+                    "Executions", rowsTask, displaySql),
                 RunGroupedTimeSeriesAsync("copilot-agent-interactions", "Copilot agent interactions per week",
                     "Weekly interactions for the most-used Copilot agents matching the current filters.",
-                    "Interactions", agents, from, weekSpine, agentName, 60),
+                    "Interactions", rowsTask, displaySql, weekSpine),
             };
         }
 
@@ -471,7 +477,7 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>Runs one query that returns multiple named weekly series.</summary>
         private static async Task<ReportChart> RunGroupedTimeSeriesAsync(string key, string title, string description,
-            string valueLabel, string body, DateTime from, List<DateTime> weekSpine, string agentName, int queryTimeoutSecs)
+            string valueLabel, Task<List<NamedWeekValueRow>> rowsTask, string sql, List<DateTime> weekSpine)
         {
             var chart = new ReportChart
             {
@@ -480,36 +486,23 @@ namespace Web.AnalyticsWeb.Controllers
                 Description = description,
                 Type = "timeseries",
                 ValueLabel = valueLabel,
-                Sql = DisplaySql(body, from, agentName),
+                Sql = sql,
             };
 
             try
             {
-                using (var db = new AnalyticsEntitiesContext())
-                {
-                    db.Database.CommandTimeout = queryTimeoutSecs;
-                    var rows = await db.Database
-                        .SqlQuery<NamedWeekValueRow>(
-                            body,
-                            new SqlParameter("@from", from),
-                            new SqlParameter("@agentName", System.Data.SqlDbType.NVarChar, 100)
-                            {
-                                Value = (object)agentName ?? DBNull.Value,
-                            })
-                        .ToListAsync();
-
-                    chart.Series = rows
-                        .GroupBy(r => new { r.SeriesKey, r.SeriesName })
-                        .OrderByDescending(g => g.Sum(r => r.Value))
-                        .Select(g => new ReportSeries
-                        {
-                            Name = g.Key.SeriesName,
-                            Points = FillWeeks(
-                                weekSpine,
-                                g.Select(r => new WeekValueRow { WeekStart = r.WeekStart, Value = r.Value }).ToList()),
-                        })
-                        .ToList();
-                }
+                var rows = await rowsTask;
+                chart.Series = rows
+                    .GroupBy(r => new { r.SeriesKey, r.SeriesName })
+                    .OrderByDescending(g => g.Sum(r => r.Value))
+                    .Select(g => new ReportSeries
+                    {
+                        Name = g.Key.SeriesName,
+                        Points = FillWeeks(
+                            weekSpine,
+                            g.Select(r => new WeekValueRow { WeekStart = r.WeekStart, Value = r.Value }).ToList()),
+                    })
+                    .ToList();
             }
             catch (Exception ex)
             {
@@ -517,6 +510,62 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             return chart;
+        }
+
+        /// <summary>Builds a categorical totals chart from the same shared weekly query result.</summary>
+        private static async Task<ReportChart> RunGroupedCategoryAsync(string key, string title, string description,
+            string valueLabel, Task<List<NamedWeekValueRow>> rowsTask, string sql)
+        {
+            var chart = new ReportChart
+            {
+                Key = key,
+                Title = title,
+                Description = description,
+                Type = "bar",
+                ValueLabel = valueLabel,
+                Sql = sql,
+            };
+
+            try
+            {
+                var rows = await rowsTask;
+                chart.Categories = rows
+                    .GroupBy(r => new { r.SeriesKey, r.SeriesName })
+                    .Select(g => new ReportCategory
+                    {
+                        Label = g.Key.SeriesName,
+                        Value = g.Sum(r => r.Value),
+                    })
+                    .OrderByDescending(category => category.Value)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                chart.Error = InnermostMessage(ex);
+            }
+
+            return chart;
+        }
+
+        private static async Task<List<NamedWeekValueRow>> QueryNamedWeeksAsync(
+            string body,
+            DateTime from,
+            string agentName,
+            int queryTimeoutSecs)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.CommandTimeout = queryTimeoutSecs;
+                return await db.Database
+                    .SqlQuery<NamedWeekValueRow>(
+                        body,
+                        new SqlParameter("@from", from),
+                        new SqlParameter("@agentName", System.Data.SqlDbType.NVarChar, 100)
+                        {
+                            Value = (object)agentName ?? DBNull.Value,
+                        })
+                    .ToListAsync();
+            }
         }
 
         /// <summary>Runs a categorical (bar) query - label + value rows, already ordered by the query.</summary>
