@@ -45,6 +45,7 @@
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
+    <Compile Include="InstallTests\AppInsightsArmTemplateTests.cs" />
     <Compile Include="UserImportCaseSensitivityTests.cs" />
     <Compile Include="UserMetadataUpdaterBasicTests.cs" />
     <Compile Include="UserMetadataUpdaterInsertTests.cs" />
