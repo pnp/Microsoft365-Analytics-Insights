@@ -158,6 +158,62 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void KuduContinuousWebJobsUriUsesHttpsApiEndpoint()
+        {
+            var uri = AppServiceWebJobHealthVerifier.BuildKuduContinuousWebJobsUri(
+                "contoso.scm.azurewebsites.net:443");
+
+            Assert.AreEqual(
+                "https://contoso.scm.azurewebsites.net/api/continuouswebjobs",
+                uri.ToString());
+        }
+
+        [TestMethod]
+        public void WebJobHealthCheckRequiresBothJobsRunning()
+        {
+            const string statusesJson = @"[
+                { ""name"": ""Office365ActivityImporter"", ""status"": ""Running"" },
+                { ""name"": ""AppInsightsImporter"", ""status"": ""Stopped"" }
+            ]";
+
+            var failures = AppServiceWebJobHealthVerifier.FindFailures(
+                AppServiceWebJobHealthVerifier.ParseStatuses(statusesJson));
+
+            CollectionAssert.AreEqual(
+                new[] { "AppInsightsImporter=Stopped" },
+                failures);
+        }
+
+        [TestMethod]
+        public void WebJobHealthCheckReportsMissingJob()
+        {
+            const string statusesJson = @"[
+                { ""name"": ""Office365ActivityImporter"", ""status"": ""Running"" }
+            ]";
+
+            var failures = AppServiceWebJobHealthVerifier.FindFailures(
+                AppServiceWebJobHealthVerifier.ParseStatuses(statusesJson));
+
+            CollectionAssert.AreEqual(
+                new[] { "AppInsightsImporter=missing" },
+                failures);
+        }
+
+        [TestMethod]
+        public void WebJobHealthCheckPassesWhenBothJobsAreRunning()
+        {
+            const string statusesJson = @"[
+                { ""name"": ""AppInsightsImporter"", ""status"": ""Running"" },
+                { ""name"": ""Office365ActivityImporter"", ""status"": ""Running"" }
+            ]";
+
+            var failures = AppServiceWebJobHealthVerifier.FindFailures(
+                AppServiceWebJobHealthVerifier.ParseStatuses(statusesJson));
+
+            Assert.AreEqual(0, failures.Count);
+        }
+
+        [TestMethod]
         public void AppServiceDeploymentPackageContainsWebsiteAndWebJobs()
         {
             var testRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

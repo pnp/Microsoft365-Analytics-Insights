@@ -108,17 +108,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         private async Task PublishZipAsync(KuduPublishInfo publishInfo, FileInfo deploymentPackage, InstallerProxyConfig proxyConfig)
         {
-            var handler = new HttpClientHandler();
-            if (proxyConfig.UseProxy)
-            {
-                var proxy = new WebProxy(proxyConfig.Host, proxyConfig.Port);
-                proxy.Credentials = proxyConfig.IntegratedAuth
-                    ? CredentialCache.DefaultCredentials
-                    : new NetworkCredential(proxyConfig.Username, proxyConfig.Password);
-                handler.Proxy = proxy;
-                handler.UseProxy = true;
-            }
-
+            var handler = CreateHttpClientHandler(proxyConfig);
             using (handler)
             using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(30) })
             using (var packageStream = deploymentPackage.OpenRead())
@@ -163,6 +153,21 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     }
                 }
             }
+        }
+
+        internal static HttpClientHandler CreateHttpClientHandler(InstallerProxyConfig proxyConfig)
+        {
+            var handler = new HttpClientHandler();
+            if (proxyConfig.UseProxy)
+            {
+                var proxy = new WebProxy(proxyConfig.Host, proxyConfig.Port);
+                proxy.Credentials = proxyConfig.IntegratedAuth
+                    ? CredentialCache.DefaultCredentials
+                    : new NetworkCredential(proxyConfig.Username, proxyConfig.Password);
+                handler.Proxy = proxy;
+                handler.UseProxy = true;
+            }
+            return handler;
         }
 
         internal static Uri BuildKuduPublishUri(string publishUrl)

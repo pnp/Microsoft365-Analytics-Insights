@@ -111,6 +111,12 @@ namespace App.ControlPanel.Engine
                     await WarmupCallRecordWebhook(log, adminSiteUrl, ct);
                 }
 
+                await AppServiceWebJobHealthVerifier.VerifyAndLogAsync(
+                    azureBackeEndCreationJob.CreatedWebSiteResource,
+                    _proxyConfig,
+                    log,
+                    ct);
+
                 log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
 
                 // Open admin site?
