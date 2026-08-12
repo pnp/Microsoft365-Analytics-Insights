@@ -44,15 +44,17 @@ namespace App.ControlPanel.Engine
             // Configure app-service connection-strings, etc
             await ConfigureWebApp(webApp, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
 
-            // Stop app for later?
+            // Download/extract the release while the App Service is still available. Kudu/SCM
+            // rejects deployments while the site resource is stopped.
+            var solutionSources = await GetSolutionFromSource(subscription, automationAccount, downloadReleaseOnly: true);
+
+            // Stop the runtime while applying database changes so the existing website/WebJobs
+            // cannot use a partially upgraded schema.
             if (this.Config.TasksConfig.InstallLatestSolutionContent)
             {
-                _logger.LogInformation("Stopping app-service during binaries deployment...");
+                _logger.LogInformation("Stopping app-service during database upgrade...");
                 await webApp.StopAsync();
             }
-
-            // Get solution sources either from Azure storage or local sources
-            var solutionSources = await GetSolutionFromSource(subscription, automationAccount);
 
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
@@ -63,7 +65,8 @@ namespace App.ControlPanel.Engine
             if (this.Config.TasksConfig.InstallLatestSolutionContent)
             {
                 await webApp.StartAsync();
-                _logger.LogInformation("App Service started again after release copied");
+                _logger.LogInformation("App Service started for SCM HTTPS deployment");
+                await InstallSolutionContent(solutionSources, subscription, automationAccount);
             }
 
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
@@ -112,24 +115,43 @@ namespace App.ControlPanel.Engine
             return installerExeFile;
         }
 
-        async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(SubscriptionResource subscription, AutomationAccountResource automationAccount)
+        async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(
+            SubscriptionResource subscription,
+            AutomationAccountResource automationAccount,
+            bool downloadReleaseOnly)
         {
             AppServiceContentInstallJob appServiceContentInstallJob = null;
             if (this.Config.DownloadLatestStable)
             {
                 // Download webjobs from blob storage. Optionally install.
-                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _proxyConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, automationAccount);
+                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount);
             }
             else
             {
                 // Use local sources. Optionally install.
-                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _proxyConfig, this.Config, !this.Config.TasksConfig.InstallLatestSolutionContent, automationAccount);
+                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount);
             }
 
             // Install or just download, depending on config above
             await appServiceContentInstallJob.Install();
 
             return appServiceContentInstallJob.LocalStorageInstallSourceInfo;
+        }
+
+        async Task InstallSolutionContent(
+            LocalStorageInstallSourceInfo solutionSources,
+            SubscriptionResource subscription,
+            AutomationAccountResource automationAccount)
+        {
+            var installJob = new UseLocalAppServiceContentInstallJob(
+                _logger,
+                subscription,
+                solutionSources,
+                _proxyConfig,
+                this.Config,
+                downloadReleaseOnly: false,
+                automationAccount: automationAccount);
+            await installJob.Install();
         }
 
         async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
