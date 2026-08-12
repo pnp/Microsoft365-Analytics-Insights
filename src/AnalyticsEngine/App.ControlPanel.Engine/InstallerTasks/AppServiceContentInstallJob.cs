@@ -15,9 +15,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class DownloadLatestAppServiceContentInstallJob : AppServiceContentInstallJob
     {
         public DownloadLatestAppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, SoftwareReleaseConfig softwareReleaseConfig,
-            InstallerFtpConfig ftpConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
+            InstallerProxyConfig proxyConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
             AutomationAccountResource automationAccount)
-            : base(logger, subscription, null, softwareReleaseConfig, config, ftpConfig, downloadReleaseOnly, automationAccount)
+            : base(logger, subscription, null, softwareReleaseConfig, config, proxyConfig, downloadReleaseOnly, automationAccount)
         {
         }
     }
@@ -25,9 +25,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class UseLocalAppServiceContentInstallJob : AppServiceContentInstallJob
     {
         public UseLocalAppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, LocalStorageInstallSourceInfo localOverrideSources,
-            InstallerFtpConfig ftpConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
+            InstallerProxyConfig proxyConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
             AutomationAccountResource automationAccount)
-            : base(logger, subscription, localOverrideSources, null, config, ftpConfig, downloadReleaseOnly, automationAccount)
+            : base(logger, subscription, localOverrideSources, null, config, proxyConfig, downloadReleaseOnly, automationAccount)
         {
         }
     }
@@ -39,7 +39,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         BaseInstallTask _sourceGetTask = null;
         public AppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, LocalStorageInstallSourceInfo localOverrideSources,
-            SoftwareReleaseConfig softwareReleaseConfig, SolutionInstallConfig config, InstallerFtpConfig ftpConfig, bool downloadReleaseOnly,
+            SoftwareReleaseConfig softwareReleaseConfig, SolutionInstallConfig config, InstallerProxyConfig proxyConfig, bool downloadReleaseOnly,
             AutomationAccountResource automationAccount)
             : base(logger, config, subscription)
         {
@@ -61,7 +61,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var installTasks = new List<BaseInstallTask> { _sourceGetTask };
             if (!downloadReleaseOnly)
             {
-                installTasks.Add(new InstallAppServiceContentsTask(ftpConfig, TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, config.AzureLocation, config.Tags.ToDictionary(), config.NetworkConfig));
+                installTasks.Add(new InstallAppServiceContentsTask(proxyConfig, TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, config.AzureLocation, config.Tags.ToDictionary(), config.NetworkConfig));
             }
             else
             {

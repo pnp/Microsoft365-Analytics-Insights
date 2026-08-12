@@ -35,9 +35,6 @@ namespace App.ControlPanel
                 }
                 return new TestConfiguration()
                 {
-                    FtpHostname = txtFtpServer.Text,
-                    FtpPassword = txtFtpPassword.Text,
-                    FtpUsername = txtFtpUsername.Text,
                     SQLConnectionString = connectionString
                 };
             }
@@ -48,39 +45,34 @@ namespace App.ControlPanel
 
                 var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(defaultConfig.SQLConnectionString);
                 txtSqlServer.Text = sqlConnectionInfo?.DataSource;
-                txtFtpServer.Text = defaultConfig.FtpHostname;
-                txtFtpUsername.Text = defaultConfig.FtpUsername;
                 txtSqlUsername.Text = sqlConnectionInfo?.UserID;
                 txtSqlPassword.Text = sqlConnectionInfo?.Password;
-                txtFtpPassword.Text = defaultConfig.FtpPassword;
             }
         }
         public SolutionInstallConfig SolutionInstallConfig { get; set; }
-        public InstallerFtpConfig FtpConfig { get; internal set; }
 
         private void btnAutoDetect_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            if (SolutionInstallVerifier.ConfigIsReadyForFtpAndSqlAutodetection(SolutionInstallConfig))
+            if (SolutionInstallVerifier.ConfigIsReadyForSqlAutodetection(SolutionInstallConfig))
             {
-                backgroundWorkerAutoDetectFTP.RunWorkerAsync();
+                backgroundWorkerAutoDetectSql.RunWorkerAsync();
                 SetLoadLoading(true);
             }
             else
             {
-                MessageBox.Show("The entered configuration in the main form is not valid to detect your FTP/SQL details. " +
-                    "You need at least: an installer account, resource-group, subscription ID, SQL details, and app-service",
+                MessageBox.Show("The entered configuration in the main form is not valid to detect your SQL details. " +
+                    "You need at least: an installer account, resource-group, subscription ID, and SQL details",
                     "Can't Autodetect", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
             }
         }
 
-        private void backgroundWorkerAutoDetectFTP_DoWork(object sender, System.ComponentModel.DoWorkEventArgs e)
+        private void backgroundWorkerAutoDetectSql_DoWork(object sender, System.ComponentModel.DoWorkEventArgs e)
         {
-            var j = new SolutionInstallVerifier(SolutionInstallConfig, _logger, FtpConfig, this.TestConfiguration);
+            var verifier = new SolutionInstallVerifier(SolutionInstallConfig, _logger, this.TestConfiguration);
 
             try
             {
-                var ftpProfile = j.GetFtpAndSQLDetails(SolutionInstallConfig.SQLServerAdminPassword).Result;
-                e.Result = ftpProfile;
+                e.Result = verifier.GetSqlDetails(SolutionInstallConfig.SQLServerAdminPassword).Result;
             }
             catch (Exception ex)
             {
@@ -88,12 +80,12 @@ namespace App.ControlPanel
             }
         }
 
-        private void backgroundWorkerAutoDetectFTP_RunWorkerCompleted(object sender, System.ComponentModel.RunWorkerCompletedEventArgs e)
+        private void backgroundWorkerAutoDetectSql_RunWorkerCompleted(object sender, System.ComponentModel.RunWorkerCompletedEventArgs e)
         {
             SetLoadLoading(false);
-            if (e.Result is AutodetectedSqlAndFtpDetails)
+            if (e.Result is AutodetectedSqlDetails)
             {
-                var r = (AutodetectedSqlAndFtpDetails)e.Result;
+                var r = (AutodetectedSqlDetails)e.Result;
                 var connectionString = string.Empty;
                 if (!string.IsNullOrEmpty(r.Sql?.SqlUsername) && !string.IsNullOrEmpty(r.Sql?.SqlPassword) && !string.IsNullOrEmpty(r.Sql?.SqlFqdn))
                 {
@@ -102,20 +94,17 @@ namespace App.ControlPanel
 
                 this.TestConfiguration = new TestConfiguration
                 {
-                    FtpHostname = r.Ftp?.Domain,
-                    FtpPassword = r.Ftp?.Password,
-                    FtpUsername = r.Ftp?.Username,
                     SQLConnectionString = connectionString
                 };
 
-                if (r.Sql == null || r.Ftp == null)
+                if (r.Sql == null)
                 {
-                    MessageBox.Show($"Couldn't get some/all of your Azure resources data: {_logger.GetMessages()}",
+                    MessageBox.Show($"Couldn't get your SQL resource data: {_logger.GetMessages()}",
                         "Can't Autodetect", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
                 }
                 else
                 {
-                    MessageBox.Show($"Your resources auto-detected succesfully. Save the detected configuration to use them for solution tests",
+                    MessageBox.Show("Your SQL resource was auto-detected successfully. Save the detected configuration to use it for solution tests",
                         "Autodetect Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
@@ -125,7 +114,7 @@ namespace App.ControlPanel
                         "Can't Autodetect", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
             }
             else
-                MessageBox.Show($"Unexpected error getting FTP details: {_logger.GetMessages()}",
+                MessageBox.Show($"Unexpected error getting SQL details: {_logger.GetMessages()}",
                     "Can't Autodetect", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
         }
 

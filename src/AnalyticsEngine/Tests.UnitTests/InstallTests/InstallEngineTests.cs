@@ -18,6 +18,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -99,14 +101,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void FtpConfigIsValid()
+        public void DeploymentProxyConfigIsValid()
         {
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = false, IntegratedAuth = false, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyHost = "test", ProxyPort = -1 }.IsValid);
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyHost = "test", ProxyPort = 1 }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyPort = 1 }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, ProxyHost = "test", ProxyPort = 10, IntegratedAuth = false, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = true, ProxyHost = "test", ProxyPort = 10, IntegratedAuth = true, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig().IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = "proxy.contoso.test", Port = -1 }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = "proxy.contoso.test", Port = 8080 }.IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Port = 8080 }.IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, Host = "proxy.contoso.test", Port = 8080, Username = "installer" }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig { UseProxy = true, Host = "proxy.contoso.test", Port = 8080, Username = "installer", Password = "synthetic-password" }.IsValid);
+        }
+
+        [TestMethod]
+        public void DeploymentProxyConfigLoadsLegacyPreferenceNames()
+        {
+            const string legacyJson = @"{
+                ""UseFtpProxy"": true,
+                ""ProxyHost"": ""proxy.contoso.test"",
+                ""ProxyPort"": 8080,
+                ""IntegratedAuth"": false,
+                ""ProxyUsername"": ""installer"",
+                ""ProxyPassword"": ""synthetic-password""
+            }";
+
+            var config = Newtonsoft.Json.JsonConvert.DeserializeObject<InstallerProxyConfig>(legacyJson);
+
+            Assert.IsTrue(config.UseProxy);
+            Assert.AreEqual("proxy.contoso.test", config.Host);
+            Assert.AreEqual(8080, config.Port);
+            Assert.AreEqual("installer", config.Username);
+            Assert.IsTrue(config.IsValid);
         }
 
 
@@ -115,6 +138,65 @@ namespace Tests.UnitTests
         {
             var data = publishData.FromXml(Properties.Resources.PublishXml);
             Assert.IsNotNull(data);
+        }
+
+        [TestMethod]
+        public void KuduPublishingProfileBuildsHttpsPublishUri()
+        {
+            const string publishXml = @"<publishData>
+                <publishProfile publishMethod=""MSDeploy""
+                                publishUrl=""contoso.scm.azurewebsites.net:443""
+                                userName=""$contoso""
+                                userPWD=""not-a-real-password"" />
+            </publishData>";
+
+            var publishInfo = publishData.FromXml(publishXml).GetKuduPublishInfo();
+            var publishUri = InstallAppServiceContentsTask.BuildKuduPublishUri(publishInfo.RootUrl);
+
+            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/publish?type=zip", publishUri.ToString());
+            Assert.AreEqual("$contoso", publishInfo.Username);
+        }
+
+        [TestMethod]
+        public void AppServiceDeploymentPackageContainsWebsiteAndWebJobs()
+        {
+            var testRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testRoot);
+
+            try
+            {
+                var websiteZip = CreateTestZip(testRoot, "Website", "default.htm");
+                var activityZip = CreateTestZip(testRoot, "Office365ActivityImporter", "job.exe");
+                var appInsightsZip = CreateTestZip(testRoot, "AppInsightsImporter", "job.exe");
+                var sources = new LocalStorageInstallSourceInfo();
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation = websiteZip;
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation = activityZip;
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation = appInsightsZip;
+
+                var package = InstallAppServiceContentsTask.BuildDeploymentPackage(sources, _logger);
+                using (var archive = ZipFile.OpenRead(package.FullName))
+                {
+                    var entries = archive.Entries.Select(entry => entry.FullName.Replace('\\', '/')).ToList();
+                    CollectionAssert.Contains(entries, "default.htm");
+                    CollectionAssert.Contains(entries, "app_data/jobs/continuous/Office365ActivityImporter/job.exe");
+                    CollectionAssert.Contains(entries, "app_data/jobs/continuous/AppInsightsImporter/job.exe");
+                }
+            }
+            finally
+            {
+                Directory.Delete(testRoot, true);
+            }
+        }
+
+        private static string CreateTestZip(string testRoot, string rootDirectoryName, string fileName)
+        {
+            var sourceDirectory = Path.Combine(testRoot, rootDirectoryName);
+            Directory.CreateDirectory(sourceDirectory);
+            System.IO.File.WriteAllText(Path.Combine(sourceDirectory, fileName), "synthetic test content");
+
+            var zipPath = Path.Combine(testRoot, rootDirectoryName + ".zip");
+            ZipFile.CreateFromDirectory(sourceDirectory, zipPath, CompressionLevel.Optimal, true);
+            return zipPath;
         }
 
         [TestMethod]

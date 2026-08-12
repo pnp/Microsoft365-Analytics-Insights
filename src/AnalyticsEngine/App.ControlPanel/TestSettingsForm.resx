@@ -117,10 +117,10 @@
   <resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
-  <metadata name="backgroundWorkerAutoDetectFTP.TrayLocation" type="System.Drawing.Point, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
+  <metadata name="backgroundWorkerAutoDetectSql.TrayLocation" type="System.Drawing.Point, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
     <value>17, 17</value>
   </metadata>
   <data name="lblTitle.Text" xml:space="preserve">
-    <value>This form is used to configure targets for the network tests used for the “Test Configuration” button on the “install” tab. The tests check that network connectivity is possible for SQL Server and FTPS – required for installation to work.</value>
+    <value>This form configures the SQL Server target used by the “Test Configuration” button on the install tab. App Service content deployment uses HTTPS and does not require a separate FTP connectivity test.</value>
   </data>
 </root>

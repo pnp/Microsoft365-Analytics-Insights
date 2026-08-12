@@ -3,7 +3,7 @@
 namespace App.ControlPanel.Engine
 {
     /// <summary>
-    /// Centralised guidance for installer steps that need data-plane access (SQL, FTP, HTTP, secret upload) to
+    /// Centralised guidance for installer steps that need data-plane access (SQL, HTTP, secret upload) to
     /// PaaS resources whose public network access has been disabled.
     ///
     /// In that mode the only way for those data-plane calls to succeed is for the installer host to have private
@@ -31,7 +31,7 @@ namespace App.ControlPanel.Engine
         /// Returns an operator-facing remediation hint to append to a failure log when the installer has just
         /// failed a data-plane operation against a PaaS resource whose public network access is disabled.
         /// </summary>
-        /// <param name="operation">Short human description of what was being attempted, e.g. "SQL connectivity test", "App Service FTP upload", "App Service warm-up request".</param>
+        /// <param name="operation">Short human description of what was being attempted, e.g. "SQL connectivity test", "App Service HTTPS deployment", "App Service warm-up request".</param>
         /// <param name="vnetName">Name of the VNet the resources are attached to, or null if unknown.</param>
         public static string BuildVmOnVNetGuidance(string operation, string vnetName)
         {
