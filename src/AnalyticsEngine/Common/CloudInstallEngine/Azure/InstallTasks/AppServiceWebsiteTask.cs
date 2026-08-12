@@ -38,12 +38,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 {
                     AppServicePlanId = appServicePlan.Id,
                     IsHttpsOnly = true,
+                    PublicNetworkAccess = desiredAccess,
                     SiteConfig = new SiteConfigProperties
                     {
                         IsAlwaysOn = true,
                         FtpsState = AppServiceFtpsState.Disabled,
-                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
-                        PublicNetworkAccess = desiredAccess
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
                     },
                     Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
                 };
@@ -71,15 +71,15 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var needsTlsUpdate = siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString());
                 var needsAlwaysOnUpdate = siteConfig.IsAlwaysOn != true;
                 var needsFtpsDisable = siteConfig.FtpsState != AppServiceFtpsState.Disabled;
-                var needsPublicAccessUpdate = !string.Equals(siteConfig.PublicNetworkAccess, desiredAccess, System.StringComparison.OrdinalIgnoreCase);
+                var needsPublicAccessUpdate = !string.Equals(webApp.Data.PublicNetworkAccess, desiredAccess, System.StringComparison.OrdinalIgnoreCase);
                 if (needsTlsUpdate || needsAlwaysOnUpdate || needsFtpsDisable || needsPublicAccessUpdate)
                 {
+                    webAppUpdateInfo.PublicNetworkAccess = desiredAccess;
                     webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
                         MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
                         IsAlwaysOn = true,
-                        FtpsState = AppServiceFtpsState.Disabled,
-                        PublicNetworkAccess = desiredAccess
+                        FtpsState = AppServiceFtpsState.Disabled
                     };
                     if (needsTlsUpdate)
                         _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");

@@ -69,7 +69,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
 
             // Deploy profiling PS?
-            if (config.SolutionConfig.ImportTaskSettings.GraphUsageReports && config.TasksConfig.InstallLatestSolutionContent)
+            if (!downloadReleaseOnly && config.SolutionConfig.ImportTaskSettings.GraphUsageReports && config.TasksConfig.InstallLatestSolutionContent)
             {
                 // Add to install tasks
                 if (automationAccount != null)
