@@ -4,6 +4,7 @@ import {
   Body1,
   Text,
   Card,
+  Input,
   Select,
   Tab,
   TabList,
@@ -25,6 +26,7 @@ import CategoryBarChart from '../components/charts/CategoryBarChart';
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
 const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; label: string; blurb: string }[] = [
   { flag: 'copilot', key: 'copilot', label: 'Copilot', blurb: 'Microsoft 365 Copilot adoption and usage.' },
+  { flag: 'copilot', key: 'copilot-agents', label: 'Copilot agents', blurb: 'Copilot agent popularity and usage.' },
   { flag: 'usage', key: 'usage', label: 'Microsoft 365 usage', blurb: 'Weekly active users across Microsoft 365 workloads.' },
   { flag: 'spoAudit', key: 'spo-audit', label: 'SharePoint & OneDrive', blurb: 'File activity from the audit log.' },
   { flag: 'webTraffic', key: 'web-traffic', label: 'Website traffic', blurb: 'Page views and visitors from the page tracker.' },
@@ -96,6 +98,9 @@ export default function ReportsPage() {
 
   const [months, setMonths] = useState(3);
   const [selectedArea, setSelectedArea] = useState<ReportAreaKey | null>(null);
+  const [topAgents, setTopAgents] = useState(8);
+  const [agentNameDraft, setAgentNameDraft] = useState('');
+  const [agentNameFilter, setAgentNameFilter] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -197,11 +202,59 @@ export default function ReportsPage() {
             </div>
           )}
 
+          {selectedArea === 'copilot-agents' && (
+            <div className={styles.controls} style={{ marginTop: '16px', flexWrap: 'wrap' }}>
+              <Text size={200} className={styles.muted}>
+                Top agents
+              </Text>
+              <Select
+                value={String(topAgents)}
+                onChange={(_e, data) => setTopAgents(Number(data.value))}
+                aria-label="Number of top Copilot agents"
+              >
+                {[5, 8, 10, 15, 20].map((count) => (
+                  <option key={count} value={count}>
+                    {count}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                value={agentNameDraft}
+                onChange={(_e, data) => setAgentNameDraft(data.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') setAgentNameFilter(agentNameDraft.trim());
+                }}
+                placeholder="Filter by agent name"
+                aria-label="Filter Copilot agents by name"
+              />
+              <Button
+                size="small"
+                onClick={() => setAgentNameFilter(agentNameDraft.trim())}
+              >
+                Apply
+              </Button>
+              {agentNameFilter && (
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  onClick={() => {
+                    setAgentNameDraft('');
+                    setAgentNameFilter('');
+                  }}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+          )}
+
           <ReportAreaView
             key={selectedArea}
             area={selectedArea}
             months={months}
             blurb={enabledAreas.find((a) => a.key === selectedArea)?.blurb ?? ''}
+            topAgents={topAgents}
+            agentName={agentNameFilter}
           />
         </>
       )}
@@ -210,7 +263,19 @@ export default function ReportsPage() {
 }
 
 /** Fetches and renders the charts for a single report area over the chosen window. */
-function ReportAreaView({ area, months, blurb }: { area: ReportAreaKey; months: number; blurb: string }) {
+function ReportAreaView({
+  area,
+  months,
+  blurb,
+  topAgents,
+  agentName,
+}: {
+  area: ReportAreaKey;
+  months: number;
+  blurb: string;
+  topAgents: number;
+  agentName: string;
+}) {
   const styles = useStyles();
 
   const [data, setData] = useState<ReportAreaData | null>(null);
@@ -222,7 +287,11 @@ function ReportAreaView({ area, months, blurb }: { area: ReportAreaKey; months: 
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchReportArea(area, months)
+    fetchReportArea(
+      area,
+      months,
+      area === 'copilot-agents' ? { topAgents, agentName } : undefined,
+    )
       .then((d) => {
         if (!cancelled) setData(d);
       })
@@ -235,7 +304,7 @@ function ReportAreaView({ area, months, blurb }: { area: ReportAreaKey; months: 
     return () => {
       cancelled = true;
     };
-  }, [area, months, reloadKey]);
+  }, [area, months, topAgents, agentName, reloadKey]);
 
   if (loading) {
     return (

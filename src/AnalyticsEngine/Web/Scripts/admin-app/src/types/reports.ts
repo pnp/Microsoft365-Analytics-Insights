@@ -54,6 +54,7 @@ export interface ReportAreaData {
 /** A report area key, as used in the api/Reports/{area} route. */
 export type ReportAreaKey =
   | 'copilot'
+  | 'copilot-agents'
   | 'usage'
   | 'spo-audit'
   | 'web-traffic'
