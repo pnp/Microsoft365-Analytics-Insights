@@ -132,13 +132,12 @@ namespace App.ControlPanel.Engine
         #endregion
     }
 
-    public abstract class BaseInstallProcessWithFtp : BaseInstallProcess
+    public abstract class BaseInstallProcessWithProxy : BaseInstallProcess
     {
-        protected BaseInstallProcessWithFtp(SolutionInstallConfig config, ILogger logger, InstallerFtpConfig ftpConfig) : base(config, logger)
+        protected BaseInstallProcessWithProxy(SolutionInstallConfig config, ILogger logger, InstallerProxyConfig proxyConfig) : base(config, logger)
         {
-            _ftpConfig = ftpConfig;
+            _proxyConfig = proxyConfig;
         }
-        protected readonly InstallerFtpConfig _ftpConfig;
+        protected readonly InstallerProxyConfig _proxyConfig;
     }
 }
-

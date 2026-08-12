@@ -1,4 +1,5 @@
 ﻿using App.ControlPanel.Engine;
+using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using DataUtils;
 using System;
@@ -60,7 +61,11 @@ namespace App.ControlPanel
             chkDisclaimer.Checked = false;
 #endif
             this.SavedPreferences = SecureLocalPreferences.Load<InstallerPreferences>();
-            installSPOSitesControl.FtpConfig = SavedPreferences.FtpConfig;
+            if (this.SavedPreferences.ProxyConfig == null)
+            {
+                this.SavedPreferences.ProxyConfig = new InstallerProxyConfig();
+            }
+            installSPOSitesControl.ProxyConfig = SavedPreferences.ProxyConfig;
 
             // Overwrite tests config if we're using default settings, or we don't have any saved for some reason
             if (this.SavedPreferences.TestsConfig == null)
@@ -147,11 +152,11 @@ namespace App.ControlPanel
         private void proxyConfigToolStripMenuItem_Click(object sender, EventArgs e)
         {
             var f = new ProxyConfigForm();
-            f.FtpConfig = this.SavedPreferences.FtpConfig;
+            f.ProxyConfig = this.SavedPreferences.ProxyConfig;
             if (f.ShowDialog() == DialogResult.OK)
             {
-                installSPOSitesControl.FtpConfig = f.FtpConfig;
-                this.SavedPreferences.FtpConfig = f.FtpConfig;
+                installSPOSitesControl.ProxyConfig = f.ProxyConfig;
+                this.SavedPreferences.ProxyConfig = f.ProxyConfig;
                 this.SavedPreferences.SaveToTempFile();
             }
         }
@@ -313,10 +318,9 @@ namespace App.ControlPanel
         {
 
             var f = new TestSettingsForm();
-            f.SolutionInstallConfig = this.SelectedUI.GetConfigurationState();            // Give current config so it can lookup FTP & SQL details
+            f.SolutionInstallConfig = this.SelectedUI.GetConfigurationState();            // Give current config so it can look up SQL details
 
             f.TestConfiguration = SavedPreferences.TestsConfig;     // Currently configured test config
-            f.FtpConfig = SavedPreferences.FtpConfig;
             if (f.ShowDialog() == DialogResult.OK)
             {
                 var newConfig = f.TestConfiguration;

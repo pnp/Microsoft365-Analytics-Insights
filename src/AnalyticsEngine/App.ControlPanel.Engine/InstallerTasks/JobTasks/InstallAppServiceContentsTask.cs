@@ -7,29 +7,32 @@ using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
-using FluentFTP;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
-using System.Net.Sockets;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
 {
     /// <summary>
-    /// Installs solution contents to app-service via FTPS. Does not configure the web-app settings - this is done in SolutionInstaller.ConfigureWebApp
+    /// Installs solution contents to App Service via Kudu ZIP deployment. Does not configure the web-app settings - this is done in SolutionInstaller.ConfigureWebApp.
     /// </summary>
     public class InstallAppServiceContentsTask : InstallTaskInAzResourceGroup<LocalStorageInstallSourceInfo>
     {
-        private readonly InstallerFtpConfig _ftpConfig;
+        private readonly InstallerProxyConfig _proxyConfig;
         private readonly VNetConfig _networkConfig;
 
-        public InstallAppServiceContentsTask(InstallerFtpConfig ftpConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig)
+        public InstallAppServiceContentsTask(InstallerProxyConfig proxyConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig)
             : base(config, logger, azureLocation, tags)
         {
-            _ftpConfig = ftpConfig;
+            _proxyConfig = proxyConfig ?? throw new ArgumentNullException(nameof(proxyConfig));
             _networkConfig = networkConfig;
         }
 
@@ -42,11 +45,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _logger.LogInformation("Configuring web-jobs in App Service ...");
 
-            var ftp = webApp.Value.GetPublishingProfileXmlWithSecrets(new CsmPublishingProfile() { Format = PublishingProfileFormat.Ftp });
-            using (var ms = new StreamReader(ftp.Value))
+            var publishingProfile = webApp.Value.GetPublishingProfileXmlWithSecrets(
+                new CsmPublishingProfile { Format = PublishingProfileFormat.WebDeploy });
+            using (var ms = new StreamReader(publishingProfile.Value))
             {
                 var profileData = publishData.FromXml(ms);
-                var ftpDetails = profileData.GetPublishFtpsUrl();
+                var kuduDetails = profileData.GetKuduPublishInfo();
 
                 _logger.LogInformation("Found latest stable release packages:");
                 _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.AITracker).FileLocation);
@@ -54,15 +58,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation);
                 _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation);
 
-                const string PATH_WEBJOB = "/site/wwwroot/app_data/jobs/continuous/", PATH_WEBSITE = "/site/wwwroot/";
-
-                // Upload the web-jobs & app-service contents
-                _logger.LogInformation("Installing Office 365 import web-job...");
-                await UnpackAndUpload(localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity), PATH_WEBJOB, true, ftpDetails, _ftpConfig);
-                _logger.LogInformation("Installing Application Insights import web-job...");
-                await UnpackAndUpload(localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights), PATH_WEBJOB, true, ftpDetails, _ftpConfig);
-                _logger.LogInformation("Installing App Service website contents...");
-                await UnpackAndUpload(localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite), PATH_WEBSITE, false, ftpDetails, _ftpConfig);
+                _logger.LogInformation("Building App Service deployment package...");
+                var deploymentPackage = BuildDeploymentPackage(localSources, _logger);
+                _logger.LogInformation("Deploying web-jobs and website to App Service over HTTPS...");
+                await PublishZipAsync(kuduDetails, deploymentPackage, _proxyConfig);
             }
 
             var url = $"https://{webApp.Value.Data.HostNames.First()}/";
@@ -71,80 +70,130 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return localSources;
         }
 
-        internal async Task UnpackAndUpload(LocalStorageBlobInfo localStorageBlobInfo, string relativePath, bool createZipFolderName, FtpPublishInfo appServiceFtp, InstallerFtpConfig ftpConfig)
+        internal static FileInfo BuildDeploymentPackage(LocalStorageInstallSourceInfo localSources, ILogger logger)
         {
-            var zipContentsDir = ZipFileTasks.Unzip(localStorageBlobInfo, _logger);
+            var deploymentRootPath = Path.Combine(DataUtils.StringUtils.TempDirPath, "AppServiceDeployment");
+            ResetDirectory(deploymentRootPath);
 
-            // Generate URL
-            var relativeThisJobSubDir = relativePath;
-            if (createZipFolderName)
-            {
-                relativeThisJobSubDir = relativePath + zipContentsDir.Name;
-            }
+            var websiteContents = ZipFileTasks.Unzip(
+                localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite), logger);
+            CopyDirectory(websiteContents.FullName, deploymentRootPath);
 
-            // https://github.com/robinrodricks/FluentFTP/wiki/Quick-Start-Example
-            using (var client = FtpClientFactory.GetFtpClient(GetHostnameFromPublishingProfile(appServiceFtp.RootUrl), appServiceFtp.Username, appServiceFtp.Password, ftpConfig))
-            {
-                try
-                {
-                    await client.Connect();
-                }
-                catch (SocketException ex)
-                {
-                    _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy}). " +
-                        $"Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
-                    LogPrivateNetworkGuidanceIfApplicable();
-                    throw;
-                }
-                catch (IOException ex)
-                {
-                    _logger.LogError($"Couldn't connect to {appServiceFtp.RootUrl} - check installer proxy settings (proxy enabled = {ftpConfig.UseFtpProxy}) and ensure app-service has 'FTP state' configured to 'FTPS only'. " +
-                        $"Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
-                    LogPrivateNetworkGuidanceIfApplicable();
-                    throw;
-                }
+            AddWebJobToPackage(localSources, SoftwareComponent.WebJobActivity, deploymentRootPath, logger);
+            AddWebJobToPackage(localSources, SoftwareComponent.WebJobAppInsights, deploymentRootPath, logger);
 
-                try
-                {
-                    await Upload(client, zipContentsDir, relativeThisJobSubDir);
-                }
-                catch (Exception ex)
-                {
-                    // FluentFTP wraps the real cause in InnerException and its top-level message
-                    // is the unhelpful "An error occurred uploading file(s). See inner exception
-                    // for more info." Surface the full chain so the operator can act on it.
-                    _logger.LogError($"FTP upload to '{relativeThisJobSubDir}' on {appServiceFtp.RootUrl} failed: " +
-                        CloudInstallEngine.ExceptionMessages.Format(ex));
-                    LogPrivateNetworkGuidanceIfApplicable();
-                    throw;
-                }
+            var packagePath = Path.Combine(DataUtils.StringUtils.TempDirPath, "AppServiceDeployment.zip");
+            if (File.Exists(packagePath))
+                File.Delete(packagePath);
 
-                await client.Disconnect();
-            }
-        }
-        string GetHostnameFromPublishingProfile(string s)
-        {
-            if (string.IsNullOrEmpty(s))
-            {
-                throw new ArgumentOutOfRangeException(nameof(s));
-            }
-
-            var uri = new Uri(s);
-            return uri.Host;
-
-            throw new ArgumentOutOfRangeException(nameof(s));
+            ZipFile.CreateFromDirectory(deploymentRootPath, packagePath, CompressionLevel.Optimal, false);
+            return new FileInfo(packagePath);
         }
 
-        async Task Upload(AsyncFtpClient client, DirectoryInfo zipContentsDir, string relativeThisJobSubDir)
+        private static void AddWebJobToPackage(
+            LocalStorageInstallSourceInfo localSources,
+            SoftwareComponent component,
+            string deploymentRootPath,
+            ILogger logger)
         {
-            await client.UploadFiles(zipContentsDir.GetFiles().Select(d => d.FullName), relativeThisJobSubDir, FtpRemoteExists.Overwrite, true, FtpVerify.Retry, FtpError.Throw);
+            var webJobContents = ZipFileTasks.Unzip(localSources.GetSolutionComponentLocation(component), logger);
+            var webJobPath = Path.Combine(
+                deploymentRootPath,
+                "app_data",
+                "jobs",
+                "continuous",
+                webJobContents.Name);
+            CopyDirectory(webJobContents.FullName, webJobPath);
+        }
 
-            // Process sub-folders too
-            foreach (var subDir in zipContentsDir.GetDirectories())
+        private async Task PublishZipAsync(KuduPublishInfo publishInfo, FileInfo deploymentPackage, InstallerProxyConfig proxyConfig)
+        {
+            var handler = new HttpClientHandler();
+            if (proxyConfig.UseProxy)
             {
-                var absoluteThisJobFtpDir = $"{relativeThisJobSubDir}{subDir.Name}/";
+                var proxy = new WebProxy(proxyConfig.Host, proxyConfig.Port);
+                proxy.Credentials = proxyConfig.IntegratedAuth
+                    ? CredentialCache.DefaultCredentials
+                    : new NetworkCredential(proxyConfig.Username, proxyConfig.Password);
+                handler.Proxy = proxy;
+                handler.UseProxy = true;
+            }
 
-                await Upload(client, subDir, absoluteThisJobFtpDir);
+            using (handler)
+            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(30) })
+            using (var packageStream = deploymentPackage.OpenRead())
+            using (var content = new StreamContent(packageStream))
+            {
+                var credentials = Convert.ToBase64String(
+                    Encoding.UTF8.GetBytes($"{publishInfo.Username}:{publishInfo.Password}"));
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+                content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+
+                var publishUri = BuildKuduPublishUri(publishInfo.RootUrl);
+                HttpResponseMessage response;
+                try
+                {
+                    response = await client.PostAsync(publishUri, content);
+                }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogError($"App Service HTTPS deployment could not reach '{publishUri.GetLeftPart(UriPartial.Authority)}'. " +
+                        $"Check installer proxy and SCM access settings. Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
+                    LogPrivateNetworkGuidanceIfApplicable();
+                    throw;
+                }
+                catch (TaskCanceledException ex)
+                {
+                    _logger.LogError($"App Service HTTPS deployment to '{publishUri.GetLeftPart(UriPartial.Authority)}' timed out after 30 minutes. " +
+                        $"Check installer proxy and SCM access settings. Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
+                    LogPrivateNetworkGuidanceIfApplicable();
+                    throw;
+                }
+
+                using (response)
+                {
+                    var responseBody = await response.Content.ReadAsStringAsync();
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var detail = string.IsNullOrWhiteSpace(responseBody)
+                            ? response.ReasonPhrase
+                            : responseBody.Substring(0, Math.Min(responseBody.Length, 2000));
+                        throw new InstallException(
+                            $"App Service HTTPS deployment failed with HTTP {(int)response.StatusCode} ({response.ReasonPhrase}): {detail}");
+                    }
+                }
+            }
+        }
+
+        internal static Uri BuildKuduPublishUri(string publishUrl)
+        {
+            if (string.IsNullOrWhiteSpace(publishUrl))
+                throw new ArgumentOutOfRangeException(nameof(publishUrl));
+
+            var absoluteUrl = publishUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? publishUrl
+                : "https://" + publishUrl;
+            var profileUri = new Uri(absoluteUrl);
+            return new Uri(profileUri.GetLeftPart(UriPartial.Authority) + "/api/publish?type=zip");
+        }
+
+        private static void ResetDirectory(string path)
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, true);
+            Directory.CreateDirectory(path);
+        }
+
+        private static void CopyDirectory(string sourcePath, string destinationPath)
+        {
+            Directory.CreateDirectory(destinationPath);
+            foreach (var filePath in Directory.GetFiles(sourcePath))
+            {
+                File.Copy(filePath, Path.Combine(destinationPath, Path.GetFileName(filePath)), true);
+            }
+            foreach (var directoryPath in Directory.GetDirectories(sourcePath))
+            {
+                CopyDirectory(directoryPath, Path.Combine(destinationPath, Path.GetFileName(directoryPath)));
             }
         }
 
@@ -152,7 +201,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         {
             if (PrivateNetworkGuidance.IsPrivateNetworkOnly(_networkConfig))
             {
-                _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the App Service FTP release upload", _networkConfig?.VNetName));
+                _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the App Service SCM HTTPS release upload", _networkConfig?.VNetName));
             }
         }
     }

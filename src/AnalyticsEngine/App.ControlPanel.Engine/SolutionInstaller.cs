@@ -16,10 +16,10 @@ namespace App.ControlPanel.Engine
     /// <summary>
     /// Top-level installer class. Executes a full solution install based on a SolutionInstallConfig values
     /// </summary>
-    public class SolutionInstaller : BaseInstallProcessWithFtp
+    public class SolutionInstaller : BaseInstallProcessWithProxy
     {
-        public SolutionInstaller(SolutionInstallConfig config, ILogger logger, SoftwareReleaseConfig softwareConfig, InstallerFtpConfig ftpConfig,
-            string installingUsername, string configPassword) : base(config, logger, ftpConfig)
+        public SolutionInstaller(SolutionInstallConfig config, ILogger logger, SoftwareReleaseConfig softwareConfig, InstallerProxyConfig proxyConfig,
+            string installingUsername, string configPassword) : base(config, logger, proxyConfig)
         {
             _softwareConfig = softwareConfig;
             this.InstalledByUsername = installingUsername;
@@ -81,7 +81,7 @@ namespace App.ControlPanel.Engine
                 ct.ThrowIfCancellationRequested();
                 // Run stuff now everything in Azure is created
                 log.LogInformation("=== Phase: App Service configuration & content deploy ===");
-                var tasks = new ConfigureAzureComponentsTasks(Config, log, _ftpConfig, InstalledByUsername, _softwareConfig, _configPassword);
+                var tasks = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig, _configPassword);
                 await tasks.RunPostCreatePaaSTasks(
                     azureBackeEndCreationJob.CreatedWebSiteResource,
                     azureBackeEndCreationJob.DatabasePaaSInfo,
@@ -143,7 +143,7 @@ namespace App.ControlPanel.Engine
             {
                 // Anything else. Log error as fatal — include the full InnerException chain
                 // (the installer ILogger drops the Exception arg, so without this the inner
-                // cause of e.g. FluentFTP "see inner exception for more info" is lost).
+                // cause of wrapper exceptions is lost).
                 log.LogError($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + CloudInstallEngine.ExceptionMessages.Format(ex));
                 Console.WriteLine(ex);
                 InstallerLogs.AddToWindowsEventLog($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + CloudInstallEngine.ExceptionMessages.Format(ex), true);

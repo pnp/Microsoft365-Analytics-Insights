@@ -40,7 +40,7 @@ namespace App.ControlPanel.Frames
 
         #region Props
 
-        public InstallerFtpConfig FtpConfig { get; set; }
+        public InstallerProxyConfig ProxyConfig { get; set; }
         public TestConfiguration TestsConfig { get; set; }
 
         #endregion
@@ -398,11 +398,11 @@ namespace App.ControlPanel.Frames
 
             if (task == InstallTask.Install)
             {
-                _installerEngine = new SolutionInstaller(config, _logger, softwareConfig, FtpConfig, Environment.UserName, (this.ParentForm as MainForm).LastPassword);
+                _installerEngine = new SolutionInstaller(config, _logger, softwareConfig, ProxyConfig, Environment.UserName, (this.ParentForm as MainForm).LastPassword);
             }
             else if (task == InstallTask.Test)
             {
-                _installerEngine = new SolutionInstallVerifier(config, _logger, FtpConfig, this.TestsConfig);
+                _installerEngine = new SolutionInstallVerifier(config, _logger, this.TestsConfig);
             }
             else if (task == InstallTask.UninstallFromSharePoint)
             {
