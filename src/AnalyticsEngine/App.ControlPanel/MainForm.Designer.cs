@@ -328,7 +328,7 @@
             this.installSPOSitesControl.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.installSPOSitesControl.FtpConfig = null;
+            this.installSPOSitesControl.ProxyConfig = null;
             this.installSPOSitesControl.Location = new System.Drawing.Point(10, 19);
             this.installSPOSitesControl.Margin = new System.Windows.Forms.Padding(6);
             this.installSPOSitesControl.Name = "installSPOSitesControl";
@@ -395,4 +395,3 @@
         private System.Windows.Forms.ToolStripMenuItem solutionTestsConfigurationToolStripMenuItem;
     }
 }
-
