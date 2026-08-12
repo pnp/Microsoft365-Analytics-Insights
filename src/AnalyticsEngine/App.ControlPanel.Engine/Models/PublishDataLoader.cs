@@ -46,6 +46,22 @@ namespace App.ControlPanel.Engine.Models
             }
         }
 
+        public KuduPublishInfo GetKuduPublishInfo()
+        {
+            var msDeployProfile = publishProfile.FirstOrDefault(p => p.publishMethod == "MSDeploy");
+            if (msDeployProfile == null)
+            {
+                throw new Exception("Can't find MSDeploy publishing method");
+            }
+
+            return new KuduPublishInfo
+            {
+                RootUrl = msDeployProfile.publishUrl,
+                Username = msDeployProfile.userName,
+                Password = msDeployProfile.userPWD
+            };
+        }
+
         private publishDataPublishProfile[] publishProfileField;
 
         /// <remarks/>
