@@ -26,13 +26,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class InstallAppServiceContentsTask : InstallTaskInAzResourceGroup<LocalStorageInstallSourceInfo>
     {
-        private readonly InstallerFtpConfig _ftpConfig;
+        private readonly InstallerProxyConfig _proxyConfig;
         private readonly VNetConfig _networkConfig;
 
-        public InstallAppServiceContentsTask(InstallerFtpConfig ftpConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig)
+        public InstallAppServiceContentsTask(InstallerProxyConfig proxyConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig)
             : base(config, logger, azureLocation, tags)
         {
-            _ftpConfig = ftpConfig ?? throw new ArgumentNullException(nameof(ftpConfig));
+            _proxyConfig = proxyConfig ?? throw new ArgumentNullException(nameof(proxyConfig));
             _networkConfig = networkConfig;
         }
 
@@ -61,7 +61,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 _logger.LogInformation("Building App Service deployment package...");
                 var deploymentPackage = BuildDeploymentPackage(localSources, _logger);
                 _logger.LogInformation("Deploying web-jobs and website to App Service over HTTPS...");
-                await PublishZipAsync(kuduDetails, deploymentPackage, _ftpConfig);
+                await PublishZipAsync(kuduDetails, deploymentPackage, _proxyConfig);
             }
 
             var url = $"https://{webApp.Value.Data.HostNames.First()}/";
@@ -106,15 +106,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
             CopyDirectory(webJobContents.FullName, webJobPath);
         }
 
-        private async Task PublishZipAsync(KuduPublishInfo publishInfo, FileInfo deploymentPackage, InstallerFtpConfig proxyConfig)
+        private async Task PublishZipAsync(KuduPublishInfo publishInfo, FileInfo deploymentPackage, InstallerProxyConfig proxyConfig)
         {
             var handler = new HttpClientHandler();
-            if (proxyConfig.UseFtpProxy)
+            if (proxyConfig.UseProxy)
             {
-                var proxy = new WebProxy(proxyConfig.ProxyHost, proxyConfig.ProxyPort);
+                var proxy = new WebProxy(proxyConfig.Host, proxyConfig.Port);
                 proxy.Credentials = proxyConfig.IntegratedAuth
                     ? CredentialCache.DefaultCredentials
-                    : new NetworkCredential(proxyConfig.ProxyUsername, proxyConfig.ProxyPassword);
+                    : new NetworkCredential(proxyConfig.Username, proxyConfig.Password);
                 handler.Proxy = proxy;
                 handler.UseProxy = true;
             }
