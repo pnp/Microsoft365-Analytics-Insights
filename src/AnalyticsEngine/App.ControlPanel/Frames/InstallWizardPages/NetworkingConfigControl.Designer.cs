@@ -467,7 +467,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
-            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 444);
+            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 394);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
             this.lblHybridWorkerVm.TabIndex = 17;
