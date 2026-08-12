@@ -72,6 +72,14 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("copilot")]
         public Task<IHttpActionResult> Copilot(int months = DefaultMonths) => AreaAsync("copilot", months);
 
+        // GET: api/Reports/copilot-agents?months=3
+        [HttpGet]
+        [Route("copilot-agents")]
+        public Task<IHttpActionResult> CopilotAgents(
+            int months = DefaultMonths,
+            int top = 8,
+            string agentName = null) => AreaAsync("copilot-agents", months, top, agentName);
+
         // GET: api/Reports/usage?months=3
         [HttpGet]
         [Route("usage")]
@@ -100,12 +108,29 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// Builds (or serves from cache) the charts for one area over the requested window.
         /// </summary>
-        private async Task<IHttpActionResult> AreaAsync(string area, int months)
+        private async Task<IHttpActionResult> AreaAsync(
+            string area,
+            int months,
+            int topAgents = 8,
+            string agentName = null)
         {
             if (months < 1) months = DefaultMonths;
             if (months > MaxMonths) months = MaxMonths;
 
+            if (topAgents < 1) topAgents = 1;
+            if (topAgents > 20) topAgents = 20;
+
+            var trimmedAgentName = agentName?.Trim();
+            var normalizedAgentName = string.IsNullOrEmpty(trimmedAgentName)
+                ? null
+                : trimmedAgentName.Substring(0, Math.Min(trimmedAgentName.Length, 100));
+
             var cacheKey = CacheKeyPrefix + area + "::" + months;
+            if (area == "copilot-agents")
+            {
+                cacheKey += $"::top={topAgents}::agent={normalizedAgentName ?? "(all)"}";
+            }
+
             if (MemoryCache.Default.Get(cacheKey) is ReportAreaData cached)
             {
                 return Ok(cached);
@@ -124,6 +149,9 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 case "copilot":
                     chartTasks = CopilotCharts(firstMonday, weekSpine);
+                    break;
+                case "copilot-agents":
+                    chartTasks = CopilotAgentCharts(firstMonday, weekSpine, topAgents, normalizedAgentName);
                     break;
                 case "usage":
                     chartTasks = UsageCharts(firstMonday, weekSpine);
@@ -186,6 +214,57 @@ namespace Web.AnalyticsWeb.Controllers
                     "Distinct users with at least one Copilot interaction each week.", "Users", "Active users", users, from, weekSpine),
                 RunCategoryAsync("copilot-hosts", "Interactions by app",
                     "Where Copilot is being used across the window (top apps).", "Interactions", hosts, from),
+            };
+        }
+
+        private static List<Task<ReportChart>> CopilotAgentCharts(
+            DateTime from,
+            List<DateTime> weekSpine,
+            int topAgents,
+            string agentName)
+        {
+            var wb = WeekBucket("au.time_stamp");
+            var agents =
+                "WITH EligibleAgents AS (\r\n" +
+                "    SELECT id\r\n" +
+                "    FROM dbo.copilot_agents\r\n" +
+                "    WHERE @agentName IS NULL OR CHARINDEX(@agentName, ISNULL(name, '')) > 0\r\n" +
+                "),\r\n" +
+                "AgentWeeks AS (\r\n" +
+                "    SELECT c.agent_id AS AgentKey,\r\n" +
+                $"           {wb} AS WeekStart,\r\n" +
+                "           COUNT_BIG(*) AS InteractionCount\r\n" +
+                "    FROM dbo.copilot_chats AS c\r\n" +
+                "    JOIN dbo.audit_events AS au ON c.event_id = au.id\r\n" +
+                "    JOIN EligibleAgents AS eligible ON c.agent_id = eligible.id\r\n" +
+                "    WHERE au.time_stamp >= @from\r\n" +
+                $"    GROUP BY c.agent_id, {wb}\r\n" +
+                "),\r\n" +
+                "AgentWeeksWithTotals AS (\r\n" +
+                "    SELECT AgentKey, WeekStart, InteractionCount,\r\n" +
+                "           SUM(InteractionCount) OVER (PARTITION BY AgentKey) AS TotalInteractions\r\n" +
+                "    FROM AgentWeeks\r\n" +
+                "),\r\n" +
+                "RankedAgentWeeks AS (\r\n" +
+                "    SELECT AgentKey, WeekStart, InteractionCount,\r\n" +
+                "           DENSE_RANK() OVER (ORDER BY TotalInteractions DESC, AgentKey) AS PopularityRank\r\n" +
+                "    FROM AgentWeeksWithTotals\r\n" +
+                ")\r\n" +
+                "SELECT ranked.AgentKey AS SeriesKey,\r\n" +
+                "       COALESCE(NULLIF(LTRIM(RTRIM(agent.name)), ''), NULLIF(LTRIM(RTRIM(agent.agent_id)), ''), '(unnamed agent)') AS SeriesName,\r\n" +
+                "       ranked.WeekStart,\r\n" +
+                "       CAST(ranked.InteractionCount AS float) AS Value\r\n" +
+                "FROM RankedAgentWeeks AS ranked\r\n" +
+                "JOIN dbo.copilot_agents AS agent ON ranked.AgentKey = agent.id\r\n" +
+                $"WHERE ranked.PopularityRank <= {topAgents}\r\n" +
+                "ORDER BY SeriesName, WeekStart\r\n" +
+                "OPTION (RECOMPILE);";
+
+            return new List<Task<ReportChart>>
+            {
+                RunGroupedTimeSeriesAsync("copilot-agent-interactions", "Copilot agent interactions per week",
+                    "Weekly interactions for the most-used Copilot agents matching the current filters.",
+                    "Interactions", agents, from, weekSpine, agentName, 60),
             };
         }
 
@@ -390,6 +469,56 @@ namespace Web.AnalyticsWeb.Controllers
             return chart;
         }
 
+        /// <summary>Runs one query that returns multiple named weekly series.</summary>
+        private static async Task<ReportChart> RunGroupedTimeSeriesAsync(string key, string title, string description,
+            string valueLabel, string body, DateTime from, List<DateTime> weekSpine, string agentName, int queryTimeoutSecs)
+        {
+            var chart = new ReportChart
+            {
+                Key = key,
+                Title = title,
+                Description = description,
+                Type = "timeseries",
+                ValueLabel = valueLabel,
+                Sql = DisplaySql(body, from, agentName),
+            };
+
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    db.Database.CommandTimeout = queryTimeoutSecs;
+                    var rows = await db.Database
+                        .SqlQuery<NamedWeekValueRow>(
+                            body,
+                            new SqlParameter("@from", from),
+                            new SqlParameter("@agentName", System.Data.SqlDbType.NVarChar, 100)
+                            {
+                                Value = (object)agentName ?? DBNull.Value,
+                            })
+                        .ToListAsync();
+
+                    chart.Series = rows
+                        .GroupBy(r => new { r.SeriesKey, r.SeriesName })
+                        .OrderByDescending(g => g.Sum(r => r.Value))
+                        .Select(g => new ReportSeries
+                        {
+                            Name = g.Key.SeriesName,
+                            Points = FillWeeks(
+                                weekSpine,
+                                g.Select(r => new WeekValueRow { WeekStart = r.WeekStart, Value = r.Value }).ToList()),
+                        })
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                chart.Error = InnermostMessage(ex);
+            }
+
+            return chart;
+        }
+
         /// <summary>Runs a categorical (bar) query - label + value rows, already ordered by the query.</summary>
         private static async Task<ReportChart> RunCategoryAsync(string key, string title, string description,
             string valueLabel, string body, DateTime from)
@@ -499,6 +628,16 @@ namespace Web.AnalyticsWeb.Controllers
             return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" + body;
         }
 
+        private static string DisplaySql(string body, DateTime from, string agentName)
+        {
+            var agentNameSql = agentName == null
+                ? "NULL"
+                : $"N'{agentName.Replace("'", "''")}'";
+            return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" +
+                   $"DECLARE @agentName nvarchar(100) = {agentNameSql};\r\n" +
+                   body;
+        }
+
         /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>
         private static string InnermostMessage(Exception ex)
         {
@@ -520,6 +659,15 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Shape for a weekly (WeekStart, Value) raw SQL result.</summary>
         private sealed class WeekValueRow
         {
+            public DateTime WeekStart { get; set; }
+            public double Value { get; set; }
+        }
+
+        /// <summary>Shape for a named weekly series raw SQL result.</summary>
+        private sealed class NamedWeekValueRow
+        {
+            public int SeriesKey { get; set; }
+            public string SeriesName { get; set; }
             public DateTime WeekStart { get; set; }
             public double Value { get; set; }
         }

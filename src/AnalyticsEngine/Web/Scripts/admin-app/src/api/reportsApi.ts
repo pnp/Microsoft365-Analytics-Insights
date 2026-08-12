@@ -18,9 +18,22 @@ export async function fetchReportAreas(): Promise<ReportAreas> {
   return response.json() as Promise<ReportAreas>;
 }
 
+export type ReportAreaOptions = {
+  topAgents?: number;
+  agentName?: string;
+};
+
 /** Fetch the weekly charts for one report area over the given window (months). */
-export async function fetchReportArea(area: ReportAreaKey, months: number): Promise<ReportAreaData> {
-  const url = `${baseUrl()}/${area}?months=${encodeURIComponent(months)}`;
+export async function fetchReportArea(
+  area: ReportAreaKey,
+  months: number,
+  options?: ReportAreaOptions,
+): Promise<ReportAreaData> {
+  const params = new URLSearchParams({ months: String(months) });
+  if (options?.topAgents !== undefined) params.set('top', String(options.topAgents));
+  if (options?.agentName) params.set('agentName', options.agentName);
+
+  const url = `${baseUrl()}/${area}?${params.toString()}`;
   const response = await fetch(url, {
     method: 'GET',
     credentials: 'same-origin',
