@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace UsageReporting
@@ -11,6 +12,19 @@ namespace UsageReporting
     {
         Task<AnonUsageStatsModel> LoadCurrentRecordByClientId(AnonUsageStatsModel model);
         Task SaveOrUpdate(AnonUsageStatsModel newVersion);
+    }
+
+    /// <summary>
+    /// Read-only side of the telemetry store. Kept separate from <see cref="ITelemetrySaveAdaptor"/>
+    /// so the importer side (which only writes) is not forced to take a dependency on it.
+    /// </summary>
+    public interface ITelemetryQueryAdaptor
+    {
+        /// <summary>
+        /// Returns the current (latest) telemetry record for every known client.
+        /// </summary>
+        /// <param name="maxItems">Optional cap to avoid pulling unbounded result sets.</param>
+        Task<IReadOnlyList<AnonUsageStatsModel>> LoadAllCurrentAsync(int? maxItems = null);
     }
 
     public class StatsSaveService
