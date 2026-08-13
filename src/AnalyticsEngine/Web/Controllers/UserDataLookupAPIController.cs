@@ -150,7 +150,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Description = "Power Apps launch / usage events (Audit.General feed)." },
             new CategoryMeta { Key = CatFlowEvents, Label = "Power Automate events", SupportsDetail = true,
                 Table = "event_meta_power_automate_flow", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
-                Description = "Power Automate flow run events (Audit.General feed)." },
+                Description = "Power Automate lifecycle and permission events (Audit.General feed)." },
             new CategoryMeta { Key = CatPowerBiEvents, Label = "Power BI events", SupportsDetail = true,
                 Table = "event_meta_power_bi", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
                 Description = "Power BI audit events (Audit.General feed)." },

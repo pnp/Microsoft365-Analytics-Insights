@@ -63,7 +63,7 @@ LEFT JOIN power_automate_flows pf ON pf.flow_id = i.flow_id
 WHERE NOT EXISTS (SELECT 1 FROM event_meta_power_automate_flow m WHERE m.event_id = i.event_id);
 
 
--- 5. Refresh connector bindings (pipe-delimited connectors_csv from save / publish events).
+-- 5. Add connector bindings observed on create/edit events.
 WITH split_connectors AS (
     SELECT DISTINCT
         i.flow_id,
