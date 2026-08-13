@@ -67,11 +67,12 @@ Each supported workload (`Constants.cs → ActivityImportConstants.WORKLOAD_*`) 
 | `AzureActiveDirectory` | `AzureADAuditLogContent` | None |
 | `MicrosoftStream` | `StreamAuditLogContent` | None |
 | `Copilot` | `CopilotAuditLogContent` | None (custom parser from JSON string) |
-| `PowerPlatform` (RecordType 256) | → `PowerPlatformAdminActivityRecordContent.ToWorkloadSpecificContent()` | Power Automate: FlowRunStarted only |
+| `PowerPlatform` (RecordType 256) | → `PowerPlatformAdminActivityRecordContent.ToWorkloadSpecificContent()` | Requires a supported resource identity |
 | `PowerApps` (legacy) | `PowerAppsAuditLogContent` | None |
-| `MicrosoftFlow` (legacy) | `PowerAutomateAuditLogContent` | FlowRunStarted only |
+| `MicrosoftFlow` | `PowerAutomateAuditLogContent` | Requires FlowId or usable FlowDetailsUrl |
 | `PowerBI` | `PowerBIAuditLogContent` | ViewReport only |
-| `MicrosoftCopilotStudio` | `CopilotStudioAuditLogContent` | None |
+| Copilot Studio authoring record (`BotId` present) | `CopilotStudioAuditLogContent` | Requires BotId |
+| `MicrosoftCopilotStudio` (legacy workload route) | `CopilotStudioAuditLogContent` | None |
 
 ---
 
@@ -103,8 +104,8 @@ PowerPlatformAdminActivityRecordContent (raw record)
 
 ### What's NOT in the Unified Schema
 - **AppType** (Canvas/Model-Driven/etc.) – not present in `LaunchPowerApp` events.
-- **RecurrenceType** – not present in `FlowRunStarted` events.
-- **ConnectionReferences** – only on publish/save events (which we don't persist).
+- **RecurrenceType** – not present in the current lifecycle/permission schema.
+- **Per-run metadata** – Purview does not emit individual flow runs.
 
 These were removed in migration `202605201510051_RemovePowerAppTypesAndFlowRecurrenceTypes`.
 
@@ -112,9 +113,9 @@ These were removed in migration `202605201510051_RemovePowerAppTypesAndFlowRecur
 
 ## Filtering Layers
 
-### 1. Workload Operation Filters (Dispatcher level)
+### 1. Workload Validation / Operation Filters (Dispatcher level)
 Applied **before** any staging. Defined in:
-- `PowerPlatformAuditLogFilter.ShouldPersistPowerAutomateOperation()` → FlowRunStarted only
+- `PowerPlatformAuditLogFilter.ShouldPersistPowerAutomateRecord()` → normalises documented fields and requires a flow identity
 - `ActivityImportConstants.PowerBIOps.IsSupported()` → ViewReport only
 - `PowerPlatformOps.IsPowerAppShareOp()` → recognises share operation names
 
@@ -184,7 +185,7 @@ payloads to verify property names.
 |---------|-------------|
 | "0 imported" but events exist | `SharePointOrgUrlsFilterConfig.InScope` returning false – check `org_urls` table has matching prefixes. Non-SP events must NOT be filtered by this. |
 | "skipping record with unsupported resource type ''" | Unified PowerPlatform event with an unknown `powerplatform.analytics.resource.type` value. Add handling to `ToWorkloadSpecificContent`. |
-| "skipping Power Automate event with non-run operation 'X'" | Expected – only `FlowRunStarted` is persisted. If a new run-like operation appears, add it to `PowerPlatformOps.FlowRunOps`. |
+| "Power Automate ... has no flow identity" | The record has neither legacy `FlowId` nor a `FlowDetailsUrl` containing `/flows/{id}`. Non-resource events such as trial licensing are intentionally skipped. |
 | Power BI events not saving | Only `ViewReport` is persisted. Other operations (Login, PublishReport, etc.) are intentionally dropped. |
 | Duplicate key violations in merge SQL | Typically a staging batch that includes the same natural key with different attribute values. Fix: `GROUP BY natural_key` + `MAX(other_cols)` in the upsert SELECT. |
 
@@ -227,9 +228,9 @@ Located in `Common/Entities/Migrations/`. Key points:
 8. Add unit tests mirroring `PowerPlatformAuditEventManagerTests` style.
 
 ### Adding a New Operation to an Existing Workload
-1. Add it to the relevant filter whitelist (e.g. `PowerPlatformOps.FlowRunOps`).
-2. Verify the operation carries the required fields (capture a real JSON sample first).
-3. Update the staging class if new columns are needed.
+1. Verify the operation carries the required resource identity and metadata fields.
+2. Capture and sanitise a JSON sample before adding schema-specific handling.
+3. Update the dispatcher validation and staging class if new columns are needed.
 4. Update the merge SQL.
 
 ---
