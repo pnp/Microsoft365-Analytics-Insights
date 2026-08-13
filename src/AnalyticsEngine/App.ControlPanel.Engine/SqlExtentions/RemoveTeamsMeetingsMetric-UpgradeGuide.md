@@ -58,7 +58,7 @@ have live Graph sources remain unchanged:
 
 - `Teams Meetings Attended` / `Teams Meetings Organized`
 - `Teams Adhoc Meetings Attended` / `Teams Adhoc Meetings Organized`
-- `Teams Scheduled One-time Meetings Attended` / `Teams Scheduled One-time Meetings Organized` (and recurring variants)
+- `Teams Scheduled Onetime Meetings Attended` / `Teams Scheduled Onetime Meetings Organized` (and recurring variants)
 
 The source column `dbo.teams_user_activity_log.meetings_count` and the importer that populates it are
 intentionally left untouched — only the now‑dead profiling plumbing

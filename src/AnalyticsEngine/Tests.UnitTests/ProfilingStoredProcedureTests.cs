@@ -170,6 +170,11 @@ namespace Tests.UnitTests
 
                 // The deprecated "Teams Meetings" metric (Graph meetingCount) must no longer be reported
                 Assert.IsFalse(teamsMetrics.Contains("Teams Meetings"), "Should not contain the deprecated Teams Meetings metric");
+
+                // ...but the granular replacements it was superseded by must survive. These come from
+                // the same Graph report and are what reports should use instead of the old total.
+                Assert.IsTrue(teamsMetrics.Contains("Teams Meetings Organized"), "Should still contain the replacement Teams Meetings Organized metric");
+                Assert.IsTrue(teamsMetrics.Contains("Teams Meetings Attended"), "Should still contain the replacement Teams Meetings Attended metric");
             }
         }
 
