@@ -140,7 +140,13 @@ namespace Web.AnalyticsWeb.Controllers
             // SQL bucket is Monday-aligned too, so the spine and the data line up exactly.
             var today = DateTime.UtcNow.Date;
             var firstMonday = MondayOf(today.AddMonths(-months));
-            var weekSpine = WeekSpine(firstMonday, MondayOf(today));
+            // Usage reports arrive a couple of days late. Never plot the current, necessarily
+            // incomplete week as a sharp fall to zero; UsageCharts trims further when a completed
+            // Sunday's snapshot is not yet available for every workload.
+            var lastMonday = area == "usage"
+                ? MondayOf(today).AddDays(-7)
+                : MondayOf(today);
+            var weekSpine = WeekSpine(firstMonday, lastMonday);
 
             var model = new ReportAreaData { Area = area, Months = months, FromWeek = firstMonday };
 
@@ -274,10 +280,11 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
-        // One line per workload. Each user activity-log table has one row per user per report date;
-        // a user is "active in week W" when their last_activity_date falls in W (deduped across the
-        // repeated daily reports by COUNT(DISTINCT user_id)). The scan is bounded by the indexed
-        // [date] column so a big tenant doesn't scan the whole table.
+        // One line per workload. Each user activity-log table has one row per user per report date.
+        // Use the completed week's Sunday snapshot to count users whose last activity falls in that
+        // week. Reading one snapshot per week avoids scanning every repeated daily snapshot (tens of
+        // millions of rows on a large tenant) and avoids the false dips caused by reconstructing a
+        // week from whichever daily snapshots happened to import successfully.
         private static List<Task<ReportChart>> UsageCharts(DateTime from, List<DateTime> weekSpine)
         {
             var workloads = new[]
@@ -289,20 +296,39 @@ namespace Web.AnalyticsWeb.Controllers
                 new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage" },
             };
 
-            var wb = WeekBucket("last_activity_date");
             var series = workloads.Select(w => new SeriesQuery
             {
                 Name = w.Name,
                 Body =
-                    $"SELECT {wb} AS WeekStart, CAST(COUNT(DISTINCT user_id) AS float) AS Value\r\n" +
-                    $"FROM {w.Table} WHERE [date] >= @from AND last_activity_date >= @from\r\n" +
-                    $"GROUP BY {wb} ORDER BY WeekStart;"
+                    "WITH WeekStarts AS (\r\n" +
+                    "    SELECT CAST(@from AS date) AS WeekStart\r\n" +
+                    "    UNION ALL\r\n" +
+                    "    SELECT DATEADD(DAY, 7, WeekStart)\r\n" +
+                    "    FROM WeekStarts\r\n" +
+                    "    WHERE WeekStart < @through\r\n" +
+                    "),\r\n" +
+                    "AvailableWeeks AS (\r\n" +
+                    "    SELECT weeks.WeekStart\r\n" +
+                    "    FROM WeekStarts AS weeks\r\n" +
+                    $"    WHERE EXISTS (SELECT 1 FROM {w.Table} AS snapshot\r\n" +
+                    "                  WHERE snapshot.[date] = DATEADD(DAY, 6, weeks.WeekStart))\r\n" +
+                    ")\r\n" +
+                    "SELECT weeks.WeekStart, CAST(COUNT(DISTINCT activity.user_id) AS float) AS Value\r\n" +
+                    "FROM AvailableWeeks AS weeks\r\n" +
+                    $"LEFT JOIN {w.Table} AS activity\r\n" +
+                    "    ON activity.[date] = DATEADD(DAY, 6, weeks.WeekStart)\r\n" +
+                    "   AND activity.last_activity_date >= weeks.WeekStart\r\n" +
+                    "   AND activity.last_activity_date < DATEADD(DAY, 7, weeks.WeekStart)\r\n" +
+                    "GROUP BY weeks.WeekStart\r\n" +
+                    "ORDER BY weeks.WeekStart\r\n" +
+                    "OPTION (MAXRECURSION 100);"
             }).ToList();
 
             return new List<Task<ReportChart>>
             {
                 RunMultiTimeSeriesAsync("usage-active-users", "Weekly active users by workload",
-                    "Distinct users active each week in each Microsoft 365 workload.", "Active users", series, from, weekSpine),
+                    "Distinct users active in each completed week. Recent weeks appear once every workload's usage report is available.",
+                    "Active users", series, from, weekSpine),
             };
         }
 
@@ -442,35 +468,52 @@ namespace Web.AnalyticsWeb.Controllers
                 ValueLabel = valueLabel,
                 // Show one representative query; each series uses the same shape against its own table.
                 Sql = "-- One query per workload (below is representative); the chart runs one per series.\r\n" +
-                      DisplaySql(series.First().Body, from),
+                      DisplaySql(series.First().Body, from, weekSpine.Last()),
             };
 
-            var results = new List<ReportSeries>();
-            string firstError = null;
+            var rowsBySeries = new List<KeyValuePair<string, List<WeekValueRow>>>();
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
-            // already runs in parallel with other areas' charts); each is a light indexed-range scan.
+            // already runs in parallel with other areas' charts); each performs indexed seeks into
+            // one Sunday snapshot per week.
             foreach (var sq in series)
             {
                 try
                 {
-                    var rows = await QueryWeeksAsync(sq.Body, from);
-                    results.Add(new ReportSeries { Name = sq.Name, Points = FillWeeks(weekSpine, rows) });
+                    var rows = await QueryWeeksAsync(sq.Body, from, weekSpine.Last());
+                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(sq.Name, rows));
                 }
                 catch (Exception ex)
                 {
-                    if (firstError == null) firstError = InnermostMessage(ex);
+                    chart.Error = $"{sq.Name}: {InnermostMessage(ex)}";
+                    return chart;
                 }
             }
 
-            if (results.Count > 0)
+            // A report can still be arriving after the week has ended. Trim trailing weeks until
+            // every workload has its Sunday snapshot rather than gap-filling missing snapshots with
+            // zero and drawing a misleading decrease.
+            var lastCompleteWeekIndex = weekSpine.Count - 1;
+            while (lastCompleteWeekIndex >= 0)
             {
-                chart.Series = results;
+                var week = weekSpine[lastCompleteWeekIndex];
+                if (rowsBySeries.All(s => s.Value.Any(r => r.WeekStart.Date == week)))
+                {
+                    break;
+                }
+                lastCompleteWeekIndex--;
             }
-            else
+
+            if (lastCompleteWeekIndex < 0)
             {
-                chart.Error = firstError ?? "No data.";
+                chart.Error = "No completed usage-report weeks are available for every workload.";
+                return chart;
             }
+
+            var completeWeekSpine = weekSpine.Take(lastCompleteWeekIndex + 1).ToList();
+            chart.Series = rowsBySeries
+                .Select(s => new ReportSeries { Name = s.Key, Points = FillWeeks(completeWeekSpine, s.Value) })
+                .ToList();
 
             return chart;
         }
@@ -615,6 +658,24 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
+        /// <summary>Executes a bounded weekly query with an explicit last completed week.</summary>
+        private static async Task<List<WeekValueRow>> QueryWeeksAsync(
+            string body,
+            DateTime from,
+            DateTime through)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.CommandTimeout = QueryTimeoutSecs;
+                return await db.Database
+                    .SqlQuery<WeekValueRow>(
+                        body,
+                        new SqlParameter("@from", from),
+                        new SqlParameter("@through", through))
+                    .ToListAsync();
+            }
+        }
+
         #endregion
 
         #region Helpers
@@ -675,6 +736,13 @@ namespace Web.AnalyticsWeb.Controllers
         private static string DisplaySql(string body, DateTime from)
         {
             return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" + body;
+        }
+
+        private static string DisplaySql(string body, DateTime from, DateTime through)
+        {
+            return $"DECLARE @from date = '{from:yyyy-MM-dd}';\r\n" +
+                   $"DECLARE @through date = '{through:yyyy-MM-dd}';\r\n" +
+                   body;
         }
 
         private static string DisplaySql(string body, DateTime from, string agentName)

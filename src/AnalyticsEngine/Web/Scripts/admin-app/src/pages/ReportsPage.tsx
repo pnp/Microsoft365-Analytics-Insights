@@ -335,7 +335,7 @@ function ReportAreaView({
     <div className={styles.cards}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <Text size={200} className={styles.muted}>
-          {blurb} Weeks from {fromLabel} to now.
+          {blurb} Weeks from {fromLabel}{area === 'usage' ? '; recent incomplete weeks are omitted.' : ' to now.'}
         </Text>
         <Button
           appearance="subtle"
