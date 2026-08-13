@@ -10,10 +10,12 @@ export interface ReportAreas {
   emails: boolean;
 }
 
-/** One point of a weekly series: the (Monday) week start (ISO date) and its value. */
+/** One point of a weekly series: the (Monday) week start (ISO date) and its value. A null value
+ * means the week's figure is unknown (e.g. its usage report never arrived) rather than zero, and is
+ * drawn as a gap in the line. */
 export interface ReportTimePoint {
   weekStart: string;
-  value: number;
+  value: number | null;
 }
 
 /** A named line in a time-series chart. */

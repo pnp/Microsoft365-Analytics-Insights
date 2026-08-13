@@ -335,7 +335,10 @@ function ReportAreaView({
     <div className={styles.cards}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <Text size={200} className={styles.muted}>
-          {blurb} Weeks from {fromLabel} to now.
+          {blurb} Weeks from {fromLabel}
+          {area === 'usage'
+            ? '. Usage reports arrive a few days late, so the latest weeks appear once their report does.'
+            : ' to now.'}
         </Text>
         <Button
           appearance="subtle"
