@@ -31,7 +31,7 @@ namespace Tests.FakeDataGen.StressTests
         private static readonly string[] ReportTypes = { "PowerBIReport", "PaginatedReport" };
 
         private static readonly string[] AppOperations = { "LaunchPowerApp", "EditPowerApp", "PublishPowerApp", "CreatePowerApp" };
-        private static readonly string[] FlowOperations = { "FlowRunStarted", "FlowRunCompleted", "EditFlow", "CreateFlow" };
+        private static readonly string[] FlowOperations = { "CreateFlow", "EditFlow", "PutPermissions", "DeletePermissions" };
 
         protected override StressTestResult Execute()
         {
@@ -315,38 +315,30 @@ namespace Tests.FakeDataGen.StressTests
             var flowId = flows[random.Next(flows.Count)];
             var operation = FlowOperations[random.Next(FlowOperations.Length)];
             common.Operation = new EventOperation { Name = operation };
+            var environmentId = EnvironmentIds[random.Next(EnvironmentIds.Length)];
 
             var content = new PowerAutomateAuditLogContent
             {
-                FlowId = flowId,
-                FlowDisplayName = $"Display-{flowId}",
-                EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
-                RunId = Guid.NewGuid().ToString("N"),
+                Operation = operation,
+                FlowDetailsUrl = $"https://admin.powerplatform.microsoft.com/environments/{environmentId}/flows/{flowId}/flowDetails",
             };
 
             if (operation == "CreateFlow" || operation == "EditFlow")
             {
-                content.ConnectionReferences = new List<PowerPlatformConnectionRef>();
+                var connectorNames = new List<string>();
                 int connectorCount = random.Next(1, 4);
                 for (int c = 0; c < connectorCount; c++)
                 {
-                    content.ConnectionReferences.Add(new PowerPlatformConnectionRef { ConnectorName = Connectors[random.Next(Connectors.Length)] });
+                    connectorNames.Add(Connectors[random.Next(Connectors.Length)]);
                 }
+                content.FlowConnectorNames = string.Join(", ", connectorNames);
             }
 
-            if (random.Next(100) < sharePercent)
+            if (operation == "PutPermissions" || operation == "DeletePermissions" || random.Next(100) < sharePercent)
             {
-                content.Permissions = new List<PowerPlatformPermissionEntry>();
-                int recipients = random.Next(1, 3);
-                for (int r = 0; r < recipients; r++)
-                {
-                    var recipient = users[random.Next(users.Count)];
-                    content.Permissions.Add(new PowerPlatformPermissionEntry
-                    {
-                        PrincipalName = recipient.Upn,
-                        RoleName = ShareRoles[random.Next(ShareRoles.Length)]
-                    });
-                }
+                var recipient = users[random.Next(users.Count)];
+                content.RecipientUpn = recipient.Upn;
+                content.SharingPermission = random.Next(0, 2) == 0 ? "2" : "3";
             }
 
             manager.SaveSinglePowerAutomateEventToSqlStaging(content, common).GetAwaiter().GetResult();
@@ -377,10 +369,13 @@ namespace Tests.FakeDataGen.StressTests
             var content = new CopilotStudioAuditLogContent
             {
                 BotId = botId,
-                BotName = $"Bot-{botId}",
-                EnvironmentName = EnvironmentIds[random.Next(EnvironmentIds.Length)],
+                BotSchemaName = $"contoso_agent_{botId}",
+                EnvironmentId = EnvironmentIds[random.Next(EnvironmentIds.Length)],
             };
-            common.Operation = new EventOperation { Name = random.Next(0, 10) < 7 ? "MessageSent" : "BotPublished" };
+            common.Operation = new EventOperation
+            {
+                Name = random.Next(0, 10) < 7 ? "BotUpdateOperation-BotPublish" : "BotUpdateOperation-BotNameUpdate"
+            };
             manager.SaveSingleCopilotStudioEventToSqlStaging(content, common).GetAwaiter().GetResult();
         }
 
