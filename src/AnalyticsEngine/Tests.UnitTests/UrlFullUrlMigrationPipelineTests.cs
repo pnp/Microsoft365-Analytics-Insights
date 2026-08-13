@@ -41,7 +41,7 @@ namespace Tests.UnitTests
         // performs the urls.full_url nvarchar(850) conversion asserted below) still runs as part of the path;
         // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup and
         // IndexUsageReportSnapshots are later, unrelated schema-only index migrations.
-        private const string LatestId = "202608131030001_IndexUsageReportSnapshots";
+        private const string LatestId = "202608131055001_IndexReportDateQueries";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
