@@ -48,6 +48,12 @@ namespace Web.AnalyticsWeb.Controllers
 
         private const string CacheKeyPrefix = "Reports::Area::";
 
+        // Microsoft 365 usage reports are published a couple of days in arrears, and Graph keeps
+        // back-filling a report date for a short while after it first appears. Snapshots newer than
+        // this many days are therefore ignored by the usage charts: including a half-populated
+        // snapshot makes the most recent week look like a sudden collapse in activity.
+        private const int UsageReportLagDays = 3;
+
         // GET: api/Reports/areas
         // Which report areas are available, based on the enabled imports.
         [HttpGet]
@@ -140,7 +146,13 @@ namespace Web.AnalyticsWeb.Controllers
             // SQL bucket is Monday-aligned too, so the spine and the data line up exactly.
             var today = DateTime.UtcNow.Date;
             var firstMonday = MondayOf(today.AddMonths(-months));
-            var weekSpine = WeekSpine(firstMonday, MondayOf(today));
+            // Usage reports arrive a couple of days late, so the current week is always incomplete;
+            // plotting it would draw a sharp fall to zero. UsageCharts trims further from the end
+            // when the settled report for a week has not reached every workload yet.
+            var lastMonday = area == "usage"
+                ? MondayOf(today).AddDays(-7)
+                : MondayOf(today);
+            var weekSpine = WeekSpine(firstMonday, lastMonday);
 
             var model = new ReportAreaData { Area = area, Months = months, FromWeek = firstMonday };
 
@@ -274,10 +286,18 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
-        // One line per workload. Each user activity-log table has one row per user per report date;
-        // a user is "active in week W" when their last_activity_date falls in W (deduped across the
-        // repeated daily reports by COUNT(DISTINCT user_id)). The scan is bounded by the indexed
-        // [date] column so a big tenant doesn't scan the whole table.
+        // One line per workload. Each user activity-log table holds one row per user per report
+        // date, so a single report date is a complete snapshot of "who was active recently".
+        //
+        // For each week we therefore read ONE snapshot rather than every daily snapshot in the week:
+        // the most recent report date that falls inside the week AND is old enough for Graph to have
+        // settled it (@settled). A user counts as active in that week when their last_activity_date
+        // falls inside the week.
+        //
+        // Picking the LATEST snapshot in the week (rather than requiring the week's final day) keeps
+        // the chart working when an individual daily import is missed - a week has seven chances to
+        // supply a snapshot instead of one. Weeks with no settled snapshot at all return no row, and
+        // are rendered as a gap rather than as zero.
         private static List<Task<ReportChart>> UsageCharts(DateTime from, List<DateTime> weekSpine)
         {
             var workloads = new[]
@@ -289,20 +309,49 @@ namespace Web.AnalyticsWeb.Controllers
                 new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage" },
             };
 
-            var wb = WeekBucket("last_activity_date");
             var series = workloads.Select(w => new SeriesQuery
             {
                 Name = w.Name,
                 Body =
-                    $"SELECT {wb} AS WeekStart, CAST(COUNT(DISTINCT user_id) AS float) AS Value\r\n" +
-                    $"FROM {w.Table} WHERE [date] >= @from AND last_activity_date >= @from\r\n" +
-                    $"GROUP BY {wb} ORDER BY WeekStart;"
+                    "WITH WeekStarts AS (\r\n" +
+                    "    SELECT @from AS WeekStart\r\n" +
+                    "    UNION ALL\r\n" +
+                    "    SELECT DATEADD(DAY, 7, WeekStart)\r\n" +
+                    "    FROM WeekStarts\r\n" +
+                    "    WHERE WeekStart < @through\r\n" +
+                    "),\r\n" +
+                    "-- The latest settled report date inside each week; NULL when that week never\r\n" +
+                    "-- got a usage report, in which case the week is omitted (drawn as a gap).\r\n" +
+                    "WeekSnapshots AS (\r\n" +
+                    "    SELECT weeks.WeekStart, snapshot.SnapshotDate\r\n" +
+                    "    FROM WeekStarts AS weeks\r\n" +
+                    "    CROSS APPLY (\r\n" +
+                    $"        SELECT MAX(available.[date]) AS SnapshotDate\r\n" +
+                    $"        FROM {w.Table} AS available\r\n" +
+                    "        WHERE available.[date] >= weeks.WeekStart\r\n" +
+                    "          AND available.[date] < DATEADD(DAY, 7, weeks.WeekStart)\r\n" +
+                    "          AND available.[date] <= @settled\r\n" +
+                    "    ) AS snapshot\r\n" +
+                    "    WHERE snapshot.SnapshotDate IS NOT NULL\r\n" +
+                    ")\r\n" +
+                    "SELECT weeks.WeekStart, CAST(COUNT(DISTINCT activity.user_id) AS float) AS Value\r\n" +
+                    "FROM WeekSnapshots AS weeks\r\n" +
+                    $"LEFT JOIN {w.Table} AS activity\r\n" +
+                    "    ON activity.[date] = weeks.SnapshotDate\r\n" +
+                    "   AND activity.last_activity_date >= weeks.WeekStart\r\n" +
+                    "   AND activity.last_activity_date < DATEADD(DAY, 7, weeks.WeekStart)\r\n" +
+                    "GROUP BY weeks.WeekStart\r\n" +
+                    "ORDER BY weeks.WeekStart\r\n" +
+                    // The recursion is bounded by the @through predicate above, so no arbitrary
+                    // depth cap is needed (a cap silently errors if the window is ever widened).
+                    "OPTION (MAXRECURSION 0);"
             }).ToList();
 
             return new List<Task<ReportChart>>
             {
                 RunMultiTimeSeriesAsync("usage-active-users", "Weekly active users by workload",
-                    "Distinct users active each week in each Microsoft 365 workload.", "Active users", series, from, weekSpine),
+                    "Distinct users active in each completed week. Weeks with no usage report yet are left blank rather than shown as zero.",
+                    "Active users", series, from, weekSpine),
             };
         }
 
@@ -318,11 +367,22 @@ namespace Web.AnalyticsWeb.Controllers
                 join + "\r\n" +
                 $"GROUP BY {wb} ORDER BY WeekStart;";
 
+            // Aggregate by the operation FOREIGN KEY first, then resolve the ten winning names from
+            // the small lookup table. Joining event_operations up-front instead would resolve a name
+            // for every audit event in the window (millions of lookups) just to group them again.
             var byType =
-                "SELECT TOP 10 ISNULL(eo.operation_name, '(unknown)') AS Label, CAST(COUNT(*) AS float) AS Value\r\n" +
-                "FROM dbo.audit_events AS au JOIN dbo.event_meta_sharepoint AS sp ON au.id = sp.event_id\r\n" +
-                "LEFT JOIN dbo.event_operations AS eo ON au.operation_id = eo.id WHERE au.time_stamp >= @from\r\n" +
-                "GROUP BY ISNULL(eo.operation_name, '(unknown)') ORDER BY Value DESC;";
+                "WITH OperationTotals AS (\r\n" +
+                "    SELECT TOP 10 au.operation_id, COUNT_BIG(*) AS Operations\r\n" +
+                "    FROM dbo.audit_events AS au\r\n" +
+                "    JOIN dbo.event_meta_sharepoint AS sp ON au.id = sp.event_id\r\n" +
+                "    WHERE au.time_stamp >= @from\r\n" +
+                "    GROUP BY au.operation_id\r\n" +
+                "    ORDER BY Operations DESC\r\n" +
+                ")\r\n" +
+                "SELECT ISNULL(eo.operation_name, '(unknown)') AS Label, CAST(totals.Operations AS float) AS Value\r\n" +
+                "FROM OperationTotals AS totals\r\n" +
+                "LEFT JOIN dbo.event_operations AS eo ON totals.operation_id = eo.id\r\n" +
+                "ORDER BY Value DESC;";
 
             return new List<Task<ReportChart>>
             {
@@ -440,37 +500,69 @@ namespace Web.AnalyticsWeb.Controllers
                 Description = description,
                 Type = "timeseries",
                 ValueLabel = valueLabel,
-                // Show one representative query; each series uses the same shape against its own table.
-                Sql = "-- One query per workload (below is representative); the chart runs one per series.\r\n" +
-                      DisplaySql(series.First().Body, from),
             };
 
-            var results = new List<ReportSeries>();
-            string firstError = null;
+            if (weekSpine.Count == 0)
+            {
+                chart.Series = series.Select(s => new ReportSeries { Name = s.Name }).ToList();
+                return chart;
+            }
+
+            var lastWeek = weekSpine[weekSpine.Count - 1];
+            var settled = SettledThrough();
+
+            // Show one representative query; each series uses the same shape against its own table.
+            chart.Sql = "-- One query per workload (below is representative); the chart runs one per series.\r\n" +
+                        DisplaySql(series.First().Body, from, lastWeek, settled);
+
+            var rowsBySeries = new List<KeyValuePair<string, List<WeekValueRow>>>();
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
-            // already runs in parallel with other areas' charts); each is a light indexed-range scan.
+            // already runs in parallel with other areas' charts); each performs indexed seeks into
+            // one snapshot per week.
             foreach (var sq in series)
             {
                 try
                 {
-                    var rows = await QueryWeeksAsync(sq.Body, from);
-                    results.Add(new ReportSeries { Name = sq.Name, Points = FillWeeks(weekSpine, rows) });
+                    var rows = await QueryWeeksAsync(sq.Body, from, lastWeek, settled);
+                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(sq.Name, rows));
                 }
                 catch (Exception ex)
                 {
-                    if (firstError == null) firstError = InnermostMessage(ex);
+                    chart.Error = $"{sq.Name}: {InnermostMessage(ex)}";
+                    return chart;
                 }
             }
 
-            if (results.Count > 0)
+            // Trailing weeks are trimmed once, across every workload, so the chart ends where the
+            // slowest report has caught up. Interior weeks are NOT trimmed: they keep their place on
+            // the spine and any workload missing that week gets a null (a gap in its line) rather
+            // than a zero, which would draw a false collapse in activity.
+            var lastCompleteWeekIndex = weekSpine.Count - 1;
+            while (lastCompleteWeekIndex >= 0)
             {
-                chart.Series = results;
+                var week = weekSpine[lastCompleteWeekIndex];
+                if (rowsBySeries.All(s => s.Value.Any(r => r.WeekStart.Date == week)))
+                {
+                    break;
+                }
+                lastCompleteWeekIndex--;
             }
-            else
+
+            if (lastCompleteWeekIndex < 0)
             {
-                chart.Error = firstError ?? "No data.";
+                chart.Error = "No completed usage-report weeks are available for every workload.";
+                return chart;
             }
+
+            var completeWeekSpine = weekSpine.Take(lastCompleteWeekIndex + 1).ToList();
+            chart.Series = rowsBySeries
+                .Select(s => new ReportSeries
+                {
+                    Name = s.Key,
+                    Points = FillWeeks(completeWeekSpine, s.Value, missingValue: null),
+                })
+                .ToList();
 
             return chart;
         }
@@ -615,6 +707,36 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
+        /// <summary>Executes a bounded weekly query for the snapshot-based usage charts.</summary>
+        private static async Task<List<WeekValueRow>> QueryWeeksAsync(
+            string body,
+            DateTime from,
+            DateTime through,
+            DateTime settled)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.CommandTimeout = QueryTimeoutSecs;
+                return await db.Database
+                    .SqlQuery<WeekValueRow>(
+                        body,
+                        DateParameter("@from", from),
+                        DateParameter("@through", through),
+                        DateParameter("@settled", settled))
+                    .ToListAsync();
+            }
+        }
+
+        /// <summary>
+        /// A date-only parameter. The usage tables store report dates at midnight, so comparing them
+        /// against a <c>date</c> keeps the predicate an index seek and matches the SQL shown in the
+        /// popover (which declares these as <c>date</c>).
+        /// </summary>
+        private static SqlParameter DateParameter(string name, DateTime value)
+        {
+            return new SqlParameter(name, System.Data.SqlDbType.Date) { Value = value.Date };
+        }
+
         #endregion
 
         #region Helpers
@@ -652,6 +774,20 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Projects query rows onto the full week spine, filling gaps with zero.</summary>
         private static List<ReportTimePoint> FillWeeks(List<DateTime> weekSpine, List<WeekValueRow> rows)
         {
+            return FillWeeks(weekSpine, rows, missingValue: 0);
+        }
+
+        /// <summary>
+        /// Projects query rows onto the full week spine. <paramref name="missingValue"/> is what a
+        /// week with no row means: zero for charts that count events (no rows really is "nothing
+        /// happened"), or null for the usage snapshot charts, where a missing week means the report
+        /// never arrived and the value is unknown.
+        /// </summary>
+        private static List<ReportTimePoint> FillWeeks(
+            List<DateTime> weekSpine,
+            List<WeekValueRow> rows,
+            double? missingValue)
+        {
             var byWeek = new Dictionary<DateTime, double>();
             foreach (var r in rows)
             {
@@ -662,9 +798,19 @@ namespace Web.AnalyticsWeb.Controllers
                 .Select(w => new ReportTimePoint
                 {
                     WeekStart = w,
-                    Value = byWeek.TryGetValue(w, out var v) ? v : 0,
+                    Value = byWeek.TryGetValue(w, out var v) ? v : missingValue,
                 })
                 .ToList();
+        }
+
+        /// <summary>
+        /// The most recent report date Graph can be trusted to have finished populating. The usage
+        /// reports lag real time by a couple of days, so a snapshot newer than this may exist but be
+        /// half-filled - counting it would understate that week's active users.
+        /// </summary>
+        private static DateTime SettledThrough()
+        {
+            return DateTime.UtcNow.Date.AddDays(-UsageReportLagDays);
         }
 
         /// <summary>
@@ -675,6 +821,14 @@ namespace Web.AnalyticsWeb.Controllers
         private static string DisplaySql(string body, DateTime from)
         {
             return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" + body;
+        }
+
+        private static string DisplaySql(string body, DateTime from, DateTime through, DateTime settled)
+        {
+            return $"DECLARE @from date = '{from:yyyy-MM-dd}';\r\n" +
+                   $"DECLARE @through date = '{through:yyyy-MM-dd}';\r\n" +
+                   $"DECLARE @settled date = '{settled:yyyy-MM-dd}';\r\n" +
+                   body;
         }
 
         private static string DisplaySql(string body, DateTime from, string agentName)
