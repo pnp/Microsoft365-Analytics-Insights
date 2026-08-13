@@ -44,3 +44,8 @@ src/TelemetryService/web.client/.vscode/*
 # VSTest output (vstest.console.exe writes TRX logs + per-run subfolders here)
 **/TestResults/
 *.trx
+# Telemetry Service Azure deployment values and artifacts
+/.azure/*.parameters.json
+/infra/TelemetryService/*.parameters.json
+/infra/TelemetryService/.deploy/
+/artifacts/TelemetryService/
