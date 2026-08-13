@@ -9,9 +9,18 @@ namespace Common.Entities.Migrations
     /// lookups for operation and user on every matching row. The remaining report fact tables have
     /// no date index, so their cost grows with all retained history rather than the selected period.
     ///
-    /// This is a SQL-schema-only migration. Builds run outside the EF transaction, attempt ONLINE
-    /// where supported, and fall back to offline. Large deployments on editions without online
-    /// index builds should stop importers and apply the upgrade in a maintenance window.
+    /// Safety: idempotent and guarded (each table, column and the existing index definition is
+    /// checked, so an index that already covers the query is left alone). Attempts an <c>ONLINE</c>
+    /// (non-blocking) build on capable editions (Enterprise 3 / Azure SQL DB 5 / MI 8) and falls
+    /// back to a normal offline build. Runs outside the EF transaction
+    /// (<c>suppressTransaction: true</c>).
+    ///
+    /// Note for upgrades from a release older than 1716: EF applies
+    /// <see cref="IndexAuditEventsTimeStamp"/> first, which builds the key-only
+    /// <c>IX_audit_events_time_stamp</c>, and this migration then rebuilds it with the INCLUDE
+    /// columns - two builds of the same large index in one upgrade. That shipped migration is left
+    /// as published rather than amended, so the manual upgrade script attached to those releases
+    /// still matches the code. Databases already on 1716 or later pay for a single rebuild.
     /// </summary>
     public partial class IndexReportDateQueries : DbMigration
     {
