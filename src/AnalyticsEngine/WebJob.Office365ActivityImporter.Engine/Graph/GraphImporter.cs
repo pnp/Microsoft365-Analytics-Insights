@@ -264,7 +264,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             where CACHETYPE : DBLookupCache<TLookupType>
         {
             logger.LogInformation($"Importing {thingWeAreImporting} reports...");
-            await abstractActivityLoader.PopulateLoadedReportPagesFromGraph(daysBackMax);
+
+            // Graph usage data is stable once finalized (~2-3 day latency), so days we already hold and that can no
+            // longer change don't need re-downloading or re-writing. Skip them unless a forced full re-import is set.
+            ISet<DateTime> datesToSkip = null;
+            if (!_settings.ForceUsageReportsImport)
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    datesToSkip = await abstractActivityLoader.GetFinalizedStoredDatesToSkipAsync(db, daysBackMax);
+                }
+                if (datesToSkip.Count > 0)
+                {
+                    logger.LogInformation($"{thingWeAreImporting}: skipping {datesToSkip.Count} already-stored finalized day(s); " +
+                        $"only re-importing the most recent {abstractActivityLoader.RefreshableRecentDays} day(s) that can still change in Graph.");
+                }
+            }
+
+            await abstractActivityLoader.PopulateLoadedReportPagesFromGraph(daysBackMax, datesToSkip);
 
             using (var db = new AnalyticsEntitiesContext())
             {
