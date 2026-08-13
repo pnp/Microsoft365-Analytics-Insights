@@ -218,37 +218,95 @@ namespace Tests.UnitTests
         // -- Power Automate -------------------------------------------------------------------
 
         /// <summary>
-        /// A FlowRunStarted event should create the flow lookup and the per-event metadata.
+        /// A documented lifecycle event should derive the flow/environment ids from
+        /// FlowDetailsUrl and populate connector relationships.
         /// </summary>
         [TestMethod]
-        public async Task PowerAutomate_FlowEvent_PersistsFlowAndMetadata()
+        public async Task PowerAutomate_LifecycleEvent_PersistsFlowMetadataAndConnectors()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var commonEvent = BuildCommonEvent("FlowRunStarted", "flow-run");
+                var commonEvent = BuildCommonEvent("EditFlow", "flow-edit");
                 await PersistAuditEventAsync(db, commonEvent);
 
                 var flowId = "flow-" + Guid.NewGuid().ToString("N");
+                var environmentId = "env-" + Guid.NewGuid().ToString("N");
+                var connectorA = "connector-a-" + Guid.NewGuid().ToString("N");
+                var connectorB = "connector-b-" + Guid.NewGuid().ToString("N");
 
                 var manager = NewManager();
                 await manager.SaveSinglePowerAutomateEventToSqlStaging(new PowerAutomateAuditLogContent
                 {
-                    FlowId = flowId,
-                    FlowDisplayName = "Nightly Sync",
-                    EnvironmentName = "env-test",
-                    RunId = Guid.NewGuid().ToString("N")
+                    Operation = "EditFlow",
+                    FlowDetailsUrl = $"https://admin.powerplatform.microsoft.com/environments/{environmentId}/flows/{flowId}/flowDetails",
+                    FlowConnectorNames = $"{connectorA}, {connectorB}"
                 }, commonEvent);
 
                 await manager.CommitAllChanges();
 
                 var flowRow = await db.power_automate_flows.SingleOrDefaultAsync(f => f.FlowId == flowId);
                 Assert.IsNotNull(flowRow, "power_automate_flows row must be created for a brand-new flow_id.");
-                Assert.AreEqual("Nightly Sync", flowRow.Name);
+                Assert.AreEqual(flowId, flowRow.Name, "The audit schema has no flow display name, so the id is the stable fallback.");
                 Assert.IsTrue(flowRow.FirstSeenAt.HasValue, "first_seen_at should be populated on first sighting.");
 
                 var meta = await db.power_automate_flow_events.SingleOrDefaultAsync(m => m.EventID == commonEvent.Id);
                 Assert.IsNotNull(meta, "event_meta_power_automate_flow must exist for the staged event.");
                 Assert.AreEqual(flowRow.ID, meta.FlowId);
+                Assert.IsNull(meta.RunId, "Purview lifecycle records do not represent individual flow runs.");
+
+                var environment = await db.power_app_environments.SingleOrDefaultAsync(e => e.EnvironmentId == environmentId);
+                Assert.IsNotNull(environment);
+                Assert.AreEqual(environment.ID, flowRow.EnvironmentId);
+
+                var bindings = await db.power_automate_flow_connectors
+                    .Where(j => j.FlowId == flowRow.ID)
+                    .ToListAsync();
+                Assert.AreEqual(2, bindings.Count);
+                var connectorIds = bindings.Select(b => b.ConnectorId).ToArray();
+                var connectorNames = await db.power_platform_connectors
+                    .Where(c => connectorIds.Contains(c.ID))
+                    .Select(c => c.Name)
+                    .ToListAsync();
+                CollectionAssert.AreEquivalent(new[] { connectorA, connectorB }, connectorNames);
+            }
+        }
+
+        /// <summary>
+        /// Documented permission fields should emit one share row for the affected recipient.
+        /// </summary>
+        [TestMethod]
+        public async Task PowerAutomate_PermissionEvent_PersistsRecipientAndRole()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var commonEvent = BuildCommonEvent("PutPermissions", "flow-share");
+                await PersistAuditEventAsync(db, commonEvent);
+
+                var flowId = "flow-" + Guid.NewGuid().ToString("N");
+                var environmentId = "env-" + Guid.NewGuid().ToString("N");
+                var recipient = $"recipient-{Guid.NewGuid():N}@unit.test";
+
+                var manager = NewManager();
+                await manager.SaveSinglePowerAutomateEventToSqlStaging(new PowerAutomateAuditLogContent
+                {
+                    Operation = "PutPermissions",
+                    FlowDetailsUrl = $"https://admin.powerplatform.microsoft.com/environments/{environmentId}/flows/{flowId}/flowDetails",
+                    RecipientUpn = recipient,
+                    SharingPermission = "2"
+                }, commonEvent);
+
+                await manager.CommitAllChanges();
+
+                var flowRow = await db.power_automate_flows.SingleAsync(f => f.FlowId == flowId);
+                var shareRow = await db.power_automate_flow_share_events
+                    .SingleOrDefaultAsync(s => s.EventId == commonEvent.Id);
+                Assert.IsNotNull(shareRow);
+                Assert.AreEqual(flowRow.ID, shareRow.FlowId);
+                Assert.AreEqual("Run-only user", shareRow.RoleName);
+
+                var recipientUser = await db.users.SingleOrDefaultAsync(u => u.UserPrincipalName == recipient);
+                Assert.IsNotNull(recipientUser);
+                Assert.AreEqual(recipientUser.ID, shareRow.SharedWithUserId);
             }
         }
 
@@ -394,29 +452,34 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var commonEvent = BuildCommonEvent("BotPublished", "bot-pub");
+                var commonEvent = BuildCommonEvent("BotUpdateOperation-BotPublish", "bot-pub");
                 await PersistAuditEventAsync(db, commonEvent);
 
                 var botId = "bot-" + Guid.NewGuid().ToString("N");
+                var environmentId = "env-" + Guid.NewGuid().ToString("N");
 
                 var manager = NewManager();
                 await manager.SaveSingleCopilotStudioEventToSqlStaging(new CopilotStudioAuditLogContent
                 {
                     BotId = botId,
-                    BotName = "HR Bot",
-                    EnvironmentName = "env-test"
+                    BotSchemaName = "contoso_hr_agent",
+                    EnvironmentId = environmentId
                 }, commonEvent);
 
                 await manager.CommitAllChanges();
 
                 var botRow = await db.copilot_studio_bots.SingleOrDefaultAsync(b => b.BotId == botId);
                 Assert.IsNotNull(botRow);
-                Assert.AreEqual("HR Bot", botRow.Name);
+                Assert.AreEqual("contoso_hr_agent", botRow.Name);
                 Assert.IsTrue(botRow.FirstSeenAt.HasValue);
 
                 var meta = await db.copilot_studio_events.SingleOrDefaultAsync(m => m.EventID == commonEvent.Id);
                 Assert.IsNotNull(meta);
                 Assert.AreEqual(botRow.ID, meta.BotId);
+
+                var environment = await db.power_app_environments.SingleOrDefaultAsync(e => e.EnvironmentId == environmentId);
+                Assert.IsNotNull(environment);
+                Assert.AreEqual(environment.ID, botRow.EnvironmentId);
             }
         }
 

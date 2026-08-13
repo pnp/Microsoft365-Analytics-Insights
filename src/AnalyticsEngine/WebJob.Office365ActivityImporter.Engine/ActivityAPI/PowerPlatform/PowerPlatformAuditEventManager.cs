@@ -103,6 +103,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 return Task.CompletedTask;
             }
 
+            auditRecord.NormaliseDocumentedFields();
+            if (string.IsNullOrEmpty(auditRecord.FlowId))
+            {
+                _logger.LogWarning(
+                    $"PowerPlatformAuditEventManager: Power Automate {auditRecord.Operation} event '{auditRecord.Id}' has no flow identity - skipping staging row.");
+                return Task.CompletedTask;
+            }
+
             _flowInserts.Rows.Add(new PowerAutomateFlowLogTempEntity
             {
                 EventId = baseOfficeEvent.Id,
@@ -177,12 +185,19 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 return Task.CompletedTask;
             }
 
+            if (string.IsNullOrEmpty(auditRecord.BotId))
+            {
+                _logger.LogWarning(
+                    $"PowerPlatformAuditEventManager: Copilot Studio {auditRecord.Operation} event '{auditRecord.Id}' has no BotId - skipping staging row.");
+                return Task.CompletedTask;
+            }
+
             _copilotStudioInserts.Rows.Add(new CopilotStudioLogTempEntity
             {
                 EventId = baseOfficeEvent.Id,
                 BotId = auditRecord.BotId,
-                BotName = auditRecord.BotName,
-                EnvironmentId = auditRecord.EnvironmentName,
+                BotName = string.IsNullOrEmpty(auditRecord.BotName) ? auditRecord.BotSchemaName : auditRecord.BotName,
+                EnvironmentId = string.IsNullOrEmpty(auditRecord.EnvironmentId) ? auditRecord.EnvironmentName : auditRecord.EnvironmentId,
                 EventTime = baseOfficeEvent.TimeStamp,
             });
             _totalCopilotStudioCount++;
