@@ -1,4 +1,4 @@
-﻿// All rights reserved.
+// All rights reserved.
 // THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
 // KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
 // IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
@@ -81,7 +81,7 @@ namespace WebJob.Office365ActivityImporter
 #endif
 
             // Create new telemetry client with AppInsights key
-            var telemetry = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
+            var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
 
             // Verify config
             var webhookUrl = configuredSettings.WebAppURL + "api/CallRecordWebhook";
@@ -113,15 +113,15 @@ namespace WebJob.Office365ActivityImporter
                     if (args.Length >= argIdx + 2)
                     {
                         // Import a single call ID
-                        telemetry.LogInformation($"Detected '{ActivityImportConstants.PARAM_CALL_ID}' parameter value. Importing single call-record from Graph and exiting.");
+                        logger.LogInformation($"Detected '{ActivityImportConstants.PARAM_CALL_ID}' parameter value. Importing single call-record from Graph and exiting.");
                         var nextArg = args[argIdx + 1];
 
-                        var auth = new GraphAppIndentityOAuthContext(telemetry, configuredSettings.ClientID, configuredSettings.TenantGUID.ToString(), configuredSettings.ClientSecret, configuredSettings.KeyVaultUrl, configuredSettings.UseClientCertificate);
+                        var auth = new GraphAppIndentityOAuthContext(logger, configuredSettings.ClientID, configuredSettings.TenantGUID.ToString(), configuredSettings.ClientSecret, configuredSettings.KeyVaultUrl, configuredSettings.UseClientCertificate);
 
                         var newCall = await Engine.Entities.Serialisation.CallRecordDTO.SaveNewCallToDB(
                             nextArg,
-                            new Engine.Graph.ManualGraphCallClient(auth, telemetry),
-                            auth.Creds, telemetry, configuredSettings.TenantGUID.ToString());
+                            new Engine.Graph.ManualGraphCallClient(auth, logger),
+                            auth.Creds, logger, configuredSettings.TenantGUID.ToString());
 
                         ConsoleApp.BombOut(false);
                     }
@@ -161,10 +161,10 @@ namespace WebJob.Office365ActivityImporter
             }
 
             // Output program
-            PrintStartupDetails(configuredSettings, telemetry);
+            PrintStartupDetails(configuredSettings, logger);
 
             // Test DB
-            TestDB(telemetry);
+            TestDB(logger);
 
             // Loop forever?
             var runAgain = true;
@@ -181,23 +181,29 @@ namespace WebJob.Office365ActivityImporter
             }
             else
             {
-                telemetry.LogInformation("No Redis connection string configured - using in-memory throttle for stats upload (the MIN_WAIT window resets each time the WebJob process restarts).");
+                logger.LogInformation("No Redis connection string configured - using in-memory throttle for stats upload (the MIN_WAIT window resets each time the WebJob process restarts).");
                 statsDatesLoader = new InMemoryStatsDatesLoader();
             }
+
+            // Activity/usage reports also run at most once a day. Like the stats throttle above, this needs a
+            // store that survives across cycles - Redis when configured, otherwise an in-memory fallback built
+            // ONCE here (a fresh per-cycle instance would always look "never imported" and re-run the multi-hour
+            // usage-report phase every cycle, even without Redis).
+            ISingleDateStore activityReportsLastImportedStore = ActivityReportsLastImportedStoreFactory.Create(configuredSettings, logger);
 
             // Run app
             while (runAgain)
             {
-                var importCycleTimer = new JobTimer(telemetry, Process.GetCurrentProcess().ProcessName);
+                var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(telemetry, configuredSettings);
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
                 {
                     if (string.IsNullOrWhiteSpace(configuredSettings.ConnectionStrings.ServiceBusConnectionString))
                     {
-                        telemetry.LogCritical("Teams calls import is enabled but Service Bus is not configured. Skipping Call Queue import & webhook validation. Re-run the installer with Service Bus enabled, or disable the Calls import.");
+                        logger.LogCritical("Teams calls import is enabled but Service Bus is not configured. Skipping Call Queue import & webhook validation. Re-run the installer with Service Bus enabled, or disable the Calls import.");
                     }
                     else
                     {
@@ -207,14 +213,14 @@ namespace WebJob.Office365ActivityImporter
                         }
                         catch (Exception ex)
                         {
-                            telemetry.TrackException(ex);
-                            telemetry.LogCritical($"Got exception on {nameof(ProgramTasks.ProcessCallQueueAndWebhook)}: {ex.Message}");
+                            logger.TrackException(ex);
+                            logger.LogCritical($"Got exception on {nameof(ProgramTasks.ProcessCallQueueAndWebhook)}: {ex.Message}");
                         }
                     }
                 }
                 else
                 {
-                    telemetry.LogInformation("Skipping Call Queue import & webhook validation.");
+                    logger.LogInformation("Skipping Call Queue import & webhook validation.");
                 }
 
                 try
@@ -224,15 +230,16 @@ namespace WebJob.Office365ActivityImporter
                 }
                 catch (Exception ex)
                 {
-                    telemetry.TrackException(ex);
-                    telemetry.LogCritical($"Got exception on {nameof(ProgramTasks.GetGraphTeamsAndUserData)}: {ex.Message}");
+                    logger.TrackException(ex);
+                    logger.LogCritical($"Got exception on {nameof(ProgramTasks.GetGraphTeamsAndUserData)}: {ex.Message}");
 #if DEBUG
                     throw;
 #endif
                 }
 
-                // Activity import
-                if (configuredSettings.ImportJobSettings.ActivityLog)
+                // Activity import (Office 365 Management Activity API). Runs when SharePoint audit
+                // (ActivityLog) and/or Copilot interactions (delivered via Audit.General) are enabled.
+                if (configuredSettings.ImportJobSettings.ActivityLog || configuredSettings.ImportJobSettings.Copilot)
                 {
 #if !DEBUG
                     try
@@ -243,14 +250,17 @@ namespace WebJob.Office365ActivityImporter
                     }
                     catch (Exception ex)
                     {
-                        telemetry.TrackException(ex);
-                        Console.WriteLine($"Got exception on {nameof(ProgramTasks.DownloadActivityData)}: {ex.Message}");
+                        logger.TrackException(ex);
+                        // Also emit a trace (TrackException goes to a separate telemetry stream): a save/merge
+                        // failure that escapes here means the whole cycle was aborted. Batch-level failures are
+                        // now isolated in LoadReportsAndSave, so reaching here indicates a non-batch failure.
+                        logger.LogError($"Audit import cycle ABORTED by an unhandled exception in {nameof(ProgramTasks.DownloadActivityData)}: {ex.Message}. The cycle will restart on the next timer interval.");
                     }
 #endif
                 }
                 else
                 {
-                    telemetry.LogInformation("Skipping Activity API import.");
+                    logger.LogInformation("Skipping Activity API import.");
                 }
 
 #if DEBUG
@@ -269,17 +279,17 @@ namespace WebJob.Office365ActivityImporter
                 // its "last uploaded" timestamp across cycles.
                 using (var db = new AnalyticsEntitiesContext())
                 {
-                    var sqlUsageBuilder = new SqlUsageStatsBuilder(db, telemetry, configuredSettings.TenantGUID);
-                    using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, telemetry))
+                    var sqlUsageBuilder = new SqlUsageStatsBuilder(db, logger, configuredSettings.TenantGUID);
+                    using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, logger))
                     {
-                        var stats = new UsageStatsManager(sqlUsageBuilder, statsDatesLoader, statsUploader, telemetry);
+                        var stats = new UsageStatsManager(sqlUsageBuilder, statsDatesLoader, statsUploader, logger);
                         await stats.ProcessAndFailSilently();
                     }
                 }
 
                 if (runAgain)
                 {
-                    ConsoleApp.WebjobWait(telemetry);
+                    ConsoleApp.WebjobWait(logger);
                 }
             } // Go around again?
 
@@ -290,9 +300,9 @@ namespace WebJob.Office365ActivityImporter
         /// <summary>
         /// Tests the SQL DB configured. Bombs out if a problem
         /// </summary>
-        private static void TestDB(ILogger debugTracer)
+        private static void TestDB(ILogger logger)
         {
-            debugTracer.LogInformation("Testing SQL configuration...");
+            logger.LogInformation("Testing SQL configuration...");
 
             using (AnalyticsEntitiesContext db = new AnalyticsEntitiesContext())
             {
@@ -300,11 +310,11 @@ namespace WebJob.Office365ActivityImporter
                 {
                     int count = (from allDownloads in db.AuditEventsCommon
                                  select allDownloads).Count();
-                    debugTracer.LogInformation($"Found {count.ToString("n0")} events in table already. Test passed!");
+                    logger.LogInformation($"Found {count.ToString("n0")} events in table already. Test passed!");
                 }
                 catch (System.Data.SqlClient.SqlException ex)
                 {
-                    debugTracer.LogError(ex, $"Got a SQL error: {ex.Message}");
+                    logger.LogError(ex, $"Got a SQL error: {ex.Message}");
                     ConsoleApp.BombOut(true);
                 }
             }
@@ -313,18 +323,18 @@ namespace WebJob.Office365ActivityImporter
         /// <summary>
         /// Confirm and validate settings
         /// </summary>
-        private static void PrintStartupDetails(AppConfig settings, ILogger telemetry)
+        private static void PrintStartupDetails(AppConfig settings, ILogger logger)
         {
-            ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, telemetry);
+            ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, logger);
 
             var efConnectionString = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
             var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
 
-            telemetry.LogInformation("\nConfigured values:");
+            logger.LogInformation("\nConfigured values:");
 
-            telemetry.LogInformation($"Destination SQL Server='{sqlConnectionInfo.DataSource}', DB='{sqlConnectionInfo.InitialCatalog}'.");
-            telemetry.LogInformation($"Azure AD tenant='{settings.TenantDomain}, client ID='{settings.ClientID}'.");
-            telemetry.LogInformation($"Days back to check for events from Activity API='{settings.DaysBeforeNowToDownload}'.");
+            logger.LogInformation($"Destination SQL Server='{sqlConnectionInfo.DataSource}', DB='{sqlConnectionInfo.InitialCatalog}'.");
+            logger.LogInformation($"Azure AD tenant='{settings.TenantDomain}, client ID='{settings.ClientID}'.");
+            logger.LogInformation($"Days back to check for events from Activity API='{settings.DaysBeforeNowToDownload}'.");
 
             // Print & verify O365 workloads to import
             var validWorkloadsConfig = false;
@@ -335,17 +345,17 @@ namespace WebJob.Office365ActivityImporter
                 if (workloadsInConfig.Length > 0)
                 {
                     validWorkloadsConfig = true;
-                    telemetry.LogInformation("\nConfigured workloads to import:");
+                    logger.LogInformation("\nConfigured workloads to import:");
                     foreach (var workload in workloadsInConfig)
                     {
-                        telemetry.LogInformation($"+{workload}");
+                        logger.LogInformation($"+{workload}");
                     }
                     Console.WriteLine();
                 }
             }
             if (!validWorkloadsConfig)
             {
-                telemetry.LogError("CONFIG ERROR: No Office 365 workloads found in configuration key 'ContentTypesListAsString'!");
+                logger.LogError("CONFIG ERROR: No Office 365 workloads found in configuration key 'ContentTypesListAsString'!");
                 ConsoleApp.BombOut(true);
             }
         }

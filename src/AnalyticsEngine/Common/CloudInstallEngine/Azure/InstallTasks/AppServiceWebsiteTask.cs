@@ -38,12 +38,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 {
                     AppServicePlanId = appServicePlan.Id,
                     IsHttpsOnly = true,
+                    PublicNetworkAccess = desiredAccess,
                     SiteConfig = new SiteConfigProperties
                     {
                         IsAlwaysOn = true,
-                        FtpsState = AppServiceFtpsState.FtpsOnly,
-                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
-                        PublicNetworkAccess = desiredAccess
+                        FtpsState = AppServiceFtpsState.Disabled,
+                        MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2
                     },
                     Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned)
                 };
@@ -70,19 +70,23 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var siteConfig = (await webApp.GetWebSiteConfig().GetAsync()).Value.Data;
                 var needsTlsUpdate = siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString());
                 var needsAlwaysOnUpdate = siteConfig.IsAlwaysOn != true;
-                var needsPublicAccessUpdate = !string.Equals(siteConfig.PublicNetworkAccess, desiredAccess, System.StringComparison.OrdinalIgnoreCase);
-                if (needsTlsUpdate || needsAlwaysOnUpdate || needsPublicAccessUpdate)
+                var needsFtpsDisable = siteConfig.FtpsState != AppServiceFtpsState.Disabled;
+                var needsPublicAccessUpdate = !string.Equals(webApp.Data.PublicNetworkAccess, desiredAccess, System.StringComparison.OrdinalIgnoreCase);
+                if (needsTlsUpdate || needsAlwaysOnUpdate || needsFtpsDisable || needsPublicAccessUpdate)
                 {
+                    webAppUpdateInfo.PublicNetworkAccess = desiredAccess;
                     webAppUpdateInfo.SiteConfig = new SiteConfigProperties
                     {
                         MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2,
                         IsAlwaysOn = true,
-                        PublicNetworkAccess = desiredAccess
+                        FtpsState = AppServiceFtpsState.Disabled
                     };
                     if (needsTlsUpdate)
                         _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
                     if (needsAlwaysOnUpdate)
                         _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enable Always On...");
+                    if (needsFtpsDisable)
+                        _logger.LogInformation($"Disabling FTP/FTPS on App Service '{_config.ResourceName}' because deployment uses SCM HTTPS...");
                     if (needsPublicAccessUpdate)
                         _logger.LogInformation($"Updating App Service '{_config.ResourceName}' public network access to '{desiredAccess}'...");
                     needsUpdate = true;
@@ -99,7 +103,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Using existing App Service '{webApp.Data.DefaultHostName}'.");
             }
 
-            // Enable basic publishing credentials for SCM and FTP if not already enabled
+            // Kudu ZIP deployment requires SCM publishing credentials.
             var scmPolicy = await webApp.GetScmSiteBasicPublishingCredentialsPolicy().GetAsync();
             var ftpPolicy = await webApp.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync();
 
@@ -114,13 +118,13 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 await webApp.GetScmSiteBasicPublishingCredentialsPolicy().CreateOrUpdateAsync(
                     WaitUntil.Completed, publishingCredentialsPolicyData);
             }
-            if (ftpPolicy.Value.Data.Allow != true)
+            if (ftpPolicy.Value.Data.Allow != false)
             {
-                _logger.LogInformation($"Enabling basic publishing credentials (FTP) for '{_config.ResourceName}'...");
+                _logger.LogInformation($"Disabling FTP basic publishing credentials for '{_config.ResourceName}'...");
                 await webApp.GetWebSiteFtpPublishingCredentialsPolicy().CreateOrUpdateAsync(
-                    WaitUntil.Completed, publishingCredentialsPolicyData);
+                    WaitUntil.Completed,
+                    new CsmPublishingCredentialsPoliciesEntityData { Allow = false });
             }
-
             // Configure VNet integration if a subnet ID is provided
             var vnetSubnetId = _config.ContainsKey(CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID) ? _config.GetConfigValue(CONFIG_KEY_VNET_INTEGRATION_SUBNET_ID) : null;
             if (!string.IsNullOrWhiteSpace(vnetSubnetId))

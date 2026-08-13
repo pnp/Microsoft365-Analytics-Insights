@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -15,12 +15,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     /// </summary>
     public abstract class ContentMetaDataLoader<SUMMARYTYPE>
     {
-        protected readonly ILogger _telemetry;
+        protected readonly ILogger _logger;
         protected readonly AppConfig _settings;
 
-        protected ContentMetaDataLoader(ILogger telemetry, AppConfig settings)
+        protected ContentMetaDataLoader(ILogger logger, AppConfig settings)
         {
-            _telemetry = telemetry;
+            _logger = logger;
             _settings = settings;
         }
 
@@ -58,12 +58,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
 
             if (timeChunks.Count == 0)
             {
-                _telemetry.LogWarning("Audit events import: ERROR: Could not download activity - no time-chunks for activity scanning using configured values.");
+                _logger.LogWarning("Audit events import: ERROR: Could not download activity - no time-chunks for activity scanning using configured values.");
             }
             else
             {
                 // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-reference
-                _telemetry.LogInformation($"Audit events import: getting changes summary from Office 365 Activity API from '{timeChunks.First().Start}' to '{timeChunks.Last().End}'...");
+                _logger.LogInformation($"Audit events import: getting changes summary from Office 365 Activity API from '{timeChunks.First().Start}' to '{timeChunks.Last().End}'...");
 
                 int batchId = 0;
                 var downloadListThreads = new List<Task<List<SUMMARYTYPE>>>();
@@ -125,5 +125,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     {
         [JsonProperty("contentCreated")]
         public DateTime Created { get; set; }
+
+        /// <summary>
+        /// Stable id of this content blob, used by the blob-level checkpoint to skip re-downloading blobs
+        /// already fully committed in a previous cycle. Null when the summary type has no such id (the
+        /// checkpoint then simply never skips it). Concrete summary types (e.g. <c>ActivityReportInfo</c>)
+        /// override this to expose their content id.
+        /// </summary>
+        [JsonIgnore]
+        public virtual string BlobId => null;
     }
 }

@@ -1,4 +1,4 @@
-﻿using DataUtils.Sql.Inserts;
+using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
 using System.Data.Entity;
 
@@ -9,8 +9,8 @@ namespace Common.Entities
     /// </summary>
     public class EFInsertBatch<T> : InsertBatch<T> where T : class
     {
-        public EFInsertBatch(DbContext context, ILogger debugTracer) :
-            base(context.Database.Connection.ConnectionString, debugTracer)
+        public EFInsertBatch(DbContext context, ILogger logger) :
+            base(context.Database.Connection.ConnectionString, logger)
         {
         }
     }

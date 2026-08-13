@@ -1,4 +1,4 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -11,7 +11,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         private readonly int _reportsSummaryCountWanted;
 
-        public FakeContentMetaDataLoader(ILogger debugTracer, AppConfig settings, int reportsCountWanted) : base(debugTracer, settings)
+        public FakeContentMetaDataLoader(ILogger logger, AppConfig settings, int reportsCountWanted) : base(logger, settings)
         {
             _reportsSummaryCountWanted = reportsCountWanted;
         }

@@ -90,7 +90,6 @@
     <Compile Include="Entities\OnlineMeeting.cs" />
     <Compile Include="Entities\UsageReports\AppPlatformUserActivityLog.cs" />
     <Compile Include="Entities\UsageReports\SharePointSitesFileWeeklyStats.cs" />
-    <Compile Include="Installer\AdoptifySolutionInstallConfig.cs" />
     <Compile Include="Installer\BaseConfig.cs" />
     <Compile Include="Installer\BaseSolutionInstallConfig.cs" />
     <Compile Include="Installer\TargetSolutionConfig.cs" />
@@ -309,6 +308,34 @@
     <Compile Include="Migrations\202606141000001_UrlFullUrlNvarchar.Designer.cs">
       <DependentUpon>202606141000001_UrlFullUrlNvarchar.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202607101200001_IndexCopilotAccessedResourceLookups.cs" />
+    <Compile Include="Migrations\202607101200001_IndexCopilotAccessedResourceLookups.Designer.cs">
+      <DependentUpon>202607101200001_IndexCopilotAccessedResourceLookups.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.cs" />
+    <Compile Include="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.Designer.cs">
+      <DependentUpon>202607130900001_DedupCopilotAccessedResourceSiteUrls.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.cs" />
+    <Compile Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.Designer.cs">
+      <DependentUpon>202607141000001_IndexAuditEventsTimeStamp.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202607231000001_IndexSitesSiteId.cs" />
+    <Compile Include="Migrations\202607231000001_IndexSitesSiteId.Designer.cs">
+      <DependentUpon>202607231000001_IndexSitesSiteId.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.cs" />
+    <Compile Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.Designer.cs">
+      <DependentUpon>202607231700001_CoverCopilotAccessedResourceDedup.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608131030001_IndexUsageReportSnapshots.cs" />
+    <Compile Include="Migrations\202608131030001_IndexUsageReportSnapshots.Designer.cs">
+      <DependentUpon>202608131030001_IndexUsageReportSnapshots.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608131055001_IndexReportDateQueries.cs" />
+    <Compile Include="Migrations\202608131055001_IndexReportDateQueries.Designer.cs">
+      <DependentUpon>202608131055001_IndexReportDateQueries.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -455,6 +482,27 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202606141000001_UrlFullUrlNvarchar.resx">
       <DependentUpon>202606141000001_UrlFullUrlNvarchar.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202607101200001_IndexCopilotAccessedResourceLookups.resx">
+      <DependentUpon>202607101200001_IndexCopilotAccessedResourceLookups.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202607130900001_DedupCopilotAccessedResourceSiteUrls.resx">
+      <DependentUpon>202607130900001_DedupCopilotAccessedResourceSiteUrls.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202607141000001_IndexAuditEventsTimeStamp.resx">
+      <DependentUpon>202607141000001_IndexAuditEventsTimeStamp.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202607231000001_IndexSitesSiteId.resx">
+      <DependentUpon>202607231000001_IndexSitesSiteId.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202607231700001_CoverCopilotAccessedResourceDedup.resx">
+      <DependentUpon>202607231700001_CoverCopilotAccessedResourceDedup.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608131030001_IndexUsageReportSnapshots.resx">
+      <DependentUpon>202608131030001_IndexUsageReportSnapshots.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608131055001_IndexReportDateQueries.resx">
+      <DependentUpon>202608131055001_IndexReportDateQueries.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

@@ -40,7 +40,7 @@ namespace App.ControlPanel.Frames
 
         #region Props
 
-        public InstallerFtpConfig FtpConfig { get; set; }
+        public InstallerProxyConfig ProxyConfig { get; set; }
         public TestConfiguration TestsConfig { get; set; }
 
         #endregion
@@ -398,11 +398,11 @@ namespace App.ControlPanel.Frames
 
             if (task == InstallTask.Install)
             {
-                _installerEngine = new SolutionInstaller(config, _logger, softwareConfig, FtpConfig, Environment.UserName, (this.ParentForm as MainForm).LastPassword);
+                _installerEngine = new SolutionInstaller(config, _logger, softwareConfig, ProxyConfig, Environment.UserName, (this.ParentForm as MainForm).LastPassword);
             }
             else if (task == InstallTask.Test)
             {
-                _installerEngine = new SolutionInstallVerifier(config, _logger, FtpConfig, this.TestsConfig);
+                _installerEngine = new SolutionInstallVerifier(config, _logger, this.TestsConfig);
             }
             else if (task == InstallTask.UninstallFromSharePoint)
             {
@@ -495,6 +495,19 @@ namespace App.ControlPanel.Frames
             if (!this.ValidatInputAndShowErrors(true))
             {
                 return;
+            }
+
+            // A private deployment can leave Service Bus (and therefore the Teams calls import) unreachable if the
+            // namespace isn't Premium. Make that impossible to miss before a real deployment starts - see issue #228.
+            var serviceBusWarning = PreInstallAdvisor.GetServiceBusPrivateDeploymentWarning(GetConfigFromGUI());
+            if (serviceBusWarning != null)
+            {
+                var proceed = MessageBox.Show(this, serviceBusWarning, "Service Bus cannot be private on Standard SKU",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                if (proceed != DialogResult.Yes)
+                {
+                    return;
+                }
             }
 
             // Save settings

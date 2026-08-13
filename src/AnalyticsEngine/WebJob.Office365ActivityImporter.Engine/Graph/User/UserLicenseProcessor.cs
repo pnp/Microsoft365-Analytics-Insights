@@ -15,7 +15,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     internal class UserLicenseProcessor
     {
-        private readonly AnalyticsLogger _telemetry;
+        private readonly AnalyticsLogger _logger;
         private readonly OfficeLicenseNameResolver _officeLicenseNameResolver;
         private readonly IUserMetadataLoader _userLoader;
         private readonly UserMetadataCache _userMetaCache;
@@ -23,11 +23,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private const int SKU_BATCH_SIZE = 1000;
 
         public UserLicenseProcessor(
-            AnalyticsLogger telemetry,
+            AnalyticsLogger logger,
             IUserMetadataLoader userLoader,
             UserMetadataCache userMetaCache)
         {
-            _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userLoader = userLoader ?? throw new ArgumentNullException(nameof(userLoader));
             _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
             _officeLicenseNameResolver = new OfficeLicenseNameResolver();
@@ -44,7 +44,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Remove all existing license lookups for these users via direct SQL for performance.
             // EF RemoveRange generates individual DELETE statements per entity which is extremely
             // slow for large user counts (10+ hours for ~187K users). A single SQL DELETE is instant.
-            _telemetry.LogInformation($"User import - removing old license lookups for {graphFoundDbUsers.Count.ToString("N0")} users");
+            _logger.LogInformation($"User import - removing old license lookups for {graphFoundDbUsers.Count.ToString("N0")} users");
 
             // Detach all tracked license lookups from EF before the SQL delete so the
             // change-tracker doesn't try to re-process rows that no longer exist.
@@ -146,7 +146,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
 
-            _telemetry.LogInformation($"User import - Found {relevantDbUsers.Count.ToString("N0")} users in SQL for SKU Part Number '{sku.SkuPartNumber}' from {usersWithSku.Count.ToString("N0")} Graph users.");
+            _logger.LogInformation($"User import - Found {relevantDbUsers.Count.ToString("N0")} users in SQL for SKU Part Number '{sku.SkuPartNumber}' from {usersWithSku.Count.ToString("N0")} Graph users.");
 
             // Get license type once for all users
             var licence = await GetLicenseType(sku.SkuPartNumber);
@@ -186,7 +186,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 if ((i + batch.Count) % 5000 == 0 || i + batch.Count >= relevantDbUsers.Count)
                 {
-                    _telemetry.LogInformation($"User {(i + batch.Count).ToString("N0")} / {relevantDbUsers.Count.ToString("N0")} processed for licenses.");
+                    _logger.LogInformation($"User {(i + batch.Count).ToString("N0")} / {relevantDbUsers.Count.ToString("N0")} processed for licenses.");
                 }
 
                 // Clear batch list to free memory
@@ -195,7 +195,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (duplicatesSkipped > 0)
             {
-                _telemetry.LogInformation($"User import - Skipped {duplicatesSkipped.ToString("N0")} duplicate license lookups for SKU '{sku.SkuPartNumber}' (display-name '{licence.Name}' already assigned via another SKU).");
+                _logger.LogInformation($"User import - Skipped {duplicatesSkipped.ToString("N0")} duplicate license lookups for SKU '{sku.SkuPartNumber}' (display-name '{licence.Name}' already assigned via another SKU).");
             }
 
             // Clear list to free memory. Do NOT clear dbUsersByUpn here - it is owned by
@@ -251,7 +251,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var productName = _officeLicenseNameResolver.GetDisplayNameFor(skuPartNumber);
             if (string.IsNullOrEmpty(productName))
             {
-                _telemetry.LogWarning($"User import - unexpected SKU part-number '{skuPartNumber}'. Couldn't find a corresponding display-name.");
+                _logger.LogWarning($"User import - unexpected SKU part-number '{skuPartNumber}'. Couldn't find a corresponding display-name.");
 
                 // Set display name as SKU ID
                 productName = skuPartNumber;

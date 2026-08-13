@@ -1,142 +1,75 @@
 ![Design Header](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/media/design.jpg)
 
-Welcome to the **Office 365 Advanced Analytics** project home.
+# Microsoft 365 Advanced Analytics
 
-This is an analytics engine that extracts much more analytics from M365 than is available out of the box. The core part of this solution is an ingestion engine that collects enhanced M365 usage data and stores it into a single SQL Server database. Other solutions then use this dataset to offer enhanced funcionality or reporting.
+**Own your Microsoft 365 usage data — and get far more insight than the admin center gives you.**
 
-A list of data this engine can collect is below.
+Microsoft 365 Advanced Analytics is an open-source engine that continuously collects *enhanced* usage data from across Microsoft 365 — SharePoint, Teams, Outlook, OneDrive, Viva Engage (Yammer), Copilot, Power Platform and more — into a **single SQL database you own**. Power BI reports and dashboards then build on that dataset, so you can analyse adoption, engagement and ROI in ways the built-in reports simply can't.
+
+> Microsoft 365 already ships usage reports. This solution exists for everything those reports *don't* do: long-term history, raw queryable data, cross-workload correlation, and page/call/message-level detail — all joined to your own org structure.
+
+## Why it's more than the built-in reports
+
+| | Microsoft 365 built-in reports | Microsoft 365 Advanced Analytics |
+|-|-|-|
+| **History** | Rolling 7–180 days | Keep as long as you want — *you* control retention |
+| **Data access** | Locked in the admin center, limited export | One SQL database in **your** tenant — query it any way |
+| **Scope** | Siloed per workload, pre-aggregated | Unified, joinable schema across every workload |
+| **Granularity** | High-level counts | Page hits/clicks/sessions, per-call quality, per-email + sentiment, Copilot interactions, files & resources |
+| **People** | Names often de-identified | Identifiable users enriched with department, manager, job title, office and license/SKU |
+| **Reporting** | Microsoft's fixed report set | Your own Power BI & dashboards (templates included) |
+| **Enrichment** | — | Optional AI sentiment, language & keyword detection |
+
+## What you can do with it
+
+- **Measure real adoption** by department, region, role or license — not just tenant-wide totals.
+- **See how SharePoint is actually used** — page hits, sessions, link clicks, searches, render performance, geography and device, right down to the page.
+- **Track Copilot adoption & ROI** — who's using it, in which apps and agents, against which files and resources.
+- **Right-size licensing** with per-user, per-app usage history.
+- **Watch Teams call quality** and meeting habits at the session level.
+- **Trend over years**, not weeks, with history you keep.
+
+## What data is collected
+
+Enable only the areas you need — permissions scale accordingly. Fully enabled, the engine collects:
+
+- **SharePoint Online** — web traffic (page hits, clicks, sessions, performance, geo/device), file activity, searches, page metadata, comments & likes (with sentiment).
+- **SharePoint & OneDrive usage** — per-user daily activity; per-site weekly activity & storage.
+- **Teams & Calls** — teams, channels, membership, add-ins; per-user activity; call & meeting detail with quality/feedback.
+- **Outlook** — usage activity; optional per-recipient sent-email records with sentiment.
+- **Viva Engage (Yammer), Stream, M365 Apps & platforms** — adoption and activity signals.
+- **Copilot** — interactions, files, meetings, accessed resources (with sensitivity labels), models used.
+- **Power Platform** — Power Apps / Automate / BI and Copilot Studio adoption events.
+- **Users** — profile attributes (department, manager, title, office) and assigned SKUs.
+
+> Full data-collection map: **[What data is collected](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Data%20Collection)**.
 
 ## Getting started
 
-All the documentation is in the [wiki](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki).
+All documentation lives in the **[wiki](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki)**.
 
-* [Prerequisites](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Prerequisites)
-* [Installation (with installer)](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance)
-* [Release notes](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Release%20Notes)
-* [Known issues](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Known%20Issues)
+1. **[Prerequisites](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Prerequisites)** — service principals, permissions (Graph/Microsoft 365 API + Azure RBAC), tenant/subscription setup.
+2. **[Install with the installer](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance)** — the standard deployment.
+3. **[Verify the deployment](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Verify)** — confirm the import jobs are running.
 
-There are several solutions built with the analytics engine:
+See also [Release notes](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Release%20Notes) and [Known issues](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Known%20Issues).
 
-* [Activity and Usage Analytics](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Analytics)
-* Adoptify
-* SharePoint Insights
+## Solutions built on the engine
 
-Some of these solutions require additional configuration after the analytics engine has been installed. Please review the [post-install docs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance#additional-solutions).
+- **[Activity & Usage Analytics](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Analytics)** — Power BI reporting over the dataset.
+- **[Copilot Analytics](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot)** — Copilot usage & adoption reporting.
+- **SharePoint Insights** — additional solution built on the engine.
 
-## Collected data
+Some require extra configuration after install — see [Additional solutions](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance#additional-solutions).
 
->This is an excerpt of the whole details [found here](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki#data-collection-map).
+### Related projects in this repository
 
-This solution can store analytics data for many metrics for Office 365, if fully enabled.
+- **[Telemetry Service](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Telemetry%20Service)** — the receiver and Entra-protected aggregate dashboard for opt-in anonymous product-usage reports. Uploads are signed, and the source is under [`src/TelemetryService/`](src/TelemetryService).
 
-**Note**: depending on your requirements, not all areas of the solution need to be fully enabled.
+## Architecture & running costs
 
-For all the data to be recorded for each area various permissions are needed, but if only a specific subset of statistics is required, the solution can work on a subset of permissions where appropriate.
+The engine runs on a handful of Azure components (App Service web-jobs + admin site, Azure SQL, Redis, optional Service Bus / Cognitive Services / Automation). A medium environment (~20,000 users, 1 year of data) is roughly **€170/month**, dominated by the App Service plan and SQL database — *indicative only; verify current pricing for your region and scale*.
 
-### SharePoint Online (Web and Audit Log)
-
-Usage focused on web-traffic & file usage activity, including:
-
-* Web-browsing: page hits, clicks & user sessions
-* File activity
-* Searches
-* Pages metadata
-* Page comments and likes
-
-### SharePoint Usage
-
-* SharePoint user activity, daily.
-* SharePoint site activity, weekly
-
-### Teams & Calls
-
-Statistics focused on adoption. All information is historical, and a snapshot kept each day the solution is running.
-
-* Teams
-* Channels in Teams
-* Teams user activity
-* Teams’ user device activity
-* Calls & meetings
-
-### Outlook Usage
-
-High-level Outlook usage statistics.
-
-* User activity
-* Sent emails (optional). Per-recipient records of messages from each user's `sentitems` folder, including subject, sent date, sender, recipient and an optional Azure AI Language sentiment score. Requires the Graph `Mail.Read` application permission.
-
-### OneDrive Usage
-
-Statistics focused on adoption. All information is historical, and a snapshot kept each day the solution is running.
-
-* User activity
-
-### Yammer Messages & Usage
-
-Statistics focused on groups & user activity. All information is historical, and a snapshot kept each day the solution is running.
-
-* Yammer activity
-
-### User Apps and Platforms Usage
-
-Statistics that provides the details about which apps and platforms users have used, each day the solution is running.
-
-* M365 apps usage
-
-### Stream Activity
-
-Statistics focused on stream activity. All information is historical, and a snapshot kept each day the solution is running.
-
-* Stream activity
-
-### Misc Audit Data
-
-Given we already scan the audit logs for SharePoint, other workloads can be imported too, although by default this is disabled.
-
-Element | Description
--|-
-Exchange audit events | Operation (i.e., "New-Mailbox") User Timestamp
-General audit events | Operation (i.e., "ViewReport"). User. Timestamp
-Azure AD events | Operation (i.e., "UserLoggedIn"). User. Timestamp
-
-### User Information & Attributes
-
-For all users seen by the system & active in Azure AD, this information is read and stored:
-
-* User details
-* User SKUs
-
-### Copilot Events
-
-* Interactions with copilot (new chat thread)
-* Files involved with copilot
-
-## Azure Runtime Costs & Architecture
-
-The solution uses various components in Azure to operate. Here’s what we use & expected performance tiers.
-
-Element | Description | Expected Performance Tiers
--|-|-
-Azure App Service (Windows) + service plan – **recommended**. | Used to host the importing web-jobs and the ASP.Net site for calls notifications (and administration site). | B1-S2. Production environments need at least 3.5GB RAM (B2 tiers) Pricing: <https://azure.microsoft.com/en-us/pricing/details/app-service/windows/>
-Azure SQL Server – **recommended** | Endpoint for SQL database. | n/a – costs are done by database.
-Azure SQL Database – **recommended** | Single source of reporting data. Usually this is the component that needs to be scaled when dataset requirements grow. | 10-50 DTUs without enhanced usage profiling enabled. 50-100 DTUs if enhanced usage profiling is optionally enabled (see below). Pricing: <https://azure.microsoft.com/en-us/pricing/details/azure-sql-database/single/>
-Azure Cache for Redis – **required**. | App caching for tokens and cognitive services lookups. | C0 Basic Pricing: <https://azure.microsoft.com/en-us/pricing/details/cache/>
-Language Cognitive Service – **optional** | Used for language, keyword, and sentiment detection. | Standard Pricing: [https://azure.microsoft.com/en-us/pricing/details/cognitive-services/language-service/\#pricing](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/language-service/#pricing)
-Service Bus – **required** for Teams call-logging. | Used to queue call notifications asynchronously. | Basic Pricing: [https://azure.microsoft.com/en-us/pricing/details/service-bus/\#pricing](https://azure.microsoft.com/en-us/pricing/details/service-bus/#pricing)
-Key vault – **required** for Adoptify only. | Used to store Graph app secrets for Adoptify. Read by logic apps. | Free - <https://azure.microsoft.com/en-us/products/key-vault>
-Storage | Used for log & table storage if needed, and for storing any PowerShell SQL extensions needed in blob storage. | Pay-as-you-go. Normally zero costs unless detailed logging is turned on. <https://azure.microsoft.com/en-gb/pricing/details/storage/blobs/>
-Automation Account | Used to run enhanced usage profiling if wanted/enabled separately. | Likely free – the first 500 minutes per month are free. Unless datasets are very large, it’s common to not need any more. <https://azure.microsoft.com/en-us/pricing/details/automation/>
-
-Total estimated costs expected for a medium sized environment (20,000 users), for 1 year of data collection: **€170/month** approximately.
-
-Expected data-range for a medium-sized environment:
-
-* 10,000 hits & audit events daily.
-* Up to 1000 teams.
-* Up to 20,000 users.
-* Up to 1 year of data-collection. Longer retention rates will require higher SQL performance tiers.
-
-Some components can be moved out of Azure; the app-service and the SQL database if needed, but we recommend keeping it in Azure so the automatic installer update process will work with the architecture.
+Full breakdown: **[Architecture & costs](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Architecture%20and%20Costs)**.
 
 ![Architecture diagram](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/media/architecture.jpg)
-

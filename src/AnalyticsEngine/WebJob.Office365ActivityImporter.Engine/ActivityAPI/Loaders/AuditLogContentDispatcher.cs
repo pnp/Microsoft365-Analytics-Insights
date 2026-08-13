@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
+using System;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
@@ -8,8 +9,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 {
     /// <summary>
     /// Routes a raw audit-log JSON object to the workload-specific <see cref="AbstractAuditLogContent"/>
-    /// subclass and applies the per-workload operation filters (e.g. PowerBI ViewReport-only,
-    /// Power Automate flow-run-only).
+    /// subclass and applies per-workload validation/filtering (for example, PowerBI ViewReport-only
+    /// and Power Automate records that identify a concrete flow).
     ///
     /// The activity report loader cares about IO, retries and batching; this class owns the
     /// "what deserialisation does this workload need" decision so the two concerns stay separate
@@ -26,9 +27,30 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         /// JSON deserialisation exceptions are intentionally not caught here - the caller already
         /// logs them with the originating workload name and continues to the next record.
         /// </summary>
-        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger)
+        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true)
         {
             if (reportItem == null || logBase == null)
+            {
+                return null;
+            }
+
+            // Copilot Studio authoring records publish a top-level BotId. Route by that documented
+            // record shape rather than relying exclusively on a workload string that Microsoft does
+            // not publish in the Copilot Studio schema.
+            var isCopilotStudioRecord = reportItem.Type == JTokenType.Object
+                && !string.IsNullOrEmpty((string)reportItem["BotId"]);
+
+            // Power Platform (the unified PowerPlatform record + the legacy per-product PowerApps / Power
+            // Automate / Power BI schemas + Copilot Studio) all arrive via the Audit.General subscription.
+            // When the workload is turned off, drop these events here so they are neither imported (no base
+            // audit_events row) nor staged (no Power Platform merges) - the whole workload's cost is skipped.
+            if (!importPowerPlatform
+                && (isCopilotStudioRecord
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_PLATFORM
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_APPS
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_AUTOMATE
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_BI
+                    || logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT_STUDIO))
             {
                 return null;
             }
@@ -79,6 +101,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return CopilotAuditLogContent.FromJson(reportItem.ToString());
             }
 
+            if (isCopilotStudioRecord)
+            {
+                return reportItem.ToObject<CopilotStudioAuditLogContent>();
+            }
+
             // Workload "PowerPlatform" -> AuditLogRecordType 256 PowerPlatformAdministratorActivity.
             // Unified Power Platform admin activity record where data lives in a
             // PropertyCollection (OpenTelemetry-style key/value pairs) rather than top-level
@@ -95,10 +122,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 
                 var mapped = ppRecord.ToWorkloadSpecificContent(logger);
 
-                // Power Automate: only persist flow-run events; lifecycle events are filtered
-                // out by PowerPlatformAuditLogFilter.
                 if (mapped is PowerAutomateAuditLogContent
-                    && !PowerPlatformAuditLogFilter.ShouldPersistPowerAutomateOperation(logBase.Operation, logger))
+                    && !PowerPlatformAuditLogFilter.ShouldPersistPowerAutomateRecord((PowerAutomateAuditLogContent)mapped, logger))
                 {
                     return null;
                 }
@@ -116,16 +141,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             }
 
             // Workload "MicrosoftFlow" (Power Automate) -> AuditLogRecordType 30 MicrosoftFlow.
-            // Same flow-run-only gate as the unified PowerPlatform schema above; filtered here
-            // so nothing reaches the staging tables.
+            // Current records expose lifecycle, connector, and permission metadata through
+            // FlowDetailsUrl / FlowConnectorNames / RecipientUPN / SharingPermission.
             // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_AUTOMATE)
             {
-                if (!PowerPlatformAuditLogFilter.ShouldPersistPowerAutomateOperation(logBase.Operation, logger))
-                {
-                    return null;
-                }
-                return reportItem.ToObject<PowerAutomateAuditLogContent>();
+                var flowRecord = reportItem.ToObject<PowerAutomateAuditLogContent>();
+                return PowerPlatformAuditLogFilter.ShouldPersistPowerAutomateRecord(flowRecord, logger)
+                    ? flowRecord
+                    : null;
             }
 
             // Workload "PowerBI" -> AuditLogRecordType 20 PowerBIAudit. We only persist ViewReport:
@@ -144,9 +168,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return reportItem.ToObject<PowerBIAuditLogContent>();
             }
 
-            // Workload "MicrosoftCopilotStudio" (formerly Power Virtual Agents) - admin and user
-            // activity for Copilot Studio agents, surfaced in Purview as workload
-            // "MicrosoftCopilotStudio".
+            // Retain the legacy workload route for records that identify the product by workload.
+            // Current records with BotId are routed by shape above.
             // https://learn.microsoft.com/en-us/microsoft-copilot-studio/admin-logging-copilot-studio
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT_STUDIO)
             {

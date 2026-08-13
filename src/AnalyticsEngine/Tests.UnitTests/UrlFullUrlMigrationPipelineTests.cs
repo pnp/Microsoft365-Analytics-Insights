@@ -36,7 +36,12 @@ namespace Tests.UnitTests
     {
         private const string RemoveDataverseTablesId = "202606011010001_RemoveDataverseTables";
         private const string VarcharMappingId = "202606011739254_UrlFullUrlVarcharMapping";
-        private const string LatestId = "202606141000001_UrlFullUrlNvarchar";
+        // The most recent migration - updated whenever a newer one is added, since these pipeline tests
+        // assert the DB reaches the true latest migration after MigrateToLatest(). UrlFullUrlNvarchar (which
+        // performs the urls.full_url nvarchar(850) conversion asserted below) still runs as part of the path;
+        // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup and
+        // IndexUsageReportSnapshots are later, unrelated schema-only index migrations.
+        private const string LatestId = "202608131055001_IndexReportDateQueries";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
@@ -180,7 +185,7 @@ namespace Tests.UnitTests
 
                 // 4. Verify the upgrade completed and is lossless.
                 Assert.AreEqual(LatestId, LastMigrationId(),
-                    "DB should now be at the latest migration (UrlFullUrlNvarchar).");
+                    "DB should now be at the latest migration.");
                 Assert.IsTrue(ColumnIsNvarchar850(),
                     "full_url should now be nvarchar(850). Actual: " + ColumnType());
                 Assert.IsTrue(IndexExists(), "IX_urls_full_url should exist after the upgrade.");

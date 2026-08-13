@@ -29,7 +29,7 @@
         private void InitializeComponent()
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(TestSettingsForm));
-            this.backgroundWorkerAutoDetectFTP = new System.ComponentModel.BackgroundWorker();
+            this.backgroundWorkerAutoDetectSql = new System.ComponentModel.BackgroundWorker();
             this.pnlAll = new System.Windows.Forms.Panel();
             this.btnOk = new System.Windows.Forms.Button();
             this.btnClose = new System.Windows.Forms.Button();
@@ -39,12 +39,6 @@
             this.label6 = new System.Windows.Forms.Label();
             this.txtSqlUsername = new System.Windows.Forms.TextBox();
             this.label7 = new System.Windows.Forms.Label();
-            this.txtFtpPassword = new System.Windows.Forms.TextBox();
-            this.label5 = new System.Windows.Forms.Label();
-            this.txtFtpUsername = new System.Windows.Forms.TextBox();
-            this.label4 = new System.Windows.Forms.Label();
-            this.txtFtpServer = new System.Windows.Forms.TextBox();
-            this.label3 = new System.Windows.Forms.Label();
             this.txtSqlServer = new System.Windows.Forms.TextBox();
             this.label1 = new System.Windows.Forms.Label();
             this.lblTitle = new System.Windows.Forms.Label();
@@ -52,10 +46,10 @@
             this.groupBox1.SuspendLayout();
             this.SuspendLayout();
             // 
-            // backgroundWorkerAutoDetectFTP
+            // backgroundWorkerAutoDetectSql
             // 
-            this.backgroundWorkerAutoDetectFTP.DoWork += new System.ComponentModel.DoWorkEventHandler(this.backgroundWorkerAutoDetectFTP_DoWork);
-            this.backgroundWorkerAutoDetectFTP.RunWorkerCompleted += new System.ComponentModel.RunWorkerCompletedEventHandler(this.backgroundWorkerAutoDetectFTP_RunWorkerCompleted);
+            this.backgroundWorkerAutoDetectSql.DoWork += new System.ComponentModel.DoWorkEventHandler(this.backgroundWorkerAutoDetectSql_DoWork);
+            this.backgroundWorkerAutoDetectSql.RunWorkerCompleted += new System.ComponentModel.RunWorkerCompletedEventHandler(this.backgroundWorkerAutoDetectSql_RunWorkerCompleted);
             // 
             // pnlAll
             // 
@@ -68,13 +62,13 @@
             this.pnlAll.Controls.Add(this.groupBox1);
             this.pnlAll.Location = new System.Drawing.Point(12, 12);
             this.pnlAll.Name = "pnlAll";
-            this.pnlAll.Size = new System.Drawing.Size(687, 633);
+            this.pnlAll.Size = new System.Drawing.Size(687, 420);
             this.pnlAll.TabIndex = 7;
             // 
             // btnOk
             // 
             this.btnOk.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnOk.Location = new System.Drawing.Point(421, 584);
+            this.btnOk.Location = new System.Drawing.Point(421, 371);
             this.btnOk.Name = "btnOk";
             this.btnOk.Size = new System.Drawing.Size(120, 40);
             this.btnOk.TabIndex = 12;
@@ -86,7 +80,7 @@
             // 
             this.btnClose.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnClose.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnClose.Location = new System.Drawing.Point(547, 584);
+            this.btnClose.Location = new System.Drawing.Point(547, 371);
             this.btnClose.Name = "btnClose";
             this.btnClose.Size = new System.Drawing.Size(120, 40);
             this.btnClose.TabIndex = 11;
@@ -101,17 +95,11 @@
             this.groupBox1.Controls.Add(this.label6);
             this.groupBox1.Controls.Add(this.txtSqlUsername);
             this.groupBox1.Controls.Add(this.label7);
-            this.groupBox1.Controls.Add(this.txtFtpPassword);
-            this.groupBox1.Controls.Add(this.label5);
-            this.groupBox1.Controls.Add(this.txtFtpUsername);
-            this.groupBox1.Controls.Add(this.label4);
-            this.groupBox1.Controls.Add(this.txtFtpServer);
-            this.groupBox1.Controls.Add(this.label3);
             this.groupBox1.Controls.Add(this.txtSqlServer);
             this.groupBox1.Controls.Add(this.label1);
             this.groupBox1.Location = new System.Drawing.Point(5, 123);
             this.groupBox1.Name = "groupBox1";
-            this.groupBox1.Size = new System.Drawing.Size(662, 455);
+            this.groupBox1.Size = new System.Drawing.Size(662, 242);
             this.groupBox1.TabIndex = 9;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "Test Configuration:";
@@ -119,7 +107,7 @@
             // btnAutoDetect
             // 
             this.btnAutoDetect.AutoSize = true;
-            this.btnAutoDetect.Location = new System.Drawing.Point(12, 418);
+            this.btnAutoDetect.Location = new System.Drawing.Point(12, 210);
             this.btnAutoDetect.Name = "btnAutoDetect";
             this.btnAutoDetect.Size = new System.Drawing.Size(278, 20);
             this.btnAutoDetect.TabIndex = 17;
@@ -164,60 +152,6 @@
             this.label7.TabIndex = 12;
             this.label7.Text = "Username:";
             // 
-            // txtFtpPassword
-            // 
-            this.txtFtpPassword.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.txtFtpPassword.Location = new System.Drawing.Point(105, 350);
-            this.txtFtpPassword.Name = "txtFtpPassword";
-            this.txtFtpPassword.PasswordChar = '*';
-            this.txtFtpPassword.Size = new System.Drawing.Size(523, 26);
-            this.txtFtpPassword.TabIndex = 11;
-            // 
-            // label5
-            // 
-            this.label5.AutoSize = true;
-            this.label5.Location = new System.Drawing.Point(12, 353);
-            this.label5.Name = "label5";
-            this.label5.Size = new System.Drawing.Size(82, 20);
-            this.label5.TabIndex = 10;
-            this.label5.Text = "Password:";
-            // 
-            // txtFtpUsername
-            // 
-            this.txtFtpUsername.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.txtFtpUsername.Location = new System.Drawing.Point(105, 304);
-            this.txtFtpUsername.Name = "txtFtpUsername";
-            this.txtFtpUsername.Size = new System.Drawing.Size(523, 26);
-            this.txtFtpUsername.TabIndex = 9;
-            // 
-            // label4
-            // 
-            this.label4.AutoSize = true;
-            this.label4.Location = new System.Drawing.Point(12, 307);
-            this.label4.Name = "label4";
-            this.label4.Size = new System.Drawing.Size(87, 20);
-            this.label4.TabIndex = 8;
-            this.label4.Text = "Username:";
-            // 
-            // txtFtpServer
-            // 
-            this.txtFtpServer.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.txtFtpServer.Location = new System.Drawing.Point(17, 255);
-            this.txtFtpServer.Name = "txtFtpServer";
-            this.txtFtpServer.Size = new System.Drawing.Size(611, 26);
-            this.txtFtpServer.TabIndex = 7;
-            // 
-            // label3
-            // 
-            this.label3.AutoSize = true;
-            this.label3.Location = new System.Drawing.Point(15, 226);
-            this.label3.Name = "label3";
-            this.label3.Size = new System.Drawing.Size(103, 20);
-            this.label3.TabIndex = 6;
-            this.label3.Text = "FTPS Server:";
             // 
             // txtSqlServer
             // 
@@ -251,7 +185,7 @@
             this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 20F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnClose;
-            this.ClientSize = new System.Drawing.Size(708, 657);
+            this.ClientSize = new System.Drawing.Size(708, 444);
             this.Controls.Add(this.pnlAll);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -266,7 +200,7 @@
         }
 
         #endregion
-        private System.ComponentModel.BackgroundWorker backgroundWorkerAutoDetectFTP;
+        private System.ComponentModel.BackgroundWorker backgroundWorkerAutoDetectSql;
         private System.Windows.Forms.Panel pnlAll;
         private System.Windows.Forms.Button btnClose;
         private System.Windows.Forms.GroupBox groupBox1;
@@ -275,12 +209,6 @@
         private System.Windows.Forms.Label label6;
         private System.Windows.Forms.TextBox txtSqlUsername;
         private System.Windows.Forms.Label label7;
-        private System.Windows.Forms.TextBox txtFtpPassword;
-        private System.Windows.Forms.Label label5;
-        private System.Windows.Forms.TextBox txtFtpUsername;
-        private System.Windows.Forms.Label label4;
-        private System.Windows.Forms.TextBox txtFtpServer;
-        private System.Windows.Forms.Label label3;
         private System.Windows.Forms.TextBox txtSqlServer;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.Button btnOk;

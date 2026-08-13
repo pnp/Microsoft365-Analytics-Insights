@@ -1,0 +1,73 @@
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Identity.Web.Resource;
+using UsageReporting;
+using Web.Auth;
+using Web.Config;
+using Web.Dashboard;
+
+namespace Web
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class TelemetryController : ControllerBase
+    {
+        private readonly StatsSaveService _statsSaveService;
+        private readonly DashboardService _dashboardService;
+        private readonly WebAppConfig _configuration;
+        private readonly ILogger<TelemetryController> _logger;
+
+        public TelemetryController(StatsSaveService statsSaveService, DashboardService dashboardService, WebAppConfig configuration, ILogger<TelemetryController> logger)
+        {
+            _statsSaveService = statsSaveService;
+            _dashboardService = dashboardService;
+            _configuration = configuration;
+            _logger = logger;
+        }
+
+        // Uploaders authenticate the payload itself with the shared signature.
+        [HttpPost]
+        [AllowAnonymous]
+        public async Task<IActionResult> Post(TelemetryPayload payload)
+        {
+            if (string.IsNullOrEmpty(_configuration.TelemetrySecret))
+            {
+                throw new Exception("Server configuration error");
+            }
+
+
+            if (payload?.StatsModel == null || !payload.StatsModel.IsValid)
+            {
+                return BadRequest();
+            }
+
+            // Verify hash
+            if (!payload.StatsModel.IsValidSecretForThisObject(payload.Secret, _configuration.TelemetrySecret))
+            {
+                return Unauthorized();
+            }
+
+            await _statsSaveService.SaveOrUpdate(payload.StatsModel);
+
+            return Ok();
+        }
+
+        [HttpGet("stats")]
+        [Authorize(Roles = DashboardAuthorization.RequiredRole)]
+        [RequiredScope(DashboardAuthorization.RequiredScope)]
+        public async Task<ActionResult<DashboardStats>> GetStats()
+        {
+            var stats = await _dashboardService.GetStatsAsync();
+            return Ok(stats);
+        }
+
+        [HttpGet("clients")]
+        [Authorize(Roles = DashboardAuthorization.RequiredRole)]
+        [RequiredScope(DashboardAuthorization.RequiredScope)]
+        public async Task<ActionResult<IReadOnlyList<ClientSummary>>> GetClients()
+        {
+            var clients = await _dashboardService.GetClientsAsync();
+            return Ok(clients);
+        }
+    }
+}

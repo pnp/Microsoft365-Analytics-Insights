@@ -1,6 +1,5 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
-using App.ControlPanel.Engine.InstallerTasks.Adoptify;
 using App.ControlPanel.Engine.Models;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
@@ -17,10 +16,10 @@ namespace App.ControlPanel.Engine
     /// <summary>
     /// Top-level installer class. Executes a full solution install based on a SolutionInstallConfig values
     /// </summary>
-    public class SolutionInstaller : BaseInstallProcessWithFtp
+    public class SolutionInstaller : BaseInstallProcessWithProxy
     {
-        public SolutionInstaller(SolutionInstallConfig config, ILogger logger, SoftwareReleaseConfig softwareConfig, InstallerFtpConfig ftpConfig,
-            string installingUsername, string configPassword) : base(config, logger, ftpConfig)
+        public SolutionInstaller(SolutionInstallConfig config, ILogger logger, SoftwareReleaseConfig softwareConfig, InstallerProxyConfig proxyConfig,
+            string installingUsername, string configPassword) : base(config, logger, proxyConfig)
         {
             _softwareConfig = softwareConfig;
             this.InstalledByUsername = installingUsername;
@@ -82,7 +81,7 @@ namespace App.ControlPanel.Engine
                 ct.ThrowIfCancellationRequested();
                 // Run stuff now everything in Azure is created
                 log.LogInformation("=== Phase: App Service configuration & content deploy ===");
-                var tasks = new ConfigureAzureComponentsTasks(Config, log, _ftpConfig, InstalledByUsername, _softwareConfig, _configPassword);
+                var tasks = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig, _configPassword);
                 await tasks.RunPostCreatePaaSTasks(
                     azureBackeEndCreationJob.CreatedWebSiteResource,
                     azureBackeEndCreationJob.DatabasePaaSInfo,
@@ -112,15 +111,13 @@ namespace App.ControlPanel.Engine
                     await WarmupCallRecordWebhook(log, adminSiteUrl, ct);
                 }
 
-                log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
+                await AppServiceWebJobHealthVerifier.VerifyAndLogAsync(
+                    azureBackeEndCreationJob.CreatedWebSiteResource,
+                    _proxyConfig,
+                    log,
+                    ct);
 
-                // Install Adoptify components
-                if (Config.SolutionConfig.SolutionTargeted == SolutionImportType.Adoptify)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    log.LogInformation("=== Phase: Adoptify components ===");
-                    await InstallAdoptifyComponents(azureSub, log);
-                }
+                log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
 
                 // Open admin site?
                 if (Config.TasksConfig.OpenAdminSitePostInstall)
@@ -152,7 +149,7 @@ namespace App.ControlPanel.Engine
             {
                 // Anything else. Log error as fatal — include the full InnerException chain
                 // (the installer ILogger drops the Exception arg, so without this the inner
-                // cause of e.g. FluentFTP "see inner exception for more info" is lost).
+                // cause of wrapper exceptions is lost).
                 log.LogError($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + CloudInstallEngine.ExceptionMessages.Format(ex));
                 Console.WriteLine(ex);
                 InstallerLogs.AddToWindowsEventLog($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + CloudInstallEngine.ExceptionMessages.Format(ex), true);
@@ -183,21 +180,6 @@ namespace App.ControlPanel.Engine
                 _logger.LogInformation($"Completed with {summary.ErrorCount} error(s), {summary.WarningCount} warning(s). See summary below.");
             }
             summary.Print(_logger);
-        }
-
-        private async Task InstallAdoptifyComponents(Azure.ResourceManager.Resources.SubscriptionResource azureSub, ILogger log)
-        {
-            log.LogInformation($"Launching web login pop-up for existing Adoptify site '{Config.SolutionConfig.Adoptify.ExistingSiteUrl}'...");
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(Config.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var adoptifyInstallJob = new AdoptifyInstallJob(log, Config, azureSub, ctx);
-
-                // Install SPSite content and Azure components
-                await adoptifyInstallJob.Install();
-
-                log.LogInformation("Adoptify back-end setup complete. Remember to authorize the API connections in the portal.");
-            }
         }
 
         /// <summary>

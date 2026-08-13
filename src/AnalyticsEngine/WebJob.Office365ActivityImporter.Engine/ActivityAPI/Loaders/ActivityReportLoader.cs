@@ -1,4 +1,4 @@
-﻿using DataUtils.Http;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -20,15 +20,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
     public class ActivityReportWebLoader : IActivityReportLoader<ActivityReportInfo>
     {
         private AutoThrottleHttpClient _httpClient;
-        private readonly ILogger _telemetry;
+        private readonly ILogger _logger;
         private readonly string _tenantId;
+        private readonly bool _importPowerPlatform;
         private int _reportDownloadErrors = 0;
 
-        public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger telemetry, string tenantId)
+        public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger logger, string tenantId, bool importPowerPlatform = true)
         {
             _httpClient = httpClient;
-            _telemetry = telemetry;
+            _logger = logger;
             _tenantId = tenantId;
+            _importPowerPlatform = importPowerPlatform;
         }
 
         /// <summary>
@@ -47,13 +49,22 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             HttpResponseMessage response = null;
             try
             {
-                response = await _httpClient.GetAsyncWithThrottleRetries(newUri, _telemetry);
+                response = await _httpClient.GetAsyncWithThrottleRetries(newUri, _logger);
             }
             catch (HttpRequestException ex)
             {
                 Interlocked.Increment(ref _reportDownloadErrors);
-                _telemetry.LogError(ex, $"Got error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
-                return new WebActivityReportSet();
+                _logger.LogError(ex, $"Got error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
+                return new WebActivityReportSet { DownloadComplete = false };
+            }
+            catch (TaskCanceledException ex)
+            {
+                // An HTTP timeout (HttpClient.Timeout elapsed) surfaces as a cancelled task. Treat it like any
+                // other transient download failure - log it, count it, and skip this report so a single slow or
+                // hung request doesn't crash the whole audit-log import. The item is retried on the next cycle.
+                Interlocked.Increment(ref _reportDownloadErrors);
+                _logger.LogError(ex, $"Timed out downloading {metadata.ContentUri}: '{ex.Message}'. Will try again on next cycle.");
+                return new WebActivityReportSet { DownloadComplete = false };
             }
 
             // Use 'using' to ensure response is disposed and memory is freed
@@ -79,7 +90,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                         if (jsonReader.TokenType != JsonToken.StartArray)
                         {
                             // Empty or non-array response - treat as no data, consistent with prior behaviour
-                            // when JArray.LoadAsync returned an empty/null result.
+                            // when JArray.LoadAsync returned an empty/null result. Mark incomplete so a
+                            // (malformed / unexpected) non-array response is NOT checkpointed and is retried.
+                            logs.DownloadComplete = false;
                             return logs;
                         }
 
@@ -98,9 +111,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                             catch (JsonReaderException ex)
                             {
                                 // A single malformed object will desync the reader; bail out of the stream
-                                // so we don't accidentally mis-parse subsequent siblings.
+                                // so we don't accidentally mis-parse subsequent siblings. This is a PARTIAL
+                                // result (some events parsed, tail dropped), so mark it incomplete - the blob
+                                // must be re-downloaded next cycle, not checkpointed on the partial prefix.
                                 Interlocked.Increment(ref _reportDownloadErrors);
-                                _telemetry.LogWarning($"Invalid JSON object in stream from URL '{newUri}': {ex.Message}. Aborting stream for this batch.");
+                                _logger.LogWarning($"Invalid JSON object in stream from URL '{newUri}': {ex.Message}. Aborting stream for this batch.");
+                                logs.DownloadComplete = false;
                                 break;
                             }
 
@@ -111,14 +127,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 catch (OutOfMemoryException)
                 {
                     Interlocked.Increment(ref _reportDownloadErrors);
-                    _telemetry.LogError($"Out of memory streaming response from {metadata.ContentUri}. Will try again on next cycle.");
-                    return new WebActivityReportSet();
+                    _logger.LogError($"Out of memory streaming response from {metadata.ContentUri}. Will try again on next cycle.");
+                    return new WebActivityReportSet { DownloadComplete = false };
                 }
                 catch (JsonReaderException ex)
                 {
                     Interlocked.Increment(ref _reportDownloadErrors);
-                    _telemetry.LogWarning($"Invalid JSON response for URL '{newUri}': {ex.Message}. Ignoring");
-                    return new WebActivityReportSet();
+                    _logger.LogWarning($"Invalid JSON response for URL '{newUri}': {ex.Message}. Ignoring");
+                    return new WebActivityReportSet { DownloadComplete = false };
                 }
 
                 logs.OriginalMetadata = metadata;
@@ -147,12 +163,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                     var fileName = $"audit_trace_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}_{DateTime.UtcNow.Ticks % 1000000}.json";
                     var fullPath = Path.Combine(AuditTraceConfig.TraceDirectory, fileName);
                     File.WriteAllText(fullPath, logJson);
-                    _telemetry.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
+                    _logger.LogInformation($"TRACE: Saved matching audit log to '{fullPath}'.");
 
                 }
                 catch (Exception ex)
                 {
-                    _telemetry.LogWarning($"TRACE: Failed to write trace audit log file: {ex.Message}");
+                    _logger.LogWarning($"TRACE: Failed to write trace audit log file: {ex.Message}");
                 }
             }
             #endregion
@@ -177,16 +193,16 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             // thin IO + batching layer.
             try
             {
-                thisAuditLogReport = AuditLogContentDispatcher.Dispatch(reportItem, logBase, _telemetry);
+                thisAuditLogReport = AuditLogContentDispatcher.Dispatch(reportItem, logBase, _logger, _importPowerPlatform);
             }
             catch (JsonReaderException ex)
             {
-                _telemetry.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
+                _logger.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
                 return;
             }
             catch (JsonSerializationException ex)
             {
-                _telemetry.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
+                _logger.LogWarning($"Failed to deserialize {logBase.Workload} log: {ex.Message}");
                 return;
             }
 

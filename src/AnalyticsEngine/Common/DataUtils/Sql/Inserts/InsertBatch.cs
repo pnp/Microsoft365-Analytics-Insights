@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
@@ -19,16 +19,16 @@ namespace DataUtils.Sql.Inserts
         #region Constructor & Privates
 
         private readonly string _connectionString;
-        private readonly ILogger _telemetry;
+        private readonly ILogger _logger;
         private InsertBatchTypeFieldCache<T> _batchTypeFieldCache = null;
 
         // Count of rows dropped during the current save because a value was wider than its staging
         // column. Written from parallel insert threads via Interlocked, reset per SaveToStagingTable.
         private int _rowsSkippedTooWide = 0;
-        public InsertBatch(string connectionString, ILogger telemetry)
+        public InsertBatch(string connectionString, ILogger logger)
         {
             _connectionString = connectionString;
-            _telemetry = telemetry;
+            _logger = logger;
             _batchTypeFieldCache = new InsertBatchTypeFieldCache<T>();
         }
 
@@ -42,7 +42,13 @@ namespace DataUtils.Sql.Inserts
             return await SaveToStagingTable(10000, mergeSql);
         }
 
-        public async Task<int> SaveToStagingTable(int insertsPerThread, string mergeSql)
+        /// <summary>
+        /// <paramref name="tableNameOverride"/> (optional) replaces the type's <c>[TempTableName]</c> so a
+        /// caller can shard the staging table per save (a unique name lets multiple saves run concurrently
+        /// without colliding on one shared global-temp table). The supplied <paramref name="mergeSql"/> must
+        /// reference the same name.
+        /// </summary>
+        public async Task<int> SaveToStagingTable(int insertsPerThread, string mergeSql, string tableNameOverride = null, SemaphoreSlim mergeLock = null)
         {
             if (Rows.Count == 0) return 0;
 
@@ -54,12 +60,19 @@ namespace DataUtils.Sql.Inserts
             var typeParameterType = typeof(T);
 
             var tempTableName = string.Empty;
-            var tableAtt = typeParameterType.GetCustomAttribute<TempTableNameAttribute>();
-            if (tableAtt != null && tableAtt.IsValid)
-                tempTableName = tableAtt.Name;
+            if (!string.IsNullOrEmpty(tableNameOverride))
+            {
+                tempTableName = tableNameOverride;
+            }
             else
             {
-                throw new BatchSaveException($"No valid table-name attribute found on {typeParameterType.Name}");
+                var tableAtt = typeParameterType.GetCustomAttribute<TempTableNameAttribute>();
+                if (tableAtt != null && tableAtt.IsValid)
+                    tempTableName = tableAtt.Name;
+                else
+                {
+                    throw new BatchSaveException($"No valid table-name attribute found on {typeParameterType.Name}");
+                }
             }
             if (_batchTypeFieldCache.PropertyMappingInfo.Count == 0)
             {
@@ -79,28 +92,39 @@ namespace DataUtils.Sql.Inserts
 
                 // Import in parallel
                 await loader.ProcessListInParallel(Rows,
-                    async (threadListChunk, threadIndex) => await ProcessChunkAsync(tempTableName, _telemetry, threadListChunk, threadIndex),
-                    threads => _telemetry.LogInformation($"Inserting {Rows.Count.ToString("n0")} records into {tempTableName}, across {threads} thread(s)..."));
+                    async (threadListChunk, threadIndex) => await ProcessChunkAsync(tempTableName, _logger, threadListChunk, threadIndex),
+                    threads => _logger.LogInformation($"Inserting {Rows.Count.ToString("n0")} records into {tempTableName}, across {threads} thread(s)..."));
 
                 // Tell operators if we dropped any rows because a value was too wide for its column.
                 if (_rowsSkippedTooWide > 0)
                 {
-                    _telemetry.LogWarning($"{_rowsSkippedTooWide.ToString("n0")} of {Rows.Count.ToString("n0")} record(s) were NOT staged into {tempTableName} because a column value was longer than that staging column allows; data for those rows is missing from this import (everything else was saved). See the 'Skipping over-width record' messages above for the offending column(s). For SharePoint URLs longer than urls.full_url (nvarchar(850)) see issue #122 / #127.");
+                    _logger.LogWarning($"{_rowsSkippedTooWide.ToString("n0")} of {Rows.Count.ToString("n0")} record(s) were NOT staged into {tempTableName} because a column value was longer than that staging column allows; data for those rows is missing from this import (everything else was saved). See the 'Skipping over-width record' messages above for the offending column(s). For SharePoint URLs longer than urls.full_url (nvarchar(850)) see issue #122 / #127.");
                 }
 
-                // Merge with supplied SQL
+                // Merge with supplied SQL. The parallel load above ran unlocked (into this save's own
+                // staging table); mergeLock (when supplied) serialises ONLY the merge, because it writes
+                // shared lookup / fact tables. The connection stays open across the lock so the (global-temp)
+                // staging table survives until the merge reads it.
                 if (!string.IsNullOrEmpty(mergeSql))
                 {
-                    var cmd = opGlobalConnection.CreateCommand();
-                    cmd.CommandText = mergeSql;
-                    cmd.CommandTimeout = 0;
+                    if (mergeLock != null) await mergeLock.WaitAsync();
                     try
                     {
-                        return await cmd.ExecuteNonQueryAsync();
+                        var cmd = opGlobalConnection.CreateCommand();
+                        cmd.CommandText = mergeSql;
+                        cmd.CommandTimeout = 0;
+                        try
+                        {
+                            return await cmd.ExecuteNonQueryAsync();
+                        }
+                        catch (SqlException ex)
+                        {
+                            throw new BatchSaveException($"Couldn't merge batch insert using given SQL: {ex.Message}", ex);
+                        }
                     }
-                    catch (SqlException ex)
+                    finally
                     {
-                        throw new BatchSaveException($"Couldn't merge batch insert using given SQL: {ex.Message}");
+                        if (mergeLock != null) mergeLock.Release();
                     }
                 }
                 else
@@ -110,7 +134,7 @@ namespace DataUtils.Sql.Inserts
             }
         }
 
-        private async Task ProcessChunkAsync(string tempTableName, ILogger telemetry, List<T> threadListChunk, int chunkIdx)
+        private async Task ProcessChunkAsync(string tempTableName, ILogger logger, List<T> threadListChunk, int chunkIdx)
         {
             using (var chunkSqlConnection = new SqlConnection(_connectionString))
             {
@@ -172,7 +196,7 @@ namespace DataUtils.Sql.Inserts
                         // every retry as a "poison batch". For SharePoint URLs longer than the
                         // urls.full_url-width nvarchar(850) columns see issue #122 / #127.
                         Interlocked.Increment(ref _rowsSkippedTooWide);
-                        _telemetry.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. Continuing with the rest of the batch.");
+                        _logger.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. Continuing with the rest of the batch.");
                         continue;
                     }
 
@@ -186,12 +210,12 @@ namespace DataUtils.Sql.Inserts
                         // didn't predict it (e.g. a column whose declared width we couldn't parse).
                         // Skip just this row so one bad value can't poison the whole batch.
                         Interlocked.Increment(ref _rowsSkippedTooWide);
-                        _telemetry.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. SQL error {ex.Number}: {ex.Message}. Continuing with the rest of the batch.");
+                        _logger.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. SQL error {ex.Number}: {ex.Message}. Continuing with the rest of the batch.");
                         continue;
                     }
                     catch (SqlException ex)
                     {
-                        _telemetry.LogCritical($"Failed to insert record into {tempTableName} - {sqlInsert} | row: {BuildRowDiagnostic(insertObj, false)} | SQL error {ex.Number}: {ex.Message}");
+                        _logger.LogCritical($"Failed to insert record into {tempTableName} - {sqlInsert} | row: {BuildRowDiagnostic(insertObj, false)} | SQL error {ex.Number}: {ex.Message}");
                         throw;
                     }
                 }

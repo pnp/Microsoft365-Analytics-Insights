@@ -1,8 +1,6 @@
 ﻿using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
-using App.ControlPanel.Engine.InstallerTasks.Adoptify;
-using App.ControlPanel.Engine.InstallerTasks.Adoptify.Models;
 using App.ControlPanel.Engine.InstallerTasks.Tasks;
 using App.ControlPanel.Engine.Models;
 using App.ControlPanel.Engine.SharePointModelBuilder;
@@ -20,6 +18,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -80,16 +80,7 @@ namespace Tests.UnitTests
                     Secret = azureAuthSettings.ClientSecret,
                     DirectoryId = azureAuthSettings.TenantGUID
                 },
-                SolutionConfig = new TargetSolutionConfig
-                {
-                    SolutionLanguageCode = TargetSolutionConfig.LANG_ENGLISH,
-                    Adoptify = new AdoptifySolutionInstallConfig
-                    {
-                        CreateDefaultData = true,
-                        ProvisionSchema = true,
-                        ExistingSiteUrl = "https://m365x72460609.sharepoint.com/sites/adoptifytests"
-                    },
-                }
+                SolutionConfig = new TargetSolutionConfig()
 
             };
             return testConfig;
@@ -110,14 +101,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void FtpConfigIsValid()
+        public void DeploymentProxyConfigIsValid()
         {
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = false, IntegratedAuth = false, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyHost = "test", ProxyPort = -1 }.IsValid);
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyHost = "test", ProxyPort = 1 }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, IntegratedAuth = true, ProxyPort = 1 }.IsValid);
-            Assert.IsFalse(new InstallerFtpConfig { UseFtpProxy = true, ProxyHost = "test", ProxyPort = 10, IntegratedAuth = false, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
-            Assert.IsTrue(new InstallerFtpConfig { UseFtpProxy = true, ProxyHost = "test", ProxyPort = 10, IntegratedAuth = true, ProxyUsername = string.Empty, ProxyPassword = string.Empty }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig().IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = "proxy.contoso.test", Port = -1 }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = "proxy.contoso.test", Port = 8080 }.IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Port = 8080 }.IsValid);
+            Assert.IsFalse(new InstallerProxyConfig { UseProxy = true, Host = "proxy.contoso.test", Port = 8080, Username = "installer" }.IsValid);
+            Assert.IsTrue(new InstallerProxyConfig { UseProxy = true, Host = "proxy.contoso.test", Port = 8080, Username = "installer", Password = "synthetic-password" }.IsValid);
+        }
+
+        [TestMethod]
+        public void DeploymentProxyConfigLoadsLegacyPreferenceNames()
+        {
+            const string legacyJson = @"{
+                ""UseFtpProxy"": true,
+                ""ProxyHost"": ""proxy.contoso.test"",
+                ""ProxyPort"": 8080,
+                ""IntegratedAuth"": false,
+                ""ProxyUsername"": ""installer"",
+                ""ProxyPassword"": ""synthetic-password""
+            }";
+
+            var config = Newtonsoft.Json.JsonConvert.DeserializeObject<InstallerProxyConfig>(legacyJson);
+
+            Assert.IsTrue(config.UseProxy);
+            Assert.AreEqual("proxy.contoso.test", config.Host);
+            Assert.AreEqual(8080, config.Port);
+            Assert.AreEqual("installer", config.Username);
+            Assert.IsTrue(config.IsValid);
         }
 
 
@@ -126,6 +138,121 @@ namespace Tests.UnitTests
         {
             var data = publishData.FromXml(Properties.Resources.PublishXml);
             Assert.IsNotNull(data);
+        }
+
+        [TestMethod]
+        public void KuduPublishingProfileBuildsHttpsPublishUri()
+        {
+            const string publishXml = @"<publishData>
+                <publishProfile publishMethod=""MSDeploy""
+                                publishUrl=""contoso.scm.azurewebsites.net:443""
+                                userName=""$contoso""
+                                userPWD=""not-a-real-password"" />
+            </publishData>";
+
+            var publishInfo = publishData.FromXml(publishXml).GetKuduPublishInfo();
+            var publishUri = InstallAppServiceContentsTask.BuildKuduPublishUri(publishInfo.RootUrl);
+
+            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/publish?type=zip", publishUri.ToString());
+            Assert.AreEqual("$contoso", publishInfo.Username);
+        }
+
+        [TestMethod]
+        public void KuduContinuousWebJobsUriUsesHttpsApiEndpoint()
+        {
+            var uri = AppServiceWebJobHealthVerifier.BuildKuduContinuousWebJobsUri(
+                "contoso.scm.azurewebsites.net:443");
+
+            Assert.AreEqual(
+                "https://contoso.scm.azurewebsites.net/api/continuouswebjobs",
+                uri.ToString());
+        }
+
+        [TestMethod]
+        public void WebJobHealthCheckRequiresBothJobsRunning()
+        {
+            const string statusesJson = @"[
+                { ""name"": ""Office365ActivityImporter"", ""status"": ""Running"" },
+                { ""name"": ""AppInsightsImporter"", ""status"": ""Stopped"" }
+            ]";
+
+            var failures = AppServiceWebJobHealthVerifier.FindFailures(
+                AppServiceWebJobHealthVerifier.ParseStatuses(statusesJson));
+
+            CollectionAssert.AreEqual(
+                new[] { "AppInsightsImporter=Stopped" },
+                failures);
+        }
+
+        [TestMethod]
+        public void WebJobHealthCheckReportsMissingJob()
+        {
+            const string statusesJson = @"[
+                { ""name"": ""Office365ActivityImporter"", ""status"": ""Running"" }
+            ]";
+
+            var failures = AppServiceWebJobHealthVerifier.FindFailures(
+                AppServiceWebJobHealthVerifier.ParseStatuses(statusesJson));
+
+            CollectionAssert.AreEqual(
+                new[] { "AppInsightsImporter=missing" },
+                failures);
+        }
+
+        [TestMethod]
+        public void WebJobHealthCheckPassesWhenBothJobsAreRunning()
+        {
+            const string statusesJson = @"[
+                { ""name"": ""AppInsightsImporter"", ""status"": ""Running"" },
+                { ""name"": ""Office365ActivityImporter"", ""status"": ""Running"" }
+            ]";
+
+            var failures = AppServiceWebJobHealthVerifier.FindFailures(
+                AppServiceWebJobHealthVerifier.ParseStatuses(statusesJson));
+
+            Assert.AreEqual(0, failures.Count);
+        }
+
+        [TestMethod]
+        public void AppServiceDeploymentPackageContainsWebsiteAndWebJobs()
+        {
+            var testRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testRoot);
+
+            try
+            {
+                var websiteZip = CreateTestZip(testRoot, "Website", "default.htm");
+                var activityZip = CreateTestZip(testRoot, "Office365ActivityImporter", "job.exe");
+                var appInsightsZip = CreateTestZip(testRoot, "AppInsightsImporter", "job.exe");
+                var sources = new LocalStorageInstallSourceInfo();
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation = websiteZip;
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation = activityZip;
+                sources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation = appInsightsZip;
+
+                var package = InstallAppServiceContentsTask.BuildDeploymentPackage(sources, _logger);
+                using (var archive = ZipFile.OpenRead(package.FullName))
+                {
+                    var entries = archive.Entries.Select(entry => entry.FullName.Replace('\\', '/')).ToList();
+                    CollectionAssert.Contains(entries, "default.htm");
+                    CollectionAssert.Contains(entries, "app_data/jobs/continuous/Office365ActivityImporter/job.exe");
+                    CollectionAssert.Contains(entries, "app_data/jobs/continuous/AppInsightsImporter/job.exe");
+                }
+            }
+            finally
+            {
+                Directory.Delete(testRoot, true);
+            }
+        }
+
+        private static string CreateTestZip(string testRoot, string rootDirectoryName, string fileName)
+        {
+            var sourceDirectory = Path.Combine(testRoot, rootDirectoryName);
+            Directory.CreateDirectory(sourceDirectory);
+            System.IO.File.WriteAllText(Path.Combine(sourceDirectory, fileName), "synthetic test content");
+
+            var zipPath = Path.Combine(testRoot, rootDirectoryName + ".zip");
+            ZipFile.CreateFromDirectory(sourceDirectory, zipPath, CompressionLevel.Optimal, true);
+            return zipPath;
         }
 
         [TestMethod]
@@ -229,6 +356,7 @@ namespace Tests.UnitTests
             CollectionAssert.Contains(fqdns, "myvault.vault.azure.net");
             CollectionAssert.Contains(fqdns, "mysqlsvr.database.windows.net");
             CollectionAssert.Contains(fqdns, "mystorage.blob.core.windows.net");
+            CollectionAssert.Contains(fqdns, "mystorage.table.core.windows.net");
             CollectionAssert.Contains(fqdns, "myapp.azurewebsites.net");
             CollectionAssert.Contains(fqdns, "mycache.redis.cache.windows.net");
             CollectionAssert.Contains(fqdns, "mysb.servicebus.windows.net");
@@ -415,29 +543,6 @@ namespace Tests.UnitTests
             await azJob.Install();
         }
 
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task InstallSPDefaultData()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var cfg = TaskConfig.GetConfigForPropAndVal(ListItemsInstallTask.PROP_NAME_LANG, testConfig.SolutionConfig.SolutionLanguageCode);
-
-                var siteInfo = await AdoptifySiteListInfo.GetFromSite(ctx, testConfig.SolutionConfig.Adoptify.ExistingSiteUrl);
-
-                var assetsTask = new AssetsInstallTask(cfg, _logger, ctx);
-                var adoptifyInstallJob = new ListItemsInstallTask(cfg, _logger, ctx);
-
-                // Install new content
-                await assetsTask.ExecuteTask(siteInfo);
-                await adoptifyInstallJob.ExecuteTask(new AdoptifySiteListInfoWithAssetsUrl(siteInfo));
-            }
-        }
-
         [TestMethod]
         public void InstallModelsTests()
         {
@@ -498,85 +603,6 @@ namespace Tests.UnitTests
                 Assert.IsTrue(fileLocation.EndsWith(".zip"), $"{component} should be a .zip file");
             }
         }
-        /// <summary>
-        /// Tests we can chain one lookup to result of another
-        /// </summary>
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task SharePointChainedLookupTests()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var badges = ctx.Web.GetListByTitle("Badges");
-                var allBadges = badges.GetItems(CamlQuery.CreateAllItemsQuery());
-                ctx.Load(allBadges);
-                await ctx.ExecuteQueryRetryAsync();
-
-                // Content lookup classes.
-                var starterBadgeLookupMetadataSubLookup = new
-                {
-                    lookupType = "IdLookup",
-                    lookupParams = new
-                    {
-                        listTitle = "Badges",
-                        fieldName = "BadgeName",
-                        fieldValue = allBadges[0].FieldValues["BadgeName"]
-                    }
-                };
-
-                var testFieldVal = "FirstLaunchBadgeID " + DateTime.Now.Ticks;
-                var insertIfNotExistMetadata = new
-                {
-                    lookupType = InsertValueIfNotExists.PROP_LOOKUP_TYPE_ID_LOOKUP,
-                    lookupParams = new
-                    {
-                        listTitle = "Settings",
-                        fieldName = "Title",
-                        fieldValue = testFieldVal,
-                        insertValue = starterBadgeLookupMetadataSubLookup    // above lookup
-                    }
-                };
-
-                // We should insert the result from the IdValueFromAnotherListValueLookup if the InsertValueIfNotExists lookup doesn't find something (which it wont)
-                var lookup = AbstractSPListItemValueLookup.GetSPListLookup(ctx, JsonSerializer.Serialize(insertIfNotExistMetadata));
-                var starterBadgeVal = await lookup.GetLookupValue();
-                Assert.IsTrue(int.Parse(starterBadgeVal) > 0);
-            }
-        }
-
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task SharePointThumbnailLookupTests()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                // Content lookup classes.
-                var thumbnailLookupMetadata = new
-                {
-                    lookupType = "ThumbnailImageProvisionAndLookup",
-                    lookupParams = new
-                    {
-                        thumbnailFieldHostListTitle = "Levels",
-                        thumbnailFieldName = "LevelImage",
-                        siteAssetRelativeFileName = "LevelImages/goldtrophy.png"
-                    }
-                };
-
-                var lookup = AbstractSPListItemValueLookup.GetSPListLookup(ctx, JsonSerializer.Serialize(thumbnailLookupMetadata));
-                var goldtrophyImageValJson = await lookup.GetLookupValue();
-                var goldtrophyImageVal = JsonSerializer.Deserialize<ThumbnailFieldMetadata>(goldtrophyImageValJson);
-                Assert.IsNotNull(goldtrophyImageVal);
-            }
-        }
-
         [TestMethod]
         public async Task SharePointJsonInsertLookupTests()
         {
@@ -596,204 +622,6 @@ namespace Tests.UnitTests
             var lookupJson = await lookup.GetLookupValue();
             Assert.IsNotNull(lookupJson);
             Assert.IsTrue(AbstractValueLookup.IsListLookupDefintion(JsonSerializer.Serialize(jsonObj)));
-        }
-
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task SharePointIdValueFromAnotherListValueLookupTests()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                // Content lookup classes.
-                var validLookupMetadata = new
-                {
-                    lookupType = "IdLookup",
-                    lookupParams = new
-                    {
-                        listTitle = "Badges",
-                        fieldName = "BadgeName",
-                        fieldValue = "Socializer"
-                    }
-                };
-
-                // Test valid
-                var lookup = AbstractSPListItemValueLookup.GetSPListLookup(ctx, JsonSerializer.Serialize(validLookupMetadata));
-                Assert.IsNotNull(lookup);
-                Assert.IsTrue(lookup.IsValid);
-                Assert.IsInstanceOfType(lookup, typeof(IdValueFromAnotherListValueLookup));
-
-                var id = await lookup.GetLookupValueInt();
-                Assert.IsNotNull(id);
-                Assert.IsInstanceOfType(id, typeof(int));
-
-                // Non-existant value, but optional
-                var invalidOptionalLookupMetadata = new
-                {
-                    lookupType = "IdLookup",
-                    lookupParams = new
-                    {
-                        listTitle = "Badges",
-                        fieldName = "BadgeName",
-                        fieldValue = "Socializer2"
-                    }
-                };
-                lookup = AbstractSPListItemValueLookup.GetSPListLookup(ctx, JsonSerializer.Serialize(invalidOptionalLookupMetadata));
-                id = await lookup.GetLookupValueInt();
-                Assert.IsTrue(id == 0);
-
-
-                // Make sure it breaks if a lookup value is required & not found
-                var invalidRequiredLookupMetadata = new
-                {
-                    lookupType = "IdLookup",
-                    required = true,
-                    lookupParams = new
-                    {
-                        listTitle = "Badges",
-                        fieldName = "BadgeName",
-                        fieldValue = "Socializer2"
-                    }
-                };
-                lookup = AbstractSPListItemValueLookup.GetSPListLookup(ctx, JsonSerializer.Serialize(invalidRequiredLookupMetadata));
-                await Assert.ThrowsExceptionAsync<LookupNoResultsException>(async () => await lookup.GetLookupValueInt());
-            }
-        }
-
-        /// <summary>
-        /// Check InsertValueIfNotExists works
-        /// </summary>
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task SharePointInsertValueIfNotExistsTests()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                // Generate lookup that won't exist yet
-                var testDefaulVal = "TestVal" + DateTime.Now.Ticks;
-                var testFieldVal = "AppIdTestProp" + DateTime.Now.Ticks;
-                var insertIfNotExistMetadata = new
-                {
-                    lookupType = InsertValueIfNotExists.PROP_LOOKUP_TYPE_ID_LOOKUP,
-                    lookupParams = new
-                    {
-                        listTitle = "Settings",
-                        fieldName = "Title",
-                        fieldValue = testFieldVal,
-                        insertValue = testDefaulVal       // Value we expect back assuming Title != testFieldVal
-                    }
-                };
-
-                // Test valid
-                var lookup = AbstractSPListItemValueLookup.GetSPListLookup(ctx, JsonSerializer.Serialize(insertIfNotExistMetadata));
-                Assert.IsNotNull(lookup);
-                Assert.IsTrue(lookup.IsValid);
-                Assert.IsInstanceOfType(lookup, typeof(InsertValueIfNotExists));
-
-                var lookupResultVal = await lookup.GetLookupValue();
-
-                // Value wouldn't exist before; check we get our insertValue value
-                Assert.AreEqual(lookupResultVal, testDefaulVal);
-
-
-                var list = ctx.Web.GetListByTitle(((InsertValueIfNotExists)lookup).Params.ListTitle);
-                ctx.Load(list.Fields);
-                await ctx.ExecuteQueryAsync();
-
-                var item = list.AddItem(new ListItemCreationInformation());
-                item["Title"] = testFieldVal;
-                item.Update();
-                await ctx.ExecuteQueryAsync();
-
-                // Check again. Should now match testFieldVal as we inserted it
-                lookupResultVal = await lookup.GetLookupValue();
-                Assert.AreEqual(lookupResultVal, testFieldVal);
-            }
-        }
-
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task AdoptifyInstallJob()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var azureSub = BaseAnalyticsSolutionInstallJob.FromConfig(testConfig);
-                var adoptifyInstallJob = new AdoptifyInstallJob(_logger, testConfig, azureSub, ctx);
-
-                // Install new
-                await adoptifyInstallJob.Install();
-            }
-
-        }
-
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task AdoptifySiteProvisionTask()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var job = new AdoptifySiteProvisionTask(TaskConfig.NoConfig, _logger, ctx);
-
-                await job.ExecuteTask();
-            }
-        }
-
-
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task AdoptifySiteFieldUpdatesTask()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var t = new AdoptifySiteFieldUpdatesTask(TaskConfig.NoConfig, _logger, ctx);
-
-                var siteInfo = AdoptifySiteListInfo.GetFromSite(ctx, testConfig.SolutionConfig.Adoptify.ExistingSiteUrl);
-
-                // Install new
-                await t.ExecuteTask(siteInfo);
-            }
-
-        }
-
-#if DEBUG
-        //[TestMethod]
-#endif
-        public async Task AdoptifyArmResourcesInstallJob()
-        {
-            var testConfig = GetSolutionInstallConfig(false);
-
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            using (var ctx = authManager.GetWebLoginClientContext(testConfig.SolutionConfig.Adoptify.ExistingSiteUrl))
-            {
-                var siteInfo = await AdoptifySiteListInfo.GetFromSite(ctx, testConfig.SolutionConfig.Adoptify.ExistingSiteUrl);
-
-                var authSettings = new AzureTestsConfigReader();
-                var auth = new ClientSecretCredential(authSettings.TenantGUID, authSettings.ClientID, authSettings.ClientSecret);
-
-                var azureSub = BaseAnalyticsSolutionInstallJob.FromConfig(testConfig);
-                var job = new AdoptifyArmResourcesInstallJob(_logger, testConfig, siteInfo.ToConfig(), azureSub);
-
-                await job.Install();
-            }
         }
 
         [TestMethod]
@@ -847,42 +675,6 @@ namespace Tests.UnitTests
             Assert.IsTrue(nextSunday4pm.Hour == 16);
             Assert.IsTrue(nextSunday4pm.Minute == 0);
             Assert.IsTrue(nextSunday4pm.Date == nextSunday.Date);
-        }
-
-        [TestMethod]
-        public void TargetSolutionConfig_ValidatInputAndGetErrors()
-        {
-            // Regression: the condition used '||' ("!= en || != es"), which is always true, so an
-            // Adoptify install reported "Select a valid target language" even for valid 'en'/'es'.
-            var en = new TargetSolutionConfig
-            {
-                SolutionTargeted = SolutionImportType.Adoptify,
-                SolutionLanguageCode = TargetSolutionConfig.LANG_ENGLISH
-            };
-            Assert.AreEqual(0, en.ValidatInputAndGetErrors().Count, "Valid English Adoptify config should have no errors");
-
-            var es = new TargetSolutionConfig
-            {
-                SolutionTargeted = SolutionImportType.Adoptify,
-                SolutionLanguageCode = TargetSolutionConfig.LANG_ESPAÑOL
-            };
-            Assert.AreEqual(0, es.ValidatInputAndGetErrors().Count, "Valid Spanish Adoptify config should have no errors");
-
-            // An unsupported language for Adoptify must still be flagged.
-            var invalid = new TargetSolutionConfig
-            {
-                SolutionTargeted = SolutionImportType.Adoptify,
-                SolutionLanguageCode = "fr"
-            };
-            Assert.AreEqual(1, invalid.ValidatInputAndGetErrors().Count, "Unsupported Adoptify language should produce an error");
-
-            // Non-Adoptify targets are not language-validated.
-            var custom = new TargetSolutionConfig
-            {
-                SolutionTargeted = SolutionImportType.CustomOrInsights,
-                SolutionLanguageCode = "fr"
-            };
-            Assert.AreEqual(0, custom.ValidatInputAndGetErrors().Count, "Non-Adoptify config should not be language-validated");
         }
     }
 

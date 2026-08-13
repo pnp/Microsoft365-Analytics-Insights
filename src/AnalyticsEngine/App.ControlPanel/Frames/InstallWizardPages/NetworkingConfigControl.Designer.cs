@@ -65,6 +65,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtPeCognitive = new System.Windows.Forms.TextBox();
             this.lblPeAutomation = new System.Windows.Forms.Label();
             this.txtPeAutomation = new System.Windows.Forms.TextBox();
+            this.lblPeStorageTable = new System.Windows.Forms.Label();
+            this.txtPeStorageTable = new System.Windows.Forms.TextBox();
             this.lblPeHelp = new System.Windows.Forms.Label();
             this.lblHybridWorkerVm = new System.Windows.Forms.Label();
             this.txtHybridWorkerVm = new System.Windows.Forms.TextBox();
@@ -133,7 +135,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpVNetSettings.Enabled = false;
             this.grpVNetSettings.Location = new System.Drawing.Point(15, 78);
             this.grpVNetSettings.Name = "grpVNetSettings";
-            this.grpVNetSettings.Size = new System.Drawing.Size(600, 540);
+            this.grpVNetSettings.Size = new System.Drawing.Size(600, 567);
             this.grpVNetSettings.TabIndex = 3;
             this.grpVNetSettings.TabStop = false;
             this.grpVNetSettings.Text = "VNet Settings";
@@ -300,9 +302,11 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.grpEndpointNames.Controls.Add(this.txtPeCognitive);
             this.grpEndpointNames.Controls.Add(this.lblPeAutomation);
             this.grpEndpointNames.Controls.Add(this.txtPeAutomation);
+            this.grpEndpointNames.Controls.Add(this.lblPeStorageTable);
+            this.grpEndpointNames.Controls.Add(this.txtPeStorageTable);
             this.grpEndpointNames.Location = new System.Drawing.Point(15, 210);
             this.grpEndpointNames.Name = "grpEndpointNames";
-            this.grpEndpointNames.Size = new System.Drawing.Size(570, 145);
+            this.grpEndpointNames.Size = new System.Drawing.Size(570, 172);
             this.grpEndpointNames.TabIndex = 10;
             this.grpEndpointNames.TabStop = false;
             this.grpEndpointNames.Text = "Private Endpoint Names (optional — leave blank for defaults)";
@@ -351,34 +355,34 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblPeRedis
             // 
             this.lblPeRedis.AutoSize = true;
-            this.lblPeRedis.Location = new System.Drawing.Point(10, 67);
+            this.lblPeRedis.Location = new System.Drawing.Point(10, 148);
             this.lblPeRedis.Name = "lblPeRedis";
             this.lblPeRedis.Size = new System.Drawing.Size(38, 13);
-            this.lblPeRedis.TabIndex = 5;
+            this.lblPeRedis.TabIndex = 17;
             this.lblPeRedis.Text = "Redis:";
             // 
             // txtPeRedis
             // 
-            this.txtPeRedis.Location = new System.Drawing.Point(85, 64);
+            this.txtPeRedis.Location = new System.Drawing.Point(85, 145);
             this.txtPeRedis.Name = "txtPeRedis";
             this.txtPeRedis.Size = new System.Drawing.Size(185, 20);
-            this.txtPeRedis.TabIndex = 6;
+            this.txtPeRedis.TabIndex = 18;
             // 
             // lblPeStorage
             // 
             this.lblPeStorage.AutoSize = true;
-            this.lblPeStorage.Location = new System.Drawing.Point(285, 67);
+            this.lblPeStorage.Location = new System.Drawing.Point(10, 67);
             this.lblPeStorage.Name = "lblPeStorage";
             this.lblPeStorage.Size = new System.Drawing.Size(70, 13);
-            this.lblPeStorage.TabIndex = 7;
+            this.lblPeStorage.TabIndex = 5;
             this.lblPeStorage.Text = "Storage:";
             // 
             // txtPeStorage
             // 
-            this.txtPeStorage.Location = new System.Drawing.Point(370, 64);
+            this.txtPeStorage.Location = new System.Drawing.Point(85, 64);
             this.txtPeStorage.Name = "txtPeStorage";
             this.txtPeStorage.Size = new System.Drawing.Size(185, 20);
-            this.txtPeStorage.TabIndex = 8;
+            this.txtPeStorage.TabIndex = 6;
             // 
             // lblPeKeyVault
             // 
@@ -444,10 +448,26 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.txtPeAutomation.Size = new System.Drawing.Size(185, 20);
             this.txtPeAutomation.TabIndex = 16;
             // 
+            // lblPeStorageTable
+            // 
+            this.lblPeStorageTable.AutoSize = true;
+            this.lblPeStorageTable.Location = new System.Drawing.Point(285, 67);
+            this.lblPeStorageTable.Name = "lblPeStorageTable";
+            this.lblPeStorageTable.Size = new System.Drawing.Size(85, 13);
+            this.lblPeStorageTable.TabIndex = 7;
+            this.lblPeStorageTable.Text = "Storage table:";
+            // 
+            // txtPeStorageTable
+            // 
+            this.txtPeStorageTable.Location = new System.Drawing.Point(370, 64);
+            this.txtPeStorageTable.Name = "txtPeStorageTable";
+            this.txtPeStorageTable.Size = new System.Drawing.Size(185, 20);
+            this.txtPeStorageTable.TabIndex = 8;
+            // 
             // lblHybridWorkerVm
             // 
             this.lblHybridWorkerVm.AutoSize = true;
-            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 417);
+            this.lblHybridWorkerVm.Location = new System.Drawing.Point(15, 394);
             this.lblHybridWorkerVm.Name = "lblHybridWorkerVm";
             this.lblHybridWorkerVm.Size = new System.Drawing.Size(140, 13);
             this.lblHybridWorkerVm.TabIndex = 17;
@@ -455,14 +475,14 @@ namespace App.ControlPanel.Frames.InstallWizard
             // 
             // txtHybridWorkerVm
             // 
-            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 364);
+            this.txtHybridWorkerVm.Location = new System.Drawing.Point(160, 391);
             this.txtHybridWorkerVm.Name = "txtHybridWorkerVm";
             this.txtHybridWorkerVm.Size = new System.Drawing.Size(340, 20);
             this.txtHybridWorkerVm.TabIndex = 18;
             // 
             // btnBrowseVm
             // 
-            this.btnBrowseVm.Location = new System.Drawing.Point(506, 362);
+            this.btnBrowseVm.Location = new System.Drawing.Point(506, 389);
             this.btnBrowseVm.Name = "btnBrowseVm";
             this.btnBrowseVm.Size = new System.Drawing.Size(75, 23);
             this.btnBrowseVm.TabIndex = 19;
@@ -473,7 +493,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblHybridWorkerVmHelp
             // 
             this.lblHybridWorkerVmHelp.ForeColor = System.Drawing.SystemColors.GrayText;
-            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 387);
+            this.lblHybridWorkerVmHelp.Location = new System.Drawing.Point(157, 414);
             this.lblHybridWorkerVmHelp.Name = "lblHybridWorkerVmHelp";
             this.lblHybridWorkerVmHelp.Size = new System.Drawing.Size(430, 42);
             this.lblHybridWorkerVmHelp.TabIndex = 20;
@@ -482,7 +502,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             // lblSkuWarning
             // 
             this.lblSkuWarning.ForeColor = System.Drawing.Color.DarkOrange;
-            this.lblSkuWarning.Location = new System.Drawing.Point(15, 437);
+            this.lblSkuWarning.Location = new System.Drawing.Point(15, 464);
             this.lblSkuWarning.Name = "lblSkuWarning";
             this.lblSkuWarning.Size = new System.Drawing.Size(570, 90);
             this.lblSkuWarning.TabIndex = 21;
@@ -501,7 +521,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.Controls.Add(this.chkEnableVNet);
             this.Controls.Add(this.grpVNetSettings);
             this.Name = "NetworkingConfigControl";
-            this.Size = new System.Drawing.Size(632, 640);
+            this.Size = new System.Drawing.Size(632, 667);
             this.grpVNetSettings.ResumeLayout(false);
             this.grpVNetSettings.PerformLayout();
             this.grpEndpointNames.ResumeLayout(false);
@@ -547,6 +567,8 @@ namespace App.ControlPanel.Frames.InstallWizard
         private System.Windows.Forms.TextBox txtPeCognitive;
         private System.Windows.Forms.Label lblPeAutomation;
         private System.Windows.Forms.TextBox txtPeAutomation;
+        private System.Windows.Forms.Label lblPeStorageTable;
+        private System.Windows.Forms.TextBox txtPeStorageTable;
         private System.Windows.Forms.Label lblHybridWorkerVm;
         private System.Windows.Forms.TextBox txtHybridWorkerVm;
         private System.Windows.Forms.Button btnBrowseVm;

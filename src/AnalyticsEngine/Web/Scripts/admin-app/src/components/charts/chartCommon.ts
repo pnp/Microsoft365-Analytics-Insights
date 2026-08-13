@@ -1,0 +1,97 @@
+// Shared helpers for the lightweight SVG report charts. Kept dependency-free (no charting library)
+// so the admin SPA stays small and there is nothing extra to deploy.
+
+/**
+ * Categorical palette for chart series / bars. Saturated Fluent-family colours that read well on
+ * the app's light theme (webLightTheme). Series cycle through these in order.
+ */
+export const CHART_PALETTE = [
+  '#0f6cbd', // brand blue
+  '#d13438', // red
+  '#107c10', // green
+  '#8764b8', // purple
+  '#ca5010', // orange
+  '#008272', // teal
+  '#c19c00', // gold
+  '#5c2e91', // dark purple
+] as const;
+
+/** Colour for the series/bar at index i (cycles through the palette). */
+export function seriesColor(i: number): string {
+  return CHART_PALETTE[i % CHART_PALETTE.length];
+}
+
+/** Compact number for axis labels: 1234 -> "1.2k", 2_500_000 -> "2.5M". */
+export function formatCompact(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${trim(n / 1e9)}B`;
+  if (abs >= 1e6) return `${trim(n / 1e6)}M`;
+  if (abs >= 1e3) return `${trim(n / 1e3)}k`;
+  return String(Math.round(n));
+}
+
+function trim(n: number): string {
+  // One decimal place, but drop a trailing ".0".
+  return n.toFixed(1).replace(/\.0$/, '');
+}
+
+/** Full number for tooltips (e.g. "1,234"; fractional values keep up to one decimal). */
+export function formatValue(n: number): string {
+  const rounded = Number.isInteger(n) ? n : Math.round(n * 10) / 10;
+  return rounded.toLocaleString();
+}
+
+/** Week-start ISO date -> short label like "14 Apr". */
+export function formatWeek(iso: string): string {
+  // The week starts are UTC date-only values (Kind=Utc, serialised with a trailing Z), so format
+  // them in UTC - otherwise a Monday renders as the previous Sunday for viewers west of UTC.
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+/** Week-start ISO date -> longer label like "Mon 14 Apr 2026" (tooltip header). */
+export function formatWeekLong(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+/**
+ * "Nice" y-axis maximum and evenly-spaced ticks (including 0) for a given data max, so the axis
+ * ends on a round number. Always returns at least [0, 1] so an all-zero chart still renders.
+ */
+export function niceTicks(dataMax: number, targetTicks = 4): { max: number; ticks: number[] } {
+  if (!Number.isFinite(dataMax) || dataMax <= 0) {
+    return { max: 1, ticks: [0, 1] };
+  }
+
+  const step = niceNum(dataMax / targetTicks, true);
+  const max = Math.ceil(dataMax / step) * step;
+  const ticks: number[] = [];
+  for (let v = 0; v <= max + step / 2; v += step) {
+    ticks.push(Math.round(v * 1e6) / 1e6);
+  }
+  return { max, ticks };
+}
+
+/** Rounds a range to a "nice" 1/2/5 * 10^n value. */
+function niceNum(range: number, round: boolean): number {
+  const exp = Math.floor(Math.log10(range));
+  const frac = range / Math.pow(10, exp);
+  let nice: number;
+  if (round) {
+    if (frac < 1.5) nice = 1;
+    else if (frac < 3) nice = 2;
+    else if (frac < 7) nice = 5;
+    else nice = 10;
+  } else {
+    if (frac <= 1) nice = 1;
+    else if (frac <= 2) nice = 2;
+    else if (frac <= 5) nice = 5;
+    else nice = 10;
+  }
+  return nice * Math.pow(10, exp);
+}

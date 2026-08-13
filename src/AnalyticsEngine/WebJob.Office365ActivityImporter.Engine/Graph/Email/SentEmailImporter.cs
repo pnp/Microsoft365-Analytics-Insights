@@ -51,14 +51,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private int _deltaTokenWrites;
 
         public SentEmailImporter(
-            AnalyticsLogger telemetry,
+            AnalyticsLogger logger,
             AppConfig settings,
             ISentEmailSourceLoader sourceLoader,
             ISentEmailSentimentScorer sentimentScorer,
             Func<AnalyticsEntitiesContext> dbContextFactory = null,
             int userChunkSize = DefaultUserChunkSize,
             int graphLoadParallelism = DefaultGraphLoadParallelism)
-            : base(telemetry, settings)
+            : base(logger, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
             _sentimentScorer = sentimentScorer ?? NullSentEmailSentimentScorer.Instance;
@@ -72,27 +72,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         /// default Azure AI Language sentiment scorer (or a no-op when not configured).
         /// </summary>
         public SentEmailImporter(
-            AnalyticsLogger telemetry,
+            AnalyticsLogger logger,
             AppConfig settings,
             ManualGraphCallClient httpClient,
             IDeltaTokenStore deltaTokenStore,
             DataUtils.Http.ImportAppIndentityOAuthContext appIdentity)
             : this(
-                telemetry,
+                logger,
                 settings,
-                new GraphSentEmailSourceLoader(httpClient, deltaTokenStore, appIdentity, telemetry),
-                SentEmailSentimentScorerFactory.Create(settings, telemetry))
+                new GraphSentEmailSourceLoader(httpClient, deltaTokenStore, appIdentity, logger),
+                SentEmailSentimentScorerFactory.Create(settings, logger))
         {
         }
 
         public async Task ImportSentEmails()
         {
-            _telemetry.LogInformation("Starting sent emails import...");
+            _logger.LogInformation("Starting sent emails import...");
             var swTotal = Stopwatch.StartNew();
 
             if (!await _sourceLoader.HasMailReadAccessAsync())
             {
-                _telemetry.LogWarning(
+                _logger.LogWarning(
                     "Skipping sent emails import: the configured identity does not have Mail.Read permission. " +
                     "Grant Mail.Read (application) to the app registration to enable this import.");
                 return;
@@ -101,11 +101,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             var users = await LoadUsersWithMailAsync();
             if (users.Count == 0)
             {
-                _telemetry.LogWarning("No users found with email addresses to scan for sent items.");
+                _logger.LogWarning("No users found with email addresses to scan for sent items.");
                 return;
             }
 
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"Found {users.Count} users with email addresses to scan for sent items. " +
                 $"Processing in chunks of {_userChunkSize} (Graph load parallelism: {_graphLoadParallelism}; " +
                 $"persistence uses single-connection multi-row SQL inserts to avoid unique-index deadlocks).");
@@ -116,7 +116,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 // prior element, so chunking N users in slices of K costs O(N^2/K). At
                 // 200k users with K=25 that's ~800M wasted iterations just for slicing.
                 var chunk = users.GetRange(i, Math.Min(_userChunkSize, users.Count - i));
-                _telemetry.LogInformation(
+                _logger.LogInformation(
                     $"Processing user chunk {(i / _userChunkSize) + 1} of " +
                     $"{(users.Count + _userChunkSize - 1) / _userChunkSize} ({chunk.Count} users).");
 
@@ -155,7 +155,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             var swPhase = Stopwatch.StartNew();
             var loaded = await LoadChunkInParallelAsync(users);
             swPhase.Stop();
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"  [chunk] graph load: {users.Count} users -> {loaded.Count} loaded in {swPhase.ElapsedMilliseconds}ms.");
             if (loaded.Count == 0)
                 return;
@@ -188,7 +188,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 return;
 
             int totalCandidates = perUser.Sum(u => u.Candidates.Count);
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"  [chunk] built {totalCandidates} candidate messages across {perUser.Count} users; " +
                 $"distinct addresses: {allDistinctAddresses.Count}.");
 
@@ -204,7 +204,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 addressIds = await BulkResolveAddressIdsAsync(db, allDistinctAddresses);
             }
             swPhase.Stop();
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"  [chunk] resolved {addressIds.Count} address ids in {swPhase.ElapsedMilliseconds}ms.");
 
             // ---- 3. Bulk existing-key check across the chunk ---------------------------
@@ -221,7 +221,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 existingKeys = await FindExistingKeysAsync(db, allKeys);
             }
             swPhase.Stop();
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"  [chunk] existing-key check: {allKeys.Count} keys, {existingKeys.Count} already present, " +
                 $"in {swPhase.ElapsedMilliseconds}ms.");
 
@@ -240,12 +240,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
             // ---- 5. Single-connection persistence of SentEmail + recipient rows -------
             swPhase.Restart();
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"  [chunk] persisting {totalToInsert} new messages across {perUser.Count} users " +
                 "(serial multi-row INSERTs on one connection to avoid unique-index races)...");
             await PersistChunkAsync(perUser, addressIds, sentimentByMessageId);
             swPhase.Stop();
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"  [chunk] persistence done in {swPhase.ElapsedMilliseconds}ms.");
         }
 
@@ -269,13 +269,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     catch (System.Net.Http.HttpRequestException ex)
                     {
                         Interlocked.Increment(ref _mailboxesFailed);
-                        _telemetry.LogWarning(
+                        _logger.LogWarning(
                             $"Could not access sent items for user '{user.UserPrincipalName}': {ex.Message}");
                     }
                     catch (Exception ex)
                     {
                         Interlocked.Increment(ref _mailboxesFailed);
-                        _telemetry.LogError(ex,
+                        _logger.LogError(ex,
                             $"Error loading sent emails for user '{user.UserPrincipalName}': {ex.Message}");
                     }
                     finally
@@ -371,14 +371,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     }
                     catch (Exception ex)
                     {
-                        _telemetry.LogError(ex,
+                        _logger.LogError(ex,
                             $"  [persist] phase A failed at batch starting {i} (size {take}): {ex.GetBaseException().Message}");
                         throw;
                     }
 
                     parentsSaved += take;
                     Interlocked.Add(ref _messagesInserted, take);
-                    _telemetry.LogInformation(
+                    _logger.LogInformation(
                         $"  [persist] phase A: saved {parentsSaved}/{work.Count} parent rows " +
                         $"({swA.ElapsedMilliseconds}ms elapsed).");
                 }
@@ -411,20 +411,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     }
                     catch (Exception ex)
                     {
-                        _telemetry.LogError(ex,
+                        _logger.LogError(ex,
                             $"  [persist] phase B failed at batch starting {i} (size {take}): {ex.GetBaseException().Message}");
                         throw;
                     }
 
                     recipientsSaved += take;
                     Interlocked.Add(ref _recipientsInserted, take);
-                    _telemetry.LogInformation(
+                    _logger.LogInformation(
                         $"  [persist] phase B: saved {recipientsSaved}/{totalRecipients} recipient rows " +
                         $"({swB.ElapsedMilliseconds}ms elapsed).");
                 }
                 swB.Stop();
 
-                _telemetry.LogInformation(
+                _logger.LogInformation(
                     $"  [persist] phase A: {parentsSaved} parents in {swA.ElapsedMilliseconds}ms; " +
                     $"phase B: {recipientsSaved} recipients in {swB.ElapsedMilliseconds}ms.");
             }
@@ -576,7 +576,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
         private void LogRunSummary(TimeSpan elapsed)
         {
-            _telemetry.LogInformation(
+            _logger.LogInformation(
                 $"Finished sent emails import in {elapsed:hh\\:mm\\:ss}. " +
                 $"Mailboxes scanned: {_mailboxesScanned} (failed: {_mailboxesFailed}). " +
                 $"Messages seen: {_messagesSeen}. Messages inserted: {_messagesInserted} " +

@@ -17,7 +17,9 @@ namespace App.ControlPanel.Engine
         public BaseInstallProcess(SolutionInstallConfig config, ILogger logger)
         {
             this.Config = config;
-            _logger = logger;
+            // Tee everything logged during the install into _installLogEvents so the full log can be
+            // registered into sys_configs.messages, while still forwarding to the on-screen logger.
+            _logger = new InstallLogCapturingLogger(logger, _installLogEvents);
         }
 
         protected List<InstallLogEventArgs> _installLogEvents = new List<InstallLogEventArgs>();
@@ -130,13 +132,12 @@ namespace App.ControlPanel.Engine
         #endregion
     }
 
-    public abstract class BaseInstallProcessWithFtp : BaseInstallProcess
+    public abstract class BaseInstallProcessWithProxy : BaseInstallProcess
     {
-        protected BaseInstallProcessWithFtp(SolutionInstallConfig config, ILogger logger, InstallerFtpConfig ftpConfig) : base(config, logger)
+        protected BaseInstallProcessWithProxy(SolutionInstallConfig config, ILogger logger, InstallerProxyConfig proxyConfig) : base(config, logger)
         {
-            _ftpConfig = ftpConfig;
+            _proxyConfig = proxyConfig;
         }
-        protected readonly InstallerFtpConfig _ftpConfig;
+        protected readonly InstallerProxyConfig _proxyConfig;
     }
 }
-

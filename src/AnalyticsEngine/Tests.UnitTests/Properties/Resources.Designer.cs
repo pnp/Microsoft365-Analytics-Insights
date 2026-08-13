@@ -355,18 +355,6 @@ namespace Tests.UnitTests.Properties {
             }
         }
         
-        /// <summary>
-        ///   Looks up a localized string similar to &lt;publishData&gt;
-        ///
-        ///    &lt;publishProfile profileName=&quot;o365analyticsdemocopy - FTP&quot; publishMethod=&quot;FTP&quot;
-        ///        publishUrl=&quot;ftp://server/site/wwwroot&quot; ftpPassiveMode=&quot;True&quot;
-        ///        userName=&quot;username&quot;
-        ///        userPWD=&quot;asdf&quot;
-        ///        destinationAppUrl=&quot;https://o365analyticsdemocopy.azurewebsites.net&quot;
-        ///        SQLServerDBConnectionString=&quot;SQL&quot;
-        ///        mySQLDBConnectionString=&quot;&quot; hostingProviderForumLink=&quot;&quot; controlPanelLink=&quot;http://windows.azure.com&quot;
-        ///        webSystem=&quot;WebSites&quot; targetDatabaseEngineType=&quot;sqlazu [rest of string was truncated]&quot;;.
-        /// </summary>
         internal static string PublishXml {
             get {
                 return ResourceManager.GetString("PublishXml", resourceCulture);

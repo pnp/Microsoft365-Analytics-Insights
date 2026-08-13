@@ -1,0 +1,48 @@
+# gitleaks configuration for pnp/Microsoft365-Analytics-Insights
+#
+# Extends the default gitleaks ruleset (so all built-in secret detectors stay active) and allowlists
+# ONLY confirmed non-secrets. Every allowlisted path below was triaged by hand - see the descriptions.
+# Do NOT add an allowlist entry to silence a genuine secret; rotate it and remove it from history instead.
+title = "Microsoft365-Analytics-Insights gitleaks config"
+
+[extend]
+useDefault = true
+
+# --- Confirmed test fixtures / sample data (committed, but not usable secrets) ---
+# Scoped to the high-entropy rules that produce these false positives, so a different class of real
+# secret (private key, cloud key, etc.) accidentally added to these files would still be detected.
+[[allowlists]]
+description = """
+Confirmed non-secret test fixtures / sample data:
+- Installer test configs store account secrets / SQL passwords as DPAPI ciphertext
+  (StringUtils.ProtectString -> ProtectedData.Protect, DataProtectionScope.CurrentUser). The plaintext
+  is never committed, and the blobs cannot be decrypted off the machine+user that produced them (the
+  installer catches the CryptographicException and blanks them). They are opaque round-trip test data.
+- Resources/Activity/*.json and PowerPlatformAdminActivityRecordParseTests.cs contain Microsoft
+  audit-log SAMPLE payloads whose 'UserKey' field is a GUID event identifier, not a credential.
+- SharePointOnPremisesConfig.json holds a dev App Insights instrumentation key (write-only telemetry id).
+"""
+targetRuleIDs = ["generic-api-key", "azure-ad-client-secret"]
+paths = [
+  '''src/AnalyticsEngine/Tests\.UnitTests/InstallTests/TestConfigs/InstallerTestConfig\.json''',
+  '''src/AnalyticsEngine/Tests\.UnitTests/Resources/TestSolutionInstallConfig\.json''',
+  '''src/AnalyticsEngine/Tests\.UnitTests/Resources/Activity/.*\.json''',
+  '''src/AnalyticsEngine/Tests\.UnitTests/PowerPlatformAdminActivityRecordParseTests\.cs''',
+  '''src/SPO/.*SharePointOnPremisesConfig\.json''',
+]
+
+# --- Local build / IDE / dependency / generated artifacts ---
+# These are never committed (they're gitignored) and are absent from a fresh CI checkout; they only
+# appear in a local working-tree (`gitleaks dir`) scan. Allowlisting keeps the local scan meaningful.
+[[allowlists]]
+description = "Local build / IDE / dependency / generated-config artifacts (gitignored; absent from a CI checkout)."
+paths = [
+  '''(^|/)\.vs/''',
+  '''(^|/)bin/''',
+  '''(^|/)obj/''',
+  '''(^|/)packages/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)Web\.config$''',
+  '''(^|/)App\.config$''',
+  '''(^|/)[^/]*\.Debug\.config$''',
+]

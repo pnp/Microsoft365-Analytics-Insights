@@ -93,11 +93,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     }
 
     /// <summary>
-    /// Audit-log payload for the 'MicrosoftFlow' workload (create, edit, run, share, delete).
-    /// Schema: https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#microsoft-flow-schema
+    /// Audit-log payload for the 'MicrosoftFlow' workload (create, edit, share, delete).
+    /// Schema: https://learn.microsoft.com/en-us/power-platform/admin/activity-logging-auditing/activity-logs-power-automate
     /// </summary>
     public class PowerAutomateAuditLogContent : AbstractAuditLogContent
     {
+        /// <summary>
+        /// Legacy field retained for backward compatibility. Current Purview records identify
+        /// the flow inside <see cref="FlowDetailsUrl"/>.
+        /// </summary>
         [JsonProperty("FlowId")]
         public string FlowId { get; set; }
 
@@ -122,13 +126,106 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         [JsonProperty("RunId")]
         public string RunId { get; set; }
 
-        /// <summary>Connectors used by this flow (populated on save / publish events).</summary>
+        /// <summary>Link to the flow's details page in the Power Platform admin center.</summary>
+        [JsonProperty("FlowDetailsUrl")]
+        public string FlowDetailsUrl { get; set; }
+
+        /// <summary>Comma-delimited connector names listed in the flow definition.</summary>
+        [JsonProperty("FlowConnectorNames")]
+        public string FlowConnectorNames { get; set; }
+
+        /// <summary>Permission code: 3 = owner/read-write, 2 = run-only/read.</summary>
+        [JsonProperty("SharingPermission")]
+        public string SharingPermission { get; set; }
+
+        /// <summary>UPN of the recipient affected by a permission-change event.</summary>
+        [JsonProperty("RecipientUPN")]
+        public string RecipientUpn { get; set; }
+
+        /// <summary>Legacy connector shape retained for backward compatibility.</summary>
         [JsonProperty("ConnectionReferences")]
         public List<PowerPlatformConnectionRef> ConnectionReferences { get; set; }
 
-        /// <summary>Recipients on share / permission-grant events.</summary>
+        /// <summary>Legacy permission shape retained for backward compatibility.</summary>
         [JsonProperty("Permissions")]
         public List<PowerPlatformPermissionEntry> Permissions { get; set; }
+
+        /// <summary>
+        /// Maps the current documented Purview schema into the legacy fields consumed by the
+        /// existing staging pipeline.
+        /// </summary>
+        internal void NormaliseDocumentedFields()
+        {
+            if (string.IsNullOrEmpty(FlowId))
+            {
+                FlowId = GetDetailsUrlSegment("flows");
+            }
+
+            if (string.IsNullOrEmpty(EnvironmentName))
+            {
+                EnvironmentName = GetDetailsUrlSegment("environments");
+            }
+
+            if ((ConnectionReferences == null || ConnectionReferences.Count == 0)
+                && !string.IsNullOrWhiteSpace(FlowConnectorNames))
+            {
+                ConnectionReferences = new List<PowerPlatformConnectionRef>();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var connectorName in FlowConnectorNames.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var trimmedName = connectorName.Trim();
+                    if (trimmedName.Length > 0 && seen.Add(trimmedName))
+                    {
+                        ConnectionReferences.Add(new PowerPlatformConnectionRef { ConnectorName = trimmedName });
+                    }
+                }
+            }
+
+            if ((Permissions == null || Permissions.Count == 0)
+                && !string.IsNullOrWhiteSpace(RecipientUpn))
+            {
+                Permissions = new List<PowerPlatformPermissionEntry>
+                {
+                    new PowerPlatformPermissionEntry
+                    {
+                        PrincipalName = RecipientUpn.Trim(),
+                        RoleName = NormaliseSharingPermission(SharingPermission),
+                    }
+                };
+            }
+        }
+
+        private string GetDetailsUrlSegment(string segmentName)
+        {
+            if (!Uri.TryCreate(FlowDetailsUrl, UriKind.Absolute, out var detailsUri))
+            {
+                return null;
+            }
+
+            var segments = detailsUri.AbsolutePath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < segments.Length - 1; i++)
+            {
+                if (string.Equals(segments[i], segmentName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Uri.UnescapeDataString(segments[i + 1]);
+                }
+            }
+
+            return null;
+        }
+
+        private static string NormaliseSharingPermission(string permission)
+        {
+            switch (permission?.Trim())
+            {
+                case "3":
+                    return "Owner";
+                case "2":
+                    return "Run-only user";
+                default:
+                    return permission;
+            }
+        }
 
         public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
@@ -173,18 +270,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     }
 
     /// <summary>
-    /// Audit-log payload for the 'MicrosoftCopilotStudio' workload (bot created, published, message sent).
+    /// Audit-log payload for Copilot Studio authoring events (bot created, updated, published, or shared).
     /// </summary>
     public class CopilotStudioAuditLogContent : AbstractAuditLogContent
     {
         [JsonProperty("BotId")]
         public string BotId { get; set; }
 
+        /// <summary>
+        /// Legacy display-name field. The current published audit schema exposes
+        /// <see cref="BotSchemaName"/> rather than a friendly bot name.
+        /// </summary>
         [JsonProperty("BotName")]
         public string BotName { get; set; }
 
+        [JsonProperty("BotSchemaName")]
+        public string BotSchemaName { get; set; }
+
+        /// <summary>Legacy environment field retained for backward compatibility.</summary>
         [JsonProperty("EnvironmentName")]
         public string EnvironmentName { get; set; }
+
+        [JsonProperty("EnvironmentId")]
+        public string EnvironmentId { get; set; }
 
         public override async Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
@@ -261,7 +369,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 var isShare = ActivityImportConstants.PowerPlatformOps.IsPowerAppShareOp(Operation);
                 if (!isLaunch && !isShare)
                 {
-                    logger?.LogInformation($"PowerPlatform admin activity: ignoring PowerApp event with unsupported operation '{Operation}' (id='{Id}'). Only LaunchPowerApp + share operations are persisted today.");
+                    logger?.LogDebug($"PowerPlatform admin activity: ignoring PowerApp event with unsupported operation '{Operation}' (id='{Id}'). Only LaunchPowerApp + share operations are persisted today.");
                     return null;
                 }
                 return ToPowerAppsContent(logger, isShare);
@@ -273,11 +381,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
             if (string.IsNullOrEmpty(resourceType))
             {
-                logger?.LogInformation($"PowerPlatform admin activity: skipping record - no '{ActivityImportConstants.PowerPlatformProps.ResourceType}' property, so this event is not tied to a tracked Power App or Cloud Flow resource (operation='{Operation}', id='{Id}'). This is expected for operations like ApiEndpointCallEvent and connector-only events.");
+                logger?.LogDebug($"PowerPlatform admin activity: skipping record - no '{ActivityImportConstants.PowerPlatformProps.ResourceType}' property, so this event is not tied to a tracked Power App or Cloud Flow resource (operation='{Operation}', id='{Id}'). This is expected for operations like ApiEndpointCallEvent and connector-only events.");
             }
             else
             {
-                logger?.LogInformation($"PowerPlatform admin activity: skipping record with unsupported resource type '{resourceType}' - only PowerApp and CloudFlow are persisted today (operation='{Operation}', id='{Id}').");
+                logger?.LogDebug($"PowerPlatform admin activity: skipping record with unsupported resource type '{resourceType}' - only PowerApp and CloudFlow are persisted today (operation='{Operation}', id='{Id}').");
             }
             return null;
         }

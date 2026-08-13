@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -7,21 +7,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     public static class PageableGraphLoaderExtensions
     {
-        public static async Task<List<T>> LoadAllPagesWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger debugTracer)
+        public static async Task<List<T>> LoadAllPagesWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger)
         {
-            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, debugTracer, null);
+            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, null);
 
             return results;
         }
 
-        public static async Task<List<T>> LoadAllPagesPlusDeltaWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger debugTracer, Func<string, Task> deltaTokenFunc)
+        public static async Task<List<T>> LoadAllPagesPlusDeltaWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc)
         {
-            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, debugTracer, deltaTokenFunc);
+            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, deltaTokenFunc);
 
             return results;
         }
 
-        static async Task<List<T>> LoadPageableGraphResponseAllWithOptionalDelta<T>(ManualGraphCallClient client, string url, ILogger debugTracer, Func<string, Task> deltaTokenFunc)
+        static async Task<List<T>> LoadPageableGraphResponseAllWithOptionalDelta<T>(ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc)
         {
             var allResults = new List<T>();
 
@@ -41,17 +41,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 catch (System.Net.Http.HttpRequestException ex)
                 {
                     pageSuccess = false;
-                    debugTracer.LogError(ex, $"Got unexpected HTTP exception on page {pageCount}: {ex.Message}.");
+                    logger.LogError(ex, $"Got unexpected HTTP exception on page {pageCount}: {ex.Message}.");
 
                     // Transient error?
                     if (ex.Message != null && ex.Message.ToLower().Contains("gateway timeout"))
                     {
-                        debugTracer.LogInformation($"Got gateway timeout. Will retry page.");
+                        logger.LogInformation($"Got gateway timeout. Will retry page.");
                         await Task.Delay(1000);
                     }
                     else
                     {
-                        debugTracer.LogError(ex, $"Unexpected HTTP error. Will not retry page & returning results upto current page.");
+                        logger.LogError(ex, $"Unexpected HTTP error. Will not retry page & returning results upto current page.");
                         nextUrl = null;
                     }
                 }
@@ -63,7 +63,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     if (nextUrl != null)
                     {
                         pageCount++;
-                        debugTracer.LogInformation($"Loading {typeof(T).Name} results page #{pageCount}...");
+                        // Per-page logging floods the log on large pulls (thousands of pages/cycle), so log
+                        // each page at Debug and only a coarse progress line at Information every 50 pages.
+                        if (pageCount % 50 == 0)
+                        {
+                            logger.LogInformation($"Loading {typeof(T).Name} results page #{pageCount}...");
+                        }
+                        else
+                        {
+                            logger.LogDebug($"Loading {typeof(T).Name} results page #{pageCount}...");
+                        }
                     }
                     else
                     {

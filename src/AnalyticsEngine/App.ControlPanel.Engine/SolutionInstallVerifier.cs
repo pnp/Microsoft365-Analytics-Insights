@@ -1,16 +1,13 @@
-﻿using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager;
-using Azure.ResourceManager.AppService;
-using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
 using DataUtils;
 using DataUtils.Http;
-using FluentFTP.Exceptions;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -18,24 +15,23 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
-using static App.ControlPanel.Engine.Models.AutodetectedSqlAndFtpDetails;
+using static App.ControlPanel.Engine.Models.AutodetectedSqlDetails;
 
 namespace App.ControlPanel.Engine
 {
     /// <summary>
     /// All the tests we can run to make sure the installer will work
     /// </summary>
-    public class SolutionInstallVerifier : BaseInstallProcessWithFtp
+    public class SolutionInstallVerifier : BaseInstallProcess
     {
         protected TestConfiguration _testConfig;
-        public SolutionInstallVerifier(SolutionInstallConfig config, ILogger logger, InstallerFtpConfig ftpConfig, TestConfiguration testConfig)
-            : base(config, logger, ftpConfig)
+        public SolutionInstallVerifier(SolutionInstallConfig config, ILogger logger, TestConfiguration testConfig)
+            : base(config, logger)
         {
             this._testConfig = testConfig;
         }
@@ -120,8 +116,6 @@ namespace App.ControlPanel.Engine
             {
                 await ExecuteReportFailureAndThrowExceptionIfCritical("Runtime account permission checks", () => VerifyRuntimeAccountAllAPIs());
             }
-            await ExecuteReportFailureAndThrowExceptionIfCritical("FTPS connectivity", () => VerifyFTPS(_ftpConfig, _testConfig));
-
             // Misc checks
             WindowsVersionCheck();
 
@@ -129,39 +123,19 @@ namespace App.ControlPanel.Engine
         }
 
         /// <summary>
-        /// Return FTP deployment details so network tests can be done against the real endpoint, if config is valid.
-        /// We cannot read back the password for SQL, so it must come from config
+        /// Return SQL details so connectivity tests can run against an existing server.
+        /// We cannot read back the SQL password, so it must come from config.
         /// </summary>
-        public async Task<AutodetectedSqlAndFtpDetails> GetFtpAndSQLDetails(string sqlPassword)
+        public async Task<AutodetectedSqlDetails> GetSqlDetails(string sqlPassword)
         {
             if (string.IsNullOrEmpty(sqlPassword))
             {
                 throw new ArgumentException($"'{nameof(sqlPassword)}' cannot be null or empty.", nameof(sqlPassword));
             }
 
-            FtpPublishInfo ftpDetails = null;
-            var (testRg, azCredsValid) = await GetResourceGroupIfValid();
+            var (testRg, _) = await GetResourceGroupIfValid();
             if (testRg != null)
             {
-                FtpDetails ftpInfo = null;
-                var webApp = testRg.GetWebSites().Where(s => s.Data.Name == Config.AppServiceWebAppName).SingleOrDefault();
-                if (webApp != null)
-                {
-                    var ftp = webApp.GetPublishingProfileXmlWithSecrets(new CsmPublishingProfile() { Format = PublishingProfileFormat.Ftp });
-                    using (var ms = new StreamReader(ftp.Value))
-                    {
-                        var profileData = publishData.FromXml(ms);
-                        ftpDetails = profileData.GetPublishFtpsUrl();
-
-                        var ftpUrl = new Uri(ftpDetails.RootUrl);
-                        ftpInfo = new FtpDetails() { Domain = ftpUrl.Host, Password = ftpDetails.Password, Username = ftpDetails.Username };
-                    }
-                }
-                else
-                {
-                    _logger.LogError($"Can't find app-service with name '{Config.AppServiceWebAppName}' in resource-group '{testRg.Data.Name}'");
-                }
-
                 SqlDetails sqlInfo = null;
                 var sqlServer = testRg.GetSqlServers().Where(s => s.Data.Name == Config.SQLServerName).SingleOrDefault();
                 if (sqlServer == null)
@@ -178,25 +152,24 @@ namespace App.ControlPanel.Engine
                     };
                 }
 
-                return new AutodetectedSqlAndFtpDetails() { Ftp = ftpInfo, Sql = sqlInfo };
+                return new AutodetectedSqlDetails { Sql = sqlInfo };
             }
             else
             {
-                _logger.LogError($"Can't find resource-group '{testRg.Data.Name}'");
+                _logger.LogError($"Can't find resource-group '{Config.ResourceGroupName}'");
             }
             return null;
         }
 
         /// <summary>
-        /// Do we have enough config to run the FTP and SQL tests?
+        /// Do we have enough config to autodetect SQL connectivity details?
         /// </summary>
-        public static bool ConfigIsReadyForFtpAndSqlAutodetection(SolutionInstallConfig config)
+        public static bool ConfigIsReadyForSqlAutodetection(SolutionInstallConfig config)
         {
             if (config == null) return false;
 
             var installerAccErrors = config.InstallerAccount?.GetValidationErrors();
             return installerAccErrors != null && installerAccErrors.Count == 0
-                && !string.IsNullOrEmpty(config.AppServiceWebAppName)
                 && !string.IsNullOrEmpty(config.ResourceGroupName)
                 && config.Subscription.IsValidSubscription
                 && !string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername) && !string.IsNullOrEmpty(config.SQLServerName);
@@ -230,58 +203,6 @@ namespace App.ControlPanel.Engine
                 }
             }
             return (null, false);
-        }
-
-        /// <summary>
-        /// Test FTP by uploading a small file to a site. It's the only way to make sure the full port range is working.
-        /// This should probably be done to the customers' own FTP, not the test one we use just for this purpose...
-        /// </summary>
-        async Task VerifyFTPS(InstallerFtpConfig ftpConfig, TestConfiguration testInfo)
-        {
-            if (!testInfo.IsValid)
-            {
-                _logger.LogError($"Can't verify FTPS access - configure a test target in solution tests configuration menu when App Service is created");
-                return;
-            }
-
-            _logger.LogInformation($"Verifying FTPS access to server {testInfo.FtpHostname} on port 990...");
-
-            var success = false;
-            try
-            {
-                // https://github.com/robinrodricks/FluentFTP/wiki/Quick-Start-Example
-                using (var client = FtpClientFactory.GetFtpClient(testInfo.FtpHostname, testInfo.FtpUsername, testInfo.FtpPassword, ftpConfig))
-                {
-                    await client.Connect();
-                    await client.GetListing();
-
-                    var randomFileName = $"{DateTime.Now.Ticks}.txt";
-                    var bytes = System.Text.Encoding.ASCII.GetBytes(randomFileName);
-
-                    await client.UploadBytes(bytes, randomFileName);
-                    await client.DeleteFile(randomFileName);
-
-                    await client.Disconnect();
-                    success = true;
-                }
-            }
-            catch (FtpException ex)
-            {
-                // Nothing
-                _logger.LogError("Got unexpected response from test FTPS server: " + ex.Message);
-                Console.WriteLine(ex);
-            }
-            catch (SocketException ex)
-            {
-                // Fail
-                _logger.LogError($"Got unexpected network response (proxy in use: {ftpConfig.UseFtpProxy}): {ex.Message}");
-                Console.WriteLine(ex);
-            }
-
-            if (success)
-            {
-                _logger.LogInformation("Got expected response from test FTPS server");
-            }
         }
 
         #region Configuration & Key Vault checks
@@ -478,6 +399,7 @@ namespace App.ControlPanel.Engine
         private const string DNS_SUFFIX_KEY_VAULT = ".vault.azure.net";
         private const string DNS_SUFFIX_SQL = ".database.windows.net";
         private const string DNS_SUFFIX_STORAGE_BLOB = ".blob.core.windows.net";
+        private const string DNS_SUFFIX_STORAGE_TABLE = ".table.core.windows.net";
         private const string DNS_SUFFIX_APP_SERVICE = ".azurewebsites.net";
         private const string DNS_SUFFIX_REDIS = ".redis.cache.windows.net";
         private const string DNS_SUFFIX_SERVICE_BUS = ".servicebus.windows.net";
@@ -575,7 +497,10 @@ namespace App.ControlPanel.Engine
 
             Add("Key Vault", config.KeyVaultName, DNS_SUFFIX_KEY_VAULT);
             Add("SQL Server", config.SQLServerName, DNS_SUFFIX_SQL);
-            Add("Storage account", config.StorageAccountName, DNS_SUFFIX_STORAGE_BLOB);
+            Add("Storage account (blob)", config.StorageAccountName, DNS_SUFFIX_STORAGE_BLOB);
+            // The audit-import blob checkpoint uses the storage account's Table endpoint, which has its own
+            // private endpoint / DNS zone on private deployments - check it resolves too (see #207 / AzurePaaSInstallJob).
+            Add("Storage account (table)", config.StorageAccountName, DNS_SUFFIX_STORAGE_TABLE);
             Add("App Service", config.AppServiceWebAppName, DNS_SUFFIX_APP_SERVICE);
             Add("Redis cache", config.RedisName, DNS_SUFFIX_REDIS);
             if (config.ServiceBusEnabled)
@@ -654,9 +579,9 @@ namespace App.ControlPanel.Engine
         {
             try
             {
-                var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-                var auth = new ActivityAPIAppIndentityOAuthContext(telemetry, clientId, tenantId, clientSecret, null, false);
-                var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, telemetry);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                var auth = new ActivityAPIAppIndentityOAuthContext(logger, clientId, tenantId, clientSecret, null, false);
+                var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, logger);
                 // This will start an auth & activity subscription read, which will fail if error with account and/or permissions
                 var downloadSession = await ActivitySubscriptionManager.GetActiveSubscriptions(tenantId, _logger, httpClient);
             }
@@ -672,16 +597,16 @@ namespace App.ControlPanel.Engine
 
         async Task VerifyTeamsAndUserActivityImport(string clientId, string tenantId, string clientSecret)
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
-            var auth = new GraphAppIndentityOAuthContext(telemetry, clientId, tenantId, clientSecret, null, false);
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var auth = new GraphAppIndentityOAuthContext(logger, clientId, tenantId, clientSecret, null, false);
             await auth.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(auth.Creds);
 
-            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, telemetry),
+            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, logger),
                 new NoUsersHaveGroupsUserGroupsCache(_logger),
                 new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
-                telemetry);
+                logger);
 
             // Usage reports
             if (Config.SolutionConfig.ImportTaskSettings.GraphUsageReports)

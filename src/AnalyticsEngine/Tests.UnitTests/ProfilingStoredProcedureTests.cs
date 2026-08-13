@@ -76,6 +76,9 @@ namespace Tests.UnitTests
                             DELETE FROM dbo.sharepoint_user_activity_log WHERE user_id IN ({userIdList});
                             DELETE FROM dbo.outlook_user_activity_log WHERE user_id IN ({userIdList});
                             DELETE FROM dbo.yammer_user_activity_log WHERE user_id IN ({userIdList});
+                            DELETE FROM dbo.teams_user_device_usage_log WHERE user_id IN ({userIdList});
+                            DELETE FROM dbo.platform_user_activity_log WHERE user_id IN ({userIdList});
+                            DELETE FROM dbo.yammer_device_activity_log WHERE user_id IN ({userIdList});
                             
                             -- Clean up copilot data
                             DELETE FROM dbo.copilot_chats 
@@ -87,6 +90,7 @@ namespace Tests.UnitTests
                             -- Clean up profiling tables
                             DELETE FROM profiling.ActivitiesWeekly WHERE user_id IN ({userIdList});
                             DELETE FROM profiling.ActivitiesWeeklyColumns WHERE user_id IN ({userIdList});
+                            DELETE FROM profiling.UsageWeekly WHERE user_id IN ({userIdList});
                             
                             -- Finally, remove the test users
                             DELETE FROM dbo.users WHERE id IN ({userIdList});";
@@ -374,6 +378,191 @@ namespace Tests.UnitTests
                 // Verify data for all users
                 var columnCount = await GetActivitiesWeeklyColumnsCount(db, monday);
                 Assert.AreEqual(3, columnCount, "Should have aggregated data for 3 users");
+            }
+        }
+
+        // =====================================================================
+        // Value-correctness tests. The tests above only assert that rows exist
+        // and that a metric NAME is present - but usp_CompileWeekActivityRows
+        // UNPIVOTs every column (including zeros), so every metric name is
+        // always present regardless of the data. These assert the actual
+        // aggregated numbers so a wrong SUM / date filter / column mapping fails.
+        // =====================================================================
+
+        [TestMethod]
+        public async Task UspCompileActivityWeek_TeamsData_ComputesExactWeeklySums()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(63);
+                var sunday = monday.AddDays(6);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+                // Seeds 5,3,2,1,1,0,...,600,300,120,4,6,1 per day, for 7 days.
+                await InsertTeamsActivityTestData(db, TEST_USER_ID, monday, sunday);
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                // Long form (ActivitiesWeekly): value x 7 days.
+                Assert.AreEqual(35, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Teams Private Chats"));
+                Assert.AreEqual(21, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Teams Team Chats"));
+                Assert.AreEqual(14, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Teams Calls"));
+                Assert.AreEqual(4200, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Teams Audio Duration Seconds"));
+
+                // Wide form (ActivitiesWeeklyColumns) must equal the long form for the same metric.
+                Assert.AreEqual(35, await GetActivityColumnValue(db, monday, TEST_USER_ID, "Teams Private Chats"));
+                Assert.AreEqual(42, await GetActivityColumnValue(db, monday, TEST_USER_ID, "Teams Reply Messages"));
+            }
+        }
+
+        [TestMethod]
+        public async Task UspCompileActivityWeek_OtherWorkloads_ComputeExactWeeklySums()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(70);
+                var sunday = monday.AddDays(6);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+                await InsertOneDriveActivityTestData(db, TEST_USER_ID, monday, sunday);   // 10,5,2,1
+                await InsertSharePointActivityTestData(db, TEST_USER_ID, monday, sunday);  // 15,8,3,2
+                await InsertOutlookActivityTestData(db, TEST_USER_ID, monday, sunday);     // 20,50,40,2,3
+                await InsertYammerActivityTestData(db, TEST_USER_ID, monday, sunday);      // 3,10,5
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                Assert.AreEqual(70, await GetActivityMetricSum(db, monday, TEST_USER_ID, "OneDrive Viewed/Edited"));
+                Assert.AreEqual(35, await GetActivityMetricSum(db, monday, TEST_USER_ID, "OneDrive Synced"));
+                Assert.AreEqual(105, await GetActivityMetricSum(db, monday, TEST_USER_ID, "SPO Viewed/Edited"));
+                Assert.AreEqual(140, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Emails Sent"));
+                Assert.AreEqual(350, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Emails Received"));
+                Assert.AreEqual(280, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Emails Read"));
+                Assert.AreEqual(21, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Yammer Posted"));
+                Assert.AreEqual(70, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Yammer Read"));
+            }
+        }
+
+        [TestMethod]
+        public async Task UspCompileActivityWeek_ExcludesActivityOutsideTheWeek()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(77);
+                var sunday = monday.AddDays(6);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+                await CleanupTestData(db, monday.AddDays(7));
+
+                await InsertTeamsActivityTestData(db, TEST_USER_ID, monday, sunday);            // 7 in-week days
+                // One extra day in the FOLLOWING week - must NOT be counted in this week's compile.
+                await InsertTeamsActivityTestData(db, TEST_USER_ID, monday.AddDays(7), monday.AddDays(7));
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                // 5 private chats x 7 in-week days = 35 (NOT 40).
+                Assert.AreEqual(35, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Teams Private Chats"),
+                    "Activity dated outside the Mon-Sun window must be excluded from the week");
+
+                await CleanupTestData(db, monday.AddDays(7));
+            }
+        }
+
+        [TestMethod]
+        public async Task UspCompileActivityWeek_CopilotAppHosts_AreMappedAndFolded()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(84);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+
+                // 2 Word, 1 Excel, and the two fold-pairs:
+                //   bizchat + M365App -> "Copilot App M365App";  appchat + Office -> "Copilot App Office".
+                await InsertCopilotChat(db, TEST_USER_ID, monday, "Word");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(1), "Word");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(1), "Excel");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(2), "bizchat");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(2), "M365App");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(3), "appchat");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(3), "Office");
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                Assert.AreEqual(7, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Chats"), "Total Copilot chats");
+                Assert.AreEqual(2, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot App Word"));
+                Assert.AreEqual(1, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot App Excel"));
+                Assert.AreEqual(2, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot App M365App"), "bizchat + M365App fold together");
+                Assert.AreEqual(2, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot App Office"), "appchat + Office fold together");
+                // No files/meetings were seeded.
+                Assert.AreEqual(0, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Files"));
+                Assert.AreEqual(0, await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Meetings"));
+            }
+        }
+
+        // ---- usp_CompileUsageWeek / UsageWeekly - previously untested entirely ----
+
+        [TestMethod]
+        public async Task UspCompileUsageWeek_TeamsDeviceUsage_SetsWeeklyFlags()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(91);
+                var sunday = monday.AddDays(6);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupUsageTestData(db, monday);
+                // Each day: used_web=1, used_windows=1, used_ios=1 (mac/others 0).
+                await InsertTeamsDeviceUsageTestData(db, TEST_USER_ID, monday, sunday);
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileUsageWeek", monday);
+
+                Assert.AreEqual(1, await GetUsageFlag(db, monday, TEST_USER_ID, "Teams Used Web"));
+                Assert.AreEqual(1, await GetUsageFlag(db, monday, TEST_USER_ID, "Teams Used Windows"));
+                Assert.AreEqual(1, await GetUsageFlag(db, monday, TEST_USER_ID, "Teams Used iOS"));
+                // "Teams Used Mobile" = win_phone OR ios OR android -> 1 because ios was used.
+                Assert.AreEqual(1, await GetUsageFlag(db, monday, TEST_USER_ID, "Teams Used Mobile"));
+                // Not used this week.
+                Assert.AreEqual(0, await GetUsageFlag(db, monday, TEST_USER_ID, "Teams Used Mac"));
+                Assert.AreEqual(0, await GetUsageFlag(db, monday, TEST_USER_ID, "Teams Used Android"));
+
+                await CleanupUsageTestData(db, monday);
+            }
+        }
+
+        // ---- usp_CompileWeekly orchestrator - retention / cleanup, previously untested ----
+
+        [TestMethod]
+        public async Task UspCompileWeekly_DeletesWeeksOlderThanRetention()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                // usp_CompileWeekly bases everything on the Monday of (today - 4 days).
+                var thisWeeksMonday = MondayOf(DateTime.Today.AddDays(-4));
+                var recentMonday = thisWeeksMonday.AddDays(-7);        // last completed week - inside retention
+                var oldMonday = thisWeeksMonday.AddDays(-7 * 20);      // 20 weeks back - outside a 4-week window
+                const int weeksToKeep = 4;
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupWeeklyRows(db, TEST_USER_ID);
+
+                // Seed a recent and an old week directly into all three weekly tables. Seeding the
+                // recent week into all three makes usp_CompileWeekly's resume point = recentMonday,
+                // so its compile loop does no work and we test the retention DELETE in isolation.
+                await SeedWeeklyRows(db, TEST_USER_ID, recentMonday);
+                await SeedWeeklyRows(db, TEST_USER_ID, oldMonday);
+
+                await ExecuteSql(db, $"EXEC profiling.usp_CompileWeekly @WeeksToKeep = {weeksToKeep}");
+
+                Assert.AreEqual(0, await CountWeeklyRows(db, TEST_USER_ID, oldMonday),
+                    "Weeks older than the retention window must be deleted");
+                Assert.IsTrue(await CountWeeklyRows(db, TEST_USER_ID, recentMonday) > 0,
+                    "Weeks inside the retention window must be kept");
+
+                await CleanupWeeklyRows(db, TEST_USER_ID);
             }
         }
 
@@ -680,6 +869,113 @@ namespace Tests.UnitTests
                     conn.Close();
                 }
             }
+        }
+
+        private async Task<long> GetActivityMetricSum(AnalyticsEntitiesContext db, DateTime monday, int userId, string metric)
+        {
+            return await ExecuteScalar<long>(db, $@"
+                SELECT ISNULL(SUM([Sum]), 0)
+                FROM profiling.ActivitiesWeekly
+                WHERE MetricDate = '{monday:yyyy-MM-dd}' AND user_id = {userId} AND Metric = '{metric}'");
+        }
+
+        private async Task<long> GetActivityColumnValue(AnalyticsEntitiesContext db, DateTime monday, int userId, string column)
+        {
+            return await ExecuteScalar<long>(db, $@"
+                SELECT ISNULL([{column}], 0)
+                FROM profiling.ActivitiesWeeklyColumns
+                WHERE date = '{monday:yyyy-MM-dd}' AND user_id = {userId}");
+        }
+
+        private async Task<int> GetUsageFlag(AnalyticsEntitiesContext db, DateTime monday, int userId, string column)
+        {
+            return await ExecuteScalar<int>(db, $@"
+                SELECT ISNULL(CAST([{column}] AS INT), 0)
+                FROM profiling.UsageWeekly
+                WHERE date = '{monday:yyyy-MM-dd}' AND user_id = {userId}");
+        }
+
+        private async Task InsertCopilotChat(AnalyticsEntitiesContext db, int userId, DateTime date, string appHost)
+        {
+            var eventId = await ExecuteScalar<Guid>(db, $@"
+                INSERT INTO dbo.audit_events (id, user_id, time_stamp, operation_id)
+                OUTPUT INSERTED.id
+                VALUES (NEWID(), {userId}, '{date:yyyy-MM-dd HH:mm:ss}', 1)");
+
+            await ExecuteSql(db, $@"
+                INSERT INTO dbo.copilot_chats (event_id, app_host)
+                VALUES ('{eventId}', '{appHost}')");
+        }
+
+        private async Task InsertTeamsDeviceUsageTestData(AnalyticsEntitiesContext db, int userId, DateTime startDate, DateTime endDate)
+        {
+            for (var date = startDate; date <= endDate; date = date.AddDays(1))
+            {
+                await ExecuteSql(db, $@"
+                    INSERT INTO dbo.teams_user_device_usage_log
+                    (user_id, date, used_web, used_mac, used_windows, used_linux, used_chrome_os,
+                     used_win_phone, used_ios, used_android)
+                    VALUES
+                    ({userId}, '{date:yyyy-MM-dd}', 1, 0, 1, 0, 0, 0, 1, 0)");
+            }
+        }
+
+        private async Task CleanupUsageTestData(AnalyticsEntitiesContext db, DateTime monday)
+        {
+            var sunday = monday.AddDays(6);
+            var userIdList = string.Join(",", new[] { TEST_USER_ID, TEST_USER_ID + 1, TEST_USER_ID + 2, TEST_USER_ID + 3 });
+
+            await ExecuteSql(db, $@"
+                DELETE FROM dbo.teams_user_device_usage_log
+                WHERE user_id IN ({userIdList}) AND date >= '{monday:yyyy-MM-dd}' AND date <= '{sunday:yyyy-MM-dd}'");
+            await ExecuteSql(db, $@"
+                DELETE FROM dbo.platform_user_activity_log
+                WHERE user_id IN ({userIdList}) AND date >= '{monday:yyyy-MM-dd}' AND date <= '{sunday:yyyy-MM-dd}'");
+            await ExecuteSql(db, $@"
+                DELETE FROM dbo.yammer_device_activity_log
+                WHERE user_id IN ({userIdList}) AND date >= '{monday:yyyy-MM-dd}' AND date <= '{sunday:yyyy-MM-dd}'");
+            await ExecuteSql(db, $@"
+                DELETE FROM profiling.UsageWeekly
+                WHERE date = '{monday:yyyy-MM-dd}' AND user_id IN ({userIdList})");
+        }
+
+        /// <summary>Monday (on or before) of the given date's week - mirrors profiling.udf_GetMonday.</summary>
+        private static DateTime MondayOf(DateTime d)
+        {
+            var daysSinceMonday = ((int)d.DayOfWeek + 6) % 7;
+            return d.Date.AddDays(-daysSinceMonday);
+        }
+
+        /// <summary>Seeds one row per weekly table (Activities long + columns + Usage) for a given week.</summary>
+        private async Task SeedWeeklyRows(AnalyticsEntitiesContext db, int userId, DateTime monday)
+        {
+            await ExecuteSql(db, $@"
+                INSERT INTO profiling.ActivitiesWeekly (user_id, MetricDate, Metric, [Sum])
+                VALUES ({userId}, '{monday:yyyy-MM-dd}', 'Teams Calls', 1)");
+            await ExecuteSql(db, $@"
+                INSERT INTO profiling.ActivitiesWeeklyColumns (user_id, date)
+                VALUES ({userId}, '{monday:yyyy-MM-dd}')");
+            await ExecuteSql(db, $@"
+                INSERT INTO profiling.UsageWeekly (user_id, date)
+                VALUES ({userId}, '{monday:yyyy-MM-dd}')");
+        }
+
+        /// <summary>Total rows for a user/week across the three weekly tables.</summary>
+        private async Task<int> CountWeeklyRows(AnalyticsEntitiesContext db, int userId, DateTime monday)
+        {
+            return await ExecuteScalar<int>(db, $@"
+                SELECT
+                    (SELECT COUNT(*) FROM profiling.ActivitiesWeekly WHERE user_id = {userId} AND MetricDate = '{monday:yyyy-MM-dd}')
+                  + (SELECT COUNT(*) FROM profiling.ActivitiesWeeklyColumns WHERE user_id = {userId} AND date = '{monday:yyyy-MM-dd}')
+                  + (SELECT COUNT(*) FROM profiling.UsageWeekly WHERE user_id = {userId} AND date = '{monday:yyyy-MM-dd}')");
+        }
+
+        private async Task CleanupWeeklyRows(AnalyticsEntitiesContext db, int userId)
+        {
+            await ExecuteSql(db, $@"
+                DELETE FROM profiling.ActivitiesWeekly WHERE user_id = {userId};
+                DELETE FROM profiling.ActivitiesWeeklyColumns WHERE user_id = {userId};
+                DELETE FROM profiling.UsageWeekly WHERE user_id = {userId};");
         }
 
         #endregion

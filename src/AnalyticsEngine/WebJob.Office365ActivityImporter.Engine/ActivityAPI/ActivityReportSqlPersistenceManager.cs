@@ -1,8 +1,10 @@
-﻿using Common.Entities;
+using ActivityImporter.Engine.ActivityAPI.Copilot;
+using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
+using Microsoft.Graph;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -28,7 +30,7 @@ namespace WebJob.Office365ActivityImporter.Engine
     {
         private readonly AuditFilterConfig _filterConfig;
         private readonly UserGroupsCache _userGroupsCache;
-        private readonly ILogger _telemetry;
+        private readonly ILogger _logger;
         private readonly AppConfig _appConfig;
         private string _defaultConnectionString = null;
         private UserGroupsFilterModel _userGroupsFilter = null;
@@ -37,17 +39,62 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// Process-wide gate that serializes writes to the staging tables. Intentionally <c>static</c> so that
         /// multiple <see cref="ActivityReportSqlPersistenceManager"/> instances (e.g. one per content type or
         /// per parallel batch) cannot interleave SQL inserts/merges into the shared staging schema.
-        /// Single-permit; held only for the duration of <c>CommitAll</c>'s SQL phase.
+        /// Single-permit; held only for the duration of <c>CommitAll</c>'s SQL phase. Used only in the
+        /// default (serial) mode; see <see cref="_maxConcurrentSaves"/>.
         /// </summary>
         private static SemaphoreSlim _sqlSaveSemaphore = new SemaphoreSlim(1);      // Make sure we're only saving one thread at a time
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger telemetry, AppConfig appConfig)
+        // --- Concurrent-save mode (opt-in; _maxConcurrentSaves > 1) ------------------------------------
+        // When enabled, each CommitAll uses its OWN sharded staging table so multiple saves can build +
+        // load their staging table in parallel (bounded by _saveConcurrencyGate). The parts that write
+        // SHARED tables - the merge (lookup + fact inserts) and the metadata pass (webs/sites, etc.) -
+        // are still serialised across all saves by _sharedWriteSemaphore, so there is no shared-table
+        // race. Default is 1, which preserves the original strictly-serial behaviour exactly (single
+        // static _sqlSaveSemaphore, no sharding).
+        private readonly int _maxConcurrentSaves;
+        private readonly SemaphoreSlim _saveConcurrencyGate;
+        private static readonly SemaphoreSlim _sharedWriteSemaphore = new SemaphoreSlim(1, 1);
+
+        // --- Run-scoped dedup cache (perf: build ONCE per cycle, not per batch) -------------------------
+        // The set of audit-event ids already imported/ignored within the download window. This manager is
+        // created once per import cycle, so the cache is built ONCE (lazily, for the whole window) and kept
+        // current in-memory as each batch saves - replacing the old behaviour of re-querying audit_events on
+        // every CommitAll. A 2000-event batch's [Min,Max] CreationTime spans almost the entire window (events
+        // download out-of-order across ~130 threads), so the per-batch query materialised ~the whole in-window
+        // audit_events set on EVERY batch: the dominant cost, and a large memory spike, at scale. Correctness
+        // is unchanged - the same ids are cached (full window, keyed by id) and the merge SQL's NOT EXISTS
+        // guards remain the authoritative cross-instance/cross-cycle dedup backstop. ActivityImportCache is
+        // internally thread-safe, so one instance is shared safely across concurrent saves.
+        //   _usePerBatchDedupCache is an ops safety-valve (app setting AUDIT_PERBATCH_DEDUP_CACHE=true) that
+        //   restores the old per-batch build without a redeploy; default false = new per-cycle behaviour.
+        private readonly bool _usePerBatchDedupCache;
+        private ActivityImportCache _runImportCache;
+        private bool _runImportCacheBuilt;
+        private readonly SemaphoreSlim _runImportCacheInitLock = new SemaphoreSlim(1, 1);
+
+        // Run-scoped Copilot Graph metadata loader, shared across every batch so its Graph caches (resolved
+        // files, users, sites, and unresolvable contexts) persist for the whole import instead of being rebuilt
+        // per batch. Lazily built once; best-effort (null on failure -> each SaveSession falls back to its own).
+        private ICopilotMetadataLoader _sharedCopilotLoader;
+        private bool _sharedCopilotLoaderTried;
+        private readonly SemaphoreSlim _sharedLoaderInitLock = new SemaphoreSlim(1, 1);
+
+        // How many Copilot file contexts to resolve concurrently while pre-warming the cache (outside the SQL lock).
+        private const int PrewarmConcurrency = 8;
+
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false)
         {
             _filterConfig = filterConfig;
             _userGroupsCache = userGroupsCache;
-            _telemetry = telemetry;
+            _logger = logger;
             _appConfig = appConfig;
             _userGroupsFilter = new UserGroupsFilterModel(appConfig.UserGroupsFilter);
+            _maxConcurrentSaves = Math.Max(1, maxConcurrentSaves);
+            _usePerBatchDedupCache = usePerBatchDedupCache;
+            if (_maxConcurrentSaves > 1)
+            {
+                _saveConcurrencyGate = new SemaphoreSlim(_maxConcurrentSaves, _maxConcurrentSaves);
+            }
         }
 
         /// <summary>
@@ -57,7 +104,13 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             if (activities.Count > 0)
             {
-                var cache = ActivityImportCache.GetAndBuildNewCache(activities.OldestContent, activities.NewestContent);
+                // Build the dedup cache ONCE per cycle (shared, kept current in-memory) instead of
+                // re-querying audit_events for every batch. The per-batch reload materialised ~the whole
+                // in-window event set each time because a batch spans nearly the whole window. See the field
+                // comment on _runImportCache. The AUDIT_PERBATCH_DEDUP_CACHE safety-valve restores the old path.
+                var cache = _usePerBatchDedupCache
+                    ? ActivityImportCache.GetAndBuildNewCache(activities.OldestContent, activities.NewestContent)
+                    : await GetOrBuildRunImportCacheAsync();
 
                 // Read default connection-string
                 if (string.IsNullOrEmpty(_defaultConnectionString))
@@ -83,43 +136,231 @@ namespace WebJob.Office365ActivityImporter.Engine
 #endif
             var allStats = new ImportStat();
 
-            // Allow only one save at a time otherwise we'll get errors when we try and create the temp table without clearing it down 1st
-            await _sqlSaveSemaphore.WaitAsync();
-
-            // Create our own connection & context to use it
-            try
+            // Warm the run-scoped Copilot Graph metadata cache in PARALLEL, before taking the single-permit SQL
+            // lock. The per-event ProcessExtendedProperties pass below runs serially inside that lock, and for
+            // Copilot file events it calls Graph (network). Resolving those ahead of time - overlapping across
+            // batches and within a batch - turns the in-lock calls into cache hits, so the lock is held only for
+            // SQL work, not network round-trips.
+            // Skip the prewarm entirely when Copilot resource resolution is disabled - the save path makes no
+            // Graph resource calls in that mode (every Copilot event is staged agent-metadata-only), so there
+            // is nothing to warm.
+            var sharedLoader = await GetSharedCopilotLoaderAsync();
+            if (sharedLoader != null && _appConfig.ResolveCopilotResourceMetadata)
             {
-                using (var con = new SqlConnection(_defaultConnectionString))
+                await PrewarmCopilotFileMetadataAsync(activities, sharedLoader);
+            }
+
+            if (_maxConcurrentSaves == 1)
+            {
+                // Default (serial) mode: one save at a time, using the shared staging table. Exactly the
+                // original behaviour - the whole save (staging create + load + merge + metadata) is
+                // serialised by the static semaphore.
+                await _sqlSaveSemaphore.WaitAsync();
+                try
                 {
-                    con.Open();
-                    using (var db = new AnalyticsEntitiesContext(con))
+                    using (var con = new SqlConnection(_defaultConnectionString))
                     {
-                        // Add all activity data to staging table
-                        var stats = await SaveToSqlAllTheThings(activities, db, con, cache);
-                        allStats.AddStats(stats);
+                        con.Open();
+                        using (var db = new AnalyticsEntitiesContext(con))
+                        {
+                            var stats = await SaveToSqlAllTheThings(activities, db, con, cache, sharedLoader, null, null);
+                            allStats.AddStats(stats);
+                        }
                     }
                 }
+                finally
+                {
+                    _sqlSaveSemaphore.Release();
+                }
             }
-            finally
+            else
             {
-                _sqlSaveSemaphore.Release();        // Whatever happens, make sure we release the semaphore 
+                // Concurrent mode: multiple saves run in parallel (bounded by _saveConcurrencyGate), each
+                // with its OWN sharded staging table. Only the shared-table writes (merge + metadata) are
+                // serialised, via _sharedWriteSemaphore passed into SaveToSqlAllTheThings.
+                await _saveConcurrencyGate.WaitAsync();
+                try
+                {
+                    var shardedStagingTable = "##import_staging_event_lookups_" + Guid.NewGuid().ToString("N");
+                    using (var con = new SqlConnection(_defaultConnectionString))
+                    {
+                        con.Open();
+                        using (var db = new AnalyticsEntitiesContext(con))
+                        {
+                            var stats = await SaveToSqlAllTheThings(activities, db, con, cache, sharedLoader, shardedStagingTable, _sharedWriteSemaphore);
+                            allStats.AddStats(stats);
+                        }
+                    }
+                }
+                finally
+                {
+                    _saveConcurrencyGate.Release();
+                }
             }
 
             return allStats;
         }
 
         /// <summary>
+        /// Lazily build the run-scoped dedup cache ONCE per import cycle (this manager is created per cycle),
+        /// covering the whole download window [now - DaysBeforeNowToDownload, now]. Every event processed this
+        /// cycle has a CreationTime inside that window (the API only serves it there) and the cache is keyed by
+        /// event id, so a single full-window load is equivalent to the old per-batch [Min,Max] loads - without
+        /// the massive redundancy. Kept current thereafter in-memory by RememberProcessedEvent /
+        /// RememberNewlyIgnoredEvent as batches save. Thread-safe (double-checked init + a thread-safe cache).
+        /// </summary>
+        private async Task<ActivityImportCache> GetOrBuildRunImportCacheAsync()
+        {
+            if (_runImportCacheBuilt) return _runImportCache;
+            await _runImportCacheInitLock.WaitAsync();
+            try
+            {
+                if (!_runImportCacheBuilt)
+                {
+                    // +1 day of lower margin so an event created just outside the exact window boundary (the
+                    // download window is computed slightly earlier, at cycle start) can never be missed.
+                    var daysBack = Math.Max(_appConfig.DaysBeforeNowToDownload, 1) + 1;
+                    var cacheFrom = DateTime.UtcNow.AddDays(-daysBack);
+                    var cacheTo = DateTime.UtcNow.AddMinutes(2);
+
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var built = ActivityImportCache.GetAndBuildNewCache(cacheFrom, cacheTo);
+                    sw.Stop();
+
+                    _logger.LogInformation($"Audit events import: built run dedup cache from audit_events in " +
+                        $"{sw.Elapsed.TotalSeconds.ToString("n1")}s ({built.ProcessedIdCount.ToString("n0")} already-processed id(s), " +
+                        $"{daysBack}-day window) - reused across all save batches this cycle instead of reloading per batch.");
+
+                    _runImportCache = built;
+                    _runImportCacheBuilt = true;
+                }
+            }
+            finally
+            {
+                _runImportCacheInitLock.Release();
+            }
+            return _runImportCache;
+        }
+
+        /// <summary>
+        /// Lazily build the run-scoped Copilot metadata loader (once). Best-effort: on any failure (e.g. no Graph
+        /// creds in a test) returns null and callers fall back to the per-session loader. Thread-safe.
+        /// </summary>
+        private async Task<ICopilotMetadataLoader> GetSharedCopilotLoaderAsync()
+        {
+            if (_sharedCopilotLoaderTried)
+            {
+                return _sharedCopilotLoader;
+            }
+            await _sharedLoaderInitLock.WaitAsync();
+            try
+            {
+                if (!_sharedCopilotLoaderTried)
+                {
+                    try
+                    {
+                        var auth = new GraphAppIndentityOAuthContext(_logger, _appConfig.ClientID, _appConfig.TenantGUID.ToString(), _appConfig.ClientSecret, _appConfig.KeyVaultUrl, _appConfig.UseClientCertificate);
+                        await auth.InitClientCredential();
+                        _sharedCopilotLoader = new GraphFileMetadataLoader(new GraphServiceClient(auth.Creds), _logger);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Could not build a run-scoped Copilot metadata loader; falling back to per-batch loaders.");
+                        _sharedCopilotLoader = null;
+                    }
+                    _sharedCopilotLoaderTried = true;
+                }
+            }
+            finally
+            {
+                _sharedLoaderInitLock.Release();
+            }
+            return _sharedCopilotLoader;
+        }
+
+        /// <summary>
+        /// Resolve the file metadata for this batch's Copilot file contexts concurrently, warming the shared
+        /// loader's cache. Errors are swallowed - the authoritative resolution + logging happens in the serial
+        /// ProcessExtendedProperties pass (this only pre-populates the cache).
+        /// </summary>
+        private async Task PrewarmCopilotFileMetadataAsync(ActivityReportSet activities, ICopilotMetadataLoader loader)
+        {
+            var fileContexts = ExtractCopilotFileContexts(activities);
+            if (fileContexts.Count == 0) return;
+
+            using (var throttle = new SemaphoreSlim(PrewarmConcurrency))
+            {
+                var tasks = fileContexts.Select(async kvp =>
+                {
+                    await throttle.WaitAsync();
+                    try
+                    {
+                        await loader.GetSpoFileInfo(kvp.Key, kvp.Value);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Copilot metadata prewarm failed for context {ctx} (will retry in the serial pass)", kvp.Key);
+                    }
+                    finally
+                    {
+                        throttle.Release();
+                    }
+                });
+                await Task.WhenAll(tasks);
+            }
+        }
+
+        /// <summary>
+        /// The distinct (fileContextId -> eventUpn) map to pre-resolve for a batch. Mirrors
+        /// <c>CopilotAuditEventManager</c>: only the first file-type context per event is used; a Teams meeting
+        /// context ends file processing for that event; Teams chat contexts are additive (not files).
+        /// </summary>
+        internal static Dictionary<string, string> ExtractCopilotFileContexts(IEnumerable<AbstractAuditLogContent> activities)
+        {
+            var fileContexts = new Dictionary<string, string>();
+            foreach (var copilot in activities.OfType<CopilotAuditLogContent>())
+            {
+                var contexts = copilot.CopilotEventData?.Contexts;
+                if (contexts == null) continue;
+                foreach (var context in contexts)
+                {
+                    if (context == null) continue;
+                    // Type is checked before the id guard so a (typically non-null) meeting/chat context
+                    // controls flow exactly as CopilotAuditEventManager does, even if its id were null.
+                    if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING) break;   // meeting ends file/meeting processing
+                    if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT) continue;   // chat is additive, not a file
+                    // First file-type context for this event (a null-id file resolves to nothing, so skip it but still stop).
+                    // Also skip contexts Graph can never resolve (local C:\ / UNC / DataAgent) so the concurrent
+                    // prewarm doesn't fire a guaranteed-miss round-trip for each one (mirrors TryAddFileAsync).
+                    if (context.Id != null
+                        && !CopilotAuditEventManager.ShouldSkipGraphFileLookup(context.Id)
+                        && !fileContexts.ContainsKey(context.Id))
+                    {
+                        fileContexts[context.Id] = copilot.UserId;
+                    }
+                    break;
+                }
+            }
+            return fileContexts;
+        }
+
+        /// <summary>
         /// Fill up staging table & return import result
         /// </summary>
-        private async Task<ImportStat> SaveToSqlAllTheThings(ActivityReportSet activities, AnalyticsEntitiesContext db, SqlConnection con, ActivityImportCache cache)
+        private async Task<ImportStat> SaveToSqlAllTheThings(ActivityReportSet activities, AnalyticsEntitiesContext db, SqlConnection con, ActivityImportCache cache, ICopilotMetadataLoader sharedCopilotLoader, string stagingTableName, SemaphoreSlim mergeLock)
         {
             var listOfActivitiesSavedToSQL = new ConcurrentBag<AbstractAuditLogContent>();
-            var logsToInsert = new EFInsertBatch<AuditLogTempEntity>(db, _telemetry);
+            var logsToInsert = new EFInsertBatch<AuditLogTempEntity>(db, _logger);
             // Sequential dedup within this set: a HashSet gives O(1) Contains. The previous
             // ConcurrentBag.Contains was O(n) per row (an O(n^2) scan over a large activity set).
             var processedIds = new HashSet<Guid>();
             var stats = new ImportStat() { Total = activities.Count };
 
+            // Phase timing, surfaced per cycle so operators can see where the save time actually goes: the
+            // in-memory dedup + scope check, the SQL staging-load + merge, and the EF metadata pass. Aggregated
+            // (summed) across batches in ImportStat.AddStats; in concurrent-save mode the merge/metadata are
+            // serialised by mergeLock so their summed times approximate the real serialised wall-time.
+            var swDedup = System.Diagnostics.Stopwatch.StartNew();
             foreach (var abtractLog in activities)
             {
                 // Don't insert duplicates in same set
@@ -139,7 +380,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                         else
                         {
                             result = SaveResultEnum.UserOutOfScope;
-                            _telemetry.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
+                            _logger.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
                         }
                     }
                     else
@@ -158,32 +399,71 @@ namespace WebJob.Office365ActivityImporter.Engine
                     else if (result == SaveResultEnum.ProcessedAlready) stats.ProcessedAlready++;
                     else if (result == SaveResultEnum.UrlOutOfScope) stats.URLsOutOfScope++;
                     else if (result == SaveResultEnum.UserOutOfScope) stats.UsersOutOfScope++;
-                    else _telemetry.LogError($"Unexpected log result for log {abtractLog.Id}");
+                    else _logger.LogError($"Unexpected log result for log {abtractLog.Id}");
 
                     processedIds.Add(abtractLog.Id);
                 }
             }
+            swDedup.Stop();
+            stats.SaveDedupMs = swDedup.Elapsed.TotalMilliseconds;
 
             // Merge data
 #if DEBUG
             Console.WriteLine("\nDEBUG: Merging activity staging table...");
 #endif
-            // Merge to normal tables
-            var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", ActivityImportConstants.STAGING_TABLE_ACTIVITY);
-            await logsToInsert.SaveToStagingTable(mergeSQL);
+            // Merge to normal tables. In concurrent mode each save has its own sharded staging table
+            // (stagingTableName) and mergeLock serialises ONLY the merge (which writes shared lookup/fact
+            // tables); the parallel staging LOAD inside SaveToStagingTable runs unlocked.
+            var effectiveStagingTable = stagingTableName ?? ActivityImportConstants.STAGING_TABLE_ACTIVITY;
+            var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", effectiveStagingTable);
+            var swMerge = System.Diagnostics.Stopwatch.StartNew();
+            await logsToInsert.SaveToStagingTable(10000, mergeSQL, stagingTableName, mergeLock);
+            swMerge.Stop();
+            stats.SaveMergeMs = swMerge.Elapsed.TotalMilliseconds;
 
             #region Add Extra Metadata
 
-            // Add metadata the traditional way with EF. By now should have all the sites saved. 
-            var saveSession = new SaveSession(_telemetry, db, _appConfig);
+            // The metadata pass writes SHARED tables (webs/sites via ProcessExtendedProperties, plus the
+            // Copilot / Power Platform commits), so in concurrent mode it is serialised by the same lock.
+            var swMeta = System.Diagnostics.Stopwatch.StartNew();
+            if (mergeLock != null) await mergeLock.WaitAsync();
+            try
+            {
+                await SaveMetadataAsync(db, listOfActivitiesSavedToSQL, sharedCopilotLoader, stats);
+            }
+            finally
+            {
+                if (mergeLock != null) mergeLock.Release();
+            }
+            swMeta.Stop();
+            stats.SaveMetadataMs = swMeta.Elapsed.TotalMilliseconds;
+
+            #endregion
+
+            return stats;
+        }
+
+        /// <summary>
+        /// The EF metadata pass (webs/sites + workload-specific resolvers). Extracted so the concurrent-save
+        /// path can wrap it in the shared-write lock. Writes shared tables, so callers serialise it.
+        /// </summary>
+        private async Task SaveMetadataAsync(AnalyticsEntitiesContext db, ConcurrentBag<AbstractAuditLogContent> listOfActivitiesSavedToSQL, ICopilotMetadataLoader sharedCopilotLoader, ImportStat stats)
+        {
+            // Add metadata the traditional way with EF. By now should have all the sites saved.
+            // Pass the run-scoped Copilot loader so per-event Graph resolution hits the cache warmed above.
+            var saveSession = new SaveSession(_logger, db, _appConfig, sharedCopilotLoader);
             await saveSession.Init();
 
             int metaSaveIdx = 0, changesMadeCount = 0;
+            double copilotResolveMs = 0;   // per-event Copilot resolution time (the Graph file/meeting calls)
 #if DEBUG
             Console.WriteLine($"\nDEBUG: Updating metadata for {listOfActivitiesSavedToSQL.Count.ToString("n0")} saved events...");
 #endif
             if (listOfActivitiesSavedToSQL.Count > 0)
             {
+                // Time the metadata read-back (EF load of the just-saved audit + SharePoint events) on its own
+                // so it appears in the per-cycle metadata breakdown instead of being folded into the total.
+                var swMetaLoad = System.Diagnostics.Stopwatch.StartNew();
                 var ids = listOfActivitiesSavedToSQL.Select(l => l.Id).ToList();
                 var eventsJustSaved = db.AuditEventsCommon
                     .Include(e => e.User)
@@ -201,6 +481,8 @@ namespace WebJob.Office365ActivityImporter.Engine
                 {
                     saveSession.CachedSpEvents.Add(e.EventID, e);
                 }
+                swMetaLoad.Stop();
+                stats.SaveMetadataLoadMs = swMetaLoad.Elapsed.TotalMilliseconds;
 
                 foreach (var log in listOfActivitiesSavedToSQL)
                 {
@@ -220,7 +502,11 @@ namespace WebJob.Office365ActivityImporter.Engine
                         metaSaveIdx++;
                         continue;
                     }
-                    var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _telemetry);
+                    // Time the Copilot per-event work separately - this is where the Graph file/meeting
+                    // resolution happens - so its cost shows up in the per-cycle summary.
+                    var copilotSw = log is CopilotAuditLogContent ? System.Diagnostics.Stopwatch.StartNew() : null;
+                    var changesMade = await log.ProcessExtendedProperties(saveSession, savedEvent, _logger);
+                    if (copilotSw != null) { copilotSw.Stop(); copilotResolveMs += copilotSw.Elapsed.TotalMilliseconds; }
                     if (changesMade)
                         changesMadeCount++;
 
@@ -234,9 +520,12 @@ namespace WebJob.Office365ActivityImporter.Engine
             // Save metadata updates
             await saveSession.CommitAllChanges();
 
-            #endregion
-
-            return stats;
+            // Surface the per-workload sub-costs (summed across batches in the cycle summary): the Copilot
+            // per-event resolution measured above, and the Power Platform staging-merge cost.
+            stats.SaveCopilotResolveMs = copilotResolveMs;
+            stats.SaveCopilotCommitMs = saveSession.LastCopilotCommitMs;
+            stats.SavePowerPlatformMs = saveSession.LastPowerPlatformCommitMs;
+            stats.SaveEfChangesMs = saveSession.LastEfSaveChangesMs;
         }
     }
 

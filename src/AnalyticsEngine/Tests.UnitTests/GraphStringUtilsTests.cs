@@ -74,5 +74,23 @@ namespace Tests.UnitTests
                 "0D86F64F-8435-430C-8979-FF46C00F7ACB");
         }
 
+        [TestMethod]
+        public void IsResolvableSpoFileUrl()
+        {
+            // SharePoint / OneDrive URLs we can resolve via Graph
+            Assert.IsTrue(StringUtils.IsResolvableSpoFileUrl("https://contoso.sharepoint.com/sites/x/Shared%20Documents/General/report.docx"));
+            Assert.IsTrue(StringUtils.IsResolvableSpoFileUrl("https://contoso-my.sharepoint.com/personal/user_contoso_com/Documents/plan.docx"));
+            // Unicode (Greek) file names must be handled, not rejected
+            Assert.IsTrue(StringUtils.IsResolvableSpoFileUrl("https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.pdf"));
+
+            // Contexts that can never be a SharePoint file -> must be rejected before any Graph call
+            Assert.IsFalse(StringUtils.IsResolvableSpoFileUrl("https://securitycopilot.microsoft.com"));
+            Assert.IsFalse(StringUtils.IsResolvableSpoFileUrl(@"C:\Users\x\AppData\Local\Microsoft\Olk\Attachments\file.pdf"));
+            Assert.IsFalse(StringUtils.IsResolvableSpoFileUrl("https://example.com/some/file.docx"));
+            Assert.IsFalse(StringUtils.IsResolvableSpoFileUrl(null));
+            Assert.IsFalse(StringUtils.IsResolvableSpoFileUrl(""));
+            Assert.IsFalse(StringUtils.IsResolvableSpoFileUrl("not a url"));
+        }
+
     }
 }

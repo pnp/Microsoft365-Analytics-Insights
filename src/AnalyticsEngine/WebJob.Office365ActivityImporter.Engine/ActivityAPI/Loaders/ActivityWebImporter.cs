@@ -1,6 +1,7 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Http;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
 {
@@ -14,27 +15,28 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private WebContentMetaDataLoader _contentMetaDataLoader;
         private ActivitySubscriptionManager _activitySubscriptionManager;
 
-        public ActivityWebImporter(AppConfig settings, AnalyticsLogger telemetry, int maxSavesPerBatch) : base(settings, telemetry, maxSavesPerBatch)
+        public ActivityWebImporter(AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch, int maxConcurrentSaves = 1)
+            : base(settings, logger, maxSavesPerBatch, ProcessedBlobStoreFactory.Create(settings, logger), maxConcurrentSaves)
         {
-            var auth = new ActivityAPIAppIndentityOAuthContext(telemetry, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
-            var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, telemetry);
-            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, telemetry, settings.TenantGUID.ToString());
-            _contentMetaDataLoader = new WebContentMetaDataLoader(telemetry, httpClient, settings);
-            _activitySubscriptionManager = new ActivitySubscriptionManager(settings, telemetry, httpClient);
+            var auth = new ActivityAPIAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
+            var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, logger);
+            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, logger, settings.TenantGUID.ToString(), settings.ImportJobSettings?.ImportPowerPlatform ?? false);
+            _contentMetaDataLoader = new WebContentMetaDataLoader(logger, httpClient, settings);
+            _activitySubscriptionManager = new ActivitySubscriptionManager(settings, logger, httpClient);
         }
 
 
         /// <summary>
         /// Unit tests constructors
         /// </summary>
-        public ActivityWebImporter(ConfidentialClientApplicationThrottledHttpClient httpClient, AppConfig settings, AnalyticsLogger telemetry, int maxSavesPerBatch) : base(settings, telemetry, maxSavesPerBatch)
+        public ActivityWebImporter(ConfidentialClientApplicationThrottledHttpClient httpClient, AppConfig settings, AnalyticsLogger logger, int maxSavesPerBatch) : base(settings, logger, maxSavesPerBatch)
         {
-            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, telemetry, settings.TenantGUID.ToString());
-            _contentMetaDataLoader = new WebContentMetaDataLoader(telemetry, httpClient, settings);
-            _activitySubscriptionManager = new ActivitySubscriptionManager(settings, telemetry, httpClient);
+            _activityReportWebLoader = new ActivityReportWebLoader(httpClient, logger, settings.TenantGUID.ToString(), settings.ImportJobSettings?.ImportPowerPlatform ?? false);
+            _contentMetaDataLoader = new WebContentMetaDataLoader(logger, httpClient, settings);
+            _activitySubscriptionManager = new ActivitySubscriptionManager(settings, logger, httpClient);
         }
-        public ActivityWebImporter(ConfidentialClientApplicationThrottledHttpClient fakeClient, AppConfig s, AnalyticsLogger telemetry) :
-            this(fakeClient, s, telemetry, 1)
+        public ActivityWebImporter(ConfidentialClientApplicationThrottledHttpClient fakeClient, AppConfig s, AnalyticsLogger logger) :
+            this(fakeClient, s, logger, 1)
         {
         }
 

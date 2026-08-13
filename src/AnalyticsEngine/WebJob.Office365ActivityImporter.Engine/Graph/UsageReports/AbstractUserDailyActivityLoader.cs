@@ -1,4 +1,4 @@
-﻿using Common.Entities.ActivityReports;
+using Common.Entities.ActivityReports;
 using Common.Entities.Config;
 using Common.Entities.LookupCaches;
 using Microsoft.Extensions.Logging;
@@ -18,7 +18,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         private readonly UserGroupsCache _graphUserGroupsCache;
         private readonly UserGroupsFilterModel _userGroupsFilterModel;
 
-        internal AbstractUserDailyActivityLoader(ManualGraphCallClient client, UserGroupsCache graphUserGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger telemetry) : base(client, telemetry)
+        internal AbstractUserDailyActivityLoader(ManualGraphCallClient client, UserGroupsCache graphUserGroupsCache, UserGroupsFilterModel userGroupsFilterModel, ILogger logger) : base(client, logger)
         {
             _graphUserGroupsCache = graphUserGroupsCache;
             _userGroupsFilterModel = userGroupsFilterModel;

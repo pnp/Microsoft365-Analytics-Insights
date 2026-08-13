@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -92,6 +93,34 @@ namespace DataUtils
         public static bool IsMySiteUrl(string copilotDocContextId)
         {
             return copilotDocContextId.Contains("-my.sharepoint.com");
+        }
+
+        /// <summary>
+        /// True only if the copilot doc context id looks like a SharePoint/OneDrive URL we could resolve to a
+        /// file via Graph. Filters out contexts that can never be an SPO file - e.g. https://securitycopilot.microsoft.com,
+        /// other non-SharePoint hosts, and local file paths (C:\...\Olk\Attachments\...) - so we don't fire a
+        /// doomed Graph lookup for them on every import.
+        /// </summary>
+        public static bool IsResolvableSpoFileUrl(string copilotDocContextId)
+        {
+            if (string.IsNullOrWhiteSpace(copilotDocContextId))
+            {
+                return false;
+            }
+            if (!IsValidAbsoluteUrl(copilotDocContextId))
+            {
+                return false;
+            }
+            var uri = new Uri(copilotDocContextId);
+
+            // Excludes file:// (local paths like C:\Users\...\Olk\Attachments), mailto:, etc.
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            {
+                return false;
+            }
+
+            // SharePoint Online and OneDrive for Business are always *.sharepoint.com (incl. -my.sharepoint.com).
+            return uri.Host.EndsWith(".sharepoint.com", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -569,6 +598,39 @@ namespace DataUtils
             return statements
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim(' ', '\n'));
+        }
+
+        /// <summary>
+        /// Marker written in place of any password so logs never leak SQL credentials.
+        /// </summary>
+        public const string RedactedSecretMarker = "***REDACTED***";
+
+        /// <summary>
+        /// Returns a copy of a SQL connection string that is safe to write to logs: any password
+        /// (Password / pwd) is replaced with <see cref="RedactedSecretMarker"/>. Server, database,
+        /// user id and other non-secret keys are preserved so logs remain useful for diagnostics.
+        /// </summary>
+        public static string RedactSqlConnectionString(string connectionString)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                return connectionString;
+            }
+
+            try
+            {
+                var builder = new SqlConnectionStringBuilder(connectionString);
+                if (!string.IsNullOrEmpty(builder.Password))
+                {
+                    builder.Password = RedactedSecretMarker;
+                }
+                return builder.ConnectionString;
+            }
+            catch
+            {
+                // Not a parseable SQL connection string; fall back to a key-based regex so we never leak a password.
+                return Regex.Replace(connectionString, @"(?i)\b(password|pwd)\s*=\s*[^;]*", $"$1={RedactedSecretMarker}");
+            }
         }
     }
 }

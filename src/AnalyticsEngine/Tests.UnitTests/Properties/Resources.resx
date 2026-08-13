@@ -184,11 +184,11 @@
   <data name="PublishXml" xml:space="preserve">
     <value>&lt;publishData&gt;
 
-    &lt;publishProfile profileName="o365analyticsdemocopy - FTP" publishMethod="FTP"
-        publishUrl="ftp://server/site/wwwroot" ftpPassiveMode="True"
-        userName="username"
-        userPWD="asdf"
-        destinationAppUrl="https://o365analyticsdemocopy.azurewebsites.net"
+    &lt;publishProfile profileName="Contoso - Web Deploy" publishMethod="MSDeploy"
+        publishUrl="contoso.scm.azurewebsites.net:443"
+        userName="$contoso"
+        userPWD="synthetic-password"
+        destinationAppUrl="https://contoso.azurewebsites.net"
         SQLServerDBConnectionString="SQL"
         mySQLDBConnectionString="" hostingProviderForumLink="" controlPanelLink="http://windows.azure.com"
         webSystem="WebSites" targetDatabaseEngineType="sqlazuredatabase" targetServerVersion="Version100"&gt;

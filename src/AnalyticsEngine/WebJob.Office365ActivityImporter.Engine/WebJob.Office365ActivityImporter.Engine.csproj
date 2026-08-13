@@ -63,12 +63,18 @@
     <Compile Include="ActivityAPI\ActivitySubscriptionManager.cs" />
     <Compile Include="ActivityAPI\AuditFilterConfig.cs" />
     <Compile Include="ActivityAPI\ActivityImporter.cs" />
+    <Compile Include="ActivityAPI\BlobCheckpoint\AzureTableProcessedBlobStore.cs" />
+    <Compile Include="ActivityAPI\BlobCheckpoint\BlobCommitTracker.cs" />
+    <Compile Include="ActivityAPI\BlobCheckpoint\InMemoryProcessedBlobStore.cs" />
+    <Compile Include="ActivityAPI\BlobCheckpoint\IProcessedBlobStore.cs" />
+    <Compile Include="ActivityAPI\BlobCheckpoint\ProcessedBlobStoreFactory.cs" />
     <Compile Include="ActivityAPI\AuditTraceConfig.cs" />
     <Compile Include="ActivityAPI\Copilot\CopilotAuditEventManager.cs" />
     <Compile Include="ActivityAPI\Copilot\CostEstimate\CopilotCreditEstimation.cs" />
     <Compile Include="ActivityAPI\Copilot\CostEstimate\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\GraphCaches.cs" />
     <Compile Include="ActivityAPI\Copilot\GraphFileMetadataLoader.cs" />
+    <Compile Include="ActivityAPI\Copilot\SpoGraphClient.cs" />
     <Compile Include="ActivityAPI\Copilot\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\StagingClasses.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
@@ -137,6 +143,7 @@
     <Compile Include="Graph\Teams\TeamTokenManager.cs" />
     <Compile Include="Graph\UsageReports\AbstractDailyActivityLoader.cs" />
     <Compile Include="Graph\Calls\CallQueueProcessor.cs" />
+    <Compile Include="Graph\Calls\CallRecordSubscriptionInfo.cs" />
     <Compile Include="Graph\Calls\CallWebhook.cs" />
     <Compile Include="Graph\Teams\ChannelMessagesLoader.cs" />
     <Compile Include="Graph\Teams\Extensions\GraphUserExtensions.cs" />
@@ -192,6 +199,7 @@
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
     <Compile Include="RedisSingleDateLoader.cs" />
+    <Compile Include="SingleDateStore.cs" />
     <Compile Include="StatsUploader\AnonUsageStatsModelLoader.cs" />
     <Compile Include="StatsUploader\BaseClasses.cs" />
     <Compile Include="StatsUploader\InMemoryStatsDatesLoader.cs" />
@@ -218,6 +226,7 @@
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_sp_copilot_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_teams_copilot_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\common_upsert_copilot_agents.sql" />
+    <None Include="ActivityAPI\Copilot\SQL\copilot_merge_step_timings.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_activity_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_share_events_from_staging_table.sql" />
@@ -245,6 +254,9 @@
     </PackageReference>
     <PackageReference Include="Azure.Core">
       <Version>1.57.0</Version>
+    </PackageReference>
+    <PackageReference Include="Azure.Data.Tables">
+      <Version>12.11.0</Version>
     </PackageReference>
     <PackageReference Include="Azure.Identity">
       <Version>1.21.0</Version>

@@ -22,7 +22,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_ManagerChanged_DatabaseReflectsChange()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var userUpn = $"employeemanager{timestamp}@test.com";
@@ -43,7 +43,7 @@ namespace Tests.UnitTests
             var employee = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = manager1Id } } };
 
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { manager1, manager2, employee });
-            await new UserMetadataUpdater(telemetry, config, fakeLoader).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, fakeLoader).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -54,7 +54,7 @@ namespace Tests.UnitTests
 
             var employeeWithNewManager = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = manager2Id } } };
             var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { manager1, manager2, employeeWithNewManager });
-            await new UserMetadataUpdater(telemetry, config, updatedFakeLoader).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, updatedFakeLoader).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
@@ -67,7 +67,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_ManagerRemoved_DatabaseReflectsRemoval()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var employeeUpn = $"emp_mgr_removed{timestamp}@test.com";
@@ -84,7 +84,7 @@ namespace Tests.UnitTests
             var manager = new GraphUser { UserPrincipalName = managerUpn, Id = managerId, AccountEnabled = true, Mail = managerUpn };
             var employee = new GraphUser { UserPrincipalName = employeeUpn, Id = employeeId, AccountEnabled = true, Mail = employeeUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = managerId } } };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { manager, employee })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { manager, employee })).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -93,7 +93,7 @@ namespace Tests.UnitTests
             }
 
             var employeeNoManager = new GraphUser { UserPrincipalName = employeeUpn, Id = employeeId, AccountEnabled = true, Mail = employeeUpn, ManagerInfo = new List<ManagerInfo>() };
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { manager, employeeNoManager })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { manager, employeeNoManager })).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
@@ -106,7 +106,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_MultipleManagersInChain_AllRelationshipsCorrect()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var user0Upn = $"chain_emp{timestamp}@test.com"; var user1Upn = $"chain_mgr1{timestamp}@test.com";
@@ -128,7 +128,7 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = user3Upn, Id = user3Id, AccountEnabled = true, Mail = user3Upn }
             };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -146,7 +146,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_NewlyInsertedUserAsManager_NoDuplicateKeyError()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var existingUserUpn = $"existingemployee{timestamp}@test.com";
@@ -160,12 +160,12 @@ namespace Tests.UnitTests
                 if (usersToClean.Any()) { cleanupDb.users.RemoveRange(usersToClean); await cleanupDb.SaveChangesAsync(); }
             }
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingUserUpn, Id = existingUserId, AccountEnabled = true, Mail = existingUserUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingUserUpn, Id = existingUserId, AccountEnabled = true, Mail = existingUserUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
 
             var existingUserWithNewManager = new GraphUser { UserPrincipalName = existingUserUpn, Id = existingUserId, AccountEnabled = true, Mail = existingUserUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = newManagerId } } };
             var newManager = new GraphUser { UserPrincipalName = newManagerUpn, Id = newManagerId, AccountEnabled = true, Mail = newManagerUpn };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { newManager, existingUserWithNewManager })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { newManager, existingUserWithNewManager })).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
@@ -180,7 +180,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_ExistingUserManagerUpdatedToNewlyInsertedUser_NoDuplicateKeyInBatchProcessing()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var existingEmployeeUpn = $"existingemployee{timestamp}@test.com";
@@ -194,12 +194,12 @@ namespace Tests.UnitTests
                 if (usersToClean.Any()) { cleanupDb.users.RemoveRange(usersToClean); await cleanupDb.SaveChangesAsync(); }
             }
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingEmployeeUpn, Id = existingEmployeeId, AccountEnabled = true, Mail = existingEmployeeUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingEmployeeUpn, Id = existingEmployeeId, AccountEnabled = true, Mail = existingEmployeeUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
 
             var newManager = new GraphUser { UserPrincipalName = newManagerUpn, Id = newManagerId, AccountEnabled = true, Mail = newManagerUpn };
             var existingEmployeeWithManager = new GraphUser { UserPrincipalName = existingEmployeeUpn, Id = existingEmployeeId, AccountEnabled = true, Mail = existingEmployeeUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = newManagerId } } };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { newManager, existingEmployeeWithManager })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { newManager, existingEmployeeWithManager })).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
@@ -212,7 +212,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_ProductionScenario_ExistingUserWithNewlyInsertedManagerChain_NoDuplicateKey()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var existingEmployeeUpn = $"alice_anderson{timestamp}@contoso.com";
@@ -228,7 +228,7 @@ namespace Tests.UnitTests
                 if (usersToClean.Any()) { cleanupDb.users.RemoveRange(usersToClean); await cleanupDb.SaveChangesAsync(); }
             }
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingEmployeeUpn, Id = existingEmployeeId, AccountEnabled = true, Mail = existingEmployeeUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingEmployeeUpn, Id = existingEmployeeId, AccountEnabled = true, Mail = existingEmployeeUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
 
             var step2Users = new List<GraphUser>
             {
@@ -237,7 +237,7 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = existingEmployeeUpn, Id = existingEmployeeId, AccountEnabled = true, Mail = existingEmployeeUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = newManager1Id } } }
             };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(step2Users)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(step2Users)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
@@ -251,7 +251,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_LargeScaleBatching_ReloadedEntitiesRemainTracked()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var existingUserUpn = $"existing_employee{timestamp}@test.com"; var newMgr1Upn = $"newmgr1_{timestamp}@test.com"; var newMgr2Upn = $"newmgr2_{timestamp}@test.com";
@@ -263,7 +263,7 @@ namespace Tests.UnitTests
                 if (usersToClean.Any()) { cleanupDb.users.RemoveRange(usersToClean); await cleanupDb.SaveChangesAsync(); }
             }
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingUserUpn, Id = existingUserId, AccountEnabled = true, Mail = existingUserUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = existingUserUpn, Id = existingUserId, AccountEnabled = true, Mail = existingUserUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
 
             var loader2 = new FakeUserMetadataLoader(new List<GraphUser>
             {
@@ -271,7 +271,7 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = newMgr1Upn, Id = newMgr1Id, AccountEnabled = true, Mail = newMgr1Upn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = newMgr2Id } } },
                 new GraphUser { UserPrincipalName = existingUserUpn, Id = existingUserId, AccountEnabled = true, Mail = existingUserUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = newMgr1Id } } }
             });
-            await new UserMetadataUpdater(telemetry, config, loader2).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, loader2).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -285,11 +285,11 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_NewUserManagerInSameBatch_WorksCorrectly()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var userAUpn = $"usera_employee{timestamp}@contoso.com";
-            var managerBUpn = $"beatriz_brown{timestamp}@contoso.com";
+            var managerBUpn = $"managerb_manager{timestamp}@contoso.com";
             var userAId = Guid.NewGuid().ToString(); var managerBId = Guid.NewGuid().ToString();
 
             using (var cleanupDb = new AnalyticsEntitiesContext())
@@ -304,7 +304,7 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = managerBUpn, Id = managerBId, AccountEnabled = true, Mail = managerBUpn }
             };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -317,7 +317,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_BugRepro_CrossBatchManagerRelationships_NoDuplicateKey()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var manager1Id = Guid.NewGuid().ToString(); var manager1Upn = $"manager1_{timestamp}@test.com";
@@ -339,7 +339,7 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = manager2Upn, Id = manager2Id, AccountEnabled = true, Mail = manager2Upn }
             };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -353,7 +353,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_BugRepro_ManyUsersCrossBatch_ManagersAtEnd()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             const int numEmployees = 10; const int numManagers = 10;
@@ -378,7 +378,7 @@ namespace Tests.UnitTests
                 graphUsers.Add(new GraphUser { UserPrincipalName = managerUpns[i], Id = managerIds[i], AccountEnabled = true, Mail = managerUpns[i] });
             }
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -396,7 +396,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_BugRepro_UntrackedManagerEntity_SameBatch_WorksCorrectly()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var employeeUpn = $"employee_untracked_mgr_test{timestamp}@test.com";
@@ -415,7 +415,7 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = managerUpn, Id = managerId, AccountEnabled = true, Mail = managerUpn }
             };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -428,7 +428,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_BugRepro_MultipleRealBatches_NoDuplicateKey()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             const int numManagers = 100; const int numEmployees = 510;
@@ -453,7 +453,7 @@ namespace Tests.UnitTests
                 graphUsers.Add(new GraphUser { UserPrincipalName = managerUpns[i], Id = managerIds[i], AccountEnabled = true, Mail = managerUpns[i] });
             }
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(graphUsers)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var verifyDb = new AnalyticsEntitiesContext())
             {
@@ -465,7 +465,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task UserMetadataUpdater_ManagerAadIdMismatch_NoDuplicateKeyError()
         {
-            var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
             var timestamp = DateTime.Now.Ticks;
             var managerUpn = $"carlos_carter{timestamp}@contoso.com";
@@ -480,7 +480,7 @@ namespace Tests.UnitTests
                 if (usersToClean.Any()) { cleanupDb.users.RemoveRange(usersToClean); await cleanupDb.SaveChangesAsync(); }
             }
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = managerUpn, Id = managerOldAadId, AccountEnabled = true, Mail = managerUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = managerUpn, Id = managerOldAadId, AccountEnabled = true, Mail = managerUpn } })).InsertAndUpdateDatabaseFromExternalUsers();
 
             var step2Users = new List<GraphUser>
             {
@@ -488,12 +488,12 @@ namespace Tests.UnitTests
                 new GraphUser { UserPrincipalName = employeeUpn, Id = employeeId, AccountEnabled = true, Mail = employeeUpn, ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = managerNewAadId } } }
             };
 
-            await new UserMetadataUpdater(telemetry, config, new FakeUserMetadataLoader(step2Users)).InsertAndUpdateDatabaseFromExternalUsers();
+            await new UserMetadataUpdater(logger, config, new FakeUserMetadataLoader(step2Users)).InsertAndUpdateDatabaseFromExternalUsers();
 
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
                 var allTestUsers = await finalVerifyDb.users.Include(u => u.Manager).Where(u => u.UserPrincipalName == managerUpn || u.UserPrincipalName == employeeUpn).ToListAsync();
-                Assert.AreEqual(2, allTestUsers.Count, "Carlos should NOT be duplicated despite AAD ID mismatch");
+                Assert.AreEqual(2, allTestUsers.Count, "The manager should NOT be duplicated despite AAD ID mismatch");
                 Assert.AreEqual(managerUpn, allTestUsers.First(u => u.UserPrincipalName == employeeUpn).Manager.UserPrincipalName);
             }
         }

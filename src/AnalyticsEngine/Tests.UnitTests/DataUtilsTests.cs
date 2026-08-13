@@ -654,6 +654,53 @@ namespace Tests.UnitTests
             Assert.IsTrue(t.Elapsed == TimeSpan.Zero);
         }
 
+        // Days must only appear when the run took a day or more, otherwise a multi-day
+        // import is misreported as just its hours component (e.g. "14 hours" for a 1d 14h run).
+        [TestMethod]
+        public void JobTimerFormatElapsedDays()
+        {
+            // Under a day: no "day(s)" mentioned
+            var under = JobTimer.FormatElapsed("Audit events import", new TimeSpan(0, 14, 28, 44));
+            Assert.AreEqual("Audit events import: 14 hours, 28 mins, and 44 seconds.", under);
+            Assert.IsFalse(under.Contains("day"));
+
+            // A day or more: days are included up front
+            var over = JobTimer.FormatElapsed("Audit events import", new TimeSpan(2, 14, 28, 44));
+            Assert.AreEqual("Audit events import: 2 days, 14 hours, 28 mins, and 44 seconds.", over);
+        }
+
+        // The FinishedImportCycle custom event carries the elapsed time in its "context" dimension via the
+        // same StopAndPrintElapsed -> ToString -> FormatElapsed path as the trace log, so the days handling
+        // applies there too. This pins that wiring so the custom event can't silently drop days on its own.
+        [TestMethod]
+        public void JobTimerFinishedEventContextUsesFormatElapsed()
+        {
+            var trace = AnalyticsLogger.ConsoleOnlyTracer();
+            var t = new JobTimer(trace, "Import cycle");
+
+            var originalOut = Console.Out;
+            var captured = new System.IO.StringWriter();
+            try
+            {
+                Console.SetOut(captured);
+                t.Start();
+                Thread.Sleep(10);
+                t.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+
+            var output = captured.ToString();
+            // e.g. New event 'FinishedImportCycle'; 'context=Import cycle: 0 hours, 0 mins, and 0 seconds.'.
+            StringAssert.Contains(output, "New event 'FinishedImportCycle'");
+            StringAssert.Contains(output, "context=Import cycle: ");
+            StringAssert.Contains(output, " hours, ");
+            StringAssert.Contains(output, " mins, and ");
+            StringAssert.Contains(output, " seconds.");
+        }
+
         [TestMethod]
         public void TrimStringFromStart()
         {
@@ -695,6 +742,38 @@ namespace Tests.UnitTests
             Assert.AreEqual(string.Empty, StringUtils.FindValueForProp(null, "data source"));
             Assert.AreEqual(string.Empty, StringUtils.FindValueForProp("", "data source"));
             Assert.AreEqual(string.Empty, StringUtils.FindValueForProp("Data Source=srv;", null));
+        }
+
+        [TestMethod]
+        public void RedactSqlConnectionStringTests()
+        {
+            // The exact shape leaked in installer logs before redaction (issue: plain-text password in logs).
+            const string connStr = "data source=mdona365sql.database.windows.net;initial catalog=officeanalytics;" +
+                "persist security info=True;user id=sqladmin;password=Cambiame03.;MultipleActiveResultSets=True;Connection Timeout=120";
+
+            var cleaned = StringUtils.RedactSqlConnectionString(connStr);
+
+            // Password is gone; non-secret diagnostics preserved.
+            Assert.IsFalse(cleaned.Contains("Cambiame03."), "Plain-text password must never appear in a redacted string");
+            Assert.IsTrue(cleaned.Contains(StringUtils.RedactedSecretMarker));
+            Assert.IsTrue(cleaned.Contains("mdona365sql.database.windows.net"));
+            Assert.IsTrue(cleaned.Contains("officeanalytics"));
+            Assert.IsTrue(cleaned.Contains("sqladmin"));
+
+            // 'pwd' alias is redacted too.
+            Assert.IsFalse(StringUtils.RedactSqlConnectionString("Server=s;Database=d;Uid=u;Pwd=secretpass;").Contains("secretpass"));
+
+            // No password -> non-secret content (server name) preserved; builder normalizes Server->Data Source.
+            var noPwd = StringUtils.RedactSqlConnectionString("Server=s;Database=d;Integrated Security=true;");
+            Assert.IsTrue(noPwd.Contains("Data Source=s"));
+            Assert.IsTrue(noPwd.Contains("Initial Catalog=d"));
+
+            // Null / empty inputs are passed through, not thrown on.
+            Assert.IsNull(StringUtils.RedactSqlConnectionString(null));
+            Assert.AreEqual(string.Empty, StringUtils.RedactSqlConnectionString(string.Empty));
+
+            // Unparseable garbage still gets the password stripped via the regex fallback.
+            Assert.IsFalse(StringUtils.RedactSqlConnectionString("garbage password=topsecret rubbish").Contains("topsecret"));
         }
 
         [TestMethod]
