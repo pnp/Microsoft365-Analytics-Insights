@@ -1,4 +1,5 @@
 ﻿using Microsoft.Azure.Cosmos;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace UsageReporting
@@ -9,7 +10,7 @@ namespace UsageReporting
         string ContainerNameHistory { get; set; }
         string ContainerNameCurrent { get; set; }
     }
-    public class CosmosTelemetrySaveAdaptor : ITelemetrySaveAdaptor
+    public class CosmosTelemetrySaveAdaptor : ITelemetrySaveAdaptor, ITelemetryQueryAdaptor
     {
         private static string PARTITION_KEY = "/" + nameof(AnonUsageStatsModel.AnonClientId);
         private readonly Container _historyStatsContainer;
@@ -48,6 +49,38 @@ namespace UsageReporting
             var historicalUpdate = new HistoricalUpdate(model);
             await _historyStatsContainer.UpsertItemAsync(historicalUpdate);
             await _currentStatsContainer.UpsertItemAsync(model);
+        }
+
+        /// <summary>
+        /// Reads the latest record for every client from the "current" container.
+        /// Cross-partition query, capped to <paramref name="maxItems"/> so the dashboard cannot
+        /// pull an unbounded scan if the install grows.
+        /// </summary>
+        public async Task<IReadOnlyList<AnonUsageStatsModel>> LoadAllCurrentAsync(int? maxItems = null)
+        {
+            var results = new List<AnonUsageStatsModel>();
+            var query = new QueryDefinition("SELECT * FROM c");
+            using (var iterator = _currentStatsContainer.GetItemQueryIterator<AnonUsageStatsModel>(query))
+            {
+                while (iterator.HasMoreResults)
+                {
+                    var page = await iterator.ReadNextAsync();
+                    foreach (var item in page)
+                    {
+                        if (item == null)
+                        {
+                            continue;
+                        }
+                        results.Add(item);
+                        if (maxItems.HasValue && results.Count >= maxItems.Value)
+                        {
+                            return results;
+                        }
+                    }
+                }
+            }
+
+            return results;
         }
 
 
