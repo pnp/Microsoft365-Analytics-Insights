@@ -414,6 +414,21 @@ BEGIN
 END
 GO
 
+-- Preserve the published Power BI contract and repair databases that may have run an earlier
+-- draft of this script which removed the column.
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.columns
+  WHERE object_id = OBJECT_ID(N'profiling.ActivitiesWeeklyColumns')
+    AND name = 'Teams Meetings'
+)
+BEGIN
+  ALTER TABLE profiling.ActivitiesWeeklyColumns
+  ADD "Teams Meetings" BIGINT NOT NULL
+    CONSTRAINT df_teams_meetings DEFAULT 0;
+END
+GO
+
 -- Add possibly missing default contraints
 IF NOT EXISTS (
   SELECT OBJECT_NAME(OBJECT_ID)
