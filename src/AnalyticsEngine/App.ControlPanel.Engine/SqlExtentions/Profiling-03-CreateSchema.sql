@@ -372,6 +372,7 @@ BEGIN
     "Teams Private Chats" BIGINT NOT NULL DEFAULT 0,
     "Teams Team Chats" BIGINT NOT NULL DEFAULT 0,
     "Teams Calls" BIGINT NOT NULL DEFAULT 0,
+    "Teams Meetings" BIGINT NOT NULL DEFAULT 0,
     "Teams Meetings Attended" BIGINT NOT NULL DEFAULT 0,
     "Teams Meetings Organized" BIGINT NOT NULL DEFAULT 0,
     "Yammer Posted" BIGINT NOT NULL DEFAULT 0,
@@ -413,6 +414,21 @@ BEGIN
 END
 GO
 
+-- Preserve the published Power BI contract and repair databases that may have run an earlier
+-- draft of this script which removed the column.
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.columns
+  WHERE object_id = OBJECT_ID(N'profiling.ActivitiesWeeklyColumns')
+    AND name = 'Teams Meetings'
+)
+BEGIN
+  ALTER TABLE profiling.ActivitiesWeeklyColumns
+  ADD "Teams Meetings" BIGINT NOT NULL
+    CONSTRAINT df_teams_meetings DEFAULT 0;
+END
+GO
+
 -- Add possibly missing default contraints
 IF NOT EXISTS (
   SELECT OBJECT_NAME(OBJECT_ID)
@@ -441,6 +457,7 @@ BEGIN
     CONSTRAINT df_teams_private_chats DEFAULT 0 FOR "Teams Private Chats",
     CONSTRAINT df_teams_team_chats DEFAULT 0 FOR "Teams Team Chats",
     CONSTRAINT df_teams_calls DEFAULT 0 FOR "Teams Calls",
+    CONSTRAINT df_teams_meetings DEFAULT 0 FOR "Teams Meetings",
     CONSTRAINT df_teams_meetings_attended DEFAULT 0 FOR "Teams Meetings Attended",
     CONSTRAINT df_teams_meetings_organized DEFAULT 0 FOR "Teams Meetings Organized",
     CONSTRAINT df_yammer_posted DEFAULT 0 FOR "Yammer Posted",
@@ -633,48 +650,6 @@ IF EXISTS (
 )
 BEGIN
   ALTER TABLE profiling.ActivitiesWeeklyColumns DROP COLUMN "Yammer Used Others";
-END
-GO
-
--- Remove deprecated "Teams Meetings" metric. Sourced from the Graph
--- getTeamsUserActivityUserDetail "meetingCount" property, which Microsoft deprecated and stopped
--- populating from Feb 2023 (see RemoveTeamsMeetingsMetric-UpgradeGuide.md), so it only produced
--- misleading / zero values.
--- First the default constraint, then the column, then any already-aggregated rows.
-IF EXISTS (
-  SELECT object_id
-  FROM sys.columns
-  WHERE object_id = OBJECT_ID(N'profiling.ActivitiesWeeklyColumns')
-    AND name = 'Teams Meetings'
-)
-BEGIN
-  DECLARE @name NVARCHAR(200);
-  SELECT @name = obj.name
-  FROM sys.objects AS obj
-    JOIN sys.columns AS cols ON obj.object_id = cols.default_object_id
-  WHERE cols.object_id = OBJECT_ID(N'profiling.ActivitiesWeeklyColumns')
-    AND cols.name = 'Teams Meetings';
-  IF @name IS NOT NULL
-  BEGIN
-    EXEC ('ALTER TABLE profiling.ActivitiesWeeklyColumns DROP CONSTRAINT ' + @name);
-  END
-END
-GO
-
-IF EXISTS (
-  SELECT object_id
-  FROM sys.columns
-  WHERE object_id = OBJECT_ID(N'profiling.ActivitiesWeeklyColumns')
-    AND name = 'Teams Meetings'
-)
-BEGIN
-  ALTER TABLE profiling.ActivitiesWeeklyColumns DROP COLUMN "Teams Meetings";
-END
-GO
-
-IF OBJECT_ID(N'profiling.ActivitiesWeekly') IS NOT NULL
-BEGIN
-  DELETE FROM profiling.ActivitiesWeekly WHERE Metric = 'Teams Meetings';
 END
 GO
 
@@ -911,6 +886,7 @@ BEGIN
     private_chat_count BIGINT NOT NULL,
     team_chat_count BIGINT NOT NULL,
     calls_count BIGINT NOT NULL,
+    meetings_count BIGINT NOT NULL,
     meetings_attended_count BIGINT NOT NULL,
     meetings_organized_count BIGINT NOT NULL,
     adhoc_meetings_attended_count BIGINT NOT NULL,
@@ -1117,6 +1093,7 @@ BEGIN
     private_chat_count,
     team_chat_count,
     calls_count,
+    meetings_count,
     meetings_attended_count,
     meetings_organized_count,
     adhoc_meetings_attended_count,
@@ -1138,6 +1115,7 @@ BEGIN
     SUM(private_chat_count),
     SUM(team_chat_count),
     SUM(calls_count),
+    SUM(meetings_count),
     SUM(meetings_attended_count),
     SUM(meetings_organized_count),
     SUM(adhoc_meetings_attended_count),
@@ -1162,6 +1140,7 @@ BEGIN
     "Teams Private Chats" = tvp.private_chat_count,
     "Teams Team Chats" = tvp.team_chat_count,
     "Teams Calls" = tvp.calls_count,
+    "Teams Meetings" = tvp.meetings_count,
     "Teams Meetings Attended" = tvp.meetings_attended_count,
     "Teams Meetings Organized" = tvp.meetings_organized_count,
     "Teams Adhoc Meetings Attended" = tvp.adhoc_meetings_attended_count,
@@ -1188,6 +1167,7 @@ BEGIN
     "Teams Private Chats",
     "Teams Team Chats",
     "Teams Calls",
+    "Teams Meetings",
     "Teams Meetings Attended",
     "Teams Meetings Organized",
     "Teams Adhoc Meetings Attended",
@@ -1209,6 +1189,7 @@ BEGIN
     private_chat_count,
     team_chat_count,
     calls_count,
+    meetings_count,
     meetings_attended_count,
     meetings_organized_count,
     adhoc_meetings_attended_count,
@@ -2227,6 +2208,7 @@ BEGIN
         "Teams Private Chats",
         "Teams Team Chats",
         "Teams Calls",
+        "Teams Meetings",
         "Teams Meetings Attended",
         "Teams Meetings Organized",
         "Teams Adhoc Meetings Attended",
@@ -2321,6 +2303,7 @@ BEGIN
       "Teams Private Chats",
       "Teams Team Chats",
       "Teams Calls",
+      "Teams Meetings",
       "Teams Meetings Attended",
       "Teams Meetings Organized",
       "Teams Adhoc Meetings Attended",
@@ -2382,6 +2365,7 @@ BEGIN
       "Teams Private Chats",
       "Teams Team Chats",
       "Teams Calls",
+      "Teams Meetings",
       "Teams Meetings Attended",
       "Teams Meetings Organized",
       "Teams Adhoc Meetings Attended",
@@ -2710,6 +2694,7 @@ BEGIN
         "Teams Private Chats" BIGINT DEFAULT 0,
         "Teams Team Chats" BIGINT DEFAULT 0,
         "Teams Calls" BIGINT DEFAULT 0,
+        "Teams Meetings" BIGINT DEFAULT 0,
         "Teams Meetings Attended" BIGINT DEFAULT 0,
         "Teams Meetings Organized" BIGINT DEFAULT 0,
         "Teams Adhoc Meetings Attended" BIGINT DEFAULT 0,

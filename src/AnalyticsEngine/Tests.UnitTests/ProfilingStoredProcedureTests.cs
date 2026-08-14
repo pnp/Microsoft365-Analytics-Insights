@@ -167,14 +167,14 @@ namespace Tests.UnitTests
                 Assert.IsTrue(teamsMetrics.Contains("Teams Private Chats"), "Should contain Teams Private Chats metric");
                 Assert.IsTrue(teamsMetrics.Contains("Teams Team Chats"), "Should contain Teams Team Chats metric");
                 Assert.IsTrue(teamsMetrics.Contains("Teams Calls"), "Should contain Teams Calls metric");
+                Assert.IsTrue(teamsMetrics.Contains("Teams Meetings"), "Should preserve the Teams Meetings metric for existing reports");
+                Assert.IsTrue(teamsMetrics.Contains("Teams Meetings Organized"), "Should contain Teams Meetings Organized metric");
+                Assert.IsTrue(teamsMetrics.Contains("Teams Meetings Attended"), "Should contain Teams Meetings Attended metric");
 
-                // The deprecated "Teams Meetings" metric (Graph meetingCount) must no longer be reported
-                Assert.IsFalse(teamsMetrics.Contains("Teams Meetings"), "Should not contain the deprecated Teams Meetings metric");
-
-                // ...but the granular replacements it was superseded by must survive. These come from
-                // the same Graph report and are what reports should use instead of the old total.
-                Assert.IsTrue(teamsMetrics.Contains("Teams Meetings Organized"), "Should still contain the replacement Teams Meetings Organized metric");
-                Assert.IsTrue(teamsMetrics.Contains("Teams Meetings Attended"), "Should still contain the replacement Teams Meetings Attended metric");
+                var meetingsTotal = await GetActivityMetricSum(db, monday, TEST_USER_ID, "Teams Meetings");
+                var meetingsColumn = await GetActivityColumnValue(db, monday, TEST_USER_ID, "Teams Meetings");
+                Assert.AreEqual(7, meetingsTotal, "Teams Meetings should aggregate the legacy meetings_count values");
+                Assert.AreEqual(meetingsTotal, meetingsColumn, "Long and wide report forms should agree for Teams Meetings");
             }
         }
 
