@@ -326,6 +326,26 @@ namespace Tests.UnitTests
             Assert.AreEqual(150, log.ScreenShareDurationSeconds, "Screen-share duration must be total seconds, not the 0-59 component");
         }
 
+        [TestMethod]
+        public void TeamsUserUsageLoader_LegacyMeetingCountUsesMeetingsAttended()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var loader = new TestableTeamsUserUsageLoader(logger);
+
+            var page = new TeamsUserActivityUserDetail
+            {
+                MeetingCount = 99,
+                MeetingsAttendedCount = 7,
+                AudioDuration = "PT0S",
+                VideoDuration = "PT0S",
+                ScreenShareDuration = "PT0S",
+            };
+
+            var log = loader.Populate(page);
+
+            Assert.AreEqual(7, log.MeetingCount, "The legacy meetings_count column should contain total meetings attended");
+        }
+
         /// <summary>
         /// Test-only subclass that reaches the protected PopulateReportSpecificMetadata without a
         /// live Graph client (the client/cache/filter are only used during paging, not here).
