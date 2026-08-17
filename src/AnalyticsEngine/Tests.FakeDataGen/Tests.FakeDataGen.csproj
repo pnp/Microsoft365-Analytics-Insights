@@ -69,6 +69,9 @@
     <Compile Include="StressTests\FakeLoaders\FakeContentMetaDataLoaderForStress.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeSentEmailSentimentScorer.cs" />
     <Compile Include="StressTests\FakeLoaders\FakeSentEmailSourceLoader.cs" />
+    <Compile Include="StressTests\LoadTest\CpuSampler.cs" />
+    <Compile Include="StressTests\LoadTest\LoadTestActivityImporter.cs" />
+    <Compile Include="StressTests\LoadTest\LoadTestSuite.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
@@ -94,6 +97,10 @@
     <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj">
       <Project>{1919bde6-c311-426d-adb3-a1487133e397}</Project>
       <Name>WebJob.Office365ActivityImporter.Engine</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj">
+      <Project>{974B3B6C-B89A-45E6-A5A3-A0292BEB1BA4}</Project>
+      <Name>WebJob.AppInsightsImporter.Engine</Name>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

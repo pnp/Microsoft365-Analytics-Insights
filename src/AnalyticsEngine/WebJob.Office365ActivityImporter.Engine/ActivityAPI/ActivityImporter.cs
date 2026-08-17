@@ -226,8 +226,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             // (_maxConcurrentSaves > 1) up to that many batches commit in parallel.
             var listBatchProcessor = new ListBatchProcessor<AbstractAuditLogContent>(_maxSavesPerBatch, async (newChunk) => await newReportsLoadedCallback(newChunk), _maxConcurrentSaves);
 
-            // For each summary chunk, load full reports in parallel. Reduced chunk size to 1000 to prevent OOM with large datasets
-            var loader = new ParallelListProcessor<SUMMARYTYPE>(1000);
+            // For each summary chunk, load full reports in parallel. Reduced chunk size to 1000 to prevent OOM with large datasets.
+            // Thread fan-out is capped by MaxAuditReportLoadConcurrency (aggressiveness preset) to limit peak CPU on the shared App Service plan.
+            var loader = new ParallelListProcessor<SUMMARYTYPE>(1000, _settings.MaxAuditReportLoadConcurrency);
 
             // Load in parallel & call parent func on listBatchProcessor to save
             await loader.ProcessListInParallel(reportSummaries.OrderByDescending(j => j.Created),

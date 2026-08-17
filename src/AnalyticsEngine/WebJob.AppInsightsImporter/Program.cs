@@ -63,6 +63,11 @@ namespace WebJob.AppInsightsImporter
 
             var logger = new AnalyticsLogger(config.AppInsightsConnectionString, "AppInsightsImporter");
 
+            // Apply the SQL-commit concurrency cap (aggressiveness preset) process-wide BEFORE any hit
+            // commit runs - the hits merge is the heaviest SQL importer, so cap its staging fan-out to
+            // ease the SQL Server CPU/DTU burst (issue #161 / PR #162).
+            DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = config.MaxSqlCommitConcurrency;
+
             // If no command line override was supplied, fall back to the config/app-setting value (if any).
             // The command line argument takes precedence over the config value.
             if (daysBeforeReadOverride == 0 && config.ReadHitsDaysBeforeToday.HasValue && config.ReadHitsDaysBeforeToday.Value > 0)
@@ -93,6 +98,16 @@ namespace WebJob.AppInsightsImporter
                 }
             }
 
+            // Stagger this WebJob's first cycle so it doesn't peak on the shared App Service plan at the
+            // same time as the activity importer. One-off; later cycles use ImportCyclePauseMinutes.
+#if !DEBUG
+            if (runAgain && config.ImportStartStaggerMinutes > 0)
+            {
+                telemetry.LogInformation($"Staggering start by {config.ImportStartStaggerMinutes} min(s) to avoid simultaneous CPU peaks with the activity importer...");
+                System.Threading.Thread.Sleep(config.ImportStartStaggerMinutes * 60 * 1000);
+            }
+#endif
+
             try
             {
                 while (runAgain)
@@ -121,7 +136,7 @@ namespace WebJob.AppInsightsImporter
 
                     if (runAgain)
                     {
-                        ConsoleApp.WebjobWait(logger);
+                        ConsoleApp.WebjobWait(logger, config.ImportCyclePauseMinutes);
                     }
                 }
             }
