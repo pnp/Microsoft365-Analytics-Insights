@@ -8,6 +8,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Installer;
+using Common.Entities.Redis;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -82,6 +83,11 @@ namespace WebJob.Office365ActivityImporter
 
             // Create new telemetry client with AppInsights key
             var logger = new AnalyticsLogger(configuredSettings.AppInsightsConnectionString, "Office365ActivityImporter");
+
+            // Apply the SQL-commit concurrency cap (aggressiveness preset) process-wide BEFORE any
+            // InsertBatch import runs, so commits don't burst the shared SQL tier at the legacy 20
+            // threads (issue #161 / PR #162 - easing SQL Server CPU/DTU spikes on commit).
+            DataUtils.Sql.Inserts.InsertBatchConcurrency.MaxConcurrentThreads = configuredSettings.MaxSqlCommitConcurrency;
 
             // Verify config
             var webhookUrl = configuredSettings.WebAppURL + "api/CallRecordWebhook";
@@ -191,12 +197,41 @@ namespace WebJob.Office365ActivityImporter
             // usage-report phase every cycle, even without Redis).
             ISingleDateStore activityReportsLastImportedStore = ActivityReportsLastImportedStoreFactory.Create(configuredSettings, logger);
 
+            // Cadence-gate store for the non-fresh Graph imports (user metadata, user apps, Teams).
+            // Created ONCE here, outside the cycle loop, so the in-memory fallback retains its "last run"
+            // timestamps across cycles (mirrors statsDatesLoader above). Redis when configured (gate also
+            // survives WebJob restarts); otherwise in-memory (resets on restart). Reads/writes are
+            // fail-open so a Redis blip never skips an import.
+            IImportLastRunStore graphLastRunStore;
+            if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+            {
+                try
+                {
+                    var cache = CacheConnectionManager.GetConnectionManager(
+                        configuredSettings.ConnectionStrings.RedisConnectionString,
+                        tenantId: configuredSettings.TenantGUID.ToString(),
+                        clientId: configuredSettings.ClientID,
+                        clientSecret: configuredSettings.ClientSecret);
+                    graphLastRunStore = new RedisImportLastRunStore(cache, logger);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning($"Could not connect to Redis for import cadence gating ({ex.Message}); using in-memory fallback (the gate resets when the WebJob restarts).");
+                    graphLastRunStore = new InMemoryImportLastRunStore();
+                }
+            }
+            else
+            {
+                logger.LogInformation("No Redis configured - using in-memory import cadence gating (resets when the WebJob restarts).");
+                graphLastRunStore = new InMemoryImportLastRunStore();
+            }
+
             // Run app
             while (runAgain)
             {
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore);
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
@@ -289,7 +324,7 @@ namespace WebJob.Office365ActivityImporter
 
                 if (runAgain)
                 {
-                    ConsoleApp.WebjobWait(logger);
+                    ConsoleApp.WebjobWait(logger, configuredSettings.ImportCyclePauseMinutes);
                 }
             } // Go around again?
 
@@ -335,6 +370,9 @@ namespace WebJob.Office365ActivityImporter
             logger.LogInformation($"Destination SQL Server='{sqlConnectionInfo.DataSource}', DB='{sqlConnectionInfo.InitialCatalog}'.");
             logger.LogInformation($"Azure AD tenant='{settings.TenantDomain}, client ID='{settings.ClientID}'.");
             logger.LogInformation($"Days back to check for events from Activity API='{settings.DaysBeforeNowToDownload}'.");
+            logger.LogInformation($"Import aggressiveness='{settings.ImportAggressiveness}' (audit-load threads={settings.MaxAuditReportLoadConcurrency}, " +
+                $"SQL-commit threads={settings.MaxSqlCommitConcurrency}, " +
+                $"cycle pause={settings.ImportCyclePauseMinutes} min, non-fresh Graph import interval={settings.GraphMetadataImportIntervalHours}h).");
 
             // Print & verify O365 workloads to import
             var validWorkloadsConfig = false;
