@@ -2832,14 +2832,47 @@ BEGIN
     @Monday,
     @ThisWeeksMonday;
 
-  -- Compile every outstanding week in a single set-based pass: each source log is
-  -- scanned once for the whole [First..Last] range and bucketed to its week, instead
-  -- of being re-scanned once per week.
+  -- Compile outstanding weeks in BOUNDED CHUNKS rather than one pass covering the whole
+  -- outstanding range. Each chunk still scans each source log once for its own range (the
+  -- point of the range procs) instead of once per week.
+  --
+  -- Measured at 50,000 users x 52 weeks: a single 52-week pass peaks at ~25.5 GB tempdb with
+  -- ~19 GB spilled, and 81.6% of that spill is one step - usp_CompileWeekActivityRows, which
+  -- unpivots ~2.5m staging rows x 59 metrics into ~146m narrow rows. The memory grant is
+  -- effectively fixed regardless of range size (~508 MB observed for both a 10-week and a
+  -- 52-week pass), so anything past roughly a week spills, and the spill then grows about
+  -- linearly with the range. Capping the range per call therefore caps peak tempdb: ~4.1 GB
+  -- for a 10-week chunk versus ~25.5 GB for 52 weeks, for essentially the same total work.
+  --
+  -- Chunking also bounds the BLAST RADIUS. The range procs stage the entire range and write
+  -- to the permanent tables once at the very end, and their CATCH logs without re-throwing,
+  -- so a failure anywhere in the range silently discards every week in that call. Week-at-a-
+  -- time compiling only ever lost the failing week. With chunks, at most one chunk is lost.
   IF @ThisWeeksMonday > @Monday
   BEGIN
-    DECLARE @LastSunday DATE = DATEADD(DAY, -1, @ThisWeeksMonday);
-    EXECUTE profiling.usp_CompileActivityRange @Monday, @LastSunday;
-    EXECUTE profiling.usp_CompileUsageRange @Monday, @LastSunday;
+    DECLARE @ChunkWeeks INT = 10;
+    DECLARE @ChunkStart DATE = @Monday;
+    DECLARE @ChunkEnd DATE;
+    DECLARE @ChunkLastSunday DATE;
+
+    WHILE @ChunkStart < @ThisWeeksMonday
+    BEGIN
+      SET @ChunkEnd = DATEADD(WEEK, @ChunkWeeks, @ChunkStart);
+      IF @ChunkEnd > @ThisWeeksMonday
+        SET @ChunkEnd = @ThisWeeksMonday;
+
+      SET @ChunkLastSunday = DATEADD(DAY, -1, @ChunkEnd);
+
+      EXEC profiling.usp_Trace
+        N'Compiling weeks %s to %s.',
+        @ChunkStart,
+        @ChunkLastSunday;
+
+      EXECUTE profiling.usp_CompileActivityRange @ChunkStart, @ChunkLastSunday;
+      EXECUTE profiling.usp_CompileUsageRange @ChunkStart, @ChunkLastSunday;
+
+      SET @ChunkStart = @ChunkEnd;
+    END
   END
 
   -- Cleanup. Remove data in the tables before the retention date
