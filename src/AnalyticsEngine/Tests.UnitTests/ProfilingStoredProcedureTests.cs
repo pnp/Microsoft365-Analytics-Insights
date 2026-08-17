@@ -571,6 +571,76 @@ namespace Tests.UnitTests
             }
         }
 
+        // ---- Multi-week aggregation: each week must bucket independently ----
+        // This guards the set-based multi-week compile: distinct data in three
+        // consecutive weeks must produce three distinct per-week totals, never
+        // merged. (Achieved here by seeding a different number of days per week.)
+
+        [TestMethod]
+        public async Task Profiling_MultipleWeeks_BucketEachWeekIndependently()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var week1 = TEST_MONDAY.AddDays(105);
+                var week2 = week1.AddDays(7);
+                var week3 = week2.AddDays(7);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                foreach (var m in new[] { week1, week2, week3 })
+                {
+                    await CleanupTestData(db, m);
+                }
+
+                // 7 days -> 35, 3 days -> 15, 1 day -> 5 private chats (5/day).
+                await InsertTeamsActivityTestData(db, TEST_USER_ID, week1, week1.AddDays(6));
+                await InsertTeamsActivityTestData(db, TEST_USER_ID, week2, week2.AddDays(2));
+                await InsertTeamsActivityTestData(db, TEST_USER_ID, week3, week3);
+
+                await CompileWeeks(db, week1, week3);
+
+                Assert.AreEqual(35, await GetActivityMetricSum(db, week1, TEST_USER_ID, "Teams Private Chats"), "Week 1 (7 days)");
+                Assert.AreEqual(15, await GetActivityMetricSum(db, week2, TEST_USER_ID, "Teams Private Chats"), "Week 2 (3 days)");
+                Assert.AreEqual(5, await GetActivityMetricSum(db, week3, TEST_USER_ID, "Teams Private Chats"), "Week 3 (1 day)");
+
+                // Wide table must agree, per week.
+                Assert.AreEqual(35, await GetActivityColumnValue(db, week1, TEST_USER_ID, "Teams Private Chats"));
+                Assert.AreEqual(15, await GetActivityColumnValue(db, week2, TEST_USER_ID, "Teams Private Chats"));
+                Assert.AreEqual(5, await GetActivityColumnValue(db, week3, TEST_USER_ID, "Teams Private Chats"));
+            }
+        }
+
+        // Copilot buckets by the joined audit event's timestamp and, in a multi-week pass,
+        // must not cross-join weeks (the range compile joins host counts to event counts on
+        // user_id AND week). Two weeks with different apps/counts must stay independent.
+        [TestMethod]
+        public async Task Profiling_Copilot_MultipleWeeks_DoNotCrossJoin()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var week1 = TEST_MONDAY.AddDays(126);
+                var week2 = week1.AddDays(7);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, week1);
+                await CleanupTestData(db, week2);
+
+                await InsertCopilotChat(db, TEST_USER_ID, week1, "Word");
+                await InsertCopilotChat(db, TEST_USER_ID, week1.AddDays(1), "Word");           // week1: 2 Word
+                await InsertCopilotChat(db, TEST_USER_ID, week2, "Excel");
+                await InsertCopilotChat(db, TEST_USER_ID, week2.AddDays(1), "Excel");
+                await InsertCopilotChat(db, TEST_USER_ID, week2.AddDays(2), "Excel");          // week2: 3 Excel
+
+                await CompileWeeks(db, week1, week2);
+
+                Assert.AreEqual(2, await GetActivityMetricSum(db, week1, TEST_USER_ID, "Copilot Chats"), "Week 1 total chats");
+                Assert.AreEqual(2, await GetActivityMetricSum(db, week1, TEST_USER_ID, "Copilot App Word"));
+                Assert.AreEqual(0, await GetActivityMetricSum(db, week1, TEST_USER_ID, "Copilot App Excel"), "Week 2 data must not leak into week 1");
+                Assert.AreEqual(3, await GetActivityMetricSum(db, week2, TEST_USER_ID, "Copilot Chats"), "Week 2 total chats");
+                Assert.AreEqual(3, await GetActivityMetricSum(db, week2, TEST_USER_ID, "Copilot App Excel"));
+                Assert.AreEqual(0, await GetActivityMetricSum(db, week2, TEST_USER_ID, "Copilot App Word"), "Week 1 data must not leak into week 2");
+            }
+        }
+
         #region Helper Methods
 
         private async Task EnsureTestUserExists(AnalyticsEntitiesContext db, int userId)
@@ -757,6 +827,18 @@ namespace Tests.UnitTests
         private async Task ExecuteStoredProcedure(AnalyticsEntitiesContext db, string procedureName, DateTime monday)
         {
             await ExecuteSql(db, $"EXEC {procedureName} @Monday = '{monday:yyyy-MM-dd}'");
+        }
+
+        /// <summary>
+        /// Compiles every week from firstMonday to lastMonday (inclusive). The perf rewrite changes
+        /// this from a per-week loop to a single set-based range call; the multi-week tests use this
+        /// so they validate whichever compile path is current.
+        /// </summary>
+        private async Task CompileWeeks(AnalyticsEntitiesContext db, DateTime firstMonday, DateTime lastMonday)
+        {
+            var lastSunday = lastMonday.AddDays(6);
+            await ExecuteSql(db, $"EXEC profiling.usp_CompileActivityRange @StartDate = '{firstMonday:yyyy-MM-dd}', @EndDate = '{lastSunday:yyyy-MM-dd}'");
+            await ExecuteSql(db, $"EXEC profiling.usp_CompileUsageRange @StartDate = '{firstMonday:yyyy-MM-dd}', @EndDate = '{lastSunday:yyyy-MM-dd}'");
         }
 
         private async Task<int> GetActivitiesWeeklyRowCount(AnalyticsEntitiesContext db, DateTime monday)
