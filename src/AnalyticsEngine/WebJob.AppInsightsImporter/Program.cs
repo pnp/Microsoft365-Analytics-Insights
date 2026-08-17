@@ -103,7 +103,7 @@ namespace WebJob.AppInsightsImporter
 #if !DEBUG
             if (runAgain && config.ImportStartStaggerMinutes > 0)
             {
-                telemetry.LogInformation($"Staggering start by {config.ImportStartStaggerMinutes} min(s) to avoid simultaneous CPU peaks with the activity importer...");
+                logger.LogInformation($"Staggering start by {config.ImportStartStaggerMinutes} min(s) to avoid simultaneous CPU peaks with the activity importer...");
                 System.Threading.Thread.Sleep(config.ImportStartStaggerMinutes * 60 * 1000);
             }
 #endif
