@@ -584,7 +584,14 @@ namespace Web.AnalyticsWeb.Controllers
                 catch (Exception ex)
                 {
                     warnings.Add($"{sq.Name}: {InnermostMessage(ex)}");
-                    if (IsQueryTimeout(ex))
+
+                    // Give up on the rest only once we already have something to draw. Bailing out on
+                    // the very first timeout would blank the whole chart - the exact failure this
+                    // partial-rendering behaviour exists to prevent - because the workloads are queried
+                    // in a fixed order and the first one is not special. Once at least one series has
+                    // data we stop, so a struggling database costs one extra timeout, not one per
+                    // remaining workload.
+                    if (ShouldStopAfterSeriesFailure(ex, rowsBySeries))
                     {
                         warnings.Add("Remaining workloads were not attempted after the database timeout");
                         break;
@@ -595,8 +602,25 @@ namespace Web.AnalyticsWeb.Controllers
             return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine);
         }
 
-        internal static ReportChart CompleteMultiTimeSeries(
-            ReportChart chart,
+        /// <summary>
+        /// Whether to abandon the remaining workloads after one has failed.
+        ///
+        /// Only a database timeout is worth giving up for (a workload-specific error says nothing about
+        /// the others), and only once at least one series already has data. Stopping on the very first
+        /// timeout would blank the entire chart - the exact failure partial rendering exists to prevent -
+        /// because the workloads run in a fixed order and the first is not special. This way a struggling
+        /// database costs one extra timeout rather than one per remaining workload.
+        /// </summary>
+        internal static bool ShouldStopAfterSeriesFailure(
+            Exception ex,
+            List<KeyValuePair<string, List<WeekValueRow>>> rowsSoFar)
+        {
+            return IsQueryTimeout(ex)
+                && rowsSoFar != null
+                && rowsSoFar.Any(s => s.Value != null && s.Value.Count > 0);
+        }
+
+        internal static ReportChart CompleteMultiTimeSeries(            ReportChart chart,
             List<KeyValuePair<string, List<WeekValueRow>>> rowsBySeries,
             List<string> warnings,
             List<DateTime> weekSpine)
