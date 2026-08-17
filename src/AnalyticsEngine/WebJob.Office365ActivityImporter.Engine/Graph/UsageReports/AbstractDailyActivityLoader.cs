@@ -4,9 +4,12 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Entity;
 using System.Data.Entity.Infrastructure;
+using System.Data.SqlClient;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 
@@ -44,10 +47,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// <summary>
         /// Recent-day window (in days) during which Graph usage data can still change and therefore must be
         /// re-imported every run. Graph usage reports have a ~2-3 day latency and are stable once finalized, so
-        /// dates older than this are treated as final: once stored they are skipped entirely (no re-download,
-        /// no re-write). 3 is a safe default; every date is still fully re-imported on its first ~3 daily runs
-        /// (as day-1, day-2, day-3) before it is ever skipped, so transient partial saves self-heal. Settable so
-        /// tests can exercise the boundary.
+        /// dates older than this can be treated as final. A date is skipped only when it was already inside the
+        /// window of a previously completed import phase; rows newer than that completion marker may be from an
+        /// interrupted save and are retried. Settable so tests can exercise the boundary.
         /// </summary>
         public int RefreshableRecentDays { get; set; } = 3;
 
@@ -69,25 +71,88 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         }
 
         /// <summary>
-        /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL AND old
-        /// enough that Graph will no longer change them (older than <see cref="RefreshableRecentDays"/>). These can
-        /// be skipped entirely on the next import - no re-download, no re-write. Dates within the recent window are
-        /// never returned because their data can still change.
+        /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL, old
+        /// enough that Graph will no longer change them, and covered by a previously completed import phase. These
+        /// can be skipped entirely on the next import - no re-download, no re-write. Dates within the recent window
+        /// or newer than the completion marker are never returned because they can still change or be partial.
         /// </summary>
-        public async Task<HashSet<DateTime>> GetFinalizedStoredDatesToSkipAsync(AnalyticsEntitiesContext db, int daysBackMax)
+        public async Task<HashSet<DateTime>> GetFinalizedStoredDatesToSkipAsync(
+            AnalyticsEntitiesContext db,
+            int daysBackMax,
+            DateTime? lastSuccessfulImport)
         {
             daysBackMax = ClampDaysBack(daysBackMax);
+            if (!lastSuccessfulImport.HasValue)
+            {
+                // Existing rows could be from an interrupted import. Until a full usage-report
+                // phase completes, no stored date is proven complete enough to skip safely.
+                return new HashSet<DateTime>();
+            }
+
             var today = DateTime.UtcNow.Date;
             var windowStart = today.AddDays(-daysBackMax);
             var mutableCutoff = today.AddDays(-RefreshableRecentDays);   // dates >= this can still change; never skip them
+            var completedCutoff = lastSuccessfulImport.Value.ToUniversalTime().Date;
+            var safeCutoff = completedCutoff < mutableCutoff ? completedCutoff : mutableCutoff;
 
-            var storedFinalizedDates = await GetTable(db)
-                .Where(t => t.Date >= windowStart && t.Date < mutableCutoff)
-                .Select(t => t.Date)
+            var table = GetTable(db);
+            if (await HasLeadingDateIndexAsync(db))
+            {
+                // The window contains at most 25 finalized dates. DISTINCT over an indexed range
+                // still scans every user's row for every date (millions of rows at 200k users);
+                // bounded existence seeks touch one index entry per candidate date instead.
+                var storedFinalizedDates = new HashSet<DateTime>();
+                for (var date = windowStart; date < safeCutoff; date = date.AddDays(1))
+                {
+                    if (await table.AnyAsync(activity => activity.Date == date))
+                    {
+                        storedFinalizedDates.Add(date);
+                    }
+                }
+
+                return storedFinalizedDates;
+            }
+
+            // Some account/group report tables have no date-leading index. Repeated existence
+            // probes would each scan the table, so use one range scan until an index is available.
+            var scannedDates = await table
+                .Where(activity => activity.Date >= windowStart && activity.Date < safeCutoff)
+                .Select(activity => activity.Date)
                 .Distinct()
                 .ToListAsync();
 
-            return new HashSet<DateTime>(storedFinalizedDates.Select(d => d.Date));
+            return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
+        }
+
+        internal async Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
+        {
+            var table = typeof(TReportDbType).GetCustomAttribute<TableAttribute>();
+            if (table == null)
+            {
+                throw new InvalidOperationException(
+                    $"{typeof(TReportDbType).Name} must declare TableAttribute to inspect its date index.");
+            }
+
+            var qualifiedTableName = $"{table.Schema ?? "dbo"}.{table.Name}";
+            const string sql = @"
+SELECT CAST(CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.indexes AS i
+    INNER JOIN sys.index_columns AS ic
+      ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+    INNER JOIN sys.columns AS c
+      ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+    WHERE i.object_id = OBJECT_ID(@tableName)
+      AND i.is_disabled = 0
+      AND i.is_hypothetical = 0
+      AND i.has_filter = 0
+      AND ic.key_ordinal = 1
+      AND c.name = N'date'
+) THEN 1 ELSE 0 END AS bit);";
+
+            return await db.Database
+                .SqlQuery<bool>(sql, new SqlParameter("@tableName", qualifiedTableName))
+                .SingleAsync();
         }
 
         public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax, ISet<DateTime> datesToSkip = null)
