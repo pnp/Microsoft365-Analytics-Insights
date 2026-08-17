@@ -1,10 +1,14 @@
-using Common.Entities;
+﻿using Common.Entities;
+using Common.Entities.Entities;
+using Common.Entities.Entities.AuditLog;
 using DataUtils;
+using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
-using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
+using WebJob.AppInsightsImporter.Engine.ApiImporter;
+using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.Sql;
 
 namespace Tests.UnitTests
@@ -12,22 +16,166 @@ namespace Tests.UnitTests
     [TestClass]
     public class DuplicateUrlTests
     {
+
         [TestMethod]
-        public async Task CleanDuplicateUrls_IsNoOpWhenUniqueIndexIsEnforced()
+        public async Task InsertAndCleanDuplicateUrlTests()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var url = "https://contoso.sharepoint.com/sites/example/Καλημέρα-" + DateTime.Now.Ticks;
-                db.urls.Add(new Url { FullUrl = url });
+                // Make sure we have the right DB schema
+                await ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID(db);
+
+
+                var URL_DUP = "http://whatever/" + DateTime.Now.Ticks;
+
+                // Insert x2 duplicate URLs
+                var urlDup1 = new Url() { FullUrl = URL_DUP };
+                var urlDup2 = new Url() { FullUrl = URL_DUP, MetadataLastRefreshed = DateTime.Now };
+                db.urls.Add(urlDup1);
                 await db.SaveChangesAsync();
 
+                db.urls.Add(urlDup2);
+                await db.SaveChangesAsync();
+                Console.WriteLine($"Inserted duplicate URLs: {urlDup1.ID} and {urlDup2.ID}");
+
+                var randoUser = new User
+                {
+                    UserPrincipalName = "user" + DateTime.Now.Ticks + "@example.com",
+                };
+
+                // Insert linked data to the URLs. These should be all the entities that reference URLs in the database.
+                var spEvent = new SharePointEventMetadata
+                {
+                    url = urlDup2,
+                    AuditEvent = new CommonAuditEvent
+                    {
+                        Id = Guid.NewGuid(),
+                        Operation = new EventOperation
+                        {
+                            Name = "Op" + DateTime.Now.Ticks
+                        },
+                        User = randoUser,
+                        TimeStamp = DateTime.Now,
+                    },
+                };
+                db.sharepoint_events.Add(spEvent);
+
+                var copilotEvent = new CopilotEventMetadataFile
+                {
+                    FileExtension = new SPEventFileExtension { extension_name = "Ext" + DateTime.Now.Ticks },
+                    FileName = new SPEventFileName { Name = "File" + DateTime.Now.Ticks },
+                    Url = urlDup2,
+                    Site = new Site { UrlBase = "http://site" + DateTime.Now.Ticks },
+                    RelatedChat = new CopilotChat
+                    {
+                        AppHost = "AppHost" + DateTime.Now.Ticks,
+                        AuditEvent = new CommonAuditEvent
+                        {
+                            Id = Guid.NewGuid(),
+                            Operation = new EventOperation
+                            {
+                                Name = "Dup Url Op " + DateTime.Now.Ticks
+                            },
+                            User = randoUser,
+                            TimeStamp = DateTime.Now,
+                        }
+                    }
+                };
+                db.CopilotEventMetadataFiles.Add(copilotEvent);
+
+                var pageComment = new PageComment
+                {
+                    Url = urlDup2,
+                    Comment = "Comment" + DateTime.Now.Ticks,
+                    User = randoUser,
+                    Created = DateTime.Now,
+                };
+                db.UrlComments.Add(pageComment);
+
+                var pageLike = new PageLike
+                {
+                    Url = urlDup2,
+                    User = randoUser,
+                    Created = DateTime.Now,
+                };
+                db.UrlLikes.Add(pageLike);
+
+                var pagePropVal = new FileMetadataPropertyValue
+                {
+                    Url = urlDup2,
+                    Field = new FileMetadataFieldName { Name = "Prop" + DateTime.Now.Ticks },
+                    Updated = DateTime.Now,
+                };
+                db.FileMetadataPropertyValues.Add(pagePropVal);
+                await db.SaveChangesAsync();
+
+                var duplicateHitsInSingleBatch = new PageViewCollection();
+
+                var hitsPreInsert = db.hits.Count();
+
+                // Add 2 hits with same URL but different request IDs
+                duplicateHitsInSingleBatch.Rows.Add(new PageViewAppInsightsQueryResult
+                {
+                    Url = URL_DUP,
+                    CustomProperties = new PageViewCustomProps
+                    {
+                        PageRequestId = Guid.NewGuid(),
+                        SessionId = Guid.NewGuid().ToString()
+                    },
+                    AppInsightsTimestamp = DateTime.Now,
+                    Browser = "Whatevs",
+                    DeviceModel = "Whoever",
+                    Username = "bob",
+                    ClientOS = "Win"
+                });
+                duplicateHitsInSingleBatch.Rows.Add(new PageViewAppInsightsQueryResult
+                {
+                    Url = URL_DUP,
+                    CustomProperties = new PageViewCustomProps
+                    {
+                        PageRequestId = Guid.NewGuid(),
+                        SessionId = Guid.NewGuid().ToString()
+                    },
+                    AppInsightsTimestamp = DateTime.Now,
+                    Browser = "Whatevs",
+                    DeviceModel = "Whoever",
+                    Username = "bob",
+                    ClientOS = "Win"
+                });
+
+                // Saving hits while the duplicate URL still exists no longer throws (issue #165): the
+                // merge now keeps exactly one row per page_request_id, so a duplicate dimension lookup
+                // can't break the unique IX_PageRequestID. Each of the 2 page-views is imported once.
+                await duplicateHitsInSingleBatch.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
+
+                // Cleanup duplicate URLs - consolidates the 2 url rows into 1 and repoints all FKs.
                 await ImportDbHacks.CleanDuplicateUrls(db);
 
-                Assert.AreEqual(1, await db.urls.CountAsync(item => item.FullUrl == url));
-                Assert.AreEqual(url, (await db.urls.SingleAsync(item => item.FullUrl == url)).FullUrl);
+                var hitsPostInsert = db.hits.Count();
 
-                db.urls.RemoveRange(db.urls.Where(item => item.FullUrl == url));
-                await db.SaveChangesAsync();
+                // Find the resources we created above to make sure they still exist (or not)
+                var urlDup1Check = db.urls.FirstOrDefault(u => u.ID == urlDup1.ID);
+                var urlDup2Check = db.urls.FirstOrDefault(u => u.ID == urlDup2.ID);
+                Assert.IsNotNull(urlDup1Check, "URL 1 should still exist after cleanup");
+                Assert.IsNull(urlDup2Check, "URL 2 should not exist after cleanup");
+
+                var spEventCheck = db.sharepoint_events.FirstOrDefault(e => e.AuditEvent.Id == spEvent.AuditEvent.Id);
+                Assert.IsNotNull(spEventCheck, "SharePoint event should exist after cleanup");
+
+                var copilotEventCheck = db.CopilotEventMetadataFiles.FirstOrDefault(e => e.RelatedChat.AuditEvent.Id == copilotEvent.RelatedChat.AuditEvent.Id);
+                Assert.IsNotNull(copilotEventCheck, "Copilot event should exist after cleanup");
+
+                var pageCommentCheck = db.UrlComments.FirstOrDefault(c => c.ID == pageComment.ID);
+                Assert.IsNotNull(pageCommentCheck, "Page comment should exist after cleanup");
+
+                var pageLikeCheck = db.UrlLikes.FirstOrDefault(l => l.ID == pageLike.ID);
+                Assert.IsNotNull(pageLikeCheck, "Page like should exist after cleanup");
+
+                var pagePropValCheck = db.FileMetadataPropertyValues.FirstOrDefault(p => p.ID == pagePropVal.ID);
+                Assert.IsNotNull(pagePropValCheck, "Page property value should exist after cleanup");
+
+                Assert.IsTrue(hitsPostInsert == hitsPreInsert + duplicateHitsInSingleBatch.Rows.Count,
+                    "Hits count should increase by " + duplicateHitsInSingleBatch.Rows.Count + " after saving duplicate hits");
             }
         }
     }
