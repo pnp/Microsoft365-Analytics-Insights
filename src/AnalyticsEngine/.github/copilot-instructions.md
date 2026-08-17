@@ -70,6 +70,32 @@ Confirm the root cause from the plan / DMVs **before** adding an index or blamin
 5. **Tests fail at `AnalyticsEntitiesContext..ctor` with `AutomaticDataLossException`?** Don't enable `AutomaticMigrationDataLossAllowed = true` to make them pass — that masks the real problem and silently drops customer data. Instead, fix the snapshot so the current model matches the latest migration's Target, or add an explicit cleanup migration.
 6. **Reproducing snapshot mismatches locally**: drop `(localdb)\MSSQLLocalDB::UnitTestingAnalytics` (the default test DB per `Tests.UnitTests/App.Debug.config`) to force a fresh migration replay; that's the fastest way to surface a snapshot/model mismatch before pushing.
 
+### Prove every schema change improves performance BEFORE it is approved for stable
+
+**Rule: no SQL schema change ships to a stable release without a measured before/after benchmark showing a positive impact.** This applies to every migration whose purpose is performance — new indexes, changed index shapes (key columns, `INCLUDE` lists), column narrowing, table/proc rewrites. "It should be faster" is not sufficient; a plausible-looking index can make things *worse*.
+
+This is not hypothetical. Measured in this repo at synthetic scale on the Copilot accessed-resource de-dup (`NOT EXISTS … INTERSECT`):
+
+| Index shape | Logical reads | Time |
+|---|---|---|
+| `chat_id`-only (before) | 8,374 | 375 ms |
+| **+ covering `INCLUDE`** | **25,228** ⬆️ 3x worse | 137 ms |
+| **+ full composite KEY** | **6,414** | **7 ms** ✅ |
+
+The covering `INCLUDE` **tripled logical reads** — it would have shipped as an "optimisation" that made the hot path worse. `INCLUDE` columns only remove key lookups; they do **not** provide a seekable access path, so they cannot fix a full-tuple existence check.
+
+**What "proven" means — required evidence:**
+1. A **synthetic-scale reproduction**: replica tables populated to a realistic size for a ~200k-user tenant (millions of rows on the fact tables — `audit_events`, `hits`, the `*_user_activity_log` tables). Never benchmark against a customer database, and never paste real data or real row counts into the repo (see the sensitive-data policy).
+2. **The real query**, taken from the code that motivated the change (e.g. the report queries in `Web/Controllers/ReportsAPIController.cs` or the merge SQL), not a simplified stand-in.
+3. **Before/after `logical reads` AND elapsed time**, via `SET STATISTICS IO, TIME ON`, medians over several runs, discarding the first (cold) run and defeating plan caching (`OPTION (RECOMPILE)` / `DBCC FREEPROCCACHE`). Logical reads matter more than wall-clock: they are stable across machines, and a reads regression is the early warning that wall-clock will regress under real concurrency.
+4. **The plan operator before and after** (seek vs scan) — proving *why* it got faster, not just that it did on the day.
+5. **More than one window/selectivity.** Test both a narrow range (e.g. 30 days) and a wide one (e.g. 365 days). Regressions frequently appear only at one end, which is exactly how a fixed join hint or index shape can help one case and hurt the other.
+6. **Index build time and storage overhead**, so the release notes can give admins an upgrade-window estimate as a function of table size, and so the added disk cost is a conscious decision.
+
+**Record the numbers where they will be found again:** put the before/after table in the PR description **and** summarise it in the migration's XML doc comment (`IndexCopilotAccessedResourceLookups` / `CoverCopilotAccessedResourceDedup` are the reference examples — the latter documents "on a 500k-row chat the dedup dropped from 375 ms to 7 ms"). A migration that cannot point at its measurement is not ready for stable.
+
+**A negative result is a good result.** If the measurement shows the change is neutral or harmful, do not ship it — change the index shape (composite KEY vs `INCLUDE`, different key order) and re-measure, or drop it. Shipping an unproven index costs every customer an offline index build on their largest table for no benefit, and index builds are not free to undo.
+
 ### Writing robust schema-change migrations (raw SQL: `ALTER COLUMN`, `CREATE INDEX`, backfills)
 
 Canonical examples: `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` (`urls.full_url`, issue #122) and `IndexCopilotAccessedResourceLookups` (the Copilot accessed-resource lookup tables). Follow these when a migration changes the physical schema of a table that may be **huge** on a customer tenant.
@@ -89,6 +115,7 @@ Canonical examples: `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` (`urls.full
    - Validate the script before shipping: it must apply from the prior state, stamp `__MigrationHistory` (Model matching the predecessor), and be a **no-op on re-run**.
    - **The `__MigrationHistory` stamp must be reached on every "already applied / nothing to do" path.** If the script's work is already done (index already exists, data already clean), fall through — or `GOTO` a stamp label — rather than `RETURN`ing before the stamp; otherwise a by-hand run against an already-up-to-date DB leaves the migration "pending". Only a genuine "prerequisite missing" guard may skip the stamp (structure the "already done" case as `IF/ELSE` that falls through, not an early `RETURN`).
 8. **Adding-a-migration checklist:**
+   - **A performance-motivated migration must carry its before/after benchmark** (see *Prove every schema change improves performance*) in the PR description and the migration's doc comment. No measurement = not approved for stable.
    - The migration id/timestamp (`yyyyMMddHHmmssf`, 15 digits) must sort **after** the current latest migration.
    - Register all three files in `Common/Entities/Entities.csproj`: `.cs` as `<Compile>`, `.Designer.cs` as `<Compile>` with `<DependentUpon>`, `.resx` as `<EmbeddedResource>` with `<DependentUpon>`.
    - Add the manual SQL upgrade script (rule 7) and attach it to the release.
