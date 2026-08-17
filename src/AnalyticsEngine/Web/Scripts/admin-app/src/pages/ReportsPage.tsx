@@ -369,12 +369,21 @@ function ReportAreaView({
               <MessageBar intent="warning">
                 <MessageBarBody>Couldn't load this chart: {chart.error}</MessageBarBody>
               </MessageBar>
-            ) : chart.type === 'timeseries' && chart.series ? (
-              <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
-            ) : chart.type === 'bar' && chart.categories ? (
-              <CategoryBarChart categories={chart.categories} valueLabel={chart.valueLabel} />
             ) : (
-              <Text className={styles.muted}>No data for this period.</Text>
+              <>
+                {chart.warning && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>{chart.warning}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {chart.type === 'timeseries' && chart.series ? (
+                  <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
+                ) : chart.type === 'bar' && chart.categories ? (
+                  <CategoryBarChart categories={chart.categories} valueLabel={chart.valueLabel} />
+                ) : (
+                  <Text className={styles.muted}>No data for this period.</Text>
+                )}
+              </>
             )}
           </div>
         </Card>
