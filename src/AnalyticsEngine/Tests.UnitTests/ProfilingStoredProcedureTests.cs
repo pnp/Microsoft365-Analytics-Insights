@@ -834,6 +834,75 @@ namespace Tests.UnitTests
         /// this from a per-week loop to a single set-based range call; the multi-week tests use this
         /// so they validate whichever compile path is current.
         /// </summary>
+        // usp_CompileWeekly compiles outstanding weeks in bounded 10-week chunks (to cap tempdb
+        // and limit the blast radius of a mid-range failure). Weeks spanning MORE than one chunk
+        // must still each be compiled exactly once - no week skipped at a chunk boundary, and no
+        // week counted twice by overlapping chunks. 13 weeks forces a 10 + 3 split.
+        [TestMethod]
+        public async Task UspCompileWeekly_RangeSpanningChunkBoundary_CompilesEveryWeekExactlyOnce()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                const int weekCount = 13;
+                var firstMonday = TEST_MONDAY.AddDays(154);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+
+                var mondays = new System.Collections.Generic.List<DateTime>();
+                for (var i = 0; i < weekCount; i++)
+                {
+                    mondays.Add(firstMonday.AddDays(7 * i));
+                }
+
+                foreach (var m in mondays)
+                {
+                    await CleanupTestData(db, m);
+                }
+
+                // One day of activity per week = 5 private chats per week (5/day).
+                foreach (var m in mondays)
+                {
+                    await InsertTeamsActivityTestData(db, TEST_USER_ID, m, m);
+                }
+
+                await CompileWeeksInChunks(db, firstMonday, mondays[weekCount - 1]);
+
+                foreach (var m in mondays)
+                {
+                    Assert.AreEqual(5, await GetActivityMetricSum(db, m, TEST_USER_ID, "Teams Private Chats"),
+                        $"Week starting {m:yyyy-MM-dd} must be compiled exactly once across the chunk boundary.");
+                    Assert.AreEqual(5, await GetActivityColumnValue(db, m, TEST_USER_ID, "Teams Private Chats"),
+                        $"Wide table for week starting {m:yyyy-MM-dd} must agree.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Mirrors the chunked loop in profiling.usp_CompileWeekly (10-week chunks) so the chunk
+        /// boundary is exercised without depending on the current date.
+        /// </summary>
+        private async Task CompileWeeksInChunks(AnalyticsEntitiesContext db, DateTime firstMonday, DateTime lastMonday)
+        {
+            const int chunkWeeks = 10;
+            var endExclusive = lastMonday.AddDays(7);
+            var chunkStart = firstMonday;
+
+            while (chunkStart < endExclusive)
+            {
+                var chunkEnd = chunkStart.AddDays(7 * chunkWeeks);
+                if (chunkEnd > endExclusive)
+                {
+                    chunkEnd = endExclusive;
+                }
+
+                var chunkLastSunday = chunkEnd.AddDays(-1);
+                await ExecuteSql(db, $"EXEC profiling.usp_CompileActivityRange @StartDate = '{chunkStart:yyyy-MM-dd}', @EndDate = '{chunkLastSunday:yyyy-MM-dd}'");
+                await ExecuteSql(db, $"EXEC profiling.usp_CompileUsageRange @StartDate = '{chunkStart:yyyy-MM-dd}', @EndDate = '{chunkLastSunday:yyyy-MM-dd}'");
+
+                chunkStart = chunkEnd;
+            }
+        }
+
         private async Task CompileWeeks(AnalyticsEntitiesContext db, DateTime firstMonday, DateTime lastMonday)
         {
             var lastSunday = lastMonday.AddDays(6);
