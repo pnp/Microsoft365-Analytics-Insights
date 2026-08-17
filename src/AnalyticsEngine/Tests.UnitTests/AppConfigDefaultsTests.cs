@@ -226,17 +226,18 @@ namespace Tests.UnitTests
         // ----- Import aggressiveness preset & cadence knobs (issue #161) -----
 
         [TestMethod]
-        public void ImportAggressiveness_EmptyAppSetting_DefaultsToBalanced()
+        public void ImportAggressiveness_EmptyAppSetting_DefaultsToHigh()
         {
             ConfigurationManager.AppSettings.Set(ImportAggressiveness, string.Empty);
-            Assert.AreEqual(ImportAggressivenessLevel.Balanced, new AppConfig().ImportAggressiveness);
+            Assert.AreEqual(ImportAggressivenessLevel.High, new AppConfig().ImportAggressiveness,
+                "Default must be High so upgrading never silently slows an existing deployment down.");
         }
 
         [TestMethod]
-        public void ImportAggressiveness_InvalidAppSetting_DefaultsToBalanced()
+        public void ImportAggressiveness_InvalidAppSetting_DefaultsToHigh()
         {
             ConfigurationManager.AppSettings.Set(ImportAggressiveness, "turbo");
-            Assert.AreEqual(ImportAggressivenessLevel.Balanced, new AppConfig().ImportAggressiveness);
+            Assert.AreEqual(ImportAggressivenessLevel.High, new AppConfig().ImportAggressiveness);
         }
 
         [TestMethod]
@@ -323,6 +324,29 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void NoAppSettingsAtAll_ReproducesLegacyStableBehaviour()
+        {
+            // Upgrade-parity guard. An existing deployment upgrading to this build has none of the new
+            // AppSettings, so every knob must land on the pre-throttling ("stable") value. If any of these
+            // change, the upgrade silently slows customers' imports down - which is exactly what the
+            // throttling work must NOT do by default.
+            foreach (var key in _trackedKeys)
+            {
+                ConfigurationManager.AppSettings.Set(key, string.Empty);
+            }
+
+            var cfg = new AppConfig();
+
+            Assert.AreEqual(ImportAggressivenessLevel.High, cfg.ImportAggressiveness, "Preset must default to High.");
+            Assert.AreEqual(20, cfg.MaxAuditReportLoadConcurrency, "Legacy audit-load concurrency was a hardcoded 20.");
+            Assert.AreEqual(20, cfg.MaxSqlCommitConcurrency, "Legacy SQL-commit concurrency was a hardcoded 20.");
+            Assert.AreEqual(10, cfg.ImportCyclePauseMinutes, "Legacy cycle pause was a hardcoded 10 minutes.");
+            Assert.AreEqual(0, cfg.GraphMetadataImportIntervalHours, "Legacy ran the static Graph imports every cycle.");
+            Assert.AreEqual(0, cfg.GraphTeamsImportIntervalHours, "Legacy ran the Teams crawl every cycle.");
+            Assert.AreEqual(0, cfg.ImportStartStaggerMinutes, "Legacy had no start stagger.");
+        }
+
+        [TestMethod]
         public void ExplicitImportCyclePauseMinutes_OverridesPreset()
         {
             ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
@@ -331,13 +355,16 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void GraphMetadataImportIntervalHours_EmptyOrInvalid_DefaultsTo24()
+        public void GraphMetadataImportIntervalHours_EmptyOrInvalid_DefaultsToZero()
         {
+            // Default preset is High, whose non-fresh Graph interval is 0 (every cycle = legacy behaviour).
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, string.Empty);
             ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
-            Assert.AreEqual(24, new AppConfig().GraphMetadataImportIntervalHours);
+            Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours,
+                "With the default High preset the gate is off, matching pre-throttling behaviour.");
 
             ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "nope");
-            Assert.AreEqual(24, new AppConfig().GraphMetadataImportIntervalHours);
+            Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours);
         }
 
         [TestMethod]
@@ -356,14 +383,14 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ImportStartStaggerMinutes_EmptyOrInvalid_DefaultsToHalfCyclePause()
+        public void ImportStartStaggerMinutes_EmptyOrInvalid_DefaultsToZero()
         {
-            // Gentle => pause 20 => default stagger 10
+            // Staggering delays the first cycle, so it is opt-in: an upgrade must not silently add a delay.
             ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
             ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
             ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, string.Empty);
-            Assert.AreEqual(10, new AppConfig().ImportStartStaggerMinutes,
-                "Default stagger should be half the (Gentle=20) cycle pause.");
+            Assert.AreEqual(0, new AppConfig().ImportStartStaggerMinutes,
+                "Default stagger must be 0 (no added start delay) regardless of preset.");
         }
 
         [TestMethod]
