@@ -170,17 +170,21 @@ namespace Common.Entities.Config
             }
 
             // One-off start offset (minutes) applied before the first import cycle, used to stagger the
-            // two WebJobs so they don't peak on the shared App Service plan at the same time. 0 disables.
-            // Default = half the cycle pause. Invalid/empty falls back to that default.
+            // two WebJobs so they don't peak on the shared App Service plan at the same time. 0 disables,
+            // which is the default so an upgrade doesn't silently delay the first cycle. Opt in by setting
+            // ImportStartStaggerMinutes (a good starting point is half the cycle pause).
             this.ImportStartStaggerMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("ImportStartStaggerMinutes"), out var importStartStaggerMinutes)
                 && importStartStaggerMinutes >= 0
                 ? importStartStaggerMinutes
-                : Math.Max(0, this.ImportCyclePauseMinutes / 2);
+                : 0;
         }
 
         /// <summary>
         /// Parses the <c>ImportAggressiveness</c> AppSetting, defaulting to
-        /// <see cref="ImportAggressivenessLevel.Balanced"/> when missing or invalid.
+        /// <see cref="ImportAggressivenessLevel.High"/> when missing or invalid.
+        ///
+        /// High is the default deliberately: it reproduces the legacy (pre-throttling) behaviour exactly,
+        /// so upgrading does not silently slow anyone's import down. Easing CPU is opt-in.
         /// </summary>
         private static ImportAggressivenessLevel ParseAggressiveness(string raw)
         {
@@ -188,7 +192,7 @@ namespace Common.Entities.Config
             {
                 return level;
             }
-            return ImportAggressivenessLevel.Balanced;
+            return ImportAggressivenessLevel.High;
         }
 
         /// <summary>
@@ -354,17 +358,18 @@ namespace Common.Entities.Config
 
         /// <summary>
         /// Import "aggressiveness" preset that supplies the default burst/cadence knobs below.
-        /// Default <see cref="ImportAggressivenessLevel.Balanced"/>. Set via the
+        /// Default <see cref="ImportAggressivenessLevel.High"/>, which reproduces the legacy
+        /// (pre-throttling) behaviour so an upgrade changes nothing until an admin opts in. Set via the
         /// <c>ImportAggressiveness</c> AppSetting (High | Balanced | Gentle).
         /// </summary>
-        public ImportAggressivenessLevel ImportAggressiveness { get; set; } = ImportAggressivenessLevel.Balanced;
+        public ImportAggressivenessLevel ImportAggressiveness { get; set; } = ImportAggressivenessLevel.High;
 
         /// <summary>
         /// Maximum simultaneous threads used to full-load audit reports from the Office 365 Management
         /// Activity API. Lower values reduce peak CPU. Preset-derived (High=20, Balanced=8, Gentle=3)
         /// unless the <c>MaxAuditReportLoadConcurrency</c> AppSetting is set &amp; &gt; 0.
         /// </summary>
-        public int MaxAuditReportLoadConcurrency { get; set; } = 8;
+        public int MaxAuditReportLoadConcurrency { get; set; } = 20;
 
         /// <summary>
         /// Maximum simultaneous threads <see cref="DataUtils.Sql.Inserts.InsertBatch{T}"/> uses to commit
@@ -375,7 +380,7 @@ namespace Common.Entities.Config
         /// AppSetting is set &amp; &gt; 0. Applied at WebJob startup via
         /// <c>InsertBatchConcurrency.MaxConcurrentThreads</c>.
         /// </summary>
-        public int MaxSqlCommitConcurrency { get; set; } = 8;
+        public int MaxSqlCommitConcurrency { get; set; } = 20;
 
         /// <summary>
         /// Minutes the WebJob waits between import cycles. Preset-derived (High/Balanced=10, Gentle=20)
@@ -388,7 +393,7 @@ namespace Common.Entities.Config
         /// Preset-derived (High=0 i.e. every cycle/legacy, Balanced/Gentle=24) unless the
         /// <c>GraphMetadataImportIntervalHours</c> AppSetting is set &gt;= 0. 0 disables the gate.
         /// </summary>
-        public int GraphMetadataImportIntervalHours { get; set; } = 24;
+        public int GraphMetadataImportIntervalHours { get; set; } = 0;
 
         /// <summary>
         /// Minimum hours between Teams crawls (channel messages/reactions, etc). Separate from
@@ -396,7 +401,7 @@ namespace Common.Entities.Config
         /// incrementally. Preset-derived (High=0, Balanced/Gentle=24) unless the
         /// <c>GraphTeamsImportIntervalHours</c> AppSetting is set &gt;= 0. 0 disables the gate.
         /// </summary>
-        public int GraphTeamsImportIntervalHours { get; set; } = 24;
+        public int GraphTeamsImportIntervalHours { get; set; } = 0;
 
         /// <summary>
         /// When true, bypasses the cadence gate for the non-fresh Graph imports (user metadata, user
@@ -410,7 +415,7 @@ namespace Common.Entities.Config
         /// two WebJobs so they don't peak on the shared App Service plan simultaneously. Default = half
         /// the cycle pause. 0 disables.
         /// </summary>
-        public int ImportStartStaggerMinutes { get; set; } = 5;
+        public int ImportStartStaggerMinutes { get; set; } = 0;
     }
 
     /// <summary>
@@ -420,10 +425,10 @@ namespace Common.Entities.Config
     /// </summary>
     public enum ImportAggressivenessLevel
     {
-        /// <summary>Fastest, highest peak CPU. Full legacy behaviour: 20 audit-load threads, 10-min pause, and the non-fresh Graph imports run every cycle (interval 0).</summary>
+        /// <summary>Default. Fastest, highest peak CPU. Full legacy behaviour: 20 audit-load threads, 20 SQL-commit threads, 10-min pause, and the non-fresh Graph imports run every cycle (interval 0). Chosen as the default so upgrading never slows an existing deployment down.</summary>
         High,
 
-        /// <summary>Default. Modestly eased: 8 audit-load threads, 10-min pause, non-fresh Graph imports daily-gated (24h).</summary>
+        /// <summary>Modestly eased: 8 audit-load threads, 8 SQL-commit threads, 10-min pause, non-fresh Graph imports daily-gated (24h).</summary>
         Balanced,
 
         /// <summary>Lowest CPU: 3 audit-load threads, 20-min pause, non-fresh Graph imports daily-gated (24h).</summary>
