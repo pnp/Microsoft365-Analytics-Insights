@@ -18,9 +18,15 @@ namespace DataUtils
 
         private readonly List<Task> _tasks = new List<Task>();
 
-        public ParallelListProcessor(int maxItemsPerChunk)
+        /// <param name="maxItemsPerChunk">How many items each parallel chunk processes.</param>
+        /// <param name="maxConcurrentThreads">
+        /// Max simultaneous chunk tasks. Defaults to <see cref="MAX_CONCURRENT_THREADS"/> (20) to
+        /// preserve existing callers. Lower values reduce peak CPU; values &lt; 1 fall back to 1.
+        /// </param>
+        public ParallelListProcessor(int maxItemsPerChunk, int maxConcurrentThreads = MAX_CONCURRENT_THREADS)
         {
-            _sem = new SemaphoreSlim(MAX_CONCURRENT_THREADS, MAX_CONCURRENT_THREADS);
+            var threadCap = maxConcurrentThreads < 1 ? 1 : maxConcurrentThreads;
+            _sem = new SemaphoreSlim(threadCap, threadCap);
             if (maxItemsPerChunk < 1)
             {
                 throw new ArgumentException(nameof(maxItemsPerChunk));
