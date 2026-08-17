@@ -81,40 +81,40 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CopilotQueries_PinMeasuredMergePlans()
+        public void CopilotQueries_NeverForceAJoinHint()
         {
+            // Measured at 4m audit_events rows: a forced INNER MERGE JOIN degrades to a full scan
+            // (a flat 73,857 logical reads) at every window from 30d up, versus 5,210-14,799 for the
+            // natural join. Pin the natural join so a hint can't be reintroduced without re-measuring.
             var today = new DateTime(2026, 8, 14);
             var wideUsersSql = ReportsAPIController.BuildCopilotUsersQuery(
                 today.AddDays(-90),
                 today);
 
-            StringAssert.Contains(wideUsersSql, "INNER MERGE JOIN dbo.audit_events");
+            StringAssert.Contains(wideUsersSql, "INNER JOIN dbo.audit_events");
+            Assert.IsFalse(wideUsersSql.Contains("MERGE JOIN"),
+                "A forced MERGE JOIN scans all of audit_events; the optimiser must be left to choose.");
             StringAssert.Contains(wideUsersSql, "OPTION (RECOMPILE)");
         }
 
         [TestMethod]
-        public void CopilotJoinSelection_UsesMeasuredWindowAndFilterRules()
+        public void CopilotJoinSelection_IsAlwaysTheNaturalJoin()
         {
             var today = new DateTime(2026, 8, 14);
 
-            Assert.AreEqual(
-                ReportsAPIController.CopilotAuditNaturalJoin,
-                ReportsAPIController.SelectCopilotAuditJoin(
-                    today.AddDays(-30),
-                    hasAgentFilter: false,
-                    today));
-            StringAssert.Contains(
-                ReportsAPIController.SelectCopilotAuditJoin(
-                    today.AddDays(-90),
-                    hasAgentFilter: false,
-                    today),
-                "INNER MERGE JOIN");
-            Assert.AreEqual(
-                ReportsAPIController.CopilotAuditNaturalJoin,
-                ReportsAPIController.SelectCopilotAuditJoin(
-                    today.AddDays(-180),
-                    hasAgentFilter: true,
-                    today));
+            foreach (var days in new[] { 30, 45, 90, 180, 365 })
+            {
+                foreach (var hasAgentFilter in new[] { true, false })
+                {
+                    Assert.AreEqual(
+                        ReportsAPIController.CopilotAuditNaturalJoin,
+                        ReportsAPIController.SelectCopilotAuditJoin(
+                            today.AddDays(-days),
+                            hasAgentFilter,
+                            today),
+                        $"Window {days}d (agent filter: {hasAgentFilter}) must use the natural join.");
+                }
+            }
         }
 
         [TestMethod]
