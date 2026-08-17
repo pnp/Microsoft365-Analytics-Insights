@@ -236,7 +236,9 @@ namespace Tests.UnitTests
                     RefreshableRecentDays = 3
                 };
 
-                var finalizedDate = DateTime.UtcNow.Date.AddDays(-6);   // stored + older than the recent window -> skippable
+                var lastSuccessfulImport = DateTime.UtcNow.Date.AddDays(-10);
+                var finalizedDate = DateTime.UtcNow.Date.AddDays(-12); // stored by the completed run -> skippable
+                var partialAfterSuccess = DateTime.UtcNow.Date.AddDays(-6); // could be from a later failed run -> retry
                 var recentDate = DateTime.UtcNow.Date.AddDays(-2);      // stored but within the recent window -> never skipped
 
                 var runId = DateTime.UtcNow.Ticks;
@@ -253,12 +255,65 @@ namespace Tests.UnitTests
                 {
                     new OutlookUserActivityUserDetail { UserPrincipalName = upn, LastActivityDateString = recentDate.ToString("yyyy-MM-dd"), ReadCount = 1 }
                 });
+                loader.LoadedReportPages.Add(partialAfterSuccess, new List<OutlookUserActivityUserDetail>
+                {
+                    new OutlookUserActivityUserDetail { UserPrincipalName = upn, LastActivityDateString = partialAfterSuccess.ToString("yyyy-MM-dd"), ReadCount = 1 }
+                });
                 await loader.SaveLoadedReportsToSql(userIdCache, userCache);
 
-                var skip = await loader.GetFinalizedStoredDatesToSkipAsync(db, daysBackMax: 7);
+                var skip = await loader.GetFinalizedStoredDatesToSkipAsync(
+                    db,
+                    daysBackMax: 14,
+                    lastSuccessfulImport: lastSuccessfulImport);
 
                 Assert.IsTrue(skip.Contains(finalizedDate), "A stored, finalized date should be skippable");
+                Assert.IsFalse(
+                    skip.Contains(partialAfterSuccess),
+                    "A stored date newer than the last completed import may be partial and must be retried");
                 Assert.IsFalse(skip.Contains(recentDate), "A date within the recent window must never be skipped, even if stored");
+            }
+        }
+
+        [TestMethod]
+        public async Task FinalizedDateLookup_DetectsIndexedAndUnindexedTables()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
+            var filter = new UserGroupsFilterModel("FakeGroup1;FakeGroup2");
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var indexedLoader = new OutlookUserActivityLoader(null, groupsCache, filter, logger);
+                var unindexedLoader = new OneDriveUsageLoader(null, groupsCache, filter, logger);
+
+                Assert.IsTrue(
+                    await indexedLoader.HasLeadingDateIndexAsync(db),
+                    "The widened Outlook IX_date should use bounded date seeks.");
+                Assert.IsFalse(
+                    await unindexedLoader.HasLeadingDateIndexAsync(db),
+                    "OneDrive account usage has no date-leading index and must keep one range scan.");
+            }
+        }
+
+        [TestMethod]
+        public async Task GetFinalizedStoredDatesToSkipAsync_NoCompletedImportSkipsNothing()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var groupsCache = new NoUsersHaveGroupsUserGroupsCache(logger);
+            var loader = new OutlookUserActivityLoader(
+                null,
+                groupsCache,
+                new UserGroupsFilterModel("FakeGroup1;FakeGroup2"),
+                logger);
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var skip = await loader.GetFinalizedStoredDatesToSkipAsync(
+                    db,
+                    daysBackMax: 28,
+                    lastSuccessfulImport: null);
+
+                Assert.AreEqual(0, skip.Count, "Rows from an interrupted first import must be re-imported.");
             }
         }
 
