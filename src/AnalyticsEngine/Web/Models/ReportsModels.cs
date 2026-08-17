@@ -116,6 +116,10 @@ namespace Web.AnalyticsWeb.Models
         /// <summary>Set when the query failed/timed out; the chart data is then empty.</summary>
         [JsonProperty("error")]
         public string Error { get; set; }
+
+        /// <summary>Set when part of a chart could not load but other series remain usable.</summary>
+        [JsonProperty("warning")]
+        public string Warning { get; set; }
     }
 
     /// <summary>The set of charts for one report area over the requested window.</summary>

@@ -43,6 +43,7 @@ export interface ReportChart {
   categories: ReportCategory[] | null;
   sql: string;
   error: string | null;
+  warning: string | null;
 }
 
 /** The set of charts for one report area over the requested window. */

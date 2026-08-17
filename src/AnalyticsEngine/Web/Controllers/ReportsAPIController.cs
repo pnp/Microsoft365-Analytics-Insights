@@ -54,6 +54,17 @@ namespace Web.AnalyticsWeb.Controllers
         // snapshot makes the most recent week look like a sudden collapse in activity.
         private const int UsageReportLagDays = 3;
 
+        internal const string CopilotAuditMergeJoin =
+            "INNER MERGE JOIN dbo.audit_events AS au ON c.event_id = au.id";
+
+        internal const string CopilotAuditNaturalJoin =
+            "INNER JOIN dbo.audit_events AS au ON c.event_id = au.id";
+
+        // Benchmarked at 5m audit rows with both dense (1m chats) and sparse (10k/50k chats)
+        // histories: natural joins win for the one-month UI window, while merge joins prevent
+        // severe hash-plan regressions for the wider windows. Agent-name filters always stay natural.
+        private const int CopilotMergeJoinThresholdDays = 45;
+
         // GET: api/Reports/areas
         // Which report areas are available, based on the enabled imports.
         [HttpGet]
@@ -199,24 +210,25 @@ namespace Web.AnalyticsWeb.Controllers
         // no date column of its own), mirroring the profiling compile.
         private static List<Task<ReportChart>> CopilotCharts(DateTime from, List<DateTime> weekSpine)
         {
-            const string join = "FROM dbo.copilot_chats AS c JOIN dbo.audit_events AS au ON c.event_id = au.id WHERE au.time_stamp >= @from";
+            var join = "FROM dbo.copilot_chats AS c "
+                + SelectCopilotAuditJoin(from, hasAgentFilter: false)
+                + " WHERE au.time_stamp >= @from";
 
             var wb = WeekBucket("au.time_stamp");
 
             var interactions =
                 $"SELECT {wb} AS WeekStart, CAST(COUNT(*) AS float) AS Value\r\n" +
                 join + "\r\n" +
-                $"GROUP BY {wb} ORDER BY WeekStart;";
+                $"GROUP BY {wb} ORDER BY WeekStart\r\n" +
+                "OPTION (RECOMPILE);";
 
-            var users =
-                $"SELECT {wb} AS WeekStart, CAST(COUNT(DISTINCT au.user_id) AS float) AS Value\r\n" +
-                join + "\r\n" +
-                $"GROUP BY {wb} ORDER BY WeekStart;";
+            var users = BuildCopilotUsersQuery(from);
 
             var hosts =
                 "SELECT TOP 8 ISNULL(c.app_host, '(unknown)') AS Label, CAST(COUNT(*) AS float) AS Value\r\n" +
                 join + "\r\n" +
-                "GROUP BY ISNULL(c.app_host, '(unknown)') ORDER BY Value DESC;";
+                "GROUP BY ISNULL(c.app_host, '(unknown)') ORDER BY Value DESC\r\n" +
+                "OPTION (RECOMPILE);";
 
             return new List<Task<ReportChart>>
             {
@@ -229,6 +241,29 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
+        internal static string BuildCopilotUsersQuery(DateTime from, DateTime? today = null)
+        {
+            var wb = WeekBucket("au.time_stamp");
+            return
+                $"SELECT {wb} AS WeekStart, CAST(COUNT(DISTINCT au.user_id) AS float) AS Value\r\n" +
+                "FROM dbo.copilot_chats AS c "
+                + SelectCopilotAuditJoin(from, hasAgentFilter: false, today)
+                + " WHERE au.time_stamp >= @from\r\n" +
+                $"GROUP BY {wb} ORDER BY WeekStart\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        internal static string SelectCopilotAuditJoin(
+            DateTime from,
+            bool hasAgentFilter,
+            DateTime? today = null)
+        {
+            var windowDays = ((today ?? DateTime.UtcNow.Date) - from.Date).TotalDays;
+            return !hasAgentFilter && windowDays >= CopilotMergeJoinThresholdDays
+                ? CopilotAuditMergeJoin
+                : CopilotAuditNaturalJoin;
+        }
+
         private static List<Task<ReportChart>> CopilotAgentCharts(
             DateTime from,
             List<DateTime> weekSpine,
@@ -236,6 +271,9 @@ namespace Web.AnalyticsWeb.Controllers
             string agentName)
         {
             var wb = WeekBucket("au.time_stamp");
+            var auditJoin = SelectCopilotAuditJoin(
+                from,
+                hasAgentFilter: !string.IsNullOrEmpty(agentName));
             var agents =
                 "WITH EligibleAgents AS (\r\n" +
                 "    SELECT id\r\n" +
@@ -247,7 +285,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"           {wb} AS WeekStart,\r\n" +
                 "           COUNT_BIG(*) AS InteractionCount\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    JOIN dbo.audit_events AS au ON c.event_id = au.id\r\n" +
+                "    " + auditJoin + "\r\n" +
                 "    JOIN EligibleAgents AS eligible ON c.agent_id = eligible.id\r\n" +
                 "    WHERE au.time_stamp >= @from\r\n" +
                 $"    GROUP BY c.agent_id, {wb}\r\n" +
@@ -516,6 +554,7 @@ namespace Web.AnalyticsWeb.Controllers
                         DisplaySql(series.First().Body, from, lastWeek, settled);
 
             var rowsBySeries = new List<KeyValuePair<string, List<WeekValueRow>>>();
+            var warnings = new List<string>();
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
             // already runs in parallel with other areas' charts); each performs indexed seeks into
@@ -529,20 +568,50 @@ namespace Web.AnalyticsWeb.Controllers
                 }
                 catch (Exception ex)
                 {
-                    chart.Error = $"{sq.Name}: {InnermostMessage(ex)}";
-                    return chart;
+                    warnings.Add($"{sq.Name}: {InnermostMessage(ex)}");
+                    if (IsQueryTimeout(ex))
+                    {
+                        warnings.Add("Remaining workloads were not attempted after the database timeout");
+                        break;
+                    }
                 }
             }
 
+            return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine);
+        }
+
+        internal static ReportChart CompleteMultiTimeSeries(
+            ReportChart chart,
+            List<KeyValuePair<string, List<WeekValueRow>>> rowsBySeries,
+            List<string> warnings,
+            List<DateTime> weekSpine)
+        {
+            var populatedSeries = rowsBySeries
+                .Where(seriesRows => seriesRows.Value.Count > 0)
+                .ToList();
+
+            warnings.AddRange(rowsBySeries
+                .Where(seriesRows => seriesRows.Value.Count == 0)
+                .Select(seriesRows => $"{seriesRows.Key}: no settled usage data"));
+
+            if (populatedSeries.Count == 0)
+            {
+                chart.Error = warnings.Count == 0
+                    ? "No completed usage-report weeks are available."
+                    : "No workload series could be loaded. " + string.Join("; ", warnings);
+                return chart;
+            }
+
             // Trailing weeks are trimmed once, across every workload, so the chart ends where the
-            // slowest report has caught up. Interior weeks are NOT trimmed: they keep their place on
-            // the spine and any workload missing that week gets a null (a gap in its line) rather
-            // than a zero, which would draw a false collapse in activity.
+            // slowest populated report has caught up. Workloads with no settled data are omitted
+            // rather than preventing every other workload from rendering. Interior weeks are NOT
+            // trimmed: they keep their place on the spine and any workload missing that week gets a
+            // null (a gap in its line) rather than a zero, which would draw a false collapse.
             var lastCompleteWeekIndex = weekSpine.Count - 1;
             while (lastCompleteWeekIndex >= 0)
             {
                 var week = weekSpine[lastCompleteWeekIndex];
-                if (rowsBySeries.All(s => s.Value.Any(r => r.WeekStart.Date == week)))
+                if (populatedSeries.All(s => s.Value.Any(r => r.WeekStart.Date == week)))
                 {
                     break;
                 }
@@ -551,18 +620,23 @@ namespace Web.AnalyticsWeb.Controllers
 
             if (lastCompleteWeekIndex < 0)
             {
-                chart.Error = "No completed usage-report weeks are available for every workload.";
+                chart.Error = "No completed usage-report weeks are available for workloads with data.";
                 return chart;
             }
 
             var completeWeekSpine = weekSpine.Take(lastCompleteWeekIndex + 1).ToList();
-            chart.Series = rowsBySeries
+            chart.Series = populatedSeries
                 .Select(s => new ReportSeries
                 {
                     Name = s.Key,
                     Points = FillWeeks(completeWeekSpine, s.Value, missingValue: null),
                 })
                 .ToList();
+
+            if (warnings.Count > 0)
+            {
+                chart.Warning = "Some workload series are unavailable: " + string.Join("; ", warnings) + ".";
+            }
 
             return chart;
         }
@@ -852,6 +926,22 @@ namespace Web.AnalyticsWeb.Controllers
             return e.Message;
         }
 
+        internal static bool IsQueryTimeout(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (current is TimeoutException)
+                {
+                    return true;
+                }
+                if (current is SqlException sqlException && sqlException.Number == -2)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// <summary>A named series and the weekly query that produces it (used by the usage chart).</summary>
         private sealed class SeriesQuery
         {
@@ -860,7 +950,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>Shape for a weekly (WeekStart, Value) raw SQL result.</summary>
-        private sealed class WeekValueRow
+        internal sealed class WeekValueRow
         {
             public DateTime WeekStart { get; set; }
             public double Value { get; set; }
