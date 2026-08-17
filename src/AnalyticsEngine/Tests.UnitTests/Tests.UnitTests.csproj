@@ -161,7 +161,6 @@
     <Compile Include="ShrinkUrlsFullUrlColumnMigrationTests.cs" />
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
-    <Compile Include="EnforceUniqueUrlsFullUrlMigrationTests.cs" />
     <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
     <Compile Include="ScratchDatabase.cs" />
