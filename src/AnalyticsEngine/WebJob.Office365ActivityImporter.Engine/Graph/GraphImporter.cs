@@ -26,15 +26,69 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly UserGroupsCache _userGroupsCache;
         private readonly GraphAppIndentityOAuthContext _graphAppIndentityOAuthContext;
         private readonly GraphServiceClient _graphClient;
+        // Two independent markers: one proves the usage-report phase completed (so finalized dates can be
+        // skipped safely), the other gates how often the non-fresh Graph sections re-run.
         private readonly ISingleDateStore _activityReportsLastImportedStore;
+        private readonly IImportLastRunStore _lastRunStore;
 
-        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null)
+        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null)
             : base(logger, settings)
         {
             _userGroupsCache = userGroupsCache;
             _graphAppIndentityOAuthContext = graphAppIndentityOAuthContext;
             _graphClient = graphClient;
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
+
+            // Defensive: a per-instance in-memory store still works (just doesn't persist the gate
+            // across cycles). Production passes the process-lifetime store hoisted in Program.cs.
+            _lastRunStore = lastRunStore ?? new InMemoryImportLastRunStore();
+        }
+
+        // Keys for the per-section "last run" timestamps used to daily-gate the non-fresh Graph imports.
+        // Stored verbatim (unprefixed) in Redis db 0, so they can be cleared manually with e.g.
+        // `redis-cli DEL GraphUsersMetadataLastImported`.
+        private const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
+        private const string GraphUserAppsLastImportedKey = "GraphUserAppsLastImported";
+        private const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
+
+        /// <summary>
+        /// Runs a "non-fresh" Graph import section at most once per <paramref name="intervalHours"/>.
+        /// The last-run timestamp is persisted via <see cref="IImportLastRunStore"/> (Redis when
+        /// configured, otherwise in-memory) so the gate survives the per-cycle recreation of this
+        /// importer. An interval of 0 disables the gate (runs every cycle); <c>ForceGraphMetadataImport</c>
+        /// bypasses it for one run. Redis failures are fail-open (the section still runs).
+        /// </summary>
+        private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task> sectionWork)
+        {
+            var force = _settings.ForceGraphMetadataImport;
+            var lastRun = await _lastRunStore.GetLastRunUtc(key);
+
+            if (!ImportCadenceGate.ShouldRun(lastRun, intervalHours, force, DateTime.UtcNow))
+            {
+                _logger.LogInformation($"Skipping {sectionName}: ran recently ({lastRun:u} UTC). " +
+                    $"Next run after {lastRun?.AddHours(intervalHours):u} UTC (interval {intervalHours}h). " +
+                    $"Set ForceGraphMetadataImport=true or clear the '{key}' cache key to override.");
+                return;
+            }
+
+            if (force)
+            {
+                _logger.LogInformation($"ForceGraphMetadataImport=true; bypassing the cadence gate for {sectionName}.");
+            }
+
+            var timer = new JobTimer(_logger, sectionName);
+            timer.Start();
+
+            await sectionWork();
+
+            timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+
+            // Record the run only after success (so a failure doesn't suppress the next attempt) and only
+            // when gating is active (interval > 0).
+            if (intervalHours > 0)
+            {
+                await _lastRunStore.SetLastRunUtc(key, DateTime.UtcNow);
+            }
         }
 
 
@@ -50,15 +104,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (settings.ImportJobSettings.GraphUsersMetadata)
             {
-                var userMetadaTimer = new JobTimer(_logger, "User metadata refresh");
-                userMetadaTimer.Start();
-
-                // Update Graph users first
-                var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient);
-                await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
-
-                // Track finished event 
-                userMetadaTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                await RunGraphSectionIfDueAsync(GraphUsersMetadataLastImportedKey, _settings.GraphMetadataImportIntervalHours, "User metadata refresh", async () =>
+                {
+                    // Update Graph users first
+                    var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient);
+                    await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
+                });
             }
             else
                 _logger.LogInformation("Skipping user metadata import", graphUserGroupsCache);
@@ -69,14 +120,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Process Teams data
                 if (settings.ImportJobSettings.GraphUserApps)
                 {
-                    var userAppsTimer = new JobTimer(_logger, "User Teams apps refresh");
-                    userAppsTimer.Start();
-                    var userAppsLogUpdater = new UserAppLogUpdater(_logger, _settings);
-
-                    await userAppsLogUpdater.UpdateUserInstalledApps(_graphClient, graphUserGroupsCache, userGroupsFilter);
-
-                    // Track finished event 
-                    userAppsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                    await RunGraphSectionIfDueAsync(GraphUserAppsLastImportedKey, _settings.GraphMetadataImportIntervalHours, "User Teams apps refresh", async () =>
+                    {
+                        var userAppsLogUpdater = new UserAppLogUpdater(_logger, _settings);
+                        await userAppsLogUpdater.UpdateUserInstalledApps(_graphClient, graphUserGroupsCache, userGroupsFilter);
+                    });
                 }
                 else
                     _logger.LogInformation("Skipping user Teams apps import", graphUserGroupsCache);
@@ -101,16 +149,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 if (settings.ImportJobSettings.GraphTeams)
                 {
-                    var teamsTimer = new JobTimer(_logger, "Teams import");
-                    teamsTimer.Start();
+                    await RunGraphSectionIfDueAsync(GraphTeamsLastImportedKey, _settings.GraphTeamsImportIntervalHours, "Teams import", async () =>
+                    {
+                        var teamsImporter = new TeamsImporter(_logger, _settings, _graphClient);
 
-                    var teamsImporter = new TeamsImporter(_logger, _settings, _graphClient);
-
-                    var teamsConfig = await TeamsCrawlConfig.LoadFromDb(db);
-                    await teamsImporter.RefreshAndSaveAllTeamsData(teamsConfig);
-
-                    // Track finished event 
-                    teamsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+                        var teamsConfig = await TeamsCrawlConfig.LoadFromDb(db);
+                        await teamsImporter.RefreshAndSaveAllTeamsData(teamsConfig);
+                    });
                 }
                 else
                     _logger.LogInformation("Skipping Teams import", graphUserGroupsCache);
