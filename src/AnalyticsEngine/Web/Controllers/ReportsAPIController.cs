@@ -54,16 +54,31 @@ namespace Web.AnalyticsWeb.Controllers
         // snapshot makes the most recent week look like a sudden collapse in activity.
         private const int UsageReportLagDays = 3;
 
-        internal const string CopilotAuditMergeJoin =
-            "INNER MERGE JOIN dbo.audit_events AS au ON c.event_id = au.id";
-
+        // The Copilot charts join copilot_chats to audit_events. Both are clustered on GUIDs, so an
+        // INNER MERGE JOIN looks attractive for wide windows - but it was measured and it is not.
+        //
+        // Benchmarked at 4m audit_events rows (synthetic, 2 years), medians of 4 warm runs with the plan
+        // cache cleared, comparing the natural join against a forced INNER MERGE JOIN:
+        //
+        //   window | natural reads | natural ms | forced MERGE reads | forced MERGE ms
+        //   -------+---------------+------------+--------------------+----------------
+        //    15d   |         4,206 |        729 |              4,206 |            959
+        //    30d   |         5,210 |        816 |             73,857 |            952
+        //    45d   |         6,009 |        945 |             73,857 |          1,051
+        //    90d   |         7,884 |      1,134 |             73,857 |          1,177
+        //   180d   |        10,639 |      1,454 |             73,857 |          1,182
+        //   365d   |        14,799 |      1,899 |             73,857 |          1,372
+        //
+        // The forced merge join degrades to a FULL SCAN of audit_events at every window (a flat 73,857
+        // reads), because a merge needs both inputs sorted on the join key and the index seek returns
+        // time_stamp order, not GUID order. It buys at most ~0.5s of elapsed time beyond ~180 days and
+        // costs 5-12x the logical reads to get it. Logical reads are the primary signal here (stable
+        // across machines, and what actually bites under concurrent report load), so the hint loses.
+        //
+        // Hence: always use the natural join and let the optimiser pick, with OPTION (RECOMPILE) so the
+        // real window drives the plan. Do not reintroduce a join hint without re-measuring.
         internal const string CopilotAuditNaturalJoin =
             "INNER JOIN dbo.audit_events AS au ON c.event_id = au.id";
-
-        // Benchmarked at 5m audit rows with both dense (1m chats) and sparse (10k/50k chats)
-        // histories: natural joins win for the one-month UI window, while merge joins prevent
-        // severe hash-plan regressions for the wider windows. Agent-name filters always stay natural.
-        private const int CopilotMergeJoinThresholdDays = 45;
 
         // GET: api/Reports/areas
         // Which report areas are available, based on the enabled imports.
@@ -258,10 +273,10 @@ namespace Web.AnalyticsWeb.Controllers
             bool hasAgentFilter,
             DateTime? today = null)
         {
-            var windowDays = ((today ?? DateTime.UtcNow.Date) - from.Date).TotalDays;
-            return !hasAgentFilter && windowDays >= CopilotMergeJoinThresholdDays
-                ? CopilotAuditMergeJoin
-                : CopilotAuditNaturalJoin;
+            // Always the natural join - see the measurements on CopilotAuditNaturalJoin. The parameters
+            // are kept so callers (and tests) still express intent, and so a future, re-measured rule
+            // has somewhere to live.
+            return CopilotAuditNaturalJoin;
         }
 
         private static List<Task<ReportChart>> CopilotAgentCharts(
