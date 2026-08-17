@@ -12,6 +12,63 @@ namespace Tests.UnitTests
     public class ReportsAPIControllerTests
     {
         [TestMethod]
+        public void FirstWorkloadTimeout_DoesNotAbandonTheRemainingWorkloads()
+        {
+            // The workloads run in a fixed order and the first one is not special. Bailing out on the
+            // first timeout left rowsBySeries empty, so the chart errored anyway - defeating the whole
+            // point of partial rendering. Keep going until something has actually been retrieved.
+            var noRowsYet = new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>();
+
+            Assert.IsFalse(
+                ReportsAPIController.ShouldStopAfterSeriesFailure(TimeoutException(), noRowsYet),
+                "A timeout on the first workload must not stop the others - that would blank the chart.");
+
+            // A workload that returned zero rows is not data to draw either.
+            var emptySeries = new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>
+            {
+                new KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>(
+                    "Teams", new List<ReportsAPIController.WeekValueRow>()),
+            };
+            Assert.IsFalse(
+                ReportsAPIController.ShouldStopAfterSeriesFailure(TimeoutException(), emptySeries),
+                "An empty series is nothing to render, so keep trying the remaining workloads.");
+        }
+
+        [TestMethod]
+        public void TimeoutStopsRemainingWorkloads_OnceSomethingCanBeDrawn()
+        {
+            var week = new DateTime(2026, 8, 10);
+            var populated = new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>
+            {
+                Series("Teams", week),
+            };
+
+            Assert.IsTrue(
+                ReportsAPIController.ShouldStopAfterSeriesFailure(TimeoutException(), populated),
+                "With data already retrieved, stop rather than waiting on more timeouts.");
+        }
+
+        [TestMethod]
+        public void NonTimeoutFailure_NeverStopsTheRemainingWorkloads()
+        {
+            var week = new DateTime(2026, 8, 10);
+            var populated = new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>
+            {
+                Series("Teams", week),
+            };
+
+            Assert.IsFalse(
+                ReportsAPIController.ShouldStopAfterSeriesFailure(
+                    new InvalidOperationException("bad column"), populated),
+                "A workload-specific error says nothing about the other workloads.");
+        }
+
+        private static Exception TimeoutException()
+        {
+            return new Exception("outer", new TimeoutException("The wait operation timed out"));
+        }
+
+        [TestMethod]
         public void CompleteMultiTimeSeries_QueryFailureKeepsSuccessfulWorkloads()
         {
             var week = new DateTime(2026, 8, 10);

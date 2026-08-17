@@ -112,7 +112,7 @@ namespace Common.Entities.Config
                 ? maxSummaryFetchConcurrency
                 : 8;
 
-            // Import "aggressiveness" preset (High | Balanced | Gentle, default Balanced). It provides
+            // Import "aggressiveness" preset (High | Balanced | Gentle, default High). It provides
             // the default values for the burst/cadence knobs below so an admin can ease up CPU usage
             // with a single setting. Any explicit per-knob AppSetting still overrides the preset.
             this.ImportAggressiveness = ParseAggressiveness(ConfigurationManager.AppSettings.Get("ImportAggressiveness"));
