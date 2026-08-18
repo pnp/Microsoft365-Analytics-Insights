@@ -27,6 +27,5 @@ The more specific, existing metrics remain available:
 - Ad-hoc and scheduled one-time/recurring organized and attended counts
 
 **Breaking schema change:** None. Existing Power BI models do not need to remove, rename, or remap
-any columns. The installer includes a guarded repair that restores `Teams Meetings` only if an
-earlier draft of the script removed it. Historical rows are not rewritten; newly imported data uses
-the new meaning.
+any columns. The existing profiling schema already retains `Teams Meetings`. Historical rows are
+not rewritten; newly imported data uses the new meaning.
