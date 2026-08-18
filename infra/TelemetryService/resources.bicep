@@ -36,6 +36,7 @@ var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId(
   '4633458b-17de-408a-b874-0445c86b69e6'
 )
 var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
+var easyAuthIssuer = '${environment().authentication.loginEndpoint}${azureAdTenantId}/v2.0'
 
 resource appIntegrationNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   name: appIntegrationNsgName
@@ -415,6 +416,46 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
   }
 }
 
+// EasyAuth validates bearer tokens with the App Service MISE runtime, while the
+// application remains responsible for enforcing dashboard scopes and roles.
+resource easyAuthSettings 'Microsoft.Web/sites/config@2024-04-01' = {
+  parent: webApp
+  name: 'authsettingsV2'
+  properties: {
+    platform: {
+      enabled: true
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: false
+      unauthenticatedClientAction: 'AllowAnonymous'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: azureAdClientId
+          openIdIssuer: easyAuthIssuer
+        }
+        validation: {
+          allowedAudiences: [
+            azureAdClientId
+            'api://${azureAdClientId}'
+          ]
+        }
+      }
+    }
+    login: {
+      tokenStore: {
+        enabled: false
+      }
+    }
+    httpSettings: {
+      requireHttps: true
+    }
+  }
+}
+
 resource ftpPublishingPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-04-01' = {
   parent: webApp
   name: 'ftp'
@@ -461,6 +502,7 @@ resource webAppSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     WEBSITE_HEALTHCHECK_MAXPINGFAILURES: '5'
     SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
     ENABLE_ORYX_BUILD: 'false'
+    WEBSITE_AAD_ENABLE_MISE: 'true'
     TelemetrySecret: '@Microsoft.KeyVault(VaultName=${keyVault.name};SecretName=${telemetrySecretName})'
     CosmosDb__AccountEndpoint: cosmosAccount.properties.documentEndpoint
     CosmosDb__DatabaseName: cosmosDatabaseName
@@ -489,6 +531,7 @@ output webAppName string = webApp.name
 output webAppUrl string = 'https://${webApp.properties.defaultHostName}'
 output statsApiUrl string = 'https://${webApp.properties.defaultHostName}/api/Telemetry'
 output authConfigUrl string = 'https://${webApp.properties.defaultHostName}/api/auth/config'
+output easyAuthIssuer string = easyAuthIssuer
 output cosmosAccountName string = cosmosAccount.name
 output keyVaultName string = keyVault.name
 output appServicePrincipalId string = webApp.identity.principalId

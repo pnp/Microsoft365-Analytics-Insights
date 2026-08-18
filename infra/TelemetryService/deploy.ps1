@@ -441,7 +441,10 @@ function Publish-TelemetryApplication {
 function Test-TelemetryDeployment {
     param(
         [Parameter(Mandatory)]
-        [pscustomobject] $Outputs
+        [pscustomobject] $Outputs,
+
+        [Parameter(Mandatory)]
+        [string] $ClientId
     )
 
     $healthUrl = "$($Outputs.webAppUrl.value)/health"
@@ -463,9 +466,119 @@ function Test-TelemetryDeployment {
         throw "Health endpoint did not become ready: $healthUrl"
     }
 
+    $webAppResourceId = Invoke-AzCli -Arguments @(
+        'webapp', 'show',
+        '--resource-group', $ResourceGroupName,
+        '--name', $WebAppName,
+        '--query', 'id',
+        '--output', 'tsv'
+    )
+
+    $authSettings = Invoke-AzRestJson -Method get `
+        -Uri "https://management.azure.com$webAppResourceId/config/authsettingsV2/list?api-version=2024-04-01"
+    if (-not $authSettings -or -not $authSettings.properties) {
+        throw 'App Service Authentication settings were not returned.'
+    }
+
+    $authProperties = $authSettings.properties
+    if ($authProperties.platform.enabled -ne $true) {
+        throw 'App Service Authentication is not enabled.'
+    }
+    if ($authProperties.platform.runtimeVersion -ne '~1') {
+        throw "App Service Authentication runtime is '$($authProperties.platform.runtimeVersion)'; expected '~1'."
+    }
+    if ($authProperties.globalValidation.requireAuthentication -ne $false) {
+        throw 'EasyAuth must allow anonymous requests so signed telemetry uploads can reach the application.'
+    }
+    if ($authProperties.globalValidation.unauthenticatedClientAction -ne 'AllowAnonymous') {
+        throw "EasyAuth unauthenticated action is '$($authProperties.globalValidation.unauthenticatedClientAction)'; expected 'AllowAnonymous'."
+    }
+
+    $azureAdProvider = $authProperties.identityProviders.azureActiveDirectory
+    if ($azureAdProvider.enabled -ne $true) {
+        throw 'The EasyAuth Microsoft Entra provider is not enabled.'
+    }
+    if ($azureAdProvider.registration.clientId -ne $ClientId) {
+        throw 'The EasyAuth client ID does not match the telemetry dashboard app registration.'
+    }
+    if ($azureAdProvider.registration.openIdIssuer -ne $Outputs.easyAuthIssuer.value) {
+        throw "EasyAuth issuer is '$($azureAdProvider.registration.openIdIssuer)'; expected '$($Outputs.easyAuthIssuer.value)'."
+    }
+
+    $allowedAudiences = @($azureAdProvider.validation.allowedAudiences)
+    foreach ($expectedAudience in @($ClientId, "api://$ClientId")) {
+        if ($allowedAudiences -notcontains $expectedAudience) {
+            throw "EasyAuth allowed audiences do not include '$expectedAudience'."
+        }
+    }
+    if ($authProperties.login.tokenStore.enabled -ne $false) {
+        throw 'The EasyAuth token store should remain disabled because the SPA manages its own tokens.'
+    }
+
+    $miseSetting = Invoke-AzCli -Arguments @(
+        'webapp', 'config', 'appsettings', 'list',
+        '--resource-group', $ResourceGroupName,
+        '--name', $WebAppName,
+        '--query', "[?name=='WEBSITE_AAD_ENABLE_MISE'].value | [0]",
+        '--output', 'tsv'
+    )
+    if ($miseSetting -ne 'true') {
+        throw "WEBSITE_AAD_ENABLE_MISE is '$miseSetting'; expected 'true'."
+    }
+
+    $easyAuthReady = $false
+    for ($attempt = 1; $attempt -le 30; $attempt++) {
+        $easyAuthVersionResponse = $null
+        try {
+            $easyAuthVersionResponse = Invoke-WebRequest `
+                -Uri "$($Outputs.webAppUrl.value)/.auth/version" `
+                -TimeoutSec 20 `
+                -SkipHttpErrorCheck
+        }
+        catch {
+            # App Service Authentication can recycle after authsettings or app settings change.
+        }
+
+        if ($null -eq $easyAuthVersionResponse) {
+            Start-Sleep -Seconds 10
+            continue
+        }
+
+        if ($easyAuthVersionResponse.StatusCode -eq 401) {
+            # Linux EasyAuth can require an authenticated session for this endpoint.
+            # A 401 proves the platform route is active instead of falling through to the SPA.
+            $easyAuthReady = $true
+            break
+        }
+
+        if ($easyAuthVersionResponse.StatusCode -eq 200) {
+            $versionMatch = [regex]::Match($easyAuthVersionResponse.Content, '\d+(?:\.\d+){2,3}')
+            if ($versionMatch.Success) {
+                $easyAuthVersion = [version] $versionMatch.Value
+                if ($easyAuthVersion -le [version] '1.7.0') {
+                    throw "EasyAuth runtime version is $easyAuthVersion; a version newer than 1.7.0 is required."
+                }
+                $easyAuthReady = $true
+                break
+            }
+        }
+
+        Start-Sleep -Seconds 10
+    }
+    if (-not $easyAuthReady) {
+        throw 'EasyAuth did not begin intercepting platform authentication routes.'
+    }
+
     $authConfig = Invoke-WebRequest -Uri $Outputs.authConfigUrl.value -TimeoutSec 20 -SkipHttpErrorCheck
     if ($authConfig.StatusCode -ne 200) {
         throw "Authentication configuration endpoint returned HTTP $($authConfig.StatusCode)."
+    }
+    $authClientConfig = $authConfig.Content | ConvertFrom-Json -ErrorAction Stop
+    if ($authClientConfig.clientId -ne $ClientId) {
+        throw 'The deployed dashboard authentication configuration has an unexpected client ID.'
+    }
+    if ($authClientConfig.scope -ne "api://$ClientId/$script:ScopeName") {
+        throw "The deployed dashboard scope is '$($authClientConfig.scope)'; expected 'api://$ClientId/$script:ScopeName'."
     }
 
     $protectedEndpoint = Invoke-WebRequest `
@@ -498,13 +611,6 @@ function Test-TelemetryDeployment {
         throw 'Key Vault public network access is not disabled.'
     }
 
-    $webAppResourceId = Invoke-AzCli -Arguments @(
-        'webapp', 'show',
-        '--resource-group', $ResourceGroupName,
-        '--name', $WebAppName,
-        '--query', 'id',
-        '--output', 'tsv'
-    )
     $configReferences = Invoke-AzRestJson -Method get `
         -Uri "https://management.azure.com$webAppResourceId/config/configreferences/appsettings?api-version=2026-07-15"
     $telemetrySecretReference = @($configReferences.value) |
@@ -598,7 +704,7 @@ try {
         Publish-TelemetryApplication -WebAppResourceId $webAppResourceId
     }
 
-    Test-TelemetryDeployment -Outputs $outputs
+    Test-TelemetryDeployment -Outputs $outputs -ClientId $clientId
 
     Write-Host "Telemetry Service deployed successfully: $($outputs.statsApiUrl.value)"
 }
