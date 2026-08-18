@@ -17,6 +17,14 @@
 /src/Misc/BuildsSite/Web/ClientApp/.env.development
 /src/Misc/packages
 **/.vscode
+
+# TelemetryService web.client needs .vscode/launch.json checked in so VS 2026's
+# JavaScript SDK deploy step has a launch profile to read (otherwise it throws
+# "Value cannot be null. Parameter name: source" on F5). The pair below re-includes
+# the directory, re-excludes its contents, then re-includes just launch.json.
+!src/TelemetryService/web.client/.vscode/
+src/TelemetryService/web.client/.vscode/*
+!src/TelemetryService/web.client/.vscode/launch.json
 *.tmp
 *.tmp.*
 /src/SPO/Scripts.AITrackerInstaller/AITracker/builduntdeploy.ps1
@@ -36,3 +44,8 @@
 # VSTest output (vstest.console.exe writes TRX logs + per-run subfolders here)
 **/TestResults/
 *.trx
+# Telemetry Service Azure deployment values and artifacts
+/.azure/*.parameters.json
+/infra/TelemetryService/*.parameters.json
+/infra/TelemetryService/.deploy/
+/artifacts/TelemetryService/

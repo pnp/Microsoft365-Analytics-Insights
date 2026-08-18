@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.VisualStudio.JavaScript.Sdk/1.0.5171056">
+  <PropertyGroup>
+    <StartupCommand>npm run dev</StartupCommand>
+    <JavaScriptTestRoot>src\</JavaScriptTestRoot>
+    <JavaScriptTestFramework>Vitest</JavaScriptTestFramework>
+    <!-- Allows the build (or compile) script located on package.json to run on Build -->
+    <ShouldRunBuildScript>false</ShouldRunBuildScript>
+    <!-- Folder where production build objects will be placed -->
+    <BuildOutputFolder>$(MSBuildProjectDirectory)\dist</BuildOutputFolder>
+    <!--
+      Required by Visual Studio's deploy step for the .esproj (especially VS 2026+).
+      The JS SDK's Deploy target reads the launch profile from .vscode/launch.json
+      (see https://learn.microsoft.com/en-us/visualstudio/javascript/debug-nodejs).
+      Without DebuggerFlavor set, or without a launch.json with at least one
+      configuration, the deploy throws "Value cannot be null. Parameter name: source".
+      The actual SPA launch is driven by Microsoft.AspNetCore.SpaProxy on the host
+      project (Web.Server) — we don't want VS to attach a JS debugger here.
+    -->
+    <DebuggerFlavor>LaunchSpaProxyWithoutDebugging</DebuggerFlavor>
+  </PropertyGroup>
+</Project>

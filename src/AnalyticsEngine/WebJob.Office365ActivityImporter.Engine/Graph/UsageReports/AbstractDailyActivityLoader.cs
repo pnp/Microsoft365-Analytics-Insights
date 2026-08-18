@@ -4,8 +4,12 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Entity;
+using System.Data.Entity.Infrastructure;
+using System.Data.SqlClient;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 
@@ -40,11 +44,120 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         public int SaveBatchSize { get; set; } = 1000;
 
-        public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax)
+        /// <summary>
+        /// Recent-day window (in days) during which Graph usage data can still change and therefore must be
+        /// re-imported every run. Graph usage reports have a ~2-3 day latency and are stable once finalized, so
+        /// dates older than this can be treated as final. A date is skipped only when it was already inside the
+        /// window of a previously completed import phase; rows newer than that completion marker may be from an
+        /// interrupted save and are retried. Settable so tests can exercise the boundary.
+        /// </summary>
+        public int RefreshableRecentDays { get; set; } = 3;
+
+        /// <summary>
+        /// Number of rows actually inserted/updated in SQL by the last <see cref="SaveLoadedReportsToSql"/> call.
+        /// Unchanged rows are dirty-checked and skipped, so this is 0 when nothing changed. Exposed for tests and
+        /// diagnostics.
+        /// </summary>
+        public int LastSaveDbWriteCount { get; private set; }
+
+        private const int MIN_DAYS_BACK = 3;    // Activity reports don't tend to refresh until a couple of days late; always collect something useful.
+        private const int MAX_DAYS_BACK = 28;   // Graph only retains ~28 days of daily detail.
+
+        private static int ClampDaysBack(int daysBackMax)
         {
-            // Activity reports don't tend to refresh until a couple of days late. Make sure we collect something useful. 
-            if (daysBackMax < 3) daysBackMax = 3;
-            else if (daysBackMax > 28) daysBackMax = 28;        // Also don't live for more than 28 days
+            if (daysBackMax < MIN_DAYS_BACK) return MIN_DAYS_BACK;
+            if (daysBackMax > MAX_DAYS_BACK) return MAX_DAYS_BACK;
+            return daysBackMax;
+        }
+
+        /// <summary>
+        /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL, old
+        /// enough that Graph will no longer change them, and covered by a previously completed import phase. These
+        /// can be skipped entirely on the next import - no re-download, no re-write. Dates within the recent window
+        /// or newer than the completion marker are never returned because they can still change or be partial.
+        /// </summary>
+        public async Task<HashSet<DateTime>> GetFinalizedStoredDatesToSkipAsync(
+            AnalyticsEntitiesContext db,
+            int daysBackMax,
+            DateTime? lastSuccessfulImport)
+        {
+            daysBackMax = ClampDaysBack(daysBackMax);
+            if (!lastSuccessfulImport.HasValue)
+            {
+                // Existing rows could be from an interrupted import. Until a full usage-report
+                // phase completes, no stored date is proven complete enough to skip safely.
+                return new HashSet<DateTime>();
+            }
+
+            var today = DateTime.UtcNow.Date;
+            var windowStart = today.AddDays(-daysBackMax);
+            var mutableCutoff = today.AddDays(-RefreshableRecentDays);   // dates >= this can still change; never skip them
+            var completedCutoff = lastSuccessfulImport.Value.ToUniversalTime().Date;
+            var safeCutoff = completedCutoff < mutableCutoff ? completedCutoff : mutableCutoff;
+
+            var table = GetTable(db);
+            if (await HasLeadingDateIndexAsync(db))
+            {
+                // The window contains at most 25 finalized dates. DISTINCT over an indexed range
+                // still scans every user's row for every date (millions of rows at 200k users);
+                // bounded existence seeks touch one index entry per candidate date instead.
+                var storedFinalizedDates = new HashSet<DateTime>();
+                for (var date = windowStart; date < safeCutoff; date = date.AddDays(1))
+                {
+                    if (await table.AnyAsync(activity => activity.Date == date))
+                    {
+                        storedFinalizedDates.Add(date);
+                    }
+                }
+
+                return storedFinalizedDates;
+            }
+
+            // Some account/group report tables have no date-leading index. Repeated existence
+            // probes would each scan the table, so use one range scan until an index is available.
+            var scannedDates = await table
+                .Where(activity => activity.Date >= windowStart && activity.Date < safeCutoff)
+                .Select(activity => activity.Date)
+                .Distinct()
+                .ToListAsync();
+
+            return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
+        }
+
+        internal async Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
+        {
+            var table = typeof(TReportDbType).GetCustomAttribute<TableAttribute>();
+            if (table == null)
+            {
+                throw new InvalidOperationException(
+                    $"{typeof(TReportDbType).Name} must declare TableAttribute to inspect its date index.");
+            }
+
+            var qualifiedTableName = $"{table.Schema ?? "dbo"}.{table.Name}";
+            const string sql = @"
+SELECT CAST(CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.indexes AS i
+    INNER JOIN sys.index_columns AS ic
+      ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+    INNER JOIN sys.columns AS c
+      ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+    WHERE i.object_id = OBJECT_ID(@tableName)
+      AND i.is_disabled = 0
+      AND i.is_hypothetical = 0
+      AND i.has_filter = 0
+      AND ic.key_ordinal = 1
+      AND c.name = N'date'
+) THEN 1 ELSE 0 END AS bit);";
+
+            return await db.Database
+                .SqlQuery<bool>(sql, new SqlParameter("@tableName", qualifiedTableName))
+                .SingleAsync();
+        }
+
+        public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax, ISet<DateTime> datesToSkip = null)
+        {
+            daysBackMax = ClampDaysBack(daysBackMax);
 
             LoadedReportPages.Clear();
 
@@ -57,10 +170,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // produces the wrong date bucket near midnight.
                 var dt = DateTime.UtcNow.AddDays(daysBack);
 
+                // Finalized days we already hold don't change in Graph - skip the (often slow) paged download entirely.
+                if (datesToSkip != null && datesToSkip.Contains(dt.Date))
+                {
+                    Telemetry.LogInformation($"Skipping {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")} - already stored and finalized (no longer changes in Graph).");
+                    continue;
+                }
+
                 Telemetry.LogInformation($"Loading {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")}");
 
-                var requestUrl = $"{ReportGraphURL}(date={dt.ToString("yyyy-MM-dd")})?$format=application/json";
-                var dayReports = await _client.LoadAllPagesWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry);
+                var dayReports = await LoadReportPageForDateFromGraph(dt);
 
                 if (LoadedReportPages.ContainsKey(dt))
                 {
@@ -75,11 +194,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         }
 
         /// <summary>
+        /// Fetch one day's report from Graph (all pages, with throttle retries). Virtual so tests can supply canned
+        /// data with no HTTP, and so the date-skipping in <see cref="PopulateLoadedReportPagesFromGraph"/> can be
+        /// verified without hitting Graph.
+        /// </summary>
+        protected virtual Task<List<TUserActivityUserDetail>> LoadReportPageForDateFromGraph(DateTime date)
+        {
+            var requestUrl = $"{ReportGraphURL}(date={date.ToString("yyyy-MM-dd")})?$format=application/json";
+            return _client.LoadAllPagesWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry);
+        }
+
+        /// <summary>
         /// Save to SQL. Needs a shared ConcurrentLookupDbIdsCache if running in parallel with other imports.
         /// </summary>
         public async Task SaveLoadedReportsToSql(ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
         {
-            int i = 0; var enUS = new System.Globalization.CultureInfo("en-US");
+            int i = 0; int dbWrites = 0; var enUS = new System.Globalization.CultureInfo("en-US");
             var db = lookupCache.DB;
 
             Telemetry.LogInformation($"Saving {this.GetType().Name} for {LoadedReportPages.Keys.Count} dates");
@@ -166,22 +296,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         }
                         PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
 
-                        // Auto-detect is off, so state the change explicitly.
+                        // Auto-detect is off, so state the change explicitly. Only write when something actually
+                        // changed: existing rows for finalized days re-fetched by the recent-window rule are almost
+                        // always identical to what's stored, so dirty-checking skips the vast majority of UPDATEs -
+                        // the dominant cost of this import at large-tenant scale.
+                        bool willWrite;
                         if (isNewLog)
                         {
                             GetTable(db).Add(dateRequestedLog);
+                            willWrite = true;
                         }
                         else
                         {
-                            db.Entry(dateRequestedLog).State = EntityState.Modified;
+                            willWrite = HasMappedValueChanged(db.Entry(dateRequestedLog));
+                            if (willWrite)
+                            {
+                                db.Entry(dateRequestedLog).State = EntityState.Modified;
+                            }
                         }
 
                         i++;
-                        pendingChanges++;
-                        if (pendingChanges >= SaveBatchSize)
+                        if (willWrite)
                         {
-                            await db.SaveChangesAsync();
-                            pendingChanges = 0;
+                            dbWrites++;
+                            pendingChanges++;
+                            if (pendingChanges >= SaveBatchSize)
+                            {
+                                await db.SaveChangesAsync();
+                                pendingChanges = 0;
+                            }
                         }
                     }
 
@@ -198,6 +341,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             {
                 db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
             }
+
+            LastSaveDbWriteCount = dbWrites;
         }
 
         // Resolve the DB id for a report row's user/group lookup, using the shared cross-thread id cache and
@@ -244,6 +389,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             {
                 entry.State = EntityState.Detached;
             }
+        }
+
+        // True if any mapped scalar value on the tracked entity differs from the value originally loaded from the
+        // DB. Compares the EF6 original/current value snapshots directly so it works with
+        // AutoDetectChangesEnabled = false (auto-detect is deliberately off to keep bulk saves O(n)). Navigation
+        // properties and [NotMapped] members (e.g. AssociatedLookupId) are not in these snapshots, so only real
+        // column changes trigger an UPDATE.
+        private static bool HasMappedValueChanged(DbEntityEntry entry)
+        {
+            var current = entry.CurrentValues;
+            var original = entry.OriginalValues;
+            foreach (var propertyName in current.PropertyNames)
+            {
+                if (!object.Equals(original[propertyName], current[propertyName]))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         protected virtual Task<bool> IdInScope(string lookupId)

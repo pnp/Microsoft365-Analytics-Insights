@@ -19,7 +19,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         {
             // Convert serialised object to DB object
             todaysLog.CallCount = userActivityReportPage.CallCount;
-            todaysLog.MeetingCount = userActivityReportPage.MeetingCount;
+            // Graph no longer populates meetingCount. Preserve the published meetings_count
+            // contract by storing the supported total meetings-attended statistic instead.
+            todaysLog.MeetingCount = userActivityReportPage.MeetingsAttendedCount;
             todaysLog.PrivateChatMessageCount = userActivityReportPage.PrivateChatMessageCount;
             todaysLog.TeamChatMessageCount = userActivityReportPage.TeamChatMessageCount;
 
@@ -54,7 +56,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             count += activityPage.AdHocMeetingsAttendedCount;
             count += activityPage.AdHocMeetingsOrganizedCount;
             count += activityPage.CallCount;
-            count += activityPage.MeetingCount;
             count += activityPage.MeetingsAttendedCount;
             count += activityPage.MeetingsOrganizedCount;
             count += activityPage.PrivateChatMessageCount;

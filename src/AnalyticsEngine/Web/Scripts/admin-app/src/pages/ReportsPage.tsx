@@ -335,7 +335,10 @@ function ReportAreaView({
     <div className={styles.cards}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <Text size={200} className={styles.muted}>
-          {blurb} Weeks from {fromLabel} to now.
+          {blurb} Weeks from {fromLabel}
+          {area === 'usage'
+            ? '. Usage reports arrive a few days late, so the latest weeks appear once their report does.'
+            : ' to now.'}
         </Text>
         <Button
           appearance="subtle"
@@ -366,12 +369,21 @@ function ReportAreaView({
               <MessageBar intent="warning">
                 <MessageBarBody>Couldn't load this chart: {chart.error}</MessageBarBody>
               </MessageBar>
-            ) : chart.type === 'timeseries' && chart.series ? (
-              <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
-            ) : chart.type === 'bar' && chart.categories ? (
-              <CategoryBarChart categories={chart.categories} valueLabel={chart.valueLabel} />
             ) : (
-              <Text className={styles.muted}>No data for this period.</Text>
+              <>
+                {chart.warning && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>{chart.warning}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {chart.type === 'timeseries' && chart.series ? (
+                  <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
+                ) : chart.type === 'bar' && chart.categories ? (
+                  <CategoryBarChart categories={chart.categories} valueLabel={chart.valueLabel} />
+                ) : (
+                  <Text className={styles.muted}>No data for this period.</Text>
+                )}
+              </>
             )}
           </div>
         </Card>

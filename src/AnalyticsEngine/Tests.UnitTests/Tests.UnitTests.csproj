@@ -32,6 +32,7 @@
     <Compile Remove="Generated\**" />
     <Compile Include="AppConfigDefaultsTests.cs" />
     <Compile Include="PreInstallAdvisorTests.cs" />
+    <Compile Include="ImportCadenceTests.cs" />
     <Compile Include="AppInsightsAuthTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
@@ -142,6 +143,7 @@
     <Compile Include="PowerPlatformAuditEventManagerTests.cs" />
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
+    <Compile Include="ReportsAPIControllerTests.cs" />
     <Compile Include="SimplePropsDicTests.cs" />
     <Compile Include="PageUpdateEventListParseTests.cs" />
     <Compile Include="UserGroupsCacheTtlTests.cs" />
@@ -159,6 +161,9 @@
     <Compile Include="ShrinkUrlsFullUrlColumnMigrationTests.cs" />
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
+    <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
+    <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
+    <Compile Include="ScratchDatabase.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressRunner.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressTests.cs" />
     <Compile Include="StressHarness\CountingActivityReportPersistenceManager.cs" />
@@ -268,6 +273,11 @@
     <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj">
       <Project>{1919bde6-c311-426d-adb3-a1487133e397}</Project>
       <Name>WebJob.Office365ActivityImporter.Engine</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\Web\Web.csproj">
+      <Project>{944C6021-D995-4F92-8BF9-DC91FC514250}</Project>
+      <Name>Web</Name>
+      <Aliases>AnalyticsWeb</Aliases>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

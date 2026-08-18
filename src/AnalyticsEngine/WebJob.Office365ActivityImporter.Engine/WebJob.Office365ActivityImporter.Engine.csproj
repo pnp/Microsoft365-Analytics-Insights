@@ -89,6 +89,7 @@
     <Compile Include="ActivityAPI\ActivityReportSqlPersistenceManager.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="ActivityImportCache.cs" />
+    <Compile Include="ImportLastRunStore.cs" />
     <Compile Include="Entities\BaseUser.cs" />
     <Compile Include="Entities\ChatReactions.cs" />
     <Compile Include="Entities\Serialisation\BaseSerialisationClasses.cs" />

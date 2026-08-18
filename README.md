@@ -62,6 +62,10 @@ See also [Release notes](https://github.com/pnp/Microsoft365-Analytics-Insights/
 
 Some require extra configuration after install — see [Additional solutions](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance#additional-solutions).
 
+### Related projects in this repository
+
+- **[Telemetry Service](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Telemetry%20Service)** — the receiver and Entra-protected aggregate dashboard for opt-in anonymous product-usage reports. Uploads are signed, and the source is under [`src/TelemetryService/`](src/TelemetryService).
+
 ## Architecture & running costs
 
 The engine runs on a handful of Azure components (App Service web-jobs + admin site, Azure SQL, Redis, optional Service Bus / Cognitive Services / Automation). A medium environment (~20,000 users, 1 year of data) is roughly **€170/month**, dominated by the App Service plan and SQL database — *indicative only; verify current pricing for your region and scale*.

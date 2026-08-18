@@ -73,7 +73,7 @@ namespace Tests.UnitTests
             await graphAppIndentityOAuthContext.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(graphAppIndentityOAuthContext.Creds);
-            var graphImporter = new GraphImporter(logger, new NoUsersHaveGroupsUserGroupsCache(logger), graphAppIndentityOAuthContext, graphClient, authConfig);
+            var graphImporter = new GraphImporter(logger, new NoUsersHaveGroupsUserGroupsCache(logger), graphAppIndentityOAuthContext, graphClient, authConfig, lastRunStore: new InMemoryImportLastRunStore());
 
             await graphImporter.GetAndSaveActivityReportsMultiThreaded(1, new ManualGraphCallClient(graphAppIndentityOAuthContext, logger),
                 new NoUsersHaveGroupsUserGroupsCache(logger), new UserGroupsFilterModel());
@@ -324,6 +324,26 @@ namespace Tests.UnitTests
             Assert.AreEqual(3723, log.AudioDurationSeconds, "Audio duration must be total seconds, not the 0-59 component");
             Assert.AreEqual(2700, log.VideoDurationSeconds, "Video duration must be total seconds, not the 0-59 component");
             Assert.AreEqual(150, log.ScreenShareDurationSeconds, "Screen-share duration must be total seconds, not the 0-59 component");
+        }
+
+        [TestMethod]
+        public void TeamsUserUsageLoader_LegacyMeetingCountUsesMeetingsAttended()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var loader = new TestableTeamsUserUsageLoader(logger);
+
+            var page = new TeamsUserActivityUserDetail
+            {
+                MeetingCount = 99,
+                MeetingsAttendedCount = 7,
+                AudioDuration = "PT0S",
+                VideoDuration = "PT0S",
+                ScreenShareDuration = "PT0S",
+            };
+
+            var log = loader.Populate(page);
+
+            Assert.AreEqual(7, log.MeetingCount, "The legacy meetings_count column should contain total meetings attended");
         }
 
         /// <summary>

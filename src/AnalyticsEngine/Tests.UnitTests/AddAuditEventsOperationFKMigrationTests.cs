@@ -197,13 +197,21 @@ ALTER TABLE [dbo].[audit_events] WITH CHECK
                 await ResetFkStateAsync(db);
 
                 // Simulate the original Create DB.sql state: NOT NULL column with the
-                // legacy supporting index. Drop the modern index first because
-                // ALTER COLUMN can't run while any index references the column.
+                // legacy supporting index. Drop the modern indexes first because
+                // ALTER COLUMN can't run while any index references the column - including
+                // as an INCLUDE column, which is why IX_audit_events_time_stamp has to go
+                // too: IndexReportDateQueries rebuilt it as (time_stamp) INCLUDE
+                // (operation_id, user_id). This is a test-harness concern only - the test DB
+                // is already at head schema, whereas a real upgrade applies
+                // AddAuditEventsOperationFK (202605291207010) long before
+                // IndexReportDateQueries (202608131055001) adds the INCLUDE.
                 await ExecAsync(db, @"
 IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.audit_events') AND name = N'IX_operation_id')
     DROP INDEX [IX_operation_id] ON [dbo].[audit_events];
 IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.audit_events') AND name = N'IX_FK_events_event_operations')
-    DROP INDEX [IX_FK_events_event_operations] ON [dbo].[audit_events];");
+    DROP INDEX [IX_FK_events_event_operations] ON [dbo].[audit_events];
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.audit_events') AND name = N'IX_audit_events_time_stamp')
+    DROP INDEX [IX_audit_events_time_stamp] ON [dbo].[audit_events];");
                 await ExecAsync(db,
                     "ALTER TABLE [dbo].[audit_events] ALTER COLUMN [operation_id] int NOT NULL;");
                 await ExecAsync(db,
@@ -233,6 +241,12 @@ IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.audit_eve
                 finally
                 {
                     await DropFkIfExistsAsync(db, FkName);
+
+                    // Put IX_audit_events_time_stamp back for any test that runs after this
+                    // one against the shared LocalDB. Re-running the migration's own SQL keeps
+                    // the restored definition in step with the migration automatically - it is
+                    // guarded and idempotent, so it simply recreates the missing index.
+                    await ExecAsync(db, IndexReportDateQueries.Up_Sql);
                 }
             }
         }
