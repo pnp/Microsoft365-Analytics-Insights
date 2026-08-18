@@ -153,8 +153,56 @@ namespace Tests.UnitTests
             var publishInfo = publishData.FromXml(publishXml).GetKuduPublishInfo();
             var publishUri = InstallAppServiceContentsTask.BuildKuduPublishUri(publishInfo.RootUrl);
 
-            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/publish?type=zip", publishUri.ToString());
+            // async=true is not cosmetic: Azure's front end aborts any single request at ~230 seconds, so a
+            // synchronous publish of a large package fails with "500 - The request timed out" even when the
+            // deployment is fine. Losing this parameter silently reintroduces that failure.
+            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/publish?type=zip&async=true", publishUri.ToString());
             Assert.AreEqual("$contoso", publishInfo.Username);
+        }
+
+        [TestMethod]
+        public void DeploymentStatusUriPrefersKuduLocationHeader()
+        {
+            var fromHeader = InstallAppServiceContentsTask.ResolveDeploymentStatusUri(
+                new Uri("https://contoso.scm.azurewebsites.net/api/deployments/abc123"),
+                "contoso.scm.azurewebsites.net:443");
+
+            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/deployments/abc123", fromHeader.ToString());
+        }
+
+        [TestMethod]
+        public void DeploymentStatusUriFallsBackToLatestWhenNoLocationHeader()
+        {
+            var noHeader = InstallAppServiceContentsTask.ResolveDeploymentStatusUri(
+                null, "contoso.scm.azurewebsites.net:443");
+            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/deployments/latest", noHeader.ToString());
+
+            // A relative Location can't be polled directly, so it must fall back too.
+            var relativeHeader = InstallAppServiceContentsTask.ResolveDeploymentStatusUri(
+                new Uri("/api/deployments/abc123", UriKind.Relative), "contoso.scm.azurewebsites.net:443");
+            Assert.AreEqual("https://contoso.scm.azurewebsites.net/api/deployments/latest", relativeHeader.ToString());
+        }
+
+        [TestMethod]
+        public void KuduDeploymentStatusDistinguishesSuccessFailureAndInProgress()
+        {
+            // Kudu: 3 = Failed, 4 = Success. "complete" gates both.
+            var success = InstallAppServiceContentsTask.ParseDeploymentStatus(
+                @"{""id"":""abc"",""status"":4,""status_text"":"""",""complete"":true,""progress"":""""}");
+            Assert.IsTrue(success.IsSuccess, "status 4 + complete must be treated as a successful deployment.");
+            Assert.IsFalse(success.IsFailed);
+
+            var failed = InstallAppServiceContentsTask.ParseDeploymentStatus(
+                @"{""id"":""abc"",""status"":3,""status_text"":""Deployment failed"",""complete"":true,""log_url"":""https://contoso.scm.azurewebsites.net/api/deployments/abc/log""}");
+            Assert.IsTrue(failed.IsFailed, "status 3 + complete must be surfaced as a failure, not a success.");
+            Assert.IsFalse(failed.IsSuccess);
+
+            // Still running: must NOT be reported as either outcome, or we'd stop polling early.
+            var running = InstallAppServiceContentsTask.ParseDeploymentStatus(
+                @"{""id"":""abc"",""status"":2,""status_text"":""Deploying"",""complete"":false,""progress"":""Copying files""}");
+            Assert.IsFalse(running.IsSuccess);
+            Assert.IsFalse(running.IsFailed);
+            Assert.AreEqual("Copying files", running.DescribeProgress());
         }
 
         [TestMethod]
