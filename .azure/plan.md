@@ -3,6 +3,12 @@
 > **Status:** Deployed
 
 Generated: 2026-08-13T15:24:00+02:00
+Updated: 2026-08-18T14:28:15+02:00
+
+**Current change:** Enable the App Service MISE authentication runtime in
+allow-anonymous mode so bearer-token validation emits compliant key-discovery
+telemetry while the ASP.NET Core application continues enforcing dashboard
+scope and role authorization.
 
 ---
 
@@ -190,6 +196,21 @@ The service already:
 - [x] Verify public health/auth endpoints and private Cosmos/Key Vault network state
 - [x] Update plan status to `Deployed`
 
+### Phase 5: MISE Remediation
+
+- [x] Add non-enforcing App Service Authentication for the existing Entra SPA/API
+- [x] Enable the App Service MISE runtime
+- [x] Preserve anonymous signed uploads, health checks and MSAL configuration
+- [x] Add deployment checks for EasyAuth configuration, client ID, scope and runtime version
+- [x] Recompile the ARM template and build the Telemetry Service
+- [x] Reconfirm the production resource and Entra application out-of-band
+- [x] Confirm the production Azure CLI context with the user
+- [x] Reinvoke azure-validate after the Linux EasyAuth verification adjustment
+- [x] Run a production subscription what-if
+- [x] Deploy the infrastructure update
+- [ ] Generate authenticated dashboard traffic
+- [ ] Verify compliant MISE key-discovery telemetry after the reporting window
+
 ---
 
 ## 7. Validation Proof
@@ -218,6 +239,49 @@ The service already:
 **Validation timestamp:** 2026-08-13T17:02:02+02:00
 
 The original provisioned-throughput validation is retained for history; the later serverless validation is authoritative.
+
+### Current MISE remediation validation proof
+
+| Check | Sanitized command shape | Result | Timestamp |
+|-------|-------------------------|--------|-----------|
+| Production Azure context | `az account set/show` against retained out-of-band values | Pass; subscription and tenant confirmed by the user | 2026-08-18T14:47:03+02:00 |
+| Bicep compilation and ARM parity | `az bicep build --file infra/TelemetryService/main.bicep` plus SHA-256 comparison | Pass; checked-in ARM exactly matches Bicep output | 2026-08-18T14:47:03+02:00 |
+| Production ARM validation | `az deployment sub validate ... --parameters @<temporary-parameters>` | Pass; provisioning state `Succeeded` | 2026-08-18T14:47:03+02:00 |
+| Production what-if | `deploy.ps1 ... -AzureAdClientId <out-of-band> -WhatIf` | Pass; 29 convergent deployments, 5 ignored platform resources, no deletions | 2026-08-18T14:47:03+02:00 |
+| Application build | `dotnet build src/TelemetryService/Web.Server/Web.Server.csproj --configuration Release` | Pass; build succeeded | 2026-08-18T14:47:03+02:00 |
+| Frontend lint and production dependency audit | `npm run lint` and `npm audit --omit=dev` | Pass; lint clean and no production vulnerabilities | 2026-08-18T14:47:03+02:00 |
+| NuGet dependency audit | `dotnet list ... package --vulnerable --include-transitive` | Pass; no vulnerable packages | 2026-08-18T14:47:03+02:00 |
+| Deployment script and repository safety | PowerShell parser, `git diff --check`, and exact production-identifier scan | Pass; no parser errors, whitespace errors, secrets, or environment identifiers in the diff | 2026-08-18T14:47:03+02:00 |
+| Linux EasyAuth behavior | ARM authsettings query plus anonymous health, platform-route, protected-API and public-config probes | Pass; EasyAuth enabled with `~1`, platform route intercepted, health/config public and dashboard API protected | 2026-08-18T15:05:37+02:00 |
+| Linux verification adjustment | Bicep/ARM parity, PowerShell parser, repository safety scan and Release build | Pass; all current artifacts and checks succeeded | 2026-08-18T15:05:37+02:00 |
+
+**Validated by:** azure-validate skill
+
+**Validation timestamp:** 2026-08-18T15:05:37+02:00
+
+All production identifiers and parameters remain out-of-band and are
+intentionally omitted from this public repository.
+
+The first deployment applied the ARM changes successfully, but the post-deploy
+check assumed anonymous access to `/.auth/version`. Linux App Service protects
+that platform route with HTTP 401. The verification now accepts that
+interception behavior while retaining the `~1` runtime-selector check.
+
+### Current MISE remediation deployment result
+
+Deployment completed: 2026-08-18T15:11:50+02:00
+
+- App Service Authentication is enabled in allow-anonymous mode.
+- The App Service MISE runtime setting is enabled.
+- The configured authentication runtime selector is `~1`.
+- The platform authentication route is intercepted by EasyAuth.
+- The public health and MSAL-configuration endpoints return HTTP 200.
+- The dashboard API returns HTTP 401 without an access token.
+- An anonymous invalid telemetry upload reaches the application and returns HTTP 400.
+- Automatic tenant admin consent remains unavailable; an assigned dashboard
+  user might receive a delegated-consent prompt on first sign-in.
+- No subscription, tenant, resource, application, user, URL, network or secret
+  values are recorded in this plan.
 
 ---
 
@@ -270,6 +334,7 @@ No environment-specific parameter file will be generated inside the repository.
 
 ## 9. Next Steps
 
-> Current: Deployed and verified.
+> Current: EasyAuth/MISE remediation deployed; authenticated traffic and KPI confirmation remain.
 
-1. Persist the parameterized IaC and deployment automation through a pull request to `dev`.
+1. Exercise the authenticated dashboard with an assigned user.
+2. Confirm the MISE compliance KPI after its reporting delay.

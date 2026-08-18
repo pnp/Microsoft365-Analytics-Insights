@@ -70,6 +70,7 @@ output webAppName string = telemetryResources.outputs.webAppName
 output webAppUrl string = telemetryResources.outputs.webAppUrl
 output statsApiUrl string = telemetryResources.outputs.statsApiUrl
 output authConfigUrl string = telemetryResources.outputs.authConfigUrl
+output easyAuthIssuer string = telemetryResources.outputs.easyAuthIssuer
 output cosmosAccountName string = telemetryResources.outputs.cosmosAccountName
 output keyVaultName string = telemetryResources.outputs.keyVaultName
 output appServicePrincipalId string = telemetryResources.outputs.appServicePrincipalId

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.43.8.12551",
-      "templateHash": "7526898000566360666"
+      "templateHash": "2784755309735525658"
     }
   },
   "parameters": {
@@ -140,7 +140,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.43.8.12551",
-              "templateHash": "4033566444911330528"
+              "templateHash": "13856034097467170917"
             }
           },
           "parameters": {
@@ -194,7 +194,8 @@
             "cosmosPrivateDnsZoneName": "privatelink.documents.azure.com",
             "keyVaultPrivateDnsZoneName": "privatelink.vaultcore.azure.net",
             "keyVaultSecretsUserRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
-            "cosmosDataContributorRoleId": "00000000-0000-0000-0000-000000000002"
+            "cosmosDataContributorRoleId": "00000000-0000-0000-0000-000000000002",
+            "easyAuthIssuer": "[format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('azureAdTenantId'))]"
           },
           "resources": [
             {
@@ -638,6 +639,47 @@
               ]
             },
             {
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2024-04-01",
+              "name": "[format('{0}/{1}', parameters('webAppName'), 'authsettingsV2')]",
+              "properties": {
+                "platform": {
+                  "enabled": true,
+                  "runtimeVersion": "~1"
+                },
+                "globalValidation": {
+                  "requireAuthentication": false,
+                  "unauthenticatedClientAction": "AllowAnonymous"
+                },
+                "identityProviders": {
+                  "azureActiveDirectory": {
+                    "enabled": true,
+                    "registration": {
+                      "clientId": "[parameters('azureAdClientId')]",
+                      "openIdIssuer": "[variables('easyAuthIssuer')]"
+                    },
+                    "validation": {
+                      "allowedAudiences": [
+                        "[parameters('azureAdClientId')]",
+                        "[format('api://{0}', parameters('azureAdClientId'))]"
+                      ]
+                    }
+                  }
+                },
+                "login": {
+                  "tokenStore": {
+                    "enabled": false
+                  }
+                },
+                "httpSettings": {
+                  "requireHttps": true
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+              ]
+            },
+            {
               "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
               "apiVersion": "2024-04-01",
               "name": "[format('{0}/{1}', parameters('webAppName'), 'ftp')]",
@@ -699,6 +741,7 @@
                 "WEBSITE_HEALTHCHECK_MAXPINGFAILURES": "5",
                 "SCM_DO_BUILD_DURING_DEPLOYMENT": "false",
                 "ENABLE_ORYX_BUILD": "false",
+                "WEBSITE_AAD_ENABLE_MISE": "true",
                 "TelemetrySecret": "[format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', variables('keyVaultName'), variables('telemetrySecretName'))]",
                 "CosmosDb__AccountEndpoint": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName')), '2024-11-15').documentEndpoint]",
                 "CosmosDb__DatabaseName": "[variables('cosmosDatabaseName')]",
@@ -744,6 +787,10 @@
               "type": "string",
               "value": "[format('https://{0}/api/auth/config', reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2024-04-01').defaultHostName)]"
             },
+            "easyAuthIssuer": {
+              "type": "string",
+              "value": "[variables('easyAuthIssuer')]"
+            },
             "cosmosAccountName": {
               "type": "string",
               "value": "[variables('cosmosAccountName')]"
@@ -784,6 +831,10 @@
     "authConfigUrl": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'telemetry-resources'), '2025-04-01').outputs.authConfigUrl.value]"
+    },
+    "easyAuthIssuer": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'telemetry-resources'), '2025-04-01').outputs.easyAuthIssuer.value]"
     },
     "cosmosAccountName": {
       "type": "string",
