@@ -641,16 +641,18 @@ namespace Web.AnalyticsWeb.Controllers
                 return chart;
             }
 
-            // Trailing weeks are trimmed once, across every workload, so the chart ends where the
-            // slowest populated report has caught up. Workloads with no settled data are omitted
-            // rather than preventing every other workload from rendering. Interior weeks are NOT
-            // trimmed: they keep their place on the spine and any workload missing that week gets a
-            // null (a gap in its line) rather than a zero, which would draw a false collapse.
+            // Trailing weeks are trimmed once, across every workload, so the chart ends at the most
+            // recent week ANY populated workload has settled data for. Requiring every workload to
+            // have that week instead let a single stale table - historic rows present, recent rows
+            // absent, e.g. a loader failing persistently against a tenant that does not use that
+            // workload - silently cut months off every other workload's line. Interior and trailing
+            // weeks a workload is missing keep their place on the spine and render as a null (a gap
+            // in that line) rather than a zero, which would draw a false collapse.
             var lastCompleteWeekIndex = weekSpine.Count - 1;
             while (lastCompleteWeekIndex >= 0)
             {
                 var week = weekSpine[lastCompleteWeekIndex];
-                if (populatedSeries.All(s => s.Value.Any(r => r.WeekStart.Date == week)))
+                if (populatedSeries.Any(s => s.Value.Any(r => r.WeekStart.Date == week)))
                 {
                     break;
                 }
@@ -664,6 +666,14 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             var completeWeekSpine = weekSpine.Take(lastCompleteWeekIndex + 1).ToList();
+
+            // A workload that has stopped producing rows still draws its history, but say so: a line
+            // that simply stops part-way is otherwise indistinguishable from real inactivity.
+            var lastChartedWeek = completeWeekSpine[completeWeekSpine.Count - 1];
+            warnings.AddRange(populatedSeries
+                .Where(s => !s.Value.Any(r => r.WeekStart.Date == lastChartedWeek))
+                .Select(s => $"{s.Key}: no settled usage data for the week of {lastChartedWeek:yyyy-MM-dd}"));
+
             chart.Series = populatedSeries
                 .Select(s => new ReportSeries
                 {
