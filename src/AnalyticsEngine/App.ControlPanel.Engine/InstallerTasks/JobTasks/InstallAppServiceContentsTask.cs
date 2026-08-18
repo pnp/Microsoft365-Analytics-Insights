@@ -29,6 +29,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly InstallerProxyConfig _proxyConfig;
         private readonly VNetConfig _networkConfig;
 
+        /// <summary>How long to keep polling Kudu for the deployment outcome after the upload is accepted.</summary>
+        internal static readonly TimeSpan DeploymentCompletionTimeout = TimeSpan.FromMinutes(30);
+
+        /// <summary>Gap between deployment-status polls.</summary>
+        internal static readonly TimeSpan DeploymentPollInterval = TimeSpan.FromSeconds(5);
+
         public InstallAppServiceContentsTask(InstallerProxyConfig proxyConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig)
             : base(config, logger, azureLocation, tags)
         {
@@ -151,7 +157,151 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         throw new InstallException(
                             $"App Service HTTPS deployment failed with HTTP {(int)response.StatusCode} ({response.ReasonPhrase}): {detail}");
                     }
+
+                    // The upload is only accepted at this point, not finished. Azure's App Service front end
+                    // aborts ANY single request at ~230 seconds, so a synchronous publish of a package this
+                    // size fails with an HTML "500 - The request timed out" even when the deployment itself
+                    // is progressing fine server-side. We therefore publish with async=true and poll Kudu for
+                    // the real outcome.
+                    var statusUri = ResolveDeploymentStatusUri(response.Headers.Location, publishInfo.RootUrl);
+                    await WaitForDeploymentAsync(client, statusUri);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Where to poll for the outcome of an async publish. Kudu returns the deployment's own status URL in
+        /// the Location header; fall back to the "latest deployment" endpoint when it is absent or relative.
+        /// </summary>
+        internal static Uri ResolveDeploymentStatusUri(Uri locationHeader, string publishUrl)
+        {
+            if (locationHeader != null && locationHeader.IsAbsoluteUri)
+            {
+                return locationHeader;
+            }
+
+            var absoluteUrl = publishUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? publishUrl
+                : "https://" + publishUrl;
+            return new Uri(new Uri(absoluteUrl).GetLeftPart(UriPartial.Authority) + "/api/deployments/latest");
+        }
+
+        /// <summary>
+        /// Polls Kudu until the deployment completes, fails, or we give up. Transient read failures are
+        /// tolerated (the SCM site can briefly drop requests while the site restarts mid-deploy) - only the
+        /// overall deadline is fatal.
+        /// </summary>
+        private async Task WaitForDeploymentAsync(HttpClient client, Uri statusUri)
+        {
+            var deadline = DateTime.UtcNow.Add(DeploymentCompletionTimeout);
+            string lastProgressLogged = null;
+            string lastTransientError = null;
+
+            while (true)
+            {
+                KuduDeploymentStatus status = null;
+                try
+                {
+                    var statusResponse = await client.GetAsync(statusUri);
+                    using (statusResponse)
+                    {
+                        var body = await statusResponse.Content.ReadAsStringAsync();
+                        if (statusResponse.IsSuccessStatusCode)
+                        {
+                            status = ParseDeploymentStatus(body);
+                        }
+                        else
+                        {
+                            lastTransientError = $"HTTP {(int)statusResponse.StatusCode} ({statusResponse.ReasonPhrase})";
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
+                {
+                    lastTransientError = CloudInstallEngine.ExceptionMessages.Format(ex);
+                }
+
+                if (status != null)
+                {
+                    if (status.IsFailed)
+                    {
+                        var detail = string.IsNullOrWhiteSpace(status.StatusText) ? status.Message : status.StatusText;
+                        throw new InstallException(
+                            $"App Service deployment failed on the server after the package uploaded successfully. " +
+                            $"Kudu reported status {status.Status} ({detail}). " +
+                            $"Deployment log: {status.LogUrl ?? statusUri.ToString()}");
+                    }
+
+                    if (status.IsSuccess)
+                    {
+                        _logger.LogInformation("App Service deployment completed successfully.");
+                        return;
+                    }
+
+                    var progress = status.DescribeProgress();
+                    if (progress != lastProgressLogged)
+                    {
+                        _logger.LogInformation($"App Service deployment in progress: {progress}");
+                        lastProgressLogged = progress;
+                    }
+                }
+
+                if (DateTime.UtcNow >= deadline)
+                {
+                    var trailing = status == null && lastTransientError != null
+                        ? $" Last error reading deployment status: {lastTransientError}."
+                        : string.Empty;
+                    throw new InstallException(
+                        $"App Service deployment did not report completion within {DeploymentCompletionTimeout.TotalMinutes:N0} minutes. " +
+                        $"The package uploaded successfully, so the deployment may still finish on its own - check {statusUri}.{trailing}");
+                }
+
+                await Task.Delay(DeploymentPollInterval);
+            }
+        }
+
+        internal static KuduDeploymentStatus ParseDeploymentStatus(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            return Newtonsoft.Json.JsonConvert.DeserializeObject<KuduDeploymentStatus>(json);
+        }
+
+        /// <summary>Kudu's deployment status document, as returned by /api/deployments/latest.</summary>
+        internal class KuduDeploymentStatus
+        {
+            internal const int StatusFailed = 3;
+
+            [Newtonsoft.Json.JsonProperty("id")]
+            public string Id { get; set; }
+
+            [Newtonsoft.Json.JsonProperty("status")]
+            public int? Status { get; set; }
+
+            [Newtonsoft.Json.JsonProperty("status_text")]
+            public string StatusText { get; set; }
+
+            [Newtonsoft.Json.JsonProperty("progress")]
+            public string Progress { get; set; }
+
+            [Newtonsoft.Json.JsonProperty("complete")]
+            public bool Complete { get; set; }
+
+            [Newtonsoft.Json.JsonProperty("log_url")]
+            public string LogUrl { get; set; }
+
+            [Newtonsoft.Json.JsonProperty("message")]
+            public string Message { get; set; }
+
+            internal bool IsFailed => Complete && Status == StatusFailed;
+
+            /// <summary>Complete and not explicitly failed. Kudu uses 4 for success.</summary>
+            internal bool IsSuccess => Complete && Status != StatusFailed;
+
+            internal string DescribeProgress()
+            {
+                if (!string.IsNullOrWhiteSpace(Progress)) return Progress;
+                if (!string.IsNullOrWhiteSpace(StatusText)) return StatusText;
+                return $"status {Status?.ToString() ?? "unknown"}";
             }
         }
 
@@ -179,7 +329,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 ? publishUrl
                 : "https://" + publishUrl;
             var profileUri = new Uri(absoluteUrl);
-            return new Uri(profileUri.GetLeftPart(UriPartial.Authority) + "/api/publish?type=zip");
+            // async=true is required: Azure's front end kills any single request at ~230s, so a large
+            // package cannot be published synchronously. Kudu accepts the upload and reports progress
+            // separately - see WaitForDeploymentAsync.
+            return new Uri(profileUri.GetLeftPart(UriPartial.Authority) + "/api/publish?type=zip&async=true");
         }
 
         private static void ResetDirectory(string path)
