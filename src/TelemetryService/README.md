@@ -47,6 +47,11 @@ installations (the AnalyticsEngine importer in
   both the `Telemetry.Read` scope and the `Telemetry.Dashboard.Read` app role,
   so only explicitly assigned users or groups can view the reports. The SPA
   uses MSAL and stores tokens in session storage.
+- **App Service Authentication** runs in allow-anonymous mode so it validates
+  bearer tokens and emits MISE key-discovery telemetry without becoming the
+  authorization boundary. The ASP.NET Core API still performs the scope and
+  role checks, while anonymous health, configuration and signed-upload
+  requests continue to reach the application.
 
 ## Configuration
 
@@ -57,6 +62,7 @@ installations (the AnalyticsEngine importer in
 | `AzureAd:TenantId` | yes | Tenant containing the dashboard app registration. |
 | `AzureAd:ClientId` | yes | Client ID of the single-tenant SPA/API app registration. |
 | `AzureAd:Scopes` | yes | Delegated scope name exposed by the app registration. Must be `Telemetry.Read`. |
+| `WEBSITE_AAD_ENABLE_MISE` | Azure deployment | Enables the App Service MISE validation runtime. The Bicep deployment sets this to `true`. |
 | `CosmosDb:AccountEndpoint` | yes | Cosmos account URL, e.g. `https://myaccount.documents.azure.com:443/`. The account uses AAD (key auth disabled) — `DefaultAzureCredential` is used. |
 | `CosmosDb:DatabaseName` | yes | Cosmos database to use (created on startup if missing). |
 | `CosmosDb:ContainerNameCurrent` | yes | Container for the latest record per client. |
@@ -203,12 +209,14 @@ The script:
 2. registers required Azure resource providers;
 3. creates or updates the single-tenant Entra SPA/API and assigns the current
    user the `Telemetry.Dashboard.Read` role;
-4. deploys the ARM template using a temporary parameters file that is deleted
-   afterward;
+4. deploys the ARM template, including non-enforcing App Service
+   Authentication and the MISE runtime setting, using a temporary parameters
+   file that is deleted afterward;
 5. stores the signing secret in private Key Vault;
 6. builds and ZIP-deploys the application using Entra authentication;
-7. verifies health, authorization, Cosmos/Key Vault network isolation, private
-   endpoints and the Key Vault reference.
+7. verifies health, application authorization, EasyAuth configuration and
+   runtime version, Cosmos/Key Vault network isolation, private endpoints and
+   the Key Vault reference.
 
 Tenant admin consent might need to be granted manually after deployment. The
 assigned dashboard user can otherwise be prompted for delegated
@@ -217,6 +225,28 @@ assigned dashboard user can otherwise be prompted for delegated
 > Deploying `azuredeploy.json` directly provisions only Azure resources. Use
 > `deploy.ps1` for the complete Entra configuration, secure secret handling,
 > application publication and verification workflow.
+
+### MISE compliance verification
+
+The public repository intentionally keeps `Microsoft.Identity.Web` for its
+portable, public NuGet restore path. App Service Authentication supplies the
+MISE runtime and validates the same bearer tokens before the application
+performs its existing scope and role authorization.
+
+After deploying:
+
+1. Sign in to the dashboard and load both protected API endpoints so token
+   acquisition and key discovery occur together.
+2. Confirm the deployment script sees EasyAuth intercept `/.auth/version`.
+   Authenticated responses must report a runtime newer than `1.7.0`; Linux
+   App Service can return HTTP 401 to anonymous version requests, so the script
+   also verifies the ARM runtime selector is `~1`.
+3. Allow 3–5 days for the compliance pipeline to report the new key-discovery
+   telemetry.
+
+Do not change EasyAuth to require authentication globally without preserving
+the anonymous signed-upload, health and public authentication-configuration
+paths. Deployed importers do not send Entra tokens to the upload endpoint.
 
 ## Importer side — pointing an installation at this service
 
