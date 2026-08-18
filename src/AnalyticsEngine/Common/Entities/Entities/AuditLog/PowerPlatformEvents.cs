@@ -166,7 +166,7 @@ namespace Common.Entities.Entities.AuditLog
     public class PowerAutomateFlow : AbstractEFEntity
     {
         /// <summary>
-        /// FlowId from the audit-event payload.
+        /// Flow identifier derived from FlowDetailsUrl (or the legacy FlowId field).
         /// </summary>
         [Column("flow_id")]
         [MaxLength(200)]
@@ -189,7 +189,7 @@ namespace Common.Entities.Entities.AuditLog
     }
 
     /// <summary>
-    /// Per-event metadata for an audit_events row of workload 'MicrosoftFlow'.
+    /// Per-event metadata for a Power Automate lifecycle or permission audit event.
     /// </summary>
     [Table("event_meta_power_automate_flow")]
     public class PowerAutomateFlowEventMetadata : BaseOfficeEvent
@@ -200,7 +200,8 @@ namespace Common.Entities.Entities.AuditLog
         public PowerAutomateFlow Flow { get; set; }
 
         /// <summary>
-        /// Per-execution correlation id from the flow run.
+        /// Legacy optional flow-run correlation id. Current Purview lifecycle and permission
+        /// records don't represent individual executions, so this is normally null.
         /// </summary>
         [Column("run_id")]
         [MaxLength(200)]
@@ -234,7 +235,7 @@ namespace Common.Entities.Entities.AuditLog
     }
 
     /// <summary>
-    /// Junction: which connectors a Power Automate flow currently uses.
+    /// Junction: connector names observed on Power Automate create/edit audit events.
     /// </summary>
     [Table("power_automate_flow_connectors")]
     public class PowerAutomateFlowConnector : AbstractEFEntity

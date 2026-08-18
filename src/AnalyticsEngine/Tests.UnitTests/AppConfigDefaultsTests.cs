@@ -26,6 +26,14 @@ namespace Tests.UnitTests
         private const string MetadataRefreshMinutes = "MetadataRefreshMinutes";
         private const string ForceUsageReportsImport = "ForceUsageReportsImport";
         private const string MaxSummaryFetchConcurrency = "MaxSummaryFetchConcurrency";
+        private const string ImportAggressiveness = "ImportAggressiveness";
+        private const string MaxAuditReportLoadConcurrency = "MaxAuditReportLoadConcurrency";
+        private const string MaxSqlCommitConcurrency = "MaxSqlCommitConcurrency";
+        private const string ImportCyclePauseMinutes = "ImportCyclePauseMinutes";
+        private const string GraphMetadataImportIntervalHours = "GraphMetadataImportIntervalHours";
+        private const string GraphTeamsImportIntervalHours = "GraphTeamsImportIntervalHours";
+        private const string ForceGraphMetadataImport = "ForceGraphMetadataImport";
+        private const string ImportStartStaggerMinutes = "ImportStartStaggerMinutes";
 
         private static readonly string[] _trackedKeys =
         {
@@ -35,6 +43,14 @@ namespace Tests.UnitTests
             MetadataRefreshMinutes,
             ForceUsageReportsImport,
             MaxSummaryFetchConcurrency,
+            ImportAggressiveness,
+            MaxAuditReportLoadConcurrency,
+            MaxSqlCommitConcurrency,
+            ImportCyclePauseMinutes,
+            GraphMetadataImportIntervalHours,
+            GraphTeamsImportIntervalHours,
+            ForceGraphMetadataImport,
+            ImportStartStaggerMinutes,
         };
 
         private Dictionary<string, string> _originalAppSettings;
@@ -205,6 +221,232 @@ namespace Tests.UnitTests
             var cfg = new AppConfig();
             Assert.IsFalse(cfg.ForceUsageReportsImport,
                 "Unparseable values must not flip ForceUsageReportsImport to true.");
+        }
+
+        // ----- Import aggressiveness preset & cadence knobs (issue #161) -----
+
+        [TestMethod]
+        public void ImportAggressiveness_EmptyAppSetting_DefaultsToHigh()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, string.Empty);
+            Assert.AreEqual(ImportAggressivenessLevel.High, new AppConfig().ImportAggressiveness,
+                "Default must be High so upgrading never silently slows an existing deployment down.");
+        }
+
+        [TestMethod]
+        public void ImportAggressiveness_InvalidAppSetting_DefaultsToHigh()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "turbo");
+            Assert.AreEqual(ImportAggressivenessLevel.High, new AppConfig().ImportAggressiveness);
+        }
+
+        [TestMethod]
+        public void ImportAggressiveness_IsCaseInsensitive()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "gEnTlE");
+            Assert.AreEqual(ImportAggressivenessLevel.Gentle, new AppConfig().ImportAggressiveness);
+        }
+
+        [TestMethod]
+        public void BalancedPreset_SetsModeratedDefaults()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(8, cfg.MaxAuditReportLoadConcurrency, "Balanced audit-load concurrency should be 8.");
+            Assert.AreEqual(8, cfg.MaxSqlCommitConcurrency, "Balanced SQL-commit concurrency should be 8.");
+            Assert.AreEqual(10, cfg.ImportCyclePauseMinutes, "Balanced cycle pause should be 10 min.");
+        }
+
+        [TestMethod]
+        public void HighPreset_SetsLegacyDefaults()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(20, cfg.MaxAuditReportLoadConcurrency, "High audit-load concurrency should be 20 (legacy).");
+            Assert.AreEqual(20, cfg.MaxSqlCommitConcurrency, "High SQL-commit concurrency should be 20 (legacy).");
+            Assert.AreEqual(10, cfg.ImportCyclePauseMinutes);
+        }
+
+        [TestMethod]
+        public void GentlePreset_SetsLowCpuDefaults()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(3, cfg.MaxAuditReportLoadConcurrency, "Gentle audit-load concurrency should be 3.");
+            Assert.AreEqual(3, cfg.MaxSqlCommitConcurrency, "Gentle SQL-commit concurrency should be 3.");
+            Assert.AreEqual(20, cfg.ImportCyclePauseMinutes, "Gentle cycle pause should be 20 min.");
+        }
+
+        [TestMethod]
+        public void ExplicitMaxAuditReportLoadConcurrency_OverridesPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "12");
+            Assert.AreEqual(12, new AppConfig().MaxAuditReportLoadConcurrency,
+                "An explicit MaxAuditReportLoadConcurrency must override the preset.");
+        }
+
+        [TestMethod]
+        public void MaxAuditReportLoadConcurrency_ZeroOrInvalid_FallsBackToPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "0");
+            Assert.AreEqual(8, new AppConfig().MaxAuditReportLoadConcurrency, "0 is invalid; preset (8) preserved.");
+
+            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "abc");
+            Assert.AreEqual(8, new AppConfig().MaxAuditReportLoadConcurrency, "Unparseable; preset (8) preserved.");
+        }
+
+        [TestMethod]
+        public void ExplicitMaxSqlCommitConcurrency_OverridesPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "12");
+            Assert.AreEqual(12, new AppConfig().MaxSqlCommitConcurrency,
+                "An explicit MaxSqlCommitConcurrency must override the preset.");
+        }
+
+        [TestMethod]
+        public void MaxSqlCommitConcurrency_ZeroOrInvalid_FallsBackToPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "0");
+            Assert.AreEqual(8, new AppConfig().MaxSqlCommitConcurrency, "0 is invalid; preset (8) preserved.");
+
+            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "abc");
+            Assert.AreEqual(8, new AppConfig().MaxSqlCommitConcurrency, "Unparseable; preset (8) preserved.");
+        }
+
+        [TestMethod]
+        public void NoAppSettingsAtAll_ReproducesLegacyStableBehaviour()
+        {
+            // Upgrade-parity guard. An existing deployment upgrading to this build has none of the new
+            // AppSettings, so every knob must land on the pre-throttling ("stable") value. If any of these
+            // change, the upgrade silently slows customers' imports down - which is exactly what the
+            // throttling work must NOT do by default.
+            foreach (var key in _trackedKeys)
+            {
+                ConfigurationManager.AppSettings.Set(key, string.Empty);
+            }
+
+            var cfg = new AppConfig();
+
+            Assert.AreEqual(ImportAggressivenessLevel.High, cfg.ImportAggressiveness, "Preset must default to High.");
+            Assert.AreEqual(20, cfg.MaxAuditReportLoadConcurrency, "Legacy audit-load concurrency was a hardcoded 20.");
+            Assert.AreEqual(20, cfg.MaxSqlCommitConcurrency, "Legacy SQL-commit concurrency was a hardcoded 20.");
+            Assert.AreEqual(10, cfg.ImportCyclePauseMinutes, "Legacy cycle pause was a hardcoded 10 minutes.");
+            Assert.AreEqual(0, cfg.GraphMetadataImportIntervalHours, "Legacy ran the static Graph imports every cycle.");
+            Assert.AreEqual(0, cfg.GraphTeamsImportIntervalHours, "Legacy ran the Teams crawl every cycle.");
+            Assert.AreEqual(0, cfg.ImportStartStaggerMinutes, "Legacy had no start stagger.");
+        }
+
+        [TestMethod]
+        public void ExplicitImportCyclePauseMinutes_OverridesPreset()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, "30");
+            Assert.AreEqual(30, new AppConfig().ImportCyclePauseMinutes);
+        }
+
+        [TestMethod]
+        public void GraphMetadataImportIntervalHours_EmptyOrInvalid_DefaultsToZero()
+        {
+            // Default preset is High, whose non-fresh Graph interval is 0 (every cycle = legacy behaviour).
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, string.Empty);
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours,
+                "With the default High preset the gate is off, matching pre-throttling behaviour.");
+
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "nope");
+            Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void GraphMetadataImportIntervalHours_ZeroIsAllowed()
+        {
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "0");
+            Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours,
+                "0 explicitly disables the gate and must be honoured.");
+        }
+
+        [TestMethod]
+        public void GraphMetadataImportIntervalHours_PositiveIsParsed()
+        {
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "6");
+            Assert.AreEqual(6, new AppConfig().GraphMetadataImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void ImportStartStaggerMinutes_EmptyOrInvalid_DefaultsToZero()
+        {
+            // Staggering delays the first cycle, so it is opt-in: an upgrade must not silently add a delay.
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
+            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, string.Empty);
+            Assert.AreEqual(0, new AppConfig().ImportStartStaggerMinutes,
+                "Default stagger must be 0 (no added start delay) regardless of preset.");
+        }
+
+        [TestMethod]
+        public void ImportStartStaggerMinutes_ExplicitAndZeroHonoured()
+        {
+            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, "7");
+            Assert.AreEqual(7, new AppConfig().ImportStartStaggerMinutes);
+
+            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, "0");
+            Assert.AreEqual(0, new AppConfig().ImportStartStaggerMinutes, "0 disables stagger and must be honoured.");
+        }
+
+        [TestMethod]
+        public void HighPreset_DisablesNonFreshGraphGate()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(0, cfg.GraphMetadataImportIntervalHours, "High must run metadata/apps every cycle (legacy).");
+            Assert.AreEqual(0, cfg.GraphTeamsImportIntervalHours, "High must run Teams every cycle (legacy).");
+        }
+
+        [TestMethod]
+        public void BalancedPreset_DailyGatesNonFreshGraph()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
+            var cfg = new AppConfig();
+            Assert.AreEqual(24, cfg.GraphMetadataImportIntervalHours);
+            Assert.AreEqual(24, cfg.GraphTeamsImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void GraphTeamsImportIntervalHours_ZeroAndExplicitHonoured()
+        {
+            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, "0");
+            Assert.AreEqual(0, new AppConfig().GraphTeamsImportIntervalHours, "0 disables the Teams gate.");
+
+            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, "6");
+            Assert.AreEqual(6, new AppConfig().GraphTeamsImportIntervalHours);
+        }
+
+        [TestMethod]
+        public void ForceGraphMetadataImport_DefaultsFalse_ParsesTrue_IgnoresGarbage()
+        {
+            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, string.Empty);
+            Assert.IsFalse(new AppConfig().ForceGraphMetadataImport);
+
+            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, "true");
+            Assert.IsTrue(new AppConfig().ForceGraphMetadataImport);
+
+            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, "garbage");
+            Assert.IsFalse(new AppConfig().ForceGraphMetadataImport, "Unparseable must not flip to true.");
         }
     }
 }

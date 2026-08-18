@@ -1,0 +1,265 @@
+namespace Common.Entities.Migrations
+{
+    using System;
+    using System.Data.Entity.Migrations;
+
+    /// <summary>
+    /// Adds or upgrades the covering indexes used by the in-app Reports date-range queries.
+    /// The audit index already exists on upgraded databases, but its key-only definition causes
+    /// lookups for operation and user on every matching row. The remaining report fact tables have
+    /// no date index, so their cost grows with all retained history rather than the selected period.
+    ///
+    /// Safety: idempotent and guarded (each table, column and the existing index definition is
+    /// checked, so an index that already covers the query is left alone). Attempts an <c>ONLINE</c>
+    /// (non-blocking) build on capable editions (Enterprise 3 / Azure SQL DB 5 / MI 8) and falls
+    /// back to a normal offline build. Runs outside the EF transaction
+    /// (<c>suppressTransaction: true</c>).
+    ///
+    /// Note for upgrades from a release older than 1716: EF applies
+    /// <see cref="IndexAuditEventsTimeStamp"/> first, which builds the key-only
+    /// <c>IX_audit_events_time_stamp</c>, and this migration then rebuilds it with the INCLUDE
+    /// columns - two builds of the same large index in one upgrade. That shipped migration is left
+    /// as published rather than amended, so the manual upgrade script attached to those releases
+    /// still matches the code. Databases already on 1716 or later pay for a single rebuild.
+    /// Measured impact (synthetic scale: 4.0m audit_events rows over 2 years, 2.5m hits, 300k each of
+    /// call_records / sent_emails; medians of 4 warm runs, plan cache cleared between runs):
+    ///
+    ///   query                                  window | logical reads before -> after | verdict
+    ///   ---------------------------------------------+------------------------------+---------
+    ///   copilot users COUNT(DISTINCT user_id)     30d |      73,857 -> 5,210 (-93%)  | scan -> seek
+    ///   web page views (hits)                     30d |      25,607 -> 1,183 (-95%)  | scan -> seek
+    ///   web page views (hits)                    365d |      25,607 -> 4,644 (-82%)  | scan -> seek
+    ///   web visitors (hits + sessions)            30d |      26,242 -> 1,818 (-93%)  | scan -> seek
+    ///   calls count / minutes (call_records)      30d |       4,243 ->   171 (-96%)  | scan -> seek
+    ///   calls count / minutes (call_records)     365d |       4,243 ->   663 (-84%)  | scan -> seek
+    ///   emails sent (sent_emails)                 30d |       6,688 ->   120 (-98%)  | scan -> seek
+    ///   emails sent (sent_emails)                365d |       6,688 ->   460 (-93%)  | scan -> seek
+    ///
+    /// Known, bounded trade-off on <c>audit_events</c>: the two COUNT(*)-only queries read ~8-15% more
+    /// at 30d (wider leaf pages, no benefit to them) and are unchanged at 365d. The de-dup INCLUDE
+    /// regression documented in the repo instructions did NOT recur here - time_stamp remains a
+    /// selective leading key, so seeks are unaffected in kind.
+    ///
+    /// Index size cost: audit_events +26% (+7.9 bytes/row, = operation_id + user_id), hits +53 MB at
+    /// 2.5m rows, call_records +7.6 MB and sent_emails +5.3 MB at 300k rows each.
+    ///
+    /// Offline build time (worst case; ONLINE builds are non-blocking on Enterprise / Azure SQL DB / MI):
+    /// roughly 2.6s at 1m rows, 30s at 10m rows and 6 min at 100m rows for the audit_events rebuild,
+    /// scaling as O(n log n). Real timings vary with SQL tier, IO throughput and memory grant.
+    /// </summary>
+    public partial class IndexReportDateQueries : DbMigration
+    {
+        public const string Up_Sql = @"
+SET NOCOUNT ON;
+
+DECLARE @migration nvarchar(100) = N'IndexReportDateQueries';
+DECLARE @start datetime2(3) = SYSUTCDATETIME();
+DECLARE @msg nvarchar(2000);
+DECLARE @edition int = CAST(SERVERPROPERTY('EngineEdition') AS int);
+DECLARE @canOnline bit;
+DECLARE @table sysname;
+DECLARE @index sysname;
+DECLARE @keyColumn sysname;
+DECLARE @includeSql nvarchar(300);
+DECLARE @include1 sysname;
+DECLARE @include2 sysname;
+DECLARE @sql nvarchar(max);
+DECLARE @onlineDone bit;
+DECLARE @rowCount bigint;
+DECLARE @indexId int;
+DECLARE @definitionIsCurrent bit;
+DECLARE @i int = 1;
+
+SET @canOnline = CASE WHEN @edition IN (3, 5, 8) THEN 1 ELSE 0 END;
+
+DECLARE @targets table
+(
+    sequence int NOT NULL PRIMARY KEY,
+    table_name sysname NOT NULL,
+    index_name sysname NOT NULL,
+    key_column sysname NOT NULL,
+    include_sql nvarchar(300) NOT NULL,
+    include_1 sysname NULL,
+    include_2 sysname NULL
+);
+
+INSERT INTO @targets
+    (sequence, table_name, index_name, key_column, include_sql, include_1, include_2)
+VALUES
+    (1, N'audit_events', N'IX_audit_events_time_stamp', N'time_stamp',
+        N' INCLUDE ([operation_id], [user_id])', N'operation_id', N'user_id'),
+    (2, N'hits', N'IX_hits_hit_timestamp', N'hit_timestamp',
+        N' INCLUDE ([session_id])', N'session_id', NULL),
+    (3, N'call_records', N'IX_call_records_start', N'start',
+        N' INCLUDE ([end])', N'end', NULL),
+    (4, N'sent_emails', N'IX_sent_emails_sent_date', N'sent_date',
+        N'', NULL, NULL);
+
+SET @msg = @migration + N': starting; EngineEdition=' + CAST(@edition AS nvarchar(10))
+    + CASE WHEN @canOnline = 1
+        THEN N'; online index builds will be attempted.'
+        ELSE N'; online index builds are unavailable, so large tables will be locked during each build. Stop the relevant importer and use a maintenance window.' END;
+RAISERROR(@msg, 0, 1) WITH NOWAIT;
+
+WHILE @i <= 4
+BEGIN
+    SELECT
+        @table = table_name,
+        @index = index_name,
+        @keyColumn = key_column,
+        @includeSql = include_sql,
+        @include1 = include_1,
+        @include2 = include_2
+    FROM @targets
+    WHERE sequence = @i;
+
+    IF OBJECT_ID(N'dbo.' + @table, N'U') IS NULL
+    BEGIN
+        SET @msg = @migration + N': dbo.' + @table + N' does not exist; skipping.';
+        RAISERROR(@msg, 0, 1) WITH NOWAIT;
+    END
+    ELSE IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID(N'dbo.' + @table) AND name = @keyColumn)
+      OR (@include1 IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID(N'dbo.' + @table) AND name = @include1))
+      OR (@include2 IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID(N'dbo.' + @table) AND name = @include2))
+    BEGIN
+        SET @msg = @migration + N': dbo.' + @table + N' is missing an expected column; skipping.';
+        RAISERROR(@msg, 0, 1) WITH NOWAIT;
+    END
+    ELSE
+    BEGIN
+        SELECT @indexId = index_id
+        FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.' + @table) AND name = @index;
+
+        SET @definitionIsCurrent = 0;
+        IF @indexId IS NOT NULL
+           AND EXISTS (
+                SELECT 1
+                FROM sys.index_columns AS ic
+                JOIN sys.columns AS c
+                  ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE ic.object_id = OBJECT_ID(N'dbo.' + @table)
+                  AND ic.index_id = @indexId
+                  AND ic.key_ordinal = 1
+                  AND c.name = @keyColumn)
+           AND (@include1 IS NULL OR EXISTS (
+                SELECT 1
+                FROM sys.index_columns AS ic
+                JOIN sys.columns AS c
+                  ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE ic.object_id = OBJECT_ID(N'dbo.' + @table)
+                  AND ic.index_id = @indexId
+                  AND ic.is_included_column = 1
+                  AND c.name = @include1))
+           AND (@include2 IS NULL OR EXISTS (
+                SELECT 1
+                FROM sys.index_columns AS ic
+                JOIN sys.columns AS c
+                  ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE ic.object_id = OBJECT_ID(N'dbo.' + @table)
+                  AND ic.index_id = @indexId
+                  AND ic.is_included_column = 1
+                  AND c.name = @include2))
+            SET @definitionIsCurrent = 1;
+
+        IF @definitionIsCurrent = 1
+        BEGIN
+            SET @msg = @migration + N': [' + @index + N'] already has the required definition; skipping.';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        END
+        ELSE
+        BEGIN
+            SELECT @rowCount = ISNULL(SUM(rows), 0)
+            FROM sys.partitions
+            WHERE object_id = OBJECT_ID(N'dbo.' + @table) AND index_id IN (0, 1);
+
+            SET @msg = @migration
+                + CASE WHEN @indexId IS NULL THEN N': creating [' ELSE N': rebuilding [' END
+                + @index + N'] on dbo.' + @table + N' ('
+                + CAST(@rowCount AS nvarchar(20)) + N' estimated rows).';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+
+            SET @onlineDone = 0;
+            IF @canOnline = 1
+            BEGIN
+                BEGIN TRY
+                    SET @sql = N'CREATE NONCLUSTERED INDEX [' + @index + N'] ON [dbo].['
+                        + @table + N'] ([' + @keyColumn + N'])' + @includeSql
+                        + CASE WHEN @indexId IS NULL
+                            THEN N' WITH (ONLINE = ON);'
+                            ELSE N' WITH (DROP_EXISTING = ON, ONLINE = ON);' END;
+                    EXEC sp_executesql @sql;
+                    SET @onlineDone = 1;
+                END TRY
+                BEGIN CATCH
+                    SET @msg = @migration + N': online build of [' + @index + N'] failed ('
+                        + ERROR_MESSAGE() + N'); retrying offline.';
+                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
+                END CATCH
+            END
+
+            IF @onlineDone = 0
+            BEGIN
+                SET @sql = N'CREATE NONCLUSTERED INDEX [' + @index + N'] ON [dbo].['
+                    + @table + N'] ([' + @keyColumn + N'])' + @includeSql
+                    + CASE WHEN @indexId IS NULL
+                        THEN N';'
+                        ELSE N' WITH (DROP_EXISTING = ON);' END;
+                EXEC sp_executesql @sql;
+            END
+
+            SET @msg = @migration + N': [' + @index + N'] is ready.';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        END
+    END
+
+    SET @indexId = NULL;
+    SET @i += 1;
+END
+
+SET @msg = @migration + N': finished in '
+    + CAST(DATEDIFF(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
+RAISERROR(@msg, 0, 1) WITH NOWAIT;
+";
+
+        public const string Down_Sql = @"
+SET NOCOUNT ON;
+
+IF OBJECT_ID(N'dbo.audit_events', N'U') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.audit_events') AND name = N'IX_audit_events_time_stamp')
+    CREATE NONCLUSTERED INDEX [IX_audit_events_time_stamp]
+    ON [dbo].[audit_events] ([time_stamp])
+    WITH (DROP_EXISTING = ON);
+
+IF OBJECT_ID(N'dbo.hits', N'U') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.hits') AND name = N'IX_hits_hit_timestamp')
+    DROP INDEX [IX_hits_hit_timestamp] ON [dbo].[hits];
+
+IF OBJECT_ID(N'dbo.call_records', N'U') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.call_records') AND name = N'IX_call_records_start')
+    DROP INDEX [IX_call_records_start] ON [dbo].[call_records];
+
+IF OBJECT_ID(N'dbo.sent_emails', N'U') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.sent_emails') AND name = N'IX_sent_emails_sent_date')
+    DROP INDEX [IX_sent_emails_sent_date] ON [dbo].[sent_emails];
+";
+
+        public override void Up()
+        {
+            Console.WriteLine("DB SCHEMA: Applying 'IndexReportDateQueries'. Adds covering date indexes for the in-app Reports queries. Large audit_events and hits tables can take time to index; where online builds are unavailable, stop importers and use a maintenance window.");
+            Sql(Up_Sql, suppressTransaction: true);
+        }
+
+        public override void Down()
+        {
+            Console.WriteLine("DB SCHEMA: Reverting 'IndexReportDateQueries'.");
+            Sql(Down_Sql, suppressTransaction: true);
+        }
+    }
+}

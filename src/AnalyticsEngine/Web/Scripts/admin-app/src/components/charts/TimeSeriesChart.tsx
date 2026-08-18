@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
-import type { ReportSeries } from '../../types/reports';
+import type { ReportSeries, ReportTimePoint } from '../../types/reports';
 import {
   formatCompact,
   formatValue,
@@ -84,6 +84,18 @@ type TimeSeriesChartProps = {
   height?: number;
 };
 
+/** True when this point begins a new line segment (it is the first point, or follows a gap). */
+function isSegmentStart(points: ReportTimePoint[], i: number): boolean {
+  return i === 0 || points[i - 1].value === null;
+}
+
+/** True when a point has no drawable neighbour, so it needs a dot to be visible at all. */
+function isIsolatedPoint(points: ReportTimePoint[], i: number): boolean {
+  const before = i > 0 ? points[i - 1].value : null;
+  const after = i < points.length - 1 ? points[i + 1].value : null;
+  return before === null && after === null;
+}
+
 /**
  * A dependency-free multi-series line chart for weekly report data. Renders an SVG that scales to
  * its container, with a "nice" y-axis, thinned week labels, and an interactive hover tooltip that
@@ -111,7 +123,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300 }: Ti
     let dataMax = 0;
     for (const s of series) {
       for (const p of s.points) {
-        if (p.value > dataMax) dataMax = p.value;
+        if (p.value !== null && p.value > dataMax) dataMax = p.value;
       }
     }
     return niceTicks(dataMax);
@@ -214,17 +226,21 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300 }: Ti
           />
         )}
 
-        {/* Series lines + points */}
+        {/* Series lines + points. A null value means "no data for this week", so the line is drawn
+            as separate segments either side of the gap rather than dipping to zero. */}
         {series.map((s, si) => {
           const color = seriesColor(si);
-          const path = s.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(i)} ${y(p.value)}`).join(' ');
+          const path = s.points
+            .map((p, i) => (p.value === null ? '' : `${isSegmentStart(s.points, i) ? 'M' : 'L'} ${x(i)} ${y(p.value)}`))
+            .filter((segment) => segment !== '')
+            .join(' ');
           return (
             <g key={s.name}>
               <path d={path} fill="none" stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
               {s.points.map((p, i) =>
-                hover?.index === i ? (
+                p.value === null ? null : hover?.index === i ? (
                   <circle key={`pt-${s.name}-${i}`} cx={x(i)} cy={y(p.value)} r={5} fill={color} stroke={tokens.colorNeutralBackground1} strokeWidth={2} />
-                ) : n <= 16 ? (
+                ) : n <= 16 || isIsolatedPoint(s.points, i) ? (
                   <circle key={`pt-${s.name}-${i}`} cx={x(i)} cy={y(p.value)} r={2.5} fill={color} />
                 ) : null,
               )}
@@ -256,7 +272,9 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300 }: Ti
                 <Text size={200}>{series.length > 1 ? s.name : valueLabel}</Text>
               </span>
               <Text size={200} weight="semibold">
-                {formatValue(s.points[hover.index]?.value ?? 0)}
+                {s.points[hover.index]?.value == null
+                  ? 'No data'
+                  : formatValue(s.points[hover.index].value as number)}
               </Text>
             </div>
           ))}

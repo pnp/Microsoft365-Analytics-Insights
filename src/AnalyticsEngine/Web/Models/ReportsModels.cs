@@ -37,14 +37,19 @@ namespace Web.AnalyticsWeb.Models
         public bool Emails { get; set; }
     }
 
-    /// <summary>One point of a weekly time series: the (Monday) start of the week and its value.</summary>
+    /// <summary>
+    /// One point of a weekly time series: the (Monday) start of the week and its value.
+    /// <see cref="Value"/> is null when the week's value is genuinely unknown rather than zero -
+    /// e.g. a Microsoft 365 usage week whose activity report never arrived. Charting those weeks as
+    /// zero would draw a sharp (and false) drop, so they are rendered as a gap in the line instead.
+    /// </summary>
     public class ReportTimePoint
     {
         [JsonProperty("weekStart")]
         public DateTime WeekStart { get; set; }
 
         [JsonProperty("value")]
-        public double Value { get; set; }
+        public double? Value { get; set; }
     }
 
     /// <summary>A named line in a time-series chart (e.g. one workload, or "Page views").</summary>
@@ -111,6 +116,10 @@ namespace Web.AnalyticsWeb.Models
         /// <summary>Set when the query failed/timed out; the chart data is then empty.</summary>
         [JsonProperty("error")]
         public string Error { get; set; }
+
+        /// <summary>Set when part of a chart could not load but other series remain usable.</summary>
+        [JsonProperty("warning")]
+        public string Warning { get; set; }
     }
 
     /// <summary>The set of charts for one report area over the requested window.</summary>
