@@ -10,6 +10,7 @@ This is a **public** repository (part of a multi-fork network). Anything pushed 
 - This explicitly includes **anything obtained by analysing a database, external/production system, or "example"/sample data**: real database names, tenant/organization/agent GUIDs, agent or user display names, SharePoint/OneDrive URLs and paths, file names, row counts, and raw payloads. If you queried a real DB or inspected a real payload to understand a bug, **do not** paste those values into code, tests, commit messages, or docs — reproduce the *shape*, not the data.
 - **Always use synthetic substitutes**: `Contoso`, zeroed GUIDs (`00000000-0000-0000-0000-000000000000`), obviously-fake names/URLs, and rounded/made-up counts.
 - **Always double-check before you commit, push, or publish.** Re-scan the full diff *and* any new/edited documentation for real names, GUIDs, DB names, URLs, counts, and payloads. When in doubt, ask before committing.
+- **Azure deployment plans must be synthetic.** Files such as `.azure/plan.md` must never record real subscription/tenant/resource names or IDs, regions, hostnames/URLs, CIDRs, app IDs, user identities, deployment timestamps, resource counts, capacity/policy failures, or production validation/deployment results. Use placeholders and generic result shapes; keep real deployment context and evidence out-of-band.
 - If real data does reach a public location, treat it as **compromised**: flag it immediately so history can be rewritten and a GitHub Support purge requested (a force-push alone is not enough).
 
 ## C# / AnalyticsEngine
@@ -31,19 +32,24 @@ Always read it before making changes under `src/AnalyticsEngine/`.
 - Always open PRs against the `dev` branch unless the user explicitly says to target `main` (or another branch).
 - This applies to both human-driven and Copilot-driven PRs, including coding-agent tasks that auto-create branches.
 - If a PR has already been opened against the wrong base, retarget it with `gh pr edit <num> --base dev` rather than closing and reopening.
+- **PR bodies are for developers and reviewers.** Keep every PR description technical and implementation-focused: exact scope, architecture/code changes, tests, benchmarks, schema/config effects, risks, deferred work and reviewer hotspots.
+- A `dev`→`main` release PR is also developer-focused. Its body should make the release diff reviewable and prove that migration/configuration claims are correct; it is deliberately not the customer-facing release note.
 
 ## Releases
-Release descriptions (the dev→main release PR body and the GitHub release notes) are read by operators and customers, not just developers.
+GitHub release notes are for operators and customers. They are a separate deliverable from the technical `dev`→`main` PR body.
 
-**When the user asks for a "new release", the release notes must be admin-friendly at level 300.** Write for an IT admin / M365 or Azure operator who runs the product — technically deep, but about *operating* it, not about the source code. That means:
+**Every stable GitHub release must have admin-friendly level-300 release notes.** Write for an IT admin / M365 or Azure operator who runs the product — technically deep, but about *operating* it, not about the source code. That means:
 - **Lead with the shape of the release** — is it a bug-fix release, a feature release, or a breaking/schema release? Say so in the first line.
-- **Open with an "Should you upgrade?" summary table**: upgrade urgency and who's affected, database migrations (or "none"), configuration/config-schema changes (or "none"), breaking changes, how to upgrade, and expected downtime.
+- **Open with a "Should you upgrade?" summary table**: upgrade urgency and who's affected, database migrations (or "none"), configuration/config-schema changes (or "none"), breaking changes, how to upgrade, and expected downtime.
 - **Per significant change, cover: who it affects, the observable symptom, the root cause, what changed, and the admin action required** (explicitly say "none" when there is none). Include real error text/log lines an admin would search for, and link the relevant wiki page.
 - **Explain misleading errors.** If a symptom looks like something else (e.g. a network block that surfaces as a 401), say so — that's usually the most valuable part for the reader.
 - **Close with a numbered upgrade checklist.**
 - Level 300 means: assume Azure/M365 admin fluency (SKUs, private endpoints, DNS zones, Entra permissions, App Service), don't assume knowledge of this codebase, and never require reading the diff to understand the impact.
 
 Also:
+- **A push or merge to `main` is not complete when the branch update finishes.** Watch the Release build, locate the resulting stable GitHub release, and update that actual release's notes to the admin-level format above. Preparing notes before merge is useful, but the generated release must still be edited after it exists.
+- **Verify the release downloads before declaring success.** The stable release must contain `AITrackerInstaller.zip`, `AppInsightsImporter.zip`, `ControlPanelApp.zip`, `Office365ActivityImporter.zip`, and `Website.zip`.
+- **Verify manual database-upgrade assets.** For every migration in the release diff, confirm its matching `<migrationid>.manual.sql` is attached to the stable GitHub release and byte-matches the repository source. Upload missing scripts before reporting the release complete. If there are no migrations, state that no manual SQL assets are required.
 - **Always explain changes in plain English** — say what changed and why it matters to someone running the product, not just the technical/internal detail. Prefer more explanation over less; err on the side of over-explaining a user-facing change.
 - **Don't list pure code changes individually.** Internal-only changes with no user-visible effect (e.g. "Standardise ILogger variable names to `_logger` / `logger`", trimming redundant `PackageReference`s, cleaning binding redirects, test-data tweaks) must **not** each get their own bullet. Roll them all up under a single general **"Code maintenance"** line.
 - Reserve individual, plain-English bullets for changes an operator or end-user would actually notice: new features, bug fixes, installer/UI changes, performance/reliability improvements, and any schema/database or upgrade-step changes.
