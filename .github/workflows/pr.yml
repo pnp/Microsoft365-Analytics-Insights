@@ -5,8 +5,9 @@ on:
     types:
       - ready_for_review
     paths:
-      - src/**
+      - src/AnalyticsEngine/**
       - reports/**
+      - .github/workflows/pr.yml
   workflow_dispatch:
 
 env:
