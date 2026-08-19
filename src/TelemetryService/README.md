@@ -52,6 +52,16 @@ installations (the AnalyticsEngine importer in
   authorization boundary. The ASP.NET Core API still performs the scope and
   role checks, while anonymous health, configuration and signed-upload
   requests continue to reach the application.
+- **EasyAuth `allowedApplications` must be set explicitly.** If
+  `defaultAuthorizationPolicy` is omitted, the platform stores
+  `allowed_client_applications` as an *empty array*, which EasyAuth reads as
+  "permit nothing": it authenticates the caller and then returns a bare `403`
+  before the request reaches the application. The symptom is deeply misleading —
+  anonymous requests still succeed, and a token with an invalid signature also
+  succeeds (it fails validation, so it is treated as anonymous), so a **valid**
+  token is the only thing that gets rejected. Verify with
+  `az webapp auth show` that `aadClaimsAuthorization` lists the SPA client ID
+  rather than `"allowed_client_applications":[]`.
 
 ## Configuration
 
