@@ -107,6 +107,17 @@ namespace Common.Entities
         [ImportProp]
         public bool ImportPowerPlatform { get; set; } = false;
 
+        /// <summary>
+        /// Import the three Microsoft Graph Microsoft 365 Copilot usage reports (user-count summary,
+        /// user-count trend and per-user usage detail). Independent of <see cref="Copilot"/>, which imports
+        /// Copilot interactions from the Audit.General feed: this one is Microsoft's own official usage
+        /// reporting, which is what the Microsoft 365 admin centre shows and therefore what customers compare
+        /// our numbers against. Opt-in (default false) because it needs the Reports.Read.All application
+        /// permission and is only available in the global cloud.
+        /// </summary>
+        [ImportProp]
+        public bool GraphCopilotUsageReports { get; set; } = false;
+
         IEnumerable<PropertyInfo> GetImportProps()
         {
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));

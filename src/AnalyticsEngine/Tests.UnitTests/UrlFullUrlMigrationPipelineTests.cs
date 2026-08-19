@@ -41,8 +41,8 @@ namespace Tests.UnitTests
         // performs the urls.full_url nvarchar(850) conversion asserted below) still runs as part of the path;
         // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup,
         // IndexUsageReportSnapshots and IndexReportDateQueries are later, unrelated schema-only index
-        // migrations, and CopilotDroppedAuditFields adds the Copilot audit columns/tables.
-        private const string LatestId = "202608190622001_CopilotDroppedAuditFields";
+        // migrations, and AddCopilotUsageReports only adds new Copilot usage-report tables.
+        private const string LatestId = "202608190725064_AddCopilotUsageReports";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
@@ -55,9 +55,25 @@ namespace Tests.UnitTests
         {
             if (_connStr == null)
             {
-                // Construct-only (no query) so the auto-migrate initializer is not triggered.
-                using (var db = new AnalyticsEntitiesContext())
-                    _connStr = db.Database.Connection.ConnectionString;
+                // Read the connection string from configuration rather than from a DbContext instance.
+                // These tests deliberately park the database on an OLD migration, and in a Release build the
+                // context's initializer is CreateDatabaseIfNotExists, which validates the current model
+                // against the last __MigrationHistory row and throws "The model backing the
+                // 'AnalyticsEntitiesContext' context has changed since the database was created" whenever the
+                // two differ. That only stayed quiet while every recent migration was raw-SQL and reused its
+                // predecessor's snapshot; the first model-changing migration after this point makes
+                // constructing a context at an old state throw. The connection string is the only thing
+                // wanted here, so take it from config and never touch EF.
+                var configured = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
+                if (configured != null)
+                {
+                    _connStr = configured.ConnectionString;
+                }
+                else
+                {
+                    using (var db = new AnalyticsEntitiesContext())
+                        _connStr = db.Database.Connection.ConnectionString;
+                }
             }
             return _connStr;
         }

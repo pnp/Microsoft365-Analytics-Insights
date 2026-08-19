@@ -177,6 +177,7 @@
     <Compile Include="Entities\UsageReports\OutlookUsageActivityLog.cs" />
     <Compile Include="Entities\UsageReports\YammerActivityClasses.cs" />
     <Compile Include="Entities\UsageReports\TeamsUsageActivityClasses.cs" />
+    <Compile Include="Entities\UsageReports\CopilotUsageReportClasses.cs" />
     <Compile Include="Entities\TelemetryReport.cs" />
     <Compile Include="Entities\Web.cs" />
     <Compile Include="Entities\YammerGroup.cs" />
@@ -339,6 +340,10 @@
     <Compile Include="Migrations\202608190622001_CopilotDroppedAuditFields.cs" />
     <Compile Include="Migrations\202608190622001_CopilotDroppedAuditFields.Designer.cs">
       <DependentUpon>202608190622001_CopilotDroppedAuditFields.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608190725064_AddCopilotUsageReports.cs" />
+    <Compile Include="Migrations\202608190725064_AddCopilotUsageReports.Designer.cs">
+      <DependentUpon>202608190725064_AddCopilotUsageReports.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
@@ -510,6 +515,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608190622001_CopilotDroppedAuditFields.resx">
       <DependentUpon>202608190622001_CopilotDroppedAuditFields.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608190725064_AddCopilotUsageReports.resx">
+      <DependentUpon>202608190725064_AddCopilotUsageReports.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
