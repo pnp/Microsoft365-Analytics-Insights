@@ -33,6 +33,31 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [Column("model_transparency_json", true)]
         public string ModelTransparencyDetailsJson { get; set; }
 
+        // Contexts serialized as JSON. ALL of them - the file/meeting resolution above only ever
+        // uses the first file or meeting context, so this is the only place the rest survive.
+        [Column("contexts_json", true)]
+        public string ContextsJson { get; set; }
+
+        // AISystemPlugin entries serialized as JSON
+        [Column("ai_system_plugins_json", true)]
+        public string AISystemPluginsJson { get; set; }
+
+        // Conversation thread the interaction belongs to (CopilotEventData.ThreadId). Left as the
+        // default nvarchar(max) staging column and trimmed with LEFT() in the merge instead of
+        // declaring a bounded SqlTypeOverride: InsertBatch DROPS a whole row whose value exceeds a
+        // bounded staging column, and losing an entire interaction over a long thread id would be a
+        // far worse outcome than truncating the id.
+        [Column("thread_id", true)]
+        public string ThreadId { get; set; }
+
+        // Region of the Copilot service that served the interaction (audit record ClientRegion)
+        [Column("client_region", true)]
+        public string ClientRegion { get; set; }
+
+        // Copilot audit-log schema version of this record (audit record CopilotLogVersion)
+        [Column("copilot_log_version", true)]
+        public string CopilotLogVersion { get; set; }
+
         // Copilot Credit estimate total
         [Column("copilot_credit_estimate_total", true)]
         public int? CopilotCreditEstimateTotal { get; set; }
