@@ -54,7 +54,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         // Stored verbatim (unprefixed) in Redis db 0, so they can be cleared manually with e.g.
         // `redis-cli DEL GraphUsersMetadataLastImported`.
         private const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
-        private const string GraphUserAppsLastImportedKey = "GraphUserAppsLastImported";
         private const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
         private const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
 
@@ -147,19 +146,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                // Process Teams data
-                if (settings.ImportJobSettings.GraphUserApps)
-                {
-                    await RunGraphSectionIfDueAsync(GraphUserAppsLastImportedKey, _settings.GraphMetadataImportIntervalHours, "User Teams apps refresh", async () =>
-                    {
-                        var userAppsLogUpdater = new UserAppLogUpdater(_logger, _settings);
-                        await userAppsLogUpdater.UpdateUserInstalledApps(_graphClient, graphUserGroupsCache, userGroupsFilter);
-                    });
-                }
-                else
-                    _logger.LogInformation("Skipping user Teams apps import", graphUserGroupsCache);
-
-
                 if (settings.ImportJobSettings.GraphUsageReports)
                 {
                     var usageActivityTimer = new JobTimer(_logger, "Usage reports");

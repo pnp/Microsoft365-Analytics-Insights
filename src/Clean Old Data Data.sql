@@ -56,7 +56,13 @@ delete [event_meta_general] from [event_meta_general]
 
 
 -- Teams
-delete from teams_addons_log where [date] < @archiveDateMax
+-- Deprecated Teams add-on tracking: these tables are no longer written to and are dropped by the
+-- DeprecateTeamsAddons migration once empty, so only prune them when they are still present.
+-- Dynamic SQL keeps this batch parseable on a database where they have already gone.
+IF OBJECT_ID('dbo.teams_addons_log', 'U') IS NOT NULL
+	EXEC sp_executesql N'delete from teams_addons_log where [date] < @archiveDateMax', N'@archiveDateMax datetime', @archiveDateMax = @archiveDateMax
+IF OBJECT_ID('dbo.teams_addons_user_installed_log', 'U') IS NOT NULL
+	EXEC sp_executesql N'delete from teams_addons_user_installed_log where [date] < @archiveDateMax', N'@archiveDateMax datetime', @archiveDateMax = @archiveDateMax
 delete teams_channel_stats_log_keywords from teams_channel_stats_log_keywords 
 	inner join teams_channel_stats_log on teams_channel_stats_log.id = teams_channel_stats_log_keywords.channel_stats_log_id
 	where teams_channel_stats_log.[date] < @archiveDateMax 

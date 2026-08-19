@@ -21,7 +21,7 @@ namespace Common.Entities
         }
 
         /// <summary>
-        /// Load from string format. "GraphUsersMetadata=True;GraphUserApps=False;" etc
+        /// Load from string format. "GraphUsersMetadata=True;GraphTeams=False;" etc
         /// </summary>
         /// <param name="settingsString"></param>
         public ImportTaskSettings(string settingsString)
@@ -65,12 +65,6 @@ namespace Common.Entities
 
         [ImportProp]
         public bool GraphUsersMetadata { get; set; } = false;
-
-        /// <summary>
-        /// User Teams apps for user refresh
-        /// </summary>
-        [ImportProp]
-        public bool GraphUserApps { get; set; } = false;
 
         [ImportProp]
         public bool GraphUsageReports { get; set; } = false;

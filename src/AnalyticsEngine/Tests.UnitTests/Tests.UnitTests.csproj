@@ -167,6 +167,7 @@
     <Compile Include="CopilotUsageReportImportTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
     <Compile Include="MigrationSnapshotTests.cs" />
+    <Compile Include="UpgradeFromStableTests.cs" />
     <Compile Include="ScratchDatabase.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressRunner.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressTests.cs" />
@@ -190,7 +191,6 @@
     <Compile Include="FakeLoaderClasses\FakeActivityReportPersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeContentMetaDataLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
-    <Compile Include="FakeLoaderClasses\FakeUserAppLoader.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
     <Compile Include="SingleDateStoreTests.cs" />
     <Compile Include="AutoThrottleHttpClientTests.cs" />
