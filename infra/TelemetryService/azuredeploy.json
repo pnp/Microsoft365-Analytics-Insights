@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "15389986286903050903"
+      "templateHash": "7161291526094261756"
     }
   },
   "parameters": {
@@ -140,7 +140,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.46.1.21595",
-              "templateHash": "8994386093001141853"
+              "templateHash": "11062731204687532164"
             }
           },
           "parameters": {
@@ -662,7 +662,12 @@
                       "allowedAudiences": [
                         "[parameters('azureAdClientId')]",
                         "[format('api://{0}', parameters('azureAdClientId'))]"
-                      ]
+                      ],
+                      "defaultAuthorizationPolicy": {
+                        "allowedApplications": [
+                          "[parameters('azureAdClientId')]"
+                        ]
+                      }
                     }
                   }
                 },
