@@ -6,14 +6,16 @@ on:
       - main
       - dev
     paths:
-      - src/**
-      - reports/**  
+      - src/AnalyticsEngine/**
+      - reports/**
+      - .github/workflows/tests.yml
   pull_request:
     types:
       - ready_for_review
     paths:
-      - src/**
-      - reports/**  
+      - src/AnalyticsEngine/**
+      - reports/**
+      - .github/workflows/tests.yml
   workflow_dispatch:
     inputs:
       force_run:
@@ -55,7 +57,7 @@ jobs:
         with:
           filters: |
             code:
-              - 'src/**'
+              - 'src/AnalyticsEngine/**'
 
   test_aitracker:
     runs-on: ubuntu-latest
