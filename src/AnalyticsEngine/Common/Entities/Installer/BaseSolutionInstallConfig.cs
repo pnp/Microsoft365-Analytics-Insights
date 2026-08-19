@@ -15,7 +15,8 @@ namespace Common.Entities.Installer
         // TargetSolutionConfig / ImportTaskSettings (a new import toggle, a new resource field, etc.). Use
         // Major.Minor.Patch: minor for additive changes, major for breaking ones.
         // History: 1.8.0 -> 1.9.0 added ImportTaskSettings.ImportPowerPlatform (opt-in Power Platform workload).
-        //          1.9.0 -> 2.0.0 BREAKING: removed ImportTaskSettings.GraphUserApps - Teams add-on / app-install
+        //          1.9.0 -> 1.10.0 added ImportTaskSettings.GraphCopilotUsageReports (opt-in Graph Copilot usage reports).
+        //          1.10.0 -> 2.0.0 BREAKING: removed ImportTaskSettings.GraphUserApps - Teams add-on / app-install
         //          tracking is deprecated and the import no longer exists. Older configs still load; the
         //          property is simply ignored.
         const string CONFIG_VERSION = "2.0.0";

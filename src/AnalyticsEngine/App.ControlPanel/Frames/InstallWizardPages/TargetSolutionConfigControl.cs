@@ -31,7 +31,8 @@ namespace App.ControlPanel.Controls
                         WebTraffic = chkWeb.Checked,
                         Copilot = chkCopilot.Checked,
                         SentEmails = chkSentEmails.Checked,
-                        ImportPowerPlatform = chkPowerPlatform.Checked
+                        ImportPowerPlatform = chkPowerPlatform.Checked,
+                        GraphCopilotUsageReports = chkCopilotUsageReports.Checked
                     }
                 };
             }
@@ -54,6 +55,7 @@ namespace App.ControlPanel.Controls
             chkCopilot.Checked = value.ImportTaskSettings.Copilot;
             chkSentEmails.Checked = value.ImportTaskSettings.SentEmails;
             chkPowerPlatform.Checked = value.ImportTaskSettings.ImportPowerPlatform;
+            chkCopilotUsageReports.Checked = value.ImportTaskSettings.GraphCopilotUsageReports;
         }
 
 

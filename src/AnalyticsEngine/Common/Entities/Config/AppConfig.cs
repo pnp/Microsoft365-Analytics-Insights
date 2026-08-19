@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
@@ -169,6 +169,16 @@ namespace Common.Entities.Config
                 && sentEmailNoMailboxRetryHours >= 0
                 ? sentEmailNoMailboxRetryHours
                 : 24;
+            // Minimum hours between Copilot usage-report imports. Deliberately NOT preset-derived: the High
+            // preset sets NonFreshGraphIntervalHours = 0 (every cycle) to preserve legacy behaviour for the
+            // imports that already worked that way, and a 10-minute cycle would re-download and re-process
+            // every licensed user's Copilot row against a source that only refreshes about every 48 hours.
+            // This feature is new, so it has no legacy cadence to preserve and defaults to daily on every
+            // preset. 0 disables the gate; the ForceGraphMetadataImport flag still overrides it for one run.
+            this.GraphCopilotUsageReportsIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphCopilotUsageReportsIntervalHours"), out var graphCopilotUsageReportsIntervalHours)
+                && graphCopilotUsageReportsIntervalHours >= 0
+                ? graphCopilotUsageReportsIntervalHours
+                : DefaultCopilotUsageReportsIntervalHours;
 
             // One-off force flag: bypass the cadence gate for the non-fresh Graph imports (user metadata,
             // user apps, Teams) for this run. Mirrors ForceUsageReportsImport. Default false.
@@ -412,6 +422,20 @@ namespace Common.Entities.Config
         /// <c>GraphTeamsImportIntervalHours</c> AppSetting is set &gt;= 0. 0 disables the gate.
         /// </summary>
         public int GraphTeamsImportIntervalHours { get; set; } = 0;
+
+        /// <summary>
+        /// Default hours between Copilot usage-report imports. The source data only refreshes roughly every
+        /// 48 hours, so anything more frequent re-processes every licensed user for nothing.
+        /// </summary>
+        public const int DefaultCopilotUsageReportsIntervalHours = 24;
+
+        /// <summary>
+        /// Minimum hours between imports of the Graph Microsoft 365 Copilot usage reports. Unlike the other
+        /// Graph cadence knobs this is NOT preset-derived - see the comment where it is read - and defaults to
+        /// <see cref="DefaultCopilotUsageReportsIntervalHours"/> on every preset. Override with the
+        /// <c>GraphCopilotUsageReportsIntervalHours</c> AppSetting; 0 disables the gate.
+        /// </summary>
+        public int GraphCopilotUsageReportsIntervalHours { get; set; } = DefaultCopilotUsageReportsIntervalHours;
 
         /// <summary>
         /// When true, bypasses the cadence gate for the non-fresh Graph imports (user metadata, user
