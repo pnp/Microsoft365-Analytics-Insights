@@ -367,8 +367,13 @@ namespace Common.Entities
         public DbSet<CopilotAccessedResourceName> CopilotAccessedResourceNames { get; set; }
         public DbSet<CopilotAccessedResourceSiteUrl> CopilotAccessedResourceSiteUrls { get; set; }
         public DbSet<CopilotAccessedResourceType> CopilotAccessedResourceTypes { get; set; }
+        public DbSet<CopilotAccessedResourceAction> CopilotAccessedResourceActions { get; set; }
         public DbSet<SensitivityLabel> SensitivityLabels { get; set; }
         public DbSet<CopilotEventAccessedResource> CopilotEventAccessedResources { get; set; }
+
+        // All interaction contexts (the importer only resolves the first file/meeting one)
+        public DbSet<CopilotContextType> CopilotContextTypes { get; set; }
+        public DbSet<CopilotEventContext> CopilotEventContexts { get; set; }
 
         // Message tracking
         public DbSet<CopilotMessage> CopilotMessages { get; set; }
@@ -376,6 +381,10 @@ namespace Common.Entities
         // AI Model transparency
         public DbSet<CopilotAIModel> CopilotAIModels { get; set; }
         public DbSet<CopilotEventAIModel> CopilotEventAIModels { get; set; }
+
+        // AI system plugins / connectors that grounded the answer
+        public DbSet<CopilotAISystemPlugin> CopilotAISystemPlugins { get; set; }
+        public DbSet<CopilotEventAISystemPlugin> CopilotEventAISystemPlugins { get; set; }
 
         // Power Platform
         public virtual DbSet<PowerApp> power_apps { get; set; }
