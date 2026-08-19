@@ -180,7 +180,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // and returns the same numbers. This uses its own interval rather than the shared
                     // non-fresh Graph one, whose High-preset default is "every cycle".
                     await RunGraphSectionIfDueAsync(GraphCopilotUsageReportsLastImportedKey, _settings.GraphCopilotUsageReportsIntervalHours, "Copilot usage reports",
-                        () => ImportCopilotUsageReports(graphUserGroupsCache, userGroupsFilter));
+                        () => ImportCopilotUsageReports(httpClient, graphUserGroupsCache, userGroupsFilter));
                 }
                 else
                     _logger.LogInformation("Skipping Graph Copilot usage reports import", graphUserGroupsCache);
@@ -239,39 +239,39 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// must not take down the Teams and sent-email imports that run after this section. Each report also
         /// gets its own DbContext so a failed SaveChanges can't poison the next one.
         /// </summary>
-        private async Task<bool> ImportCopilotUsageReports(UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)
+        private async Task<bool> ImportCopilotUsageReports(ManualGraphCallClient httpClient, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)
         {
-            using (var csvSource = new GraphCopilotReportCsvSource(_graphAppIndentityOAuthContext, _logger))
+            // Same client, throttling and paging as every other Graph usage report in this solution.
+            var reportSource = new GraphCopilotReportSource(httpClient, _logger);
+
+            // First run gets the widest window Graph offers. This is history we cannot get any other way:
+            // the audit pipeline has a hard 7-day retrieval ceiling, so without this backfill a new
+            // install starts with an empty Copilot adoption trend.
+            //
+            // The decision is based on whether a D180 TREND import has ever completed - not on whether any
+            // Copilot row exists. Keying it off "any row" meant a successful summary import alongside a
+            // failed D180 trend permanently downgraded every later run to D28, silently losing the
+            // backfill for good.
+            var backfillDone = await HasCompletedTrendBackfill();
+            var trendPeriod = backfillDone ? CopilotReportRequest.DefaultRefreshPeriod : CopilotReportRequest.MaxHistoryPeriod;
+            if (!backfillDone)
             {
-                // First run gets the widest window Graph offers. This is history we cannot get any other way:
-                // the audit pipeline has a hard 7-day retrieval ceiling, so without this backfill a new
-                // install starts with an empty Copilot adoption trend.
-                //
-                // The decision is based on whether a D180 TREND import has ever completed - not on whether any
-                // Copilot row exists. Keying it off "any row" meant a successful summary import alongside a
-                // failed D180 trend permanently downgraded every later run to D28, silently losing the
-                // backfill for good.
-                var backfillDone = await HasCompletedTrendBackfill();
-                var trendPeriod = backfillDone ? CopilotReportRequest.DefaultRefreshPeriod : CopilotReportRequest.MaxHistoryPeriod;
-                if (!backfillDone)
-                {
-                    _logger.LogInformation($"No completed Copilot trend backfill on record - requesting the maximum window ({trendPeriod}).");
-                }
-
-                var allSucceeded = true;
-
-                allSucceeded &= await RunCopilotReport("Copilot user-count trend", db =>
-                    new CopilotUserCountReportLoader(csvSource, _logger).LoadAndSaveTrendAsync(db, trendPeriod));
-
-                allSucceeded &= await RunCopilotReport("Copilot user-count summary", db =>
-                    new CopilotUserCountReportLoader(csvSource, _logger).LoadAndSaveSummaryAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
-
-                allSucceeded &= await RunCopilotReport("Copilot per-user usage detail", db =>
-                    new CopilotUsageUserDetailLoader(csvSource, _logger, userGroupsCache, userGroupsFilterModel)
-                        .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
-
-                return allSucceeded;
+                _logger.LogInformation($"No completed Copilot trend backfill on record - requesting the maximum window ({trendPeriod}).");
             }
+
+            var allSucceeded = true;
+
+            allSucceeded &= await RunCopilotReport("Copilot user-count trend", db =>
+                new CopilotUserCountReportLoader(reportSource, _logger).LoadAndSaveTrendAsync(db, trendPeriod));
+
+            allSucceeded &= await RunCopilotReport("Copilot user-count summary", db =>
+                new CopilotUserCountReportLoader(reportSource, _logger).LoadAndSaveSummaryAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
+
+            allSucceeded &= await RunCopilotReport("Copilot per-user usage detail", db =>
+                new CopilotUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
+                    .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
+
+            return allSucceeded;
         }
 
         /// <summary>

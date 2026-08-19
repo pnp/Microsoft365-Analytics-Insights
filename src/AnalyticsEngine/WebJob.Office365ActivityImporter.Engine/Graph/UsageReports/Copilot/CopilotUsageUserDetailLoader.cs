@@ -31,7 +31,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     /// </summary>
     public class CopilotUsageUserDetailLoader
     {
-        private readonly ICopilotReportCsvSource _csvSource;
+        private readonly ICopilotReportSource _reportSource;
         private readonly ILogger _logger;
         private readonly UserGroupsCache _userGroupsCache;
         private readonly UserGroupsFilterModel _userGroupsFilter;
@@ -43,10 +43,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// </summary>
         public int SaveBatchSize { get; set; } = 1000;
 
-        public CopilotUsageUserDetailLoader(ICopilotReportCsvSource csvSource, ILogger logger,
+        public CopilotUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger,
             UserGroupsCache userGroupsCache = null, UserGroupsFilterModel userGroupsFilter = null)
         {
-            _csvSource = csvSource ?? throw new ArgumentNullException(nameof(csvSource));
+            _reportSource = reportSource ?? throw new ArgumentNullException(nameof(reportSource));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userGroupsCache = userGroupsCache;
             _userGroupsFilter = userGroupsFilter;
@@ -80,27 +80,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             };
 
             List<CopilotUsageUserDetailRow> parsed;
-            var headers = new List<string>();
             try
             {
-                _logger.LogInformation($"Loading Copilot per-user report {request}...");
+                var reports = await _reportSource.LoadReportAsync(request);
+                parsed = CopilotUsageUserDetailParser.Parse(reports);
 
-                // Streamed, not buffered: at ~200,000 licensed users the whole CSV plus one dictionary per row
-                // is hundreds of megabytes before a single row is written.
-                parsed = new List<CopilotUsageUserDetailRow>();
-                using (var csv = await _csvSource.OpenReportCsvAsync(request))
-                using (var reader = csv.CreateReader())
+                // The response nests the counters under copilotActivityUserDetailsByPeriod, so "no rows"
+                // can mean either "no Copilot licences" or "the shape changed and we understood none of it".
+                if (reports.Count > 0 && parsed.Count == 0)
                 {
-                    foreach (var row in CsvReportTable.StreamRows(reader, headers))
-                    {
-                        var parsedRow = CopilotUsageUserDetailParser.ParseRow(row);
-                        if (parsedRow != null) parsed.Add(parsedRow);
-                    }
+                    throw new InvalidOperationException(
+                        $"Copilot report {request} returned {reports.Count} user object(s) but none could be parsed. " +
+                        "Microsoft has probably changed the report schema; the import was stopped rather than recording an empty snapshot.");
                 }
-
-                // Checked after the read (the header list is populated before the first row is yielded) so a
-                // renamed Microsoft column fails loudly instead of looking like "this tenant has no licences".
-                CsvReportTable.RequireHeaders(headers, request, CopilotUsageUserDetailParser.RequiredHeaders);
             }
             catch (Exception ex)
             {
@@ -143,23 +135,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             var importable = concealedCount == 0 ? parsed : parsed.Where(r => !r.IsIdentityConcealed).ToList();
 
             // Checked after concealment, so a concealed tenant still gets its diagnostic rather than this
-            // error. Not a warning: persisting a v1-shaped response would write NULL over prompt counts and
-            // active usage days a previous v2 import had already stored, quietly degrading the data.
-            if (request.Version == CopilotReportVersions.V2 && !CopilotUsageUserDetailParser.IsVersion2(headers))
+            // warning. Microsoft hasn't published the beta JSON schema for version 2, so an absent set of v2
+            // values could mean either "Graph answered v1" or "the field names differ from the ones we look
+            // for". Either way the safe response is the same: import the version 1 values and leave the
+            // stored version 2 columns alone rather than blanking prompt counts a previous import captured.
+            var hasVersion2Data = CopilotUsageUserDetailParser.HasVersion2Data(importable);
+            if (request.Version == CopilotReportVersions.V2 && !hasVersion2Data && importable.Count > 0)
             {
-                var versionError = new InvalidOperationException(
-                    $"Copilot report {request} was requested as {CopilotReportVersions.V2} but the CSV contains no version 2 columns " +
-                    "(prompt counts and active usage days). Refusing to import a version 1 snapshot over version 2 data.");
-                importLog.Error = Truncate(versionError.Message, 1000);
-                await SaveImportLog(db, importLog);
-                throw versionError;
+                _logger.LogWarning($"Copilot report {request} was requested as {CopilotReportVersions.V2} but no version 2 values " +
+                    "(prompt counts, active usage days) were found in the response. Those columns will be left as they are rather than overwritten.");
             }
 
             int written;
             try
             {
                 importable = await FilterToUsersInScope(importable);
-                written = await SaveAsync(db, importable, request);
+                written = await SaveAsync(db, importable, request, hasVersion2Data);
             }
             catch (Exception ex)
             {
@@ -217,7 +208,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             return inScope;
         }
 
-        private async Task<int> SaveAsync(AnalyticsEntitiesContext db, List<CopilotUsageUserDetailRow> rows, CopilotReportRequest request)
+        private async Task<int> SaveAsync(AnalyticsEntitiesContext db, List<CopilotUsageUserDetailRow> rows,
+            CopilotReportRequest request, bool hasVersion2Data)
         {
             if (rows.Count == 0) return 0;
 
@@ -263,7 +255,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 for (var offset = 0; offset < rows.Count; offset += SaveBatchSize)
                 {
                     var batch = rows.GetRange(offset, Math.Min(SaveBatchSize, rows.Count - offset));
-                    written += await SaveBatchAsync(db, batch, userIdsByUpn, reportDates, periods);
+                    written += await SaveBatchAsync(db, batch, userIdsByUpn, reportDates, periods, hasVersion2Data);
                     DetachActivityLogs(db);
                 }
             }
@@ -277,7 +269,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         }
 
         private async Task<int> SaveBatchAsync(AnalyticsEntitiesContext db, List<CopilotUsageUserDetailRow> batch,
-            Dictionary<string, int> userIdsByUpn, List<DateTime> reportDates, List<int> periods)
+            Dictionary<string, int> userIdsByUpn, List<DateTime> reportDates, List<int> periods, bool hasVersion2Data)
         {
             var batchUserIds = new List<int>(batch.Count);
             foreach (var row in batch)
@@ -310,7 +302,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                     existingByKey[key] = log;
                 }
 
-                var changed = Populate(log, row);
+                var changed = Populate(log, row, hasVersion2Data);
 
                 if (isNew)
                 {
@@ -453,17 +445,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             newUsers.Clear();
         }
 
-        /// <summary>Copies report values onto the log row, returning true if any stored value actually changed.</summary>
-        private static bool Populate(CopilotUsageUserActivityLog log, CopilotUsageUserDetailRow row)
+        /// <summary>
+        /// Copies report values onto the log row, returning true if any stored value actually changed.
+        ///
+        /// When the response carried no version 2 values at all, those columns are left untouched instead of
+        /// being written as NULL: that response can't distinguish "the user submitted no prompts" from
+        /// "Graph didn't send prompt data", and blanking a previously captured prompt count is the more
+        /// damaging of the two possible mistakes.
+        /// </summary>
+        private static bool Populate(CopilotUsageUserActivityLog log, CopilotUsageUserDetailRow row, bool hasVersion2Data)
         {
             var changed = false;
 
             changed |= Set(log.LastActivityDate, row.LastActivityDate, v => log.LastActivityDate = v);
 
-            changed |= Set(log.PromptsAllApps, row.PromptsAllApps, v => log.PromptsAllApps = v);
-            changed |= Set(log.PromptsChatWork, row.PromptsChatWork, v => log.PromptsChatWork = v);
-            changed |= Set(log.PromptsChatWeb, row.PromptsChatWeb, v => log.PromptsChatWeb = v);
-            changed |= Set(log.ActiveUsageDays, row.ActiveUsageDays, v => log.ActiveUsageDays = v);
+            if (hasVersion2Data)
+            {
+                changed |= Set(log.PromptsAllApps, row.PromptsAllApps, v => log.PromptsAllApps = v);
+                changed |= Set(log.PromptsChatWork, row.PromptsChatWork, v => log.PromptsChatWork = v);
+                changed |= Set(log.PromptsChatWeb, row.PromptsChatWeb, v => log.PromptsChatWeb = v);
+                changed |= Set(log.ActiveUsageDays, row.ActiveUsageDays, v => log.ActiveUsageDays = v);
+                changed |= Set(log.ChatWorkLastActivityDate, row.ChatWorkLastActivityDate, v => log.ChatWorkLastActivityDate = v);
+                changed |= Set(log.ChatWebLastActivityDate, row.ChatWebLastActivityDate, v => log.ChatWebLastActivityDate = v);
+                changed |= Set(log.Microsoft365CopilotLastActivityDate, row.Microsoft365CopilotLastActivityDate, v => log.Microsoft365CopilotLastActivityDate = v);
+                changed |= Set(log.EdgeLastActivityDate, row.EdgeLastActivityDate, v => log.EdgeLastActivityDate = v);
+                changed |= Set(log.AgentLastActivityDate, row.AgentLastActivityDate, v => log.AgentLastActivityDate = v);
+            }
 
             changed |= Set(log.ChatLastActivityDate, row.ChatLastActivityDate, v => log.ChatLastActivityDate = v);
             changed |= Set(log.TeamsLastActivityDate, row.TeamsLastActivityDate, v => log.TeamsLastActivityDate = v);
@@ -473,11 +480,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             changed |= Set(log.OutlookLastActivityDate, row.OutlookLastActivityDate, v => log.OutlookLastActivityDate = v);
             changed |= Set(log.OneNoteLastActivityDate, row.OneNoteLastActivityDate, v => log.OneNoteLastActivityDate = v);
             changed |= Set(log.LoopLastActivityDate, row.LoopLastActivityDate, v => log.LoopLastActivityDate = v);
-            changed |= Set(log.ChatWorkLastActivityDate, row.ChatWorkLastActivityDate, v => log.ChatWorkLastActivityDate = v);
-            changed |= Set(log.ChatWebLastActivityDate, row.ChatWebLastActivityDate, v => log.ChatWebLastActivityDate = v);
-            changed |= Set(log.Microsoft365CopilotLastActivityDate, row.Microsoft365CopilotLastActivityDate, v => log.Microsoft365CopilotLastActivityDate = v);
-            changed |= Set(log.EdgeLastActivityDate, row.EdgeLastActivityDate, v => log.EdgeLastActivityDate = v);
-            changed |= Set(log.AgentLastActivityDate, row.AgentLastActivityDate, v => log.AgentLastActivityDate = v);
 
             changed |= Set(log.IsUpnObfuscated, false, v => log.IsUpnObfuscated = v);
 

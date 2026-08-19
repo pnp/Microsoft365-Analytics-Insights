@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Entities.UsageReports;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -21,7 +22,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     /// </summary>
     public class CopilotUserCountReportLoader
     {
-        private readonly ICopilotReportCsvSource _csvSource;
+        private readonly ICopilotReportSource _reportSource;
         private readonly ILogger _logger;
 
         /// <summary>
@@ -31,9 +32,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// </summary>
         public int SaveBatchSize { get; set; } = 500;
 
-        public CopilotUserCountReportLoader(ICopilotReportCsvSource csvSource, ILogger logger)
+        public CopilotUserCountReportLoader(ICopilotReportSource reportSource, ILogger logger)
         {
-            _csvSource = csvSource ?? throw new ArgumentNullException(nameof(csvSource));
+            _reportSource = reportSource ?? throw new ArgumentNullException(nameof(reportSource));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -72,45 +73,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             };
 
             List<CopilotUserCountLog> parsed;
-            var droppedRows = 0;
             try
             {
-                _logger.LogInformation($"Loading Copilot aggregate report {request}...");
-                var csv = await _csvSource.GetReportCsvAsync(request);
-                var table = CsvReportTable.Parse(csv);
-
-                // A renamed Microsoft column would otherwise yield zero rows, which is indistinguishable from
-                // the perfectly normal "this tenant has no Copilot licences" case.
-                CsvReportTable.RequireHeaders(table.Headers, request,
-                    isTrend
-                        ? new[] { "Report Refresh Date", "Report Date" }
-                        : new[] { "Report Refresh Date", "Report Period" });
-
-                // The metadata columns alone aren't enough: a CSV carrying them but no "<app> Enabled Users" /
-                // "<app> Active Users" pair parses to zero rows and would be recorded as a successful
-                // "this tenant has no Copilot licences" response.
-                var apps = CopilotUserCountReportParser.DiscoverAppNames(table.Headers);
-                if (apps.Count == 0)
-                {
-                    throw new InvalidOperationException(
-                        $"Copilot report {request} contains no '<app> Enabled Users' / '<app> Active Users' columns. " +
-                        $"Columns returned: {string.Join(", ", table.Headers)}. " +
-                        "Microsoft has probably changed the report schema; the import was stopped rather than recording an empty snapshot.");
-                }
+                var reports = await _reportSource.LoadReportAsync(request);
 
                 parsed = isTrend
-                    ? CopilotUserCountReportParser.ParseTrend(table)
-                    : CopilotUserCountReportParser.ParseSummary(table);
+                    ? CopilotUserCountReportParser.ParseTrend(reports)
+                    : CopilotUserCountReportParser.ParseSummary(reports);
 
-                // Graph gives one row per app per CSV line, so anything short of that means lines were
-                // dropped (an unparseable date, say). That matters most for the one-off D180 history
-                // backfill: recording a partial parse as a clean import would mark the backfill complete,
-                // switch later runs to D28, and silently lose the missing history for good. Flagging it as an
-                // error instead keeps it retryable, and a retry is cheap.
-                var expectedRows = table.Rows.Count * apps.Count;
-                if (parsed.Count < expectedRows)
+                // Graph nests the numbers one level down (adoptionByProduct / adoptionByDate), so "no rows"
+                // can mean either "no Copilot licences" or "the shape changed and we understood none of it".
+                // Counting the entries we should have produced rows for makes a schema change visible instead
+                // of silently importing nothing - which matters most for the one-off D180 history backfill,
+                // where recording an empty parse as a clean import would mark the backfill done, switch later
+                // runs to D28, and lose the missing history for good.
+                var entryCount = CountEntries(reports, isTrend);
+                if (entryCount > 0 && parsed.Count == 0)
                 {
-                    droppedRows = expectedRows - parsed.Count;
+                    throw new InvalidOperationException(
+                        $"Copilot report {request} returned {entryCount} entry/entries but none could be parsed - " +
+                        "no recognisable '<app>EnabledUsers' / '<app>ActiveUsers' values were found. " +
+                        "Microsoft has probably changed the report schema; the import was stopped rather than recording an empty snapshot.");
                 }
             }
             catch (Exception ex)
@@ -133,20 +116,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             var written = await UpsertOrRecordFailure(db, parsed, isTrend ? CopilotUserCountReportTypes.Trend : CopilotUserCountReportTypes.Summary, importLog);
             importLog.RowsSaved = written;
-
-            if (droppedRows > 0)
-            {
-                // Recorded as an error so this import doesn't count as a clean one (see HasCompletedTrendBackfill).
-                // The rows that DID parse are still saved above - partial data beats none.
-                importLog.Error = Truncate($"{droppedRows} report row(s) could not be parsed and were skipped; the import is incomplete and will be retried.", 1000);
-                _logger.LogWarning($"Copilot aggregate report {request}: {droppedRows} row(s) could not be parsed and were skipped. " +
-                    "The rows that parsed have been saved, and the import is marked incomplete so it is retried.");
-            }
-
             await SaveImportLog(db, importLog);
 
             _logger.LogInformation($"Copilot aggregate report {request}: parsed {parsed.Count} row(s), wrote {written} to SQL.");
             return written;
+        }
+
+        /// <summary>
+        /// Number of nested entries the response contained, i.e. how many app-count blocks we expected to
+        /// turn into rows.
+        /// </summary>
+        private static int CountEntries(List<JObject> reports, bool isTrend)
+        {
+            if (reports == null) return 0;
+
+            var property = isTrend ? "adoptionByDate" : "adoptionByProduct";
+            return reports.Where(r => r != null)
+                          .Select(r => r[property] as JArray)
+                          .Where(a => a != null)
+                          .Sum(a => a.Count);
         }
 
         private async Task<int> UpsertOrRecordFailure(AnalyticsEntitiesContext db, List<CopilotUserCountLog> parsed,

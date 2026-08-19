@@ -1,136 +1,272 @@
 using Common.Entities.Entities.UsageReports;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 {
     /// <summary>
-    /// Turns the wide Copilot user-count CSVs (getMicrosoft365CopilotUserCountSummary /
+    /// Turns the Copilot user-count reports (getMicrosoft365CopilotUserCountSummary /
     /// getMicrosoft365CopilotUserCountTrend) into narrow/tall <see cref="CopilotUserCountLog"/> rows.
     ///
-    /// Apps are discovered from the header row rather than listed in code: every
-    /// "&lt;app&gt; Enabled Users" / "&lt;app&gt; Active Users" pair becomes one row per date. When Microsoft
-    /// adds another Copilot surface it appears as new rows with no code change and no schema migration - the
-    /// whole reason for the narrow/tall shape.
+    /// Both reports nest their numbers one level down - summary under <c>adoptionByProduct</c> (one entry per
+    /// requested period), trend under <c>adoptionByDate</c> (one entry per day) - and each entry carries a
+    /// property pair per Copilot surface: <c>wordEnabledUsers</c> / <c>wordActiveUsers</c>.
+    ///
+    /// Apps are discovered from those property pairs rather than listed in code, so when Microsoft adds
+    /// another Copilot surface it appears as new rows with no code change and no schema migration. That is
+    /// the whole reason for the narrow/tall shape.
     /// </summary>
     public static class CopilotUserCountReportParser
     {
-        private const string EnabledUsersSuffix = " Enabled Users";
-        private const string ActiveUsersSuffix = " Active Users";
+        private const string EnabledUsersSuffix = "EnabledUsers";
+        private const string ActiveUsersSuffix = "ActiveUsers";
 
-        private const string ReportRefreshDateHeader = "Report Refresh Date";
-        private const string ReportDateHeader = "Report Date";
-        private const string ReportPeriodHeader = "Report Period";
+        private const string ReportRefreshDateProperty = "reportRefreshDate";
+        private const string ReportPeriodProperty = "reportPeriod";
+        private const string ReportDateProperty = "reportDate";
+        private const string AdoptionByProductProperty = "adoptionByProduct";
+        private const string AdoptionByDateProperty = "adoptionByDate";
 
-        // Version 2 tenant-level totals. These aren't per-app, so they're carried on the "Any App" row.
-        private const string TotalPromptsHeader = "Total prompts submitted";
-        private const string AveragePromptsHeader = "Average prompts submitted";
-        private const string TrendPromptsHeader = "Prompts submitted";
-
-        /// <summary>
-        /// Parse getMicrosoft365CopilotUserCountSummary. One roll-up per requested period; the CSV has no
-        /// per-day column, so the roll-up is dated to the report's refresh date.
-        /// </summary>
-        public static List<CopilotUserCountLog> ParseSummary(CsvReportTable table)
-        {
-            return Parse(table, CopilotUserCountReportTypes.Summary);
-        }
+        // Tenant-level totals (report version 2). Not per app, so they are carried on the "Any App" row.
+        // Several spellings are accepted because Microsoft has not published the beta JSON schema for
+        // version 2; an absent property simply leaves the value null.
+        private static readonly string[] TotalPromptsProperties = { "totalPromptsSubmitted", "promptsSubmitted" };
+        private static readonly string[] AveragePromptsProperties = { "averagePromptsSubmitted" };
 
         /// <summary>
-        /// Parse getMicrosoft365CopilotUserCountTrend. One row per calendar day per app.
+        /// Canonical display names for the app property prefixes, so stored values match what the Microsoft
+        /// 365 admin centre calls them. A prefix that isn't listed still imports - it just gets a name derived
+        /// from the property, which is what keeps a brand-new Microsoft app working with no code change.
         /// </summary>
-        public static List<CopilotUserCountLog> ParseTrend(CsvReportTable table)
+        private static readonly Dictionary<string, string> KnownAppNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            return Parse(table, CopilotUserCountReportTypes.Trend);
+            { "anyApp", CopilotAppNames.AnyApp },
+            { "microsoftTeams", "Microsoft Teams" },
+            { "word", "Word" },
+            { "excel", "Excel" },
+            { "powerPoint", "PowerPoint" },
+            { "outlook", "Outlook" },
+            { "oneNote", "OneNote" },
+            { "loop", "Loop" },
+            { "copilotChat", "Copilot Chat" },
+            { "edge", "Edge" },
+            { "microsoft365Copilot", "Microsoft 365 Copilot" },
+            { "copilotChatWork", "Copilot Chat (work)" },
+            { "copilotChatWeb", "Copilot Chat (web)" },
+        };
+
+        /// <summary>
+        /// Parse getMicrosoft365CopilotUserCountSummary. One roll-up per requested period; there is no
+        /// per-day value, so the roll-up is dated to the report's refresh date.
+        /// </summary>
+        public static List<CopilotUserCountLog> ParseSummary(IEnumerable<JObject> reports)
+        {
+            return Parse(reports, CopilotUserCountReportTypes.Summary);
         }
 
-        private static List<CopilotUserCountLog> Parse(CsvReportTable table, string reportType)
+        /// <summary>Parse getMicrosoft365CopilotUserCountTrend. One row per calendar day per app.</summary>
+        public static List<CopilotUserCountLog> ParseTrend(IEnumerable<JObject> reports)
+        {
+            return Parse(reports, CopilotUserCountReportTypes.Trend);
+        }
+
+        private static List<CopilotUserCountLog> Parse(IEnumerable<JObject> reports, string reportType)
         {
             var results = new List<CopilotUserCountLog>();
-            if (table == null || table.Rows.Count == 0) return results;
+            if (reports == null) return results;
 
             var isTrend = reportType == CopilotUserCountReportTypes.Trend;
-            var appNames = DiscoverAppNames(table.Headers);
 
-            foreach (var row in table.Rows)
+            foreach (var report in reports)
             {
-                var refreshDate = row.GetDate(ReportRefreshDateHeader);
-                if (!refreshDate.HasValue) continue;   // no date, nothing we can key on
+                if (report == null) continue;
 
-                // Trend rows carry their own day; summary rows describe the window ending at the refresh date.
-                var reportDate = isTrend ? row.GetDate(ReportDateHeader) : refreshDate;
-                if (!reportDate.HasValue) continue;
+                var refreshDate = GetDate(report, ReportRefreshDateProperty);
+                if (!refreshDate.HasValue) continue;   // nothing we can key on
 
-                // The CSV writes the period as a plain number of days (7, 28, ...), not the "D28" request value.
-                // Trend rows are daily and therefore period-independent - see CopilotUserCountReportTypes.Trend.
-                var periodDays = isTrend ? null : row.GetInt(ReportPeriodHeader);
+                // The trend report states its period once, at the top; the summary states it per entry.
+                var reportLevelPeriod = GetInt(report, ReportPeriodProperty);
 
-                foreach (var appName in appNames)
+                var entries = report[isTrend ? AdoptionByDateProperty : AdoptionByProductProperty] as JArray;
+                if (entries == null) continue;
+
+                foreach (var entry in entries.OfType<JObject>())
                 {
-                    var enabled = row.GetInt(appName + EnabledUsersSuffix);
-                    var active = row.GetInt(appName + ActiveUsersSuffix);
+                    // Trend rows carry their own day; summary rows describe the window ending at the refresh date.
+                    var reportDate = isTrend ? GetDate(entry, ReportDateProperty) : refreshDate;
+                    if (!reportDate.HasValue) continue;
 
-                    // A pair where neither side has a value is a column Graph emitted but didn't populate.
-                    if (!enabled.HasValue && !active.HasValue) continue;
+                    // Trend rows are daily and therefore period-independent - see CopilotUserCountReportTypes.Trend.
+                    var periodDays = isTrend ? null : (GetInt(entry, ReportPeriodProperty) ?? reportLevelPeriod);
 
-                    var log = new CopilotUserCountLog
+                    foreach (var app in DiscoverApps(entry))
                     {
-                        ReportRefreshDate = refreshDate.Value,
-                        ReportDate = reportDate.Value,
-                        ReportType = reportType,
-                        ReportPeriodDays = periodDays,
-                        AppName = appName,
-                        EnabledUsers = enabled ?? 0,
-                        ActiveUsers = active ?? 0,
-                    };
+                        var enabled = GetInt(entry, app.EnabledProperty);
+                        var active = GetInt(entry, app.ActiveProperty);
 
-                    if (appName == CopilotAppNames.AnyApp)
-                    {
-                        log.PromptsSubmitted = isTrend
-                            ? row.GetLong(TrendPromptsHeader)
-                            : row.GetLong(TotalPromptsHeader);
-                        log.AveragePromptsSubmitted = isTrend ? null : row.GetDouble(AveragePromptsHeader);
+                        // A pair where neither side has a value is a property Graph emitted but didn't populate.
+                        if (!enabled.HasValue && !active.HasValue) continue;
+
+                        var log = new CopilotUserCountLog
+                        {
+                            ReportRefreshDate = refreshDate.Value,
+                            ReportDate = reportDate.Value,
+                            ReportType = reportType,
+                            ReportPeriodDays = periodDays,
+                            AppName = app.DisplayName,
+                            EnabledUsers = enabled ?? 0,
+                            ActiveUsers = active ?? 0,
+                        };
+
+                        if (log.AppName == CopilotAppNames.AnyApp)
+                        {
+                            log.PromptsSubmitted = GetLong(entry, TotalPromptsProperties);
+                            log.AveragePromptsSubmitted = isTrend ? null : GetDouble(entry, AveragePromptsProperties);
+                        }
+
+                        results.Add(log);
                     }
-
-                    results.Add(log);
                 }
             }
 
             return results;
         }
 
-        /// <summary>
-        /// Every app that has an "Enabled Users" or "Active Users" column, in the order Graph listed them.
-        /// </summary>
-        public static IReadOnlyList<string> DiscoverAppNames(IReadOnlyList<string> headers)
+        /// <summary>An app discovered from a report entry's property names.</summary>
+        public class DiscoveredApp
         {
-            var apps = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public string DisplayName { get; set; }
+            public string EnabledProperty { get; set; }
+            public string ActiveProperty { get; set; }
+        }
 
-            if (headers == null) return apps;
+        /// <summary>
+        /// Every app that has an enabled-users or active-users property, in the order Graph listed them.
+        /// </summary>
+        public static IReadOnlyList<DiscoveredApp> DiscoverApps(JObject entry)
+        {
+            var apps = new List<DiscoveredApp>();
+            if (entry == null) return apps;
 
-            foreach (var header in headers)
+            var byPrefix = new Dictionary<string, DiscoveredApp>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var property in entry.Properties())
             {
-                if (string.IsNullOrWhiteSpace(header)) continue;
+                var name = property.Name;
 
-                string appName = null;
-                if (header.EndsWith(EnabledUsersSuffix, StringComparison.OrdinalIgnoreCase))
+                string prefix = null;
+                var isEnabled = false;
+                if (name.EndsWith(EnabledUsersSuffix, StringComparison.OrdinalIgnoreCase))
                 {
-                    appName = header.Substring(0, header.Length - EnabledUsersSuffix.Length);
+                    prefix = name.Substring(0, name.Length - EnabledUsersSuffix.Length);
+                    isEnabled = true;
                 }
-                else if (header.EndsWith(ActiveUsersSuffix, StringComparison.OrdinalIgnoreCase))
+                else if (name.EndsWith(ActiveUsersSuffix, StringComparison.OrdinalIgnoreCase))
                 {
-                    appName = header.Substring(0, header.Length - ActiveUsersSuffix.Length);
+                    prefix = name.Substring(0, name.Length - ActiveUsersSuffix.Length);
                 }
 
-                if (string.IsNullOrWhiteSpace(appName)) continue;
+                if (string.IsNullOrWhiteSpace(prefix)) continue;
 
-                appName = appName.Trim();
-                if (seen.Add(appName)) apps.Add(appName);
+                if (!byPrefix.TryGetValue(prefix, out var app))
+                {
+                    app = new DiscoveredApp { DisplayName = DisplayNameFor(prefix) };
+                    byPrefix[prefix] = app;
+                    apps.Add(app);
+                }
+
+                if (isEnabled) app.EnabledProperty = name;
+                else app.ActiveProperty = name;
             }
 
             return apps;
         }
+
+        /// <summary>
+        /// Maps a property prefix to the name the admin centre uses. Unknown prefixes fall back to splitting
+        /// the camel case, so a new Microsoft app still imports with a readable name rather than being
+        /// dropped - "brandNewApp" becomes "Brand New App".
+        /// </summary>
+        public static string DisplayNameFor(string prefix)
+        {
+            if (string.IsNullOrWhiteSpace(prefix)) return prefix;
+            if (KnownAppNames.TryGetValue(prefix, out var known)) return known;
+
+            var builder = new StringBuilder(prefix.Length + 8);
+            for (var i = 0; i < prefix.Length; i++)
+            {
+                var c = prefix[i];
+                if (i > 0 && char.IsUpper(c) && !char.IsUpper(prefix[i - 1]))
+                {
+                    builder.Append(' ');
+                }
+                builder.Append(i == 0 ? char.ToUpperInvariant(c) : c);
+            }
+            return builder.ToString();
+        }
+
+        #region JSON value helpers - every one returns null rather than throwing on an unexpected value
+
+        internal static DateTime? GetDate(JObject source, string property)
+        {
+            var raw = source?[property]?.Type == JTokenType.Date
+                ? source[property].Value<DateTime>().Date
+                : (DateTime?)null;
+            if (raw.HasValue) return raw;
+
+            var text = source?[property]?.Value<string>();
+            if (string.IsNullOrWhiteSpace(text)) return null;
+
+            return DateTime.TryParseExact(text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+                ? parsed.Date
+                : (DateTime?)null;
+        }
+
+        internal static int? GetInt(JObject source, string property)
+        {
+            if (property == null) return null;
+            var token = source?[property];
+            if (token == null || token.Type == JTokenType.Null) return null;
+
+            return int.TryParse(token.Value<string>(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : (int?)null;
+        }
+
+        internal static long? GetLong(JObject source, string[] properties)
+        {
+            foreach (var property in properties)
+            {
+                var token = source?[property];
+                if (token == null || token.Type == JTokenType.Null) continue;
+
+                if (long.TryParse(token.Value<string>(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+            return null;
+        }
+
+        internal static double? GetDouble(JObject source, string[] properties)
+        {
+            foreach (var property in properties)
+            {
+                var token = source?[property];
+                if (token == null || token.Type == JTokenType.Null) continue;
+
+                if (double.TryParse(token.Value<string>(), NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+            return null;
+        }
+
+        #endregion
     }
 }

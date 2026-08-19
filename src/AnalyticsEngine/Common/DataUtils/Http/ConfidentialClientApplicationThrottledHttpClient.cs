@@ -28,20 +28,8 @@ namespace DataUtils.Http
         private readonly ImportAppIndentityOAuthContext appIndentity;
         private AccessToken auth;
         public ConfidentialClientApplicationHttpHandler(ImportAppIndentityOAuthContext appIndentity)
-            : this(appIndentity, new HttpClientHandler())
         {
-        }
-
-        /// <summary>
-        /// Lets a caller supply the inner handler, so it can control transport-level behaviour that this
-        /// handler must not override. The one use today is <c>AllowAutoRedirect = false</c> for Graph usage
-        /// reports that answer with a 302 to a storage endpoint: auto-following would carry the bearer token
-        /// set below onto a host it wasn't issued for, which the storage endpoint can reject outright.
-        /// Following the redirect explicitly (unauthenticated) keeps the token scoped to Graph.
-        /// </summary>
-        public ConfidentialClientApplicationHttpHandler(ImportAppIndentityOAuthContext appIndentity, HttpMessageHandler innerHandler)
-        {
-            InnerHandler = innerHandler ?? throw new ArgumentNullException(nameof(innerHandler));
+            InnerHandler = new HttpClientHandler();
             this.appIndentity = appIndentity;
         }
 

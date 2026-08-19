@@ -1,5 +1,5 @@
-using Common.Entities.Entities.UsageReports;
 using DataUtils;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,10 +7,10 @@ using System.Linq;
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 {
     /// <summary>
-    /// One parsed row of getMicrosoft365CopilotUsageUserDetail, before it is matched to a user in our
-    /// database. Kept separate from <see cref="CopilotUsageUserActivityLog"/> so the tenant's identity
-    /// concealment can be detected from the raw report - before anything is written, and before any user
-    /// records would be created.
+    /// One parsed row of getMicrosoft365CopilotUsageUserDetail - a single user for a single report period -
+    /// before it is matched to a user in our database. Kept separate from the EF entity so the tenant's
+    /// identity concealment can be detected from the raw report, before anything is written and before any
+    /// user records would be created.
     /// </summary>
     public class CopilotUsageUserDetailRow
     {
@@ -37,6 +37,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         public DateTime? Microsoft365CopilotLastActivityDate { get; set; }
         public DateTime? EdgeLastActivityDate { get; set; }
         public DateTime? AgentLastActivityDate { get; set; }
+
+        /// <summary>True when this row carried any report-version 2 value.</summary>
+        public bool HasVersion2Data =>
+            PromptsAllApps.HasValue || PromptsChatWork.HasValue || PromptsChatWeb.HasValue
+            || ActiveUsageDays.HasValue || ChatWorkLastActivityDate.HasValue || ChatWebLastActivityDate.HasValue
+            || Microsoft365CopilotLastActivityDate.HasValue || EdgeLastActivityDate.HasValue
+            || AgentLastActivityDate.HasValue;
 
         /// <summary>
         /// True when this row's identity is a hash rather than a real user principal name, because the tenant
@@ -84,133 +91,152 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             return true;
         }
 
-        public override string ToString() => $"{UserPrincipalName} @ {ReportRefreshDate:yyyy-MM-dd}";
+        public override string ToString() => $"{UserPrincipalName} @ {ReportRefreshDate:yyyy-MM-dd} (D{ReportPeriodDays})";
     }
 
     /// <summary>
-    /// Parses the getMicrosoft365CopilotUsageUserDetail CSV.
+    /// Parses getMicrosoft365CopilotUsageUserDetail.
     ///
-    /// Every version 2 column is read optionally: <c>version</c> defaults to v1 on the Graph side, and a v1
-    /// response is a valid response that simply lacks the prompt-count, active-usage-day and newer-surface
-    /// columns. Those land as NULL rather than 0 so "Graph didn't tell us" stays distinguishable from
-    /// "the user submitted no prompts" - the two mean very different things in an adoption report.
+    /// Each user object carries the per-app last-activity dates at the top level and a
+    /// <c>copilotActivityUserDetailsByPeriod</c> array underneath - one entry per report period, which is
+    /// where the version 2 prompt and active-usage-day counters live. One user therefore yields one row per
+    /// period, matching the table's (date, user, period) key.
+    ///
+    /// Every version 2 field is read optionally. Microsoft has not published the beta JSON schema for
+    /// version 2, so each is looked up under more than one plausible name and simply stays null if absent.
+    /// Null rather than 0 matters: "Graph didn't tell us" and "the user submitted no prompts" mean very
+    /// different things in an adoption report, and the loader uses the difference to avoid overwriting good
+    /// version 2 data with a version 1 response.
     /// </summary>
     public static class CopilotUsageUserDetailParser
     {
-        private const string ReportRefreshDateHeader = "Report Refresh Date";
-        private const string UserPrincipalNameHeader = "User Principal Name";
-        private const string DisplayNameHeader = "Display Name";
-        private const string LastActivityDateHeader = "Last Activity Date";
-        private const string ReportPeriodHeader = "Report Period";
+        private const string ReportRefreshDateProperty = "reportRefreshDate";
+        private const string UserPrincipalNameProperty = "userPrincipalName";
+        private const string LastActivityDateProperty = "lastActivityDate";
+        private const string DetailsByPeriodProperty = "copilotActivityUserDetailsByPeriod";
+        private const string ReportPeriodProperty = "reportPeriod";
 
-        // Version 1 per-app columns.
-        private const string ChatLastActivityHeader = "Copilot Chat Last Activity Date";
-        private const string TeamsLastActivityHeader = "Microsoft Teams Copilot Last Activity Date";
-        private const string WordLastActivityHeader = "Word Copilot Last Activity Date";
-        private const string ExcelLastActivityHeader = "Excel Copilot Last Activity Date";
-        private const string PowerPointLastActivityHeader = "PowerPoint Copilot Last Activity Date";
-        private const string OutlookLastActivityHeader = "Outlook Copilot Last Activity Date";
-        private const string OneNoteLastActivityHeader = "OneNote Copilot Last Activity Date";
-        private const string LoopLastActivityHeader = "Loop Copilot Last Activity Date";
+        // Version 1 per-app properties (confirmed from the published beta response example).
+        private const string ChatLastActivityProperty = "copilotChatLastActivityDate";
+        private const string TeamsLastActivityProperty = "microsoftTeamsCopilotLastActivityDate";
+        private const string WordLastActivityProperty = "wordCopilotLastActivityDate";
+        private const string ExcelLastActivityProperty = "excelCopilotLastActivityDate";
+        private const string PowerPointLastActivityProperty = "powerPointCopilotLastActivityDate";
+        private const string OutlookLastActivityProperty = "outlookCopilotLastActivityDate";
+        private const string OneNoteLastActivityProperty = "oneNoteCopilotLastActivityDate";
+        private const string LoopLastActivityProperty = "loopCopilotLastActivityDate";
 
-        // Version 2 additions.
-        private const string PromptsAllAppsHeader = "Prompts submitted for all apps";
-        private const string PromptsChatWorkHeader = "Prompts submitted for Copilot Chat (work)";
-        private const string PromptsChatWebHeader = "Prompts submitted for Copilot Chat (web)";
-        private const string ActiveUsageDaysHeader = "Active Usage Days for all apps";
-        private const string ChatWorkLastActivityHeader = "Copilot Chat (work) Last Activity Date";
-        private const string ChatWebLastActivityHeader = "Copilot Chat (web) Last Activity Date";
-        private const string Microsoft365CopilotLastActivityHeader = "Microsoft 365 Copilot Last Activity Date";
-        private const string EdgeLastActivityHeader = "Edge Last Activity Date";
-        private const string AgentLastActivityHeader = "Copilot Agent Last Activity Date";
+        // Version 2 additions. Names are best-effort - see the class remarks.
+        private static readonly string[] ChatWorkLastActivityProperties = { "copilotChatWorkLastActivityDate", "microsoft365CopilotChatWorkLastActivityDate" };
+        private static readonly string[] ChatWebLastActivityProperties = { "copilotChatWebLastActivityDate", "microsoft365CopilotChatWebLastActivityDate" };
+        private static readonly string[] Microsoft365CopilotLastActivityProperties = { "microsoft365CopilotLastActivityDate" };
+        private static readonly string[] EdgeLastActivityProperties = { "edgeCopilotLastActivityDate", "edgeLastActivityDate" };
+        private static readonly string[] AgentLastActivityProperties = { "copilotAgentLastActivityDate", "agentLastActivityDate" };
 
-        /// <summary>
-        /// Columns the loader cannot work without. A renamed column here must fail the import loudly rather
-        /// than silently yield zero rows, which looks exactly like a tenant with no Copilot licences.
-        /// </summary>
-        public static readonly string[] RequiredHeaders =
+        private static readonly string[] PromptsAllAppsProperties = { "promptsSubmitted", "promptsSubmittedForAllApps", "totalPromptsSubmitted" };
+        private static readonly string[] PromptsChatWorkProperties = { "promptsSubmittedForCopilotChatWork", "copilotChatWorkPromptsSubmitted" };
+        private static readonly string[] PromptsChatWebProperties = { "promptsSubmittedForCopilotChatWeb", "copilotChatWebPromptsSubmitted" };
+        private static readonly string[] ActiveUsageDaysProperties = { "activeUsageDays", "activeUsageDaysForAllApps" };
+
+        /// <summary>True when any row in the response carried report-version 2 data.</summary>
+        public static bool HasVersion2Data(IEnumerable<CopilotUsageUserDetailRow> rows)
         {
-            ReportRefreshDateHeader, UserPrincipalNameHeader,
-        };
-
-        /// <summary>
-        /// Every column report version 2 adds. Version 2 is detected by requiring ALL of them: a response
-        /// missing only some is a shape we don't understand, and treating it as v2 would let the parser write
-        /// NULL over prompt counts a previous good import had stored.
-        /// </summary>
-        public static readonly string[] Version2Headers =
-        {
-            PromptsAllAppsHeader, PromptsChatWorkHeader, PromptsChatWebHeader, ActiveUsageDaysHeader,
-            ChatWorkLastActivityHeader, ChatWebLastActivityHeader, Microsoft365CopilotLastActivityHeader,
-            EdgeLastActivityHeader, AgentLastActivityHeader,
-        };
-
-        /// <summary>
-        /// True when the report contains the complete version 2 column set. Used to refuse a v1-shaped
-        /// response when v2 was requested - otherwise the prompt columns would just silently be NULL.
-        /// </summary>
-        public static bool IsVersion2(CsvReportTable table) => IsVersion2(table?.Headers);
-
-        public static bool IsVersion2(IReadOnlyList<string> headers)
-        {
-            if (headers == null) return false;
-            var present = new HashSet<string>(headers, StringComparer.OrdinalIgnoreCase);
-            return Version2Headers.All(present.Contains);
+            return rows != null && rows.Any(r => r.HasVersion2Data);
         }
 
-        public static List<CopilotUsageUserDetailRow> Parse(CsvReportTable table)
-        {
-            return table == null ? new List<CopilotUsageUserDetailRow>() : Parse(table.Rows);
-        }
-
-        public static List<CopilotUsageUserDetailRow> Parse(IEnumerable<IReadOnlyDictionary<string, string>> rows)
+        public static List<CopilotUsageUserDetailRow> Parse(IEnumerable<JObject> reports)
         {
             var results = new List<CopilotUsageUserDetailRow>();
-            if (rows == null) return results;
+            if (reports == null) return results;
 
-            foreach (var row in rows)
+            foreach (var report in reports)
             {
-                var parsed = ParseRow(row);
-                if (parsed != null) results.Add(parsed);
+                ParseUserInto(report, results);
             }
 
             return results;
         }
 
-        /// <summary>Returns null when the row has no date or no identity, so nothing can be keyed on it.</summary>
-        public static CopilotUsageUserDetailRow ParseRow(IReadOnlyDictionary<string, string> row)
+        /// <summary>
+        /// Appends one row per report period for a single user. Nothing is added when the object has no date
+        /// or no identity, since there would be nothing to key a row on.
+        /// </summary>
+        public static void ParseUserInto(JObject user, List<CopilotUsageUserDetailRow> into)
         {
-            var refreshDate = row.GetDate(ReportRefreshDateHeader);
-            var upn = row.GetString(UserPrincipalNameHeader);
+            if (user == null) return;
 
-            if (!refreshDate.HasValue || string.IsNullOrWhiteSpace(upn)) return null;
+            var refreshDate = CopilotUserCountReportParser.GetDate(user, ReportRefreshDateProperty);
+            var upn = user[UserPrincipalNameProperty]?.Value<string>()?.Trim();
 
+            if (!refreshDate.HasValue || string.IsNullOrWhiteSpace(upn)) return;
+
+            var periods = user[DetailsByPeriodProperty] as JArray;
+
+            // A response with no per-period breakdown still describes the user; keep it with an unknown
+            // period, which the loader fills from the requested window.
+            if (periods == null || periods.Count == 0)
+            {
+                into.Add(BuildRow(user, refreshDate.Value, upn, null));
+                return;
+            }
+
+            foreach (var period in periods.OfType<JObject>())
+            {
+                into.Add(BuildRow(user, refreshDate.Value, upn, period));
+            }
+        }
+
+        private static CopilotUsageUserDetailRow BuildRow(JObject user, DateTime refreshDate, string upn, JObject period)
+        {
             return new CopilotUsageUserDetailRow
             {
-                ReportRefreshDate = refreshDate.Value,
+                ReportRefreshDate = refreshDate,
                 UserPrincipalName = upn,
-                ReportPeriodDays = row.GetInt(ReportPeriodHeader),
-                LastActivityDate = row.GetDate(LastActivityDateHeader),
+                ReportPeriodDays = period == null ? null : CopilotUserCountReportParser.GetInt(period, ReportPeriodProperty),
+                LastActivityDate = CopilotUserCountReportParser.GetDate(user, LastActivityDateProperty),
 
-                PromptsAllApps = row.GetInt(PromptsAllAppsHeader),
-                PromptsChatWork = row.GetInt(PromptsChatWorkHeader),
-                PromptsChatWeb = row.GetInt(PromptsChatWebHeader),
-                ActiveUsageDays = row.GetInt(ActiveUsageDaysHeader),
+                // The counters live on the period entry; the dates live on the user.
+                PromptsAllApps = GetIntAny(period, PromptsAllAppsProperties),
+                PromptsChatWork = GetIntAny(period, PromptsChatWorkProperties),
+                PromptsChatWeb = GetIntAny(period, PromptsChatWebProperties),
+                ActiveUsageDays = GetIntAny(period, ActiveUsageDaysProperties),
 
-                ChatLastActivityDate = row.GetDate(ChatLastActivityHeader),
-                TeamsLastActivityDate = row.GetDate(TeamsLastActivityHeader),
-                WordLastActivityDate = row.GetDate(WordLastActivityHeader),
-                ExcelLastActivityDate = row.GetDate(ExcelLastActivityHeader),
-                PowerPointLastActivityDate = row.GetDate(PowerPointLastActivityHeader),
-                OutlookLastActivityDate = row.GetDate(OutlookLastActivityHeader),
-                OneNoteLastActivityDate = row.GetDate(OneNoteLastActivityHeader),
-                LoopLastActivityDate = row.GetDate(LoopLastActivityHeader),
-                ChatWorkLastActivityDate = row.GetDate(ChatWorkLastActivityHeader),
-                ChatWebLastActivityDate = row.GetDate(ChatWebLastActivityHeader),
-                Microsoft365CopilotLastActivityDate = row.GetDate(Microsoft365CopilotLastActivityHeader),
-                EdgeLastActivityDate = row.GetDate(EdgeLastActivityHeader),
-                AgentLastActivityDate = row.GetDate(AgentLastActivityHeader),
+                ChatLastActivityDate = CopilotUserCountReportParser.GetDate(user, ChatLastActivityProperty),
+                TeamsLastActivityDate = CopilotUserCountReportParser.GetDate(user, TeamsLastActivityProperty),
+                WordLastActivityDate = CopilotUserCountReportParser.GetDate(user, WordLastActivityProperty),
+                ExcelLastActivityDate = CopilotUserCountReportParser.GetDate(user, ExcelLastActivityProperty),
+                PowerPointLastActivityDate = CopilotUserCountReportParser.GetDate(user, PowerPointLastActivityProperty),
+                OutlookLastActivityDate = CopilotUserCountReportParser.GetDate(user, OutlookLastActivityProperty),
+                OneNoteLastActivityDate = CopilotUserCountReportParser.GetDate(user, OneNoteLastActivityProperty),
+                LoopLastActivityDate = CopilotUserCountReportParser.GetDate(user, LoopLastActivityProperty),
+                ChatWorkLastActivityDate = GetDateAny(user, ChatWorkLastActivityProperties),
+                ChatWebLastActivityDate = GetDateAny(user, ChatWebLastActivityProperties),
+                Microsoft365CopilotLastActivityDate = GetDateAny(user, Microsoft365CopilotLastActivityProperties),
+                EdgeLastActivityDate = GetDateAny(user, EdgeLastActivityProperties),
+                AgentLastActivityDate = GetDateAny(user, AgentLastActivityProperties),
             };
+        }
+
+        private static int? GetIntAny(JObject source, string[] properties)
+        {
+            if (source == null) return null;
+            foreach (var property in properties)
+            {
+                var value = CopilotUserCountReportParser.GetInt(source, property);
+                if (value.HasValue) return value;
+            }
+            return null;
+        }
+
+        private static DateTime? GetDateAny(JObject source, string[] properties)
+        {
+            if (source == null) return null;
+            foreach (var property in properties)
+            {
+                var value = CopilotUserCountReportParser.GetDate(source, property);
+                if (value.HasValue) return value;
+            }
+            return null;
         }
     }
 }

@@ -45,7 +45,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     /// than an error, so they are enforced here rather than left to each caller:
     ///
     /// 1. <c>version</c> is OPTIONAL and defaults to <see cref="CopilotReportVersions.V1"/>. Omit it and
-    ///    every prompt-count and active-usage-days column is simply absent from the CSV - no error, no
+    ///    every prompt-count and active-usage-days field is simply absent from the response - no error, no
     ///    warning, just missing data. We therefore always send it explicitly.
     /// 2. The valid <c>period</c> values differ by version: v1 accepts D30, v2 replaced it with <b>D28</b>.
     ///    Sending D30 with v2 (or D28 with v1) is rejected by Graph, so the pairing is validated up front.
@@ -55,7 +55,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     /// </summary>
     public class CopilotReportRequest
     {
-        public const string GraphV1BaseUrl = "https://graph.microsoft.com/v1.0/copilot/reports";
+        /// <summary>
+        /// The beta endpoint, matching every other Graph usage-report loader in this solution. The v1.0
+        /// endpoints stream CSV rather than JSON, which would need a parallel transport for no benefit; beta
+        /// returns the same data as JSON and is what the existing loaders already consume.
+        /// </summary>
+        public const string GraphBetaBaseUrl = "https://graph.microsoft.com/beta/copilot/reports";
 
         /// <summary>Periods Graph accepts for report version 1. Note D30.</summary>
         public static readonly IReadOnlyList<string> V1Periods = new[] { "D7", "D30", "D90", "D180", "ALL" };
@@ -126,10 +131,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         }
 
         /// <summary>
-        /// Only the v1.0 endpoints are GA; the beta ones return JSON but are explicitly not supported for
-        /// production use, so we take the CSV that v1.0 streams back.
+        /// Requests JSON explicitly, exactly as the other Graph usage-report loaders here do.
         /// </summary>
-        public string Url => $"{GraphV1BaseUrl}/{ReportName}(period='{Period}',version='{Version}')";
+        public string Url => $"{GraphBetaBaseUrl}/{ReportName}(period='{Period}',version='{Version}')?$format=application/json";
 
         public override string ToString() => $"{ReportName}(period='{Period}',version='{Version}')";
     }
