@@ -48,6 +48,7 @@
             this.chkCopilot = new System.Windows.Forms.CheckBox();
             this.chkSentEmails = new System.Windows.Forms.CheckBox();
             this.chkPowerPlatform = new System.Windows.Forms.CheckBox();
+            this.chkCopilotUsageReports = new System.Windows.Forms.CheckBox();
             this.pnlSolutionSelectionContainer.SuspendLayout();
             this.grpProductCfgInsights.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).BeginInit();
@@ -76,6 +77,7 @@
             this.grpProductCfgInsights.Controls.Add(this.chkCopilot);
             this.grpProductCfgInsights.Controls.Add(this.chkSentEmails);
             this.grpProductCfgInsights.Controls.Add(this.chkPowerPlatform);
+            this.grpProductCfgInsights.Controls.Add(this.chkCopilotUsageReports);
             this.grpProductCfgInsights.Controls.Add(this.chkUserApps);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
@@ -274,6 +276,17 @@
             this.chkPowerPlatform.Text = "Power Platform";
             this.chkPowerPlatform.UseVisualStyleBackColor = true;
             // 
+            // chkCopilotUsageReports
+            // 
+            this.chkCopilotUsageReports.AutoSize = true;
+            this.chkCopilotUsageReports.Location = new System.Drawing.Point(4, 306);
+            this.chkCopilotUsageReports.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotUsageReports.Name = "chkCopilotUsageReports";
+            this.chkCopilotUsageReports.Size = new System.Drawing.Size(250, 17);
+            this.chkCopilotUsageReports.TabIndex = 26;
+            this.chkCopilotUsageReports.Text = "Copilot usage reports (Microsoft Graph)";
+            this.chkCopilotUsageReports.UseVisualStyleBackColor = true;
+            // 
             // lblGUITargetsHeader
             // 
             this.lblGUITargetsHeader.AutoSize = true;
@@ -325,5 +338,6 @@
         private System.Windows.Forms.CheckBox chkCopilot;
         private System.Windows.Forms.CheckBox chkSentEmails;
         private System.Windows.Forms.CheckBox chkPowerPlatform;
+        private System.Windows.Forms.CheckBox chkCopilotUsageReports;
     }
 }

@@ -239,6 +239,22 @@ namespace Common.Entities
              .HasIndex(t => new { t.SentEmailID, t.RecipientAddressID })
              .IsUnique();
 
+            // Copilot tenant user-counts are narrow/tall: one row per app per date. This unique key is what
+            // makes the import an upsert - re-importing an overlapping period (Graph gap-fills the last ~3
+            // days) updates the same rows instead of duplicating them. ReportPeriodDays is NULL for trend
+            // rows, and SQL Server treats NULLs as equal in a unique index, so a D7 refresh and a D180
+            // backfill converge on one row per (date, app).
+            modelBuilder.Entity<CopilotUserCountLog>()
+             .HasIndex(c => new { c.ReportType, c.ReportPeriodDays, c.ReportDate, c.AppName })
+             .IsUnique();
+
+            // One per-user Copilot snapshot per user per report date PER PERIOD. The period belongs in the key:
+            // D7 and D28 describe the same user and date with different prompt counts, active-day counts and
+            // last-activity values, so they are different facts rather than a conflict.
+            modelBuilder.Entity<CopilotUsageUserActivityLog>()
+             .HasIndex(c => new { c.Date, c.UserID, c.ReportPeriodDays })
+             .IsUnique();
+
             base.OnModelCreating(modelBuilder);
         }
 
@@ -308,6 +324,15 @@ namespace Common.Entities
         public virtual DbSet<YammerGroupActivityLog> YammerGroupActivityLogs { get; set; }
         public virtual DbSet<YammerDeviceActivityLog> YammerDeviceActivityLogs { get; set; }
         public virtual DbSet<SharePointSitesFileWeeklyStats> SharePointSiteStats { get; set; }
+
+        /// <summary>Tenant-level Copilot enabled/active user counts from the Graph Copilot user-count reports.</summary>
+        public virtual DbSet<CopilotUserCountLog> CopilotUserCountLogs { get; set; }
+
+        /// <summary>Per-user Copilot usage from the Graph Copilot usage user-detail report.</summary>
+        public virtual DbSet<CopilotUsageUserActivityLog> CopilotUsageUserActivityLogs { get; set; }
+
+        /// <summary>Diagnostics for each Copilot usage-report import (row counts, concealed-identity detection).</summary>
+        public virtual DbSet<CopilotUsageReportImportLog> CopilotUsageReportImportLogs { get; set; }
 
         public virtual DbSet<ChannelStatsLog> TeamChannelStats { get; set; }
         public virtual DbSet<ChannelLogKeyword> TeamChannelStatKeywords { get; set; }

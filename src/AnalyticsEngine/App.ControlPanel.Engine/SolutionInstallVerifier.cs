@@ -608,8 +608,11 @@ namespace App.ControlPanel.Engine
                 new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
                 logger);
 
-            // Usage reports
-            if (Config.SolutionConfig.ImportTaskSettings.GraphUsageReports)
+            // Usage reports. Both toggles read Microsoft 365 usage reports via Reports.Read.All, so verify the
+            // permission when either is enabled - otherwise a tenant that only enabled the Copilot usage
+            // reports would first discover a missing grant at runtime, hours after the install finished.
+            if (Config.SolutionConfig.ImportTaskSettings.GraphUsageReports
+                || Config.SolutionConfig.ImportTaskSettings.GraphCopilotUsageReports)
             {
                 await VerifyUserActivityImport(graphClient, teamsUserUsageLoader);
             }
