@@ -34,7 +34,7 @@ installations (the AnalyticsEngine importer in
 | --- | --- | --- | --- |
 | `POST` | `/api/Telemetry` | Receive a `TelemetryPayload` from an importer instance. | BCrypt signature against `TelemetrySecret` (see [`AnonUsageStatsModel.IsValidSecretForThisObject`](../AnalyticsEngine/Common/UsageReporting/AnonUsageStatsModel.cs)). |
 | `GET`  | `/api/auth/config` | Public MSAL configuration (authority, client ID and API scope; no secrets). | Anonymous. |
-| `GET`  | `/api/Telemetry/stats` | Aggregated headline figures (client count, total rows / size, last update, per-table totals). | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
+| `GET`  | `/api/Telemetry/stats` | Aggregated headline figures (client count, total rows / size, last update, per-table totals, per-schema totals, build adoption, import-feature adoption, reporting freshness and deployment-size distribution). | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
 | `GET`  | `/api/Telemetry/clients` | Per-client summary rows for the dashboard table. | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
 
 ### Auth model
@@ -83,6 +83,34 @@ ineffective for .NET while making the site look instrumented: the connection
 string is present and the ingestion endpoint is reachable, yet nothing is ever
 sent. If the Application Insights resource is empty, check that this package is
 actually referenced before investigating networking.
+
+## Dashboard
+
+The SPA uses [Fluent UI v9](https://react.fluentui.dev/) and mirrors the look and
+feel of the in-product admin app
+(`src/AnalyticsEngine/Web/Scripts/admin-app`): brand header, `TabList`
+navigation and the same content width. Content is split across four tabs, each
+lazy-loaded as its own chunk:
+
+| Tab | Contents |
+| --- | --- |
+| Overview | Headline figures, reporting freshness, deployment-size distribution (median/average/largest), Azure AI usage, storage by schema and the top tables. |
+| Tables | Every table aggregated across clients, filterable and sortable, including average rows per client. |
+| Clients | One row per installation, with relative "last report" times, stale highlighting and the enabled imports per client. |
+| Adoption | Build-version adoption and per-import feature adoption across the install base. |
+
+All figures are derived server-side in `DashboardService.Aggregate` from the
+telemetry each client already sends — no client-side change is needed to
+populate them. Two derived values are worth knowing about:
+
+- **Build adoption** groups clients that never sent a `BuildVersionLabel` under
+  `(unknown)` rather than dropping them, so the counts always total the client
+  count.
+- **Import feature adoption** parses each client's
+  `ConfiguredImportsEnabledDescription` (a `Name=True;Name=False` string) and
+  reports percentages **of the clients reporting that toggle**, not of all
+  clients — otherwise a newly added import would look widely disabled simply
+  because older builds do not mention it.
 
 ## Configuration
 
