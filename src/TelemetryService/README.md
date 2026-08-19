@@ -52,6 +52,37 @@ installations (the AnalyticsEngine importer in
   authorization boundary. The ASP.NET Core API still performs the scope and
   role checks, while anonymous health, configuration and signed-upload
   requests continue to reach the application.
+- **EasyAuth `allowedApplications` must be set explicitly.** If
+  `defaultAuthorizationPolicy` is omitted, the platform stores
+  `allowed_client_applications` as an *empty array*, which EasyAuth reads as
+  "permit nothing": it authenticates the caller and then returns a bare `403`
+  before the request reaches the application. The symptom is deeply misleading —
+  anonymous requests still succeed, and a token with an invalid signature also
+  succeeds (it fails validation, so it is treated as anonymous), so a **valid**
+  token is the only thing that gets rejected. Verify with
+  `az webapp auth show` that `aadClaimsAuthorization` lists the SPA client ID
+  rather than `"allowed_client_applications":[]`.
+- **Restart the App Service after changing `authsettingsV2`.** The EasyAuth /
+  MISE runtime caches the auth configuration, so a corrected
+  `allowedApplications` is not honoured until the site restarts. Until then the
+  config APIs report the new value while requests are still rejected using the
+  old one, which makes the fix look like it did not work.
+
+### Application Insights
+
+Telemetry is emitted **in-process** by
+[`Azure.Monitor.OpenTelemetry.AspNetCore`](https://www.nuget.org/packages/Azure.Monitor.OpenTelemetry.AspNetCore),
+wired up in `Program.cs` via `AddOpenTelemetry().UseAzureMonitor()`. It reads
+`APPLICATIONINSIGHTS_CONNECTION_STRING` and no-ops when that is unset, so local
+development sends nothing.
+
+Do **not** rely on the `ApplicationInsightsAgent_EXTENSION_VERSION` codeless
+attach setting. It applies only to **Windows** App Service, and this service
+runs on **Linux** (`DOTNETCORE|10.0`), so setting it there is silently
+ineffective for .NET while making the site look instrumented: the connection
+string is present and the ingestion endpoint is reachable, yet nothing is ever
+sent. If the Application Insights resource is empty, check that this package is
+actually referenced before investigating networking.
 
 ## Dashboard
 
