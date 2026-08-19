@@ -7,15 +7,28 @@ on:
       - dev
     paths:
       - src/AnalyticsEngine/**
+      - src/SPO/AITracker/**
       - reports/**
       - .github/workflows/tests.yml
   pull_request:
+    # `ready_for_review` alone is NOT enough. A pull request opened directly as non-draft emits
+    # `opened`, never `ready_for_review`, so this workflow never started and the required checks
+    # were never reported - leaving the PR permanently at mergeStateStatus BLOCKED and mergeable
+    # only by an admin bypass, which skips the test suite outright. `synchronize` additionally
+    # means pushing new commits to an open PR re-runs the tests. See issue #270.
     types:
+      - opened
+      - synchronize
+      - reopened
       - ready_for_review
-    paths:
-      - src/AnalyticsEngine/**
-      - reports/**
-      - .github/workflows/tests.yml
+    # Deliberately NO `paths:` filter here, unlike the `push` trigger above.
+    #
+    # `test_dotnet (Release)` and `test_aitracker` are REQUIRED status checks on dev and main. A
+    # workflow that never starts reports nothing at all, so a PR touching only (say)
+    # src/TelemetryService/** would sit at BLOCKED for ever with zero statuses and again need an
+    # admin bypass. Every PR must therefore start this workflow; the actual per-path gating is
+    # applied per step inside the jobs below, so both required checks always report a real
+    # success without running a build for an unrelated change.
   workflow_dispatch:
     inputs:
       force_run:
@@ -45,9 +58,15 @@ env:
 jobs:
   setup_tests:
     # Will check that the interesting folders have been updated.
+    #
+    # Also the single place the draft-PR guard lives: `test_aitracker` and `test_dotnet` both
+    # `needs:` this job, so skipping it here skips them too and a draft PR costs no CI minutes.
+    # A draft cannot be merged, so it does not matter that its required checks go unreported.
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     outputs:
-      code_changed: ${{ steps.changes.outputs.code == 'true' }}
+      run_dotnet: ${{ inputs.force_run || steps.changes.outputs.code == 'true' }}
+      run_aitracker: ${{ inputs.force_run || steps.changes.outputs.aitracker == 'true' }}
     steps:
       - name: Checkout source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
@@ -58,15 +77,22 @@ jobs:
           filters: |
             code:
               - 'src/AnalyticsEngine/**'
+            aitracker:
+              - 'src/SPO/AITracker/**'
 
   test_aitracker:
     runs-on: ubuntu-latest
     needs: setup_tests
-    if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
+    # Gated per step rather than with a job-level `if:` - see the note on test_dotnet below.
+    # The gate is the AI tracker's own sources: this used to key off src/AnalyticsEngine/**,
+    # the wrong tree entirely, so the tracker's tests never ran when the tracker changed and
+    # always ran when it had not. See issue #270.
     steps:
       - name: Checkout source
+        if: needs.setup_tests.outputs.run_aitracker == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
       - name: Run AI Tracker tests
+        if: needs.setup_tests.outputs.run_aitracker == 'true'
         run: |
           cd src/SPO/AITracker/TypeScript
           npm ci
@@ -87,14 +113,24 @@ jobs:
     # runs. windows-2022 ships VS2022 Enterprise at that exact path. See PR #123 / issue #122.
     runs-on: windows-2022
     needs: setup_tests
-    if: inputs.force_run || needs.setup_tests.outputs.code_changed == 'true'
+    # NOTE: the per-path gate is applied to every step below rather than as a job-level `if:`,
+    # and that is deliberate. `test_dotnet (Release)` is a REQUIRED status check, and the
+    # "(Release)" suffix comes from the matrix. GitHub evaluates a job-level `if:` BEFORE it
+    # expands the matrix, so a job skipped that way reports a single check named plain
+    # "test_dotnet" - the required "test_dotnet (Release)" context never appears at all and the
+    # PR stays BLOCKED exactly as it did before. Measured on PR #280: with a job-level `if:` the
+    # check runs were `test_dotnet => completed/skipped`, with no `(Release)` variant.
+    # Gating each step instead keeps the matrix, so the correctly-named check always reports and
+    # simply does no work when nothing under src/AnalyticsEngine/** changed.
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
     steps:
       - name: Checkout source
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
       - name: Setup MSBuild
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
         uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
       - name: Cache NuGet Packages
         id: nuget-packages
@@ -106,10 +142,12 @@ jobs:
           path: ~\.nuget\packages
           key: ${{ runner.os }}-${{ env.cache-name }}
       - name: Config substitution - Unit tests
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
         uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
           files: '${{ env.Solution_Directory }}\App.Release.config'
       - name: Start Redis
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
@@ -119,6 +157,7 @@ jobs:
           Start-Sleep -Seconds 3
           & "$env:RUNNER_TEMP\redis\redis-cli.exe" ping
       - name: Restore the application
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
         run: msbuild ${{ env.Solution_Directory }} -t:Restore `
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform=${{ env.Build_Platform }} `
@@ -126,6 +165,7 @@ jobs:
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Build solution
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
         run: msbuild ${{ env.Solution_Directory }} `
           -p:Configuration=${{ env.Configuration }} `
           -p:Platform=${{ env.Build_Platform }} `
@@ -133,6 +173,7 @@ jobs:
         env:
           Configuration: ${{ matrix.configuration }}
       - name: Execute unit tests
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
         uses: jesusfer/vstest-action@f5ec12ddb71f6e151b738fa4740f8fea61e9214b
         with:
           testAssembly: Tests.UnitTests.dll
