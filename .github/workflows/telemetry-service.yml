@@ -1,0 +1,174 @@
+name: Telemetry Service
+
+# Build, test and deploy the maintainer-side telemetry dashboard (src/TelemetryService).
+#
+# Deliberately separate from ci.yml / pr.yml / tests.yml: those build the .NET Framework
+# AnalyticsEngine solution on Windows and publish GitHub releases, whereas this is a .NET 10
+# Linux web app that deploys straight to App Service.
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - src/TelemetryService/**
+      - src/AnalyticsEngine/Common/UsageReporting/**
+      - .github/workflows/telemetry-service.yml
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - src/TelemetryService/**
+      - src/AnalyticsEngine/Common/UsageReporting/**
+      - .github/workflows/telemetry-service.yml
+  workflow_dispatch:
+
+# Least privilege by default. id-token is needed by azure/login for OIDC (no stored credentials).
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  NODE_VERSION: '22.x'
+  SERVICE_DIR: src/TelemetryService
+  CLIENT_DIR: src/TelemetryService/web.client
+
+# A newer push supersedes an in-flight run for the same branch, but never cancel a deploy
+# that is already under way.
+concurrency:
+  group: telemetry-service-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build_and_test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.CLIENT_DIR }}/package-lock.json
+
+      # ---- Client -------------------------------------------------------------------
+      - name: Install client dependencies
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: npm ci
+
+      - name: Lint client
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: npm run lint
+
+      - name: Test client
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: npm test -- --coverage
+
+      # ---- Server -------------------------------------------------------------------
+      - name: Restore server
+        run: dotnet restore ${{ env.SERVICE_DIR }}/Web.Server/Web.Server.csproj
+
+      - name: Test server
+        run: >
+          dotnet test ${{ env.SERVICE_DIR }}/Tests.Unit/Tests.Unit.csproj
+          --configuration Release
+          --logger "trx;LogFileName=telemetry-tests.trx"
+          --results-directory ${{ runner.temp }}/test-results
+
+      - name: Upload test results
+        # Results are most useful precisely when the tests failed.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-test-results
+          path: ${{ runner.temp }}/test-results
+          if-no-files-found: ignore
+
+      # ---- Package ------------------------------------------------------------------
+      # `dotnet publish` also builds the Vite client via the esproj reference and drops it into
+      # wwwroot, so this single artifact is the whole deployable site.
+      - name: Publish
+        run: >
+          dotnet publish ${{ env.SERVICE_DIR }}/Web.Server/Web.Server.csproj
+          --configuration Release
+          --output ${{ runner.temp }}/publish
+
+      - name: Upload site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-site
+          path: ${{ runner.temp }}/publish
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy to App Service
+    needs: build_and_test
+    runs-on: ubuntu-latest
+    # Never deploy from a fork or from a pull request - only from pushes to this repository, and
+    # only from the branches that represent a deployable state.
+    if: >
+      github.event_name != 'pull_request'
+      && github.repository == 'pnp/Microsoft365-Analytics-Insights'
+      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+    permissions:
+      contents: read
+      id-token: write # OIDC federated credential for azure/login
+    environment:
+      name: telemetry-service
+      url: ${{ steps.deploy.outputs.webapp-url }}
+    steps:
+      - name: Download site artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: telemetry-site
+          path: publish
+
+      # Federated (OIDC) sign-in: no client secret is stored anywhere. The app registration used
+      # here needs a federated credential for this repository and environment, plus Contributor
+      # (or Website Contributor) on the target App Service.
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.TELEMETRY_APP_NAME }}
+          resource-group-name: ${{ vars.TELEMETRY_RESOURCE_GROUP }}
+          package: publish
+
+      # The site is anonymous-friendly on /health, so this is a genuine end-to-end check that the
+      # deployed build actually starts - not just that the deployment API returned success.
+      - name: Verify health
+        run: |
+          url="${{ steps.deploy.outputs.webapp-url }}/health"
+          echo "Checking $url"
+          for attempt in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url" || true)
+            if [ "$code" = "200" ]; then
+              echo "Healthy after $attempt attempt(s)."
+              exit 0
+            fi
+            echo "Attempt $attempt: HTTP $code - retrying in 15s"
+            sleep 15
+          done
+          echo "::error::Site did not report healthy after deployment."
+          exit 1
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true
