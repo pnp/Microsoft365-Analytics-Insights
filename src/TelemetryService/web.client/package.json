@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@azure/msal-browser": "^5.18.0",
+    "@fluentui/react-components": "^9.74.6",
+    "@fluentui/react-icons": "^2.0.335",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },
