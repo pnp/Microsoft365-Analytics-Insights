@@ -68,6 +68,22 @@ installations (the AnalyticsEngine importer in
   config APIs report the new value while requests are still rejected using the
   old one, which makes the fix look like it did not work.
 
+### Application Insights
+
+Telemetry is emitted **in-process** by
+[`Azure.Monitor.OpenTelemetry.AspNetCore`](https://www.nuget.org/packages/Azure.Monitor.OpenTelemetry.AspNetCore),
+wired up in `Program.cs` via `AddOpenTelemetry().UseAzureMonitor()`. It reads
+`APPLICATIONINSIGHTS_CONNECTION_STRING` and no-ops when that is unset, so local
+development sends nothing.
+
+Do **not** rely on the `ApplicationInsightsAgent_EXTENSION_VERSION` codeless
+attach setting. It applies only to **Windows** App Service, and this service
+runs on **Linux** (`DOTNETCORE|10.0`), so setting it there is silently
+ineffective for .NET while making the site look instrumented: the connection
+string is present and the ingestion endpoint is reachable, yet nothing is ever
+sent. If the Application Insights resource is empty, check that this package is
+actually referenced before investigating networking.
+
 ## Configuration
 
 | Key | Required | Description |
