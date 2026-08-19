@@ -22,14 +22,14 @@
 --   table is rewritten; the only lock taken on existing data is a brief schema lock on dbo.users to
 --   create the foreign key. The script is fully guarded and idempotent - re-running it is a no-op.
 --
--- Prerequisite: migration 202608131055001_IndexReportDateQueries must already be applied.
+-- Prerequisite: migration 202608190622001_CopilotDroppedAuditFields must already be applied.
 -- =====================================================================================================
 
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
 DECLARE @migration nvarchar(100) = N'202608190725064_AddCopilotUsageReports';
-DECLARE @predecessor nvarchar(100) = N'202608131055001_IndexReportDateQueries';
+DECLARE @predecessor nvarchar(100) = N'202608190622001_CopilotDroppedAuditFields';
 DECLARE @msg nvarchar(2000);
 
 IF OBJECT_ID(N'dbo.__MigrationHistory', N'U') IS NULL

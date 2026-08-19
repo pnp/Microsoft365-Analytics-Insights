@@ -220,17 +220,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             // A row that states no period and a request that can't supply one (ALL) has no key, so it is
             // dropped rather than stored under the meaningless period 0. Filtered in place: at ~200k licensed
             // users a second full-size list is a pointless copy of the whole report.
+            //
+            // RemoveAll rather than a reverse loop calling RemoveAt: each RemoveAt shifts every surviving
+            // element after it, so dropping a scattered subset of a 200k-row report costs O(N^2) element
+            // moves (~5 billion when half the rows are unkeyable). RemoveAll is a single O(N) compaction.
             var requestedPeriodDays = request.PeriodDays;
-            var unkeyable = 0;
-            for (var i = rows.Count - 1; i >= 0; i--)
+            var unkeyable = rows.RemoveAll(row =>
             {
-                rows[i].ReportPeriodDays = rows[i].ReportPeriodDays ?? requestedPeriodDays;
-                if (!rows[i].ReportPeriodDays.HasValue)
-                {
-                    rows.RemoveAt(i);
-                    unkeyable++;
-                }
-            }
+                row.ReportPeriodDays = row.ReportPeriodDays ?? requestedPeriodDays;
+                return !row.ReportPeriodDays.HasValue;
+            });
 
             if (unkeyable > 0)
             {
