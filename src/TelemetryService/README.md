@@ -34,7 +34,7 @@ installations (the AnalyticsEngine importer in
 | --- | --- | --- | --- |
 | `POST` | `/api/Telemetry` | Receive a `TelemetryPayload` from an importer instance. | BCrypt signature against `TelemetrySecret` (see [`AnonUsageStatsModel.IsValidSecretForThisObject`](../AnalyticsEngine/Common/UsageReporting/AnonUsageStatsModel.cs)). |
 | `GET`  | `/api/auth/config` | Public MSAL configuration (authority, client ID and API scope; no secrets). | Anonymous. |
-| `GET`  | `/api/Telemetry/stats` | Aggregated headline figures (client count, total rows / size, last update, per-table totals). | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
+| `GET`  | `/api/Telemetry/stats` | Aggregated headline figures (client count, total rows / size, last update, per-table totals, per-schema totals, build adoption, import-feature adoption, reporting freshness and deployment-size distribution). | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
 | `GET`  | `/api/Telemetry/clients` | Per-client summary rows for the dashboard table. | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
 
 ### Auth model
@@ -52,6 +52,105 @@ installations (the AnalyticsEngine importer in
   authorization boundary. The ASP.NET Core API still performs the scope and
   role checks, while anonymous health, configuration and signed-upload
   requests continue to reach the application.
+- **EasyAuth `allowedApplications` must be set explicitly.** If
+  `defaultAuthorizationPolicy` is omitted, the platform stores
+  `allowed_client_applications` as an *empty array*, which EasyAuth reads as
+  "permit nothing": it authenticates the caller and then returns a bare `403`
+  before the request reaches the application. The symptom is deeply misleading —
+  anonymous requests still succeed, and a token with an invalid signature also
+  succeeds (it fails validation, so it is treated as anonymous), so a **valid**
+  token is the only thing that gets rejected. Verify with
+  `az webapp auth show` that `aadClaimsAuthorization` lists the SPA client ID
+  rather than `"allowed_client_applications":[]`.
+- **Restart the App Service after changing `authsettingsV2`.** The EasyAuth /
+  MISE runtime caches the auth configuration, so a corrected
+  `allowedApplications` is not honoured until the site restarts. Until then the
+  config APIs report the new value while requests are still rejected using the
+  old one, which makes the fix look like it did not work.
+
+### Application Insights
+
+Telemetry is emitted **in-process** by
+[`Azure.Monitor.OpenTelemetry.AspNetCore`](https://www.nuget.org/packages/Azure.Monitor.OpenTelemetry.AspNetCore),
+wired up in `Program.cs` via `AddOpenTelemetry().UseAzureMonitor()`. It reads
+`APPLICATIONINSIGHTS_CONNECTION_STRING` and no-ops when that is unset, so local
+development sends nothing.
+
+Do **not** rely on the `ApplicationInsightsAgent_EXTENSION_VERSION` codeless
+attach setting. It applies only to **Windows** App Service, and this service
+runs on **Linux** (`DOTNETCORE|10.0`), so setting it there is silently
+ineffective for .NET while making the site look instrumented: the connection
+string is present and the ingestion endpoint is reachable, yet nothing is ever
+sent. If the Application Insights resource is empty, check that this package is
+actually referenced before investigating networking.
+
+## Dashboard
+
+The SPA uses [Fluent UI v9](https://react.fluentui.dev/) and mirrors the look and
+feel of the in-product admin app
+(`src/AnalyticsEngine/Web/Scripts/admin-app`): brand header, `TabList`
+navigation and the same content width. Content is split across four tabs, each
+lazy-loaded as its own chunk:
+
+| Tab | Contents |
+| --- | --- |
+| Overview | Headline figures, reporting freshness, deployment-size distribution (median/average/largest), Azure AI usage, storage by schema and the top tables. |
+| Tables | Every table aggregated across clients, filterable and sortable, including average rows per client. |
+| Clients | One row per installation, with relative "last report" times, stale highlighting and the enabled imports per client. |
+| Adoption | Build-version adoption and per-import feature adoption across the install base. |
+
+All figures are derived server-side in `DashboardService.Aggregate` from the
+telemetry each client already sends — no client-side change is needed to
+populate them. Two derived values are worth knowing about:
+
+- **Build adoption** groups clients that never sent a `BuildVersionLabel` under
+  `(unknown)` rather than dropping them, so the counts always total the client
+  count.
+- **Import feature adoption** parses each client's
+  `ConfiguredImportsEnabledDescription` (a `Name=True;Name=False` string) and
+  reports percentages **of the clients reporting that toggle**, not of all
+  clients — otherwise a newly added import would look widely disabled simply
+  because older builds do not mention it.
+
+## Tests
+
+| Project | Runner | Command |
+| --- | --- | --- |
+| `Tests.Unit` | MSTest (net10.0) | `dotnet test src/TelemetryService/Tests.Unit/Tests.Unit.csproj` |
+| `web.client` | Vitest + Testing Library | `npm test` (from `src/TelemetryService/web.client`) |
+
+The server tests cover the dashboard aggregation (freshness bucketing, build and feature
+adoption, schema/table keying, medians), the settings-string parser, the upload endpoint's
+signature checks, the save/merge behaviour and configuration binding. `Aggregate` takes an
+injectable `nowUtc` so the freshness buckets are deterministic rather than dependent on when
+the suite runs, and the internal helpers are exposed to the test project via `InternalsVisibleTo`.
+
+The client tests cover the formatting helpers and the sortable table component. Fluent UI is
+inlined in `vitest.config.ts` (`server.deps.inline`) because `@fluentui/react-icons` ships
+extensionless ESM chunk imports that Vite's node resolver cannot follow.
+
+## Continuous delivery
+
+[`.github/workflows/telemetry-service.yml`](../../.github/workflows/telemetry-service.yml)
+builds, lints and tests both halves on every pull request, and deploys on pushes to `main` and
+`dev`. `dotnet publish` also builds the Vite client into `wwwroot`, so a single artifact is the
+whole deployable site. After deploying, the workflow polls `/health` so a build that deploys but
+fails to start is reported as a failed deployment rather than a successful one.
+
+Azure sign-in uses **OIDC federated credentials**, so no client secret is stored. Configure the
+app registration with a federated credential for this repository and the `telemetry-service`
+environment, and grant it Website Contributor (or Contributor) on the target App Service.
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Secret | `AZURE_CLIENT_ID` | App registration used for the federated deployment credential. |
+| Secret | `AZURE_TENANT_ID` | Tenant of that app registration. |
+| Secret | `AZURE_SUBSCRIPTION_ID` | Subscription containing the App Service. |
+| Variable | `TELEMETRY_APP_NAME` | App Service name to deploy to. |
+| Variable | `TELEMETRY_RESOURCE_GROUP` | Resource group containing that App Service. |
+
+The deploy job is guarded so it can only ever run from this repository on a push — never from a
+pull request and never from a fork.
 
 ## Configuration
 
