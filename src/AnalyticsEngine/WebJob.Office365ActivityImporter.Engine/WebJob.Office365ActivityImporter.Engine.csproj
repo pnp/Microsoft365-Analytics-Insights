@@ -164,6 +164,13 @@
     <Compile Include="Graph\UsageReports\Aggregate\AbstractModels.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSiteUsageDetail.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSitesWeeklyUsageReportLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotReportRequest.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailParser.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportParser.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CsvReportTable.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\GraphCopilotReportCsvSource.cs" />
     <Compile Include="Graph\UsageReports\OneDriveUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\SharePointUserActivityLoader.cs" />
     <Compile Include="Graph\UsageReports\OneDriveUserActivityLoader.cs" />

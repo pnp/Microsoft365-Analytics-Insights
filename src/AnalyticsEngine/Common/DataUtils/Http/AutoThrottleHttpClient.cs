@@ -124,8 +124,7 @@ namespace DataUtils.Http
                     }
 
                     // Do we have a "retry-after" header & should we use it?
-                    var waitValue = response.GetRetryAfterHeaderSeconds();
-                    if (!ignoreRetryHeader && waitValue.HasValue)
+                    var waitValue = response.GetRetryAfterHeaderSeconds();                    if (!ignoreRetryHeader && waitValue.HasValue)
                     {
                         // Honour 'retry-after', but cap it: a single very large (or buggy) value would otherwise
                         // block this thread for that entire duration (we saw multi-minute stalls in usage-report
@@ -165,6 +164,11 @@ namespace DataUtils.Http
                         _nextCallEarliestTime = DateTime.Now.AddSeconds(secondsToWait);
                     }
 
+                    // This response is being discarded, so release it before looping. It matters for callers
+                    // that request HttpCompletionOption.ResponseHeadersRead (the Copilot CSV report
+                    // downloads): the body is still unread, so without this each retry leaks a connection.
+                    response.Dispose();
+                    response = null;
                 }
                 else
                 {

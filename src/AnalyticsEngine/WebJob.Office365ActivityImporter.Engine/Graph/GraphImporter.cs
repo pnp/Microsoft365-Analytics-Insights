@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.ActivityReports;
 using Common.Entities.Config;
+using Common.Entities.Entities.UsageReports;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -14,6 +15,7 @@ using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.Teams;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -50,6 +52,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
         private const string GraphUserAppsLastImportedKey = "GraphUserAppsLastImported";
         private const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
+        private const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
 
         /// <summary>
         /// Runs a "non-fresh" Graph import section at most once per <paramref name="intervalHours"/>.
@@ -58,7 +61,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// importer. An interval of 0 disables the gate (runs every cycle); <c>ForceGraphMetadataImport</c>
         /// bypasses it for one run. Redis failures are fail-open (the section still runs).
         /// </summary>
-        private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task> sectionWork)
+        private Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task> sectionWork)
+        {
+            return RunGraphSectionIfDueAsync(key, intervalHours, sectionName, async () =>
+            {
+                await sectionWork();
+                return true;
+            });
+        }
+
+        /// <summary>
+        /// As above, for a section that reports success itself instead of throwing. Returning false records
+        /// the section as not done, so the cadence gate lets it retry next cycle, without an exception
+        /// unwinding out of <see cref="GetAndSaveAllGraphData"/> and skipping the sections that come after it.
+        /// </summary>
+        private async Task RunGraphSectionIfDueAsync(string key, int intervalHours, string sectionName, Func<Task<bool>> sectionWork)
         {
             var force = _settings.ForceGraphMetadataImport;
             var lastRun = await _lastRunStore.GetLastRunUtc(key);
@@ -79,13 +96,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var timer = new JobTimer(_logger, sectionName);
             timer.Start();
 
-            await sectionWork();
+            var succeeded = await sectionWork();
 
-            timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+            // Only claim the section finished when it actually did; otherwise a permanently failing section
+            // would emit a healthy "finished" event on every cycle.
+            if (succeeded)
+            {
+                timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
+            }
+            else
+            {
+                _logger.LogWarning($"{sectionName} did not complete successfully; it will be retried on the next cycle.");
+            }
 
             // Record the run only after success (so a failure doesn't suppress the next attempt) and only
             // when gating is active (interval > 0).
-            if (intervalHours > 0)
+            if (intervalHours > 0 && succeeded)
             {
                 await _lastRunStore.SetLastRunUtc(key, DateTime.UtcNow);
             }
@@ -147,6 +173,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 else
                     _logger.LogInformation("Skipping usage reports import", graphUserGroupsCache);
 
+                if (settings.ImportJobSettings.GraphCopilotUsageReports)
+                {
+                    // Refreshed on the same daily cadence as the other non-fresh Graph sections: Microsoft
+                    // publishes these reports roughly 48 hours behind, so polling more often costs Graph calls
+                    // and returns the same numbers.
+                    await RunGraphSectionIfDueAsync(GraphCopilotUsageReportsLastImportedKey, _settings.GraphMetadataImportIntervalHours, "Copilot usage reports",
+                        () => ImportCopilotUsageReports(graphUserGroupsCache, userGroupsFilter));
+                }
+                else
+                    _logger.LogInformation("Skipping Graph Copilot usage reports import", graphUserGroupsCache);
+
                 if (settings.ImportJobSettings.GraphTeams)
                 {
                     await RunGraphSectionIfDueAsync(GraphTeamsLastImportedKey, _settings.GraphTeamsImportIntervalHours, "Teams import", async () =>
@@ -187,8 +224,102 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
 
-        public async Task<bool> GetAndSaveActivityReportsMultiThreaded(int daysBackMax, ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)
+        /// <summary>
+        /// Imports the three Graph Microsoft 365 Copilot usage reports. Returns true only if all three
+        /// succeeded, so the cadence gate retries next cycle otherwise.
+        ///
+        /// Order is deliberate: the two tenant-aggregate reports go first because they are cheap (a few
+        /// thousand rows whatever the tenant size), need no per-user joins, and are unaffected by the tenant's
+        /// concealed-user-information setting - so even where the per-user report is unusable, the customer
+        /// still gets adoption numbers that line up with the Microsoft 365 admin centre.
+        ///
+        /// Each report is attempted independently, and a failure is logged rather than thrown: a missing
+        /// Reports.Read.All grant or a non-global-cloud tenant (where these endpoints simply don't exist)
+        /// must not take down the Teams and sent-email imports that run after this section. Each report also
+        /// gets its own DbContext so a failed SaveChanges can't poison the next one.
+        /// </summary>
+        private async Task<bool> ImportCopilotUsageReports(UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)
         {
+            using (var csvSource = new GraphCopilotReportCsvSource(_graphAppIndentityOAuthContext, _logger))
+            {
+                // First run gets the widest window Graph offers. This is history we cannot get any other way:
+                // the audit pipeline has a hard 7-day retrieval ceiling, so without this backfill a new
+                // install starts with an empty Copilot adoption trend.
+                //
+                // The decision is based on whether a D180 TREND import has ever completed - not on whether any
+                // Copilot row exists. Keying it off "any row" meant a successful summary import alongside a
+                // failed D180 trend permanently downgraded every later run to D28, silently losing the
+                // backfill for good.
+                var backfillDone = await HasCompletedTrendBackfill();
+                var trendPeriod = backfillDone ? CopilotReportRequest.DefaultRefreshPeriod : CopilotReportRequest.MaxHistoryPeriod;
+                if (!backfillDone)
+                {
+                    _logger.LogInformation($"No completed Copilot trend backfill on record - requesting the maximum window ({trendPeriod}).");
+                }
+
+                var allSucceeded = true;
+
+                allSucceeded &= await RunCopilotReport("Copilot user-count trend", db =>
+                    new CopilotUserCountReportLoader(csvSource, _logger).LoadAndSaveTrendAsync(db, trendPeriod));
+
+                allSucceeded &= await RunCopilotReport("Copilot user-count summary", db =>
+                    new CopilotUserCountReportLoader(csvSource, _logger).LoadAndSaveSummaryAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
+
+                allSucceeded &= await RunCopilotReport("Copilot per-user usage detail", db =>
+                    new CopilotUsageUserDetailLoader(csvSource, _logger, userGroupsCache, userGroupsFilterModel)
+                        .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
+
+                return allSucceeded;
+            }
+        }
+
+        /// <summary>
+        /// True when a maximum-window trend import has previously completed without error, which is what
+        /// proves the one-off history backfill actually landed. Never throws: this is only a decision about
+        /// which window to request, so if the check itself fails the safe answer is "not done" (request the
+        /// wide window) rather than unwinding and skipping the Graph sections that follow.
+        /// </summary>
+        private async Task<bool> HasCompletedTrendBackfill()
+        {
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    return await db.CopilotUsageReportImportLogs.AnyAsync(l =>
+                        l.ReportName == CopilotUsageReportNames.UserCountTrend
+                        && l.ReportPeriod == CopilotReportRequest.MaxHistoryPeriod
+                        && l.Error == null
+                        && l.RowsRead > 0);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Couldn't check whether the Copilot trend backfill has run ({ex.Message}); assuming it hasn't and requesting the maximum window.");
+                return false;
+            }
+        }
+
+        private async Task<bool> RunCopilotReport(string reportDescription, Func<AnalyticsEntitiesContext, Task<int>> import)
+        {
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var rows = await import(db);
+                    _logger.LogInformation($"{reportDescription}: wrote {rows.ToString("N0")} row(s) to SQL.");
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"{reportDescription} failed: {ex.Message}. " +
+                    "Check the app registration has the Reports.Read.All application permission granted, and that this is a global-cloud tenant (these reports don't exist in the US Government or 21Vianet clouds). " +
+                    "The other Copilot reports and the remaining Graph imports are unaffected; this one will be retried on the next cycle.");
+                return false;
+            }
+        }
+
+        public async Task<bool> GetAndSaveActivityReportsMultiThreaded(int daysBackMax, ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)        {
             var MIN_WAIT = TimeSpan.FromDays(1);
 
             // Throttle the whole activity/usage-report phase (all daily loaders + the weekly SharePoint sites
