@@ -1,70 +1,95 @@
-import { useEffect, useState } from 'react';
-import './App.css';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import {
+    Button,
+    makeStyles,
+    MessageBar,
+    MessageBarBody,
+    MessageBarTitle,
+    Spinner,
+    Tab,
+    TabList,
+    Text,
+    tokens,
+    type SelectTabEventHandler,
+} from '@fluentui/react-components';
+import { ArrowClockwise20Regular, SignOut20Regular } from '@fluentui/react-icons';
 import type { DashboardAuth } from './auth';
+import type { ClientSummary, DashboardStats } from './types';
 
-interface TableTotal {
-    tableName: string;
-    rows: number;
-    totalSpaceMB: number;
-    clientCount: number;
-}
+// Code-split the tabs so the initial load only pays for the Overview chunk.
+const OverviewTab = lazy(() => import('./tabs/OverviewTab'));
+const TablesTab = lazy(() => import('./tabs/TablesTab'));
+const ClientsTab = lazy(() => import('./tabs/ClientsTab'));
+const AdoptionTab = lazy(() => import('./tabs/AdoptionTab'));
 
-interface DashboardStats {
-    clientCount: number;
-    totalRows: number;
-    totalSpaceMB: number;
-    lastUpdated: string | null;
-    tableTotals: TableTotal[];
-}
+const useStyles = makeStyles({
+    header: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: tokens.colorBrandBackground,
+        color: tokens.colorNeutralForegroundOnBrand,
+        paddingInline: '20px',
+        height: '48px',
+    },
+    brand: {
+        color: tokens.colorNeutralForegroundOnBrand,
+        fontWeight: tokens.fontWeightSemibold,
+    },
+    headerRight: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+    },
+    account: { color: tokens.colorNeutralForegroundOnBrand },
+    headerButton: { color: tokens.colorNeutralForegroundOnBrand },
+    tabBar: {
+        backgroundColor: tokens.colorNeutralBackground1,
+        paddingInline: '12px',
+        boxShadow: tokens.shadow4,
+    },
+    content: {
+        padding: '24px',
+        maxWidth: '1120px',
+        marginInline: 'auto',
+    },
+    intro: {
+        color: tokens.colorNeutralForeground3,
+        marginBottom: '20px',
+        display: 'block',
+    },
+    centre: {
+        display: 'flex',
+        justifyContent: 'center',
+        padding: '48px',
+    },
+});
 
-interface ClientSummary {
-    anonClientId: string;
-    generated: string | null;
-    buildVersionLabel: string | null;
-    configuredImportsEnabledDescription: string | null;
-    configuredSolutionsEnabledDescription: string | null;
-    dataPointsFromAITotal: number | null;
-    rows: number;
-    totalSpaceMB: number;
-    tableCount: number;
-}
+type TabValue = 'overview' | 'tables' | 'clients' | 'adoption';
 
-function formatNumber(n: number): string {
-    return n.toLocaleString();
-}
-
-function formatMB(mb: number): string {
-    if (mb >= 1024) {
-        return `${(mb / 1024).toFixed(2)} GB`;
-    }
-    return `${mb.toFixed(2)} MB`;
-}
-
-function formatDate(value: string | null): string {
-    if (!value) return '—';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return value;
-    return d.toLocaleString();
-}
-
-function App({ auth }: { auth: DashboardAuth }) {
+export default function App({ auth }: { auth: DashboardAuth }) {
+    const styles = useStyles();
     const [stats, setStats] = useState<DashboardStats | null>(null);
     const [clients, setClients] = useState<ClientSummary[] | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [loading, setLoading] = useState<boolean>(true);
+    const [loading, setLoading] = useState(true);
+    const [reloadKey, setReloadKey] = useState(0);
+    const [selectedTab, setSelectedTab] = useState<TabValue>('overview');
 
+    // The effect body deliberately performs no synchronous setState: it starts an async
+    // function whose first statement awaits, so React never sees a cascading render. The
+    // spinner is driven by `loading` starting true, and by the refresh handler below.
     useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
 
-        async function load() {
-            setLoading(true);
-            setError(null);
+        void (async () => {
             try {
                 const accessToken = await auth.getAccessToken();
+                if (controller.signal.aborted) return;
+
                 const request = {
-                    headers: {
-                        Authorization: `Bearer ${accessToken}`,
-                    },
+                    headers: { Authorization: `Bearer ${accessToken}` },
+                    signal: controller.signal,
                 };
                 const [statsRes, clientsRes] = await Promise.all([
                     fetch('/api/Telemetry/stats', request),
@@ -75,20 +100,31 @@ function App({ auth }: { auth: DashboardAuth }) {
 
                 const statsData: DashboardStats = await statsRes.json();
                 const clientsData: ClientSummary[] = await clientsRes.json();
-                if (cancelled) return;
+                if (controller.signal.aborted) return;
+
                 setStats(statsData);
                 setClients(clientsData);
+                setError(null);
             } catch (e: unknown) {
-                if (cancelled) return;
+                if (controller.signal.aborted) return;
                 setError(e instanceof Error ? e.message : 'Failed to load dashboard data');
             } finally {
-                if (!cancelled) setLoading(false);
+                if (!controller.signal.aborted) setLoading(false);
             }
-        }
+        })();
 
-        load();
-        return () => { cancelled = true; };
-    }, [auth]);
+        return () => controller.abort();
+    }, [auth, reloadKey]);
+
+    function refresh() {
+        setLoading(true);
+        setError(null);
+        setReloadKey(k => k + 1);
+    }
+
+    const onTabSelect: SelectTabEventHandler = (_event, data) => {
+        setSelectedTab(data.value as TabValue);
+    };
 
     function signOut() {
         void auth.signOut().catch((e: unknown) => {
@@ -96,118 +132,90 @@ function App({ auth }: { auth: DashboardAuth }) {
         });
     }
 
+    const hasData = !!stats && stats.clientCount > 0;
+
     return (
-        <div className="dashboard">
-            <header className="dashboard-header">
-                <div>
-                    <h1>Analytics Telemetry</h1>
-                    <p className="subtitle">
-                        Anonymous usage stats reported by Microsoft 365 Analytics Insights installations.
-                    </p>
-                </div>
-                <div className="auth-controls">
-                    <span>{auth.accountName}</span>
-                    <button type="button" onClick={signOut}>Sign out</button>
+        <>
+            <header className={styles.header}>
+                <Text size={400} className={styles.brand}>
+                    Microsoft 365 Analytics — Telemetry
+                </Text>
+                <div className={styles.headerRight}>
+                    <Text className={styles.account}>{auth.accountName}</Text>
+                    <Button
+                        appearance="transparent"
+                        className={styles.headerButton}
+                        icon={<ArrowClockwise20Regular />}
+                        disabled={loading}
+                        onClick={() => refresh()}
+                    >
+                        Refresh
+                    </Button>
+                    <Button
+                        appearance="transparent"
+                        className={styles.headerButton}
+                        icon={<SignOut20Regular />}
+                        onClick={signOut}
+                    >
+                        Sign out
+                    </Button>
                 </div>
             </header>
 
-            {loading && <p><em>Loading…</em></p>}
+            <div className={styles.tabBar}>
+                <TabList selectedValue={selectedTab} onTabSelect={onTabSelect} size="large">
+                    <Tab value="overview">Overview</Tab>
+                    <Tab value="tables">Tables</Tab>
+                    <Tab value="clients">Clients</Tab>
+                    <Tab value="adoption">Adoption</Tab>
+                </TabList>
+            </div>
 
-            {error && (
-                <div className="error">
-                    <strong>Could not load dashboard data:</strong> {error}
-                </div>
-            )}
+            <main className={styles.content}>
+                <Text className={styles.intro}>
+                    Anonymous usage statistics reported by Microsoft 365 Analytics Insights installations.
+                </Text>
 
-            {!loading && !error && stats && (
-                <>
-                    {stats.clientCount === 0 ? (
-                        <p className="empty">
-                            No telemetry has been received yet. Once an importer instance has
-                            <code> StatsApiUrl</code> + <code>StatsApiSecret</code> configured to
-                            point at this service it will start reporting in.
-                        </p>
-                    ) : (
-                        <section className="cards">
-                            <Card label="Reporting clients" value={formatNumber(stats.clientCount)} />
-                            <Card label="Total rows" value={formatNumber(stats.totalRows)} />
-                            <Card label="Total size" value={formatMB(stats.totalSpaceMB)} />
-                            <Card label="Last update" value={formatDate(stats.lastUpdated)} />
-                        </section>
-                    )}
+                {error && (
+                    <MessageBar intent="error">
+                        <MessageBarBody>
+                            <MessageBarTitle>Could not load dashboard data</MessageBarTitle>
+                            {error}
+                        </MessageBarBody>
+                    </MessageBar>
+                )}
 
-                    {stats.tableTotals.length > 0 && (
-                        <section>
-                            <h2>Tables (aggregated across clients)</h2>
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>Table</th>
-                                        <th className="num">Rows</th>
-                                        <th className="num">Size</th>
-                                        <th className="num">Clients</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {stats.tableTotals.map(t => (
-                                        <tr key={t.tableName}>
-                                            <td>{t.tableName}</td>
-                                            <td className="num">{formatNumber(t.rows)}</td>
-                                            <td className="num">{formatMB(t.totalSpaceMB)}</td>
-                                            <td className="num">{t.clientCount}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </section>
-                    )}
-                </>
-            )}
+                {loading && (
+                    <div className={styles.centre}>
+                        <Spinner size="large" label="Loading telemetry…" />
+                    </div>
+                )}
 
-            {!loading && !error && clients && clients.length > 0 && (
-                <section>
-                    <h2>Clients</h2>
-                    <table className="data-table">
-                        <thead>
-                            <tr>
-                                <th>Anon client ID</th>
-                                <th>Last report</th>
-                                <th>Build</th>
-                                <th>Imports</th>
-                                <th>Solutions</th>
-                                <th className="num">Rows</th>
-                                <th className="num">Size</th>
-                                <th className="num">AI calls</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {clients.map(c => (
-                                <tr key={c.anonClientId}>
-                                    <td className="mono">{c.anonClientId}</td>
-                                    <td>{formatDate(c.generated)}</td>
-                                    <td>{c.buildVersionLabel ?? '—'}</td>
-                                    <td>{c.configuredImportsEnabledDescription ?? '—'}</td>
-                                    <td>{c.configuredSolutionsEnabledDescription ?? '—'}</td>
-                                    <td className="num">{formatNumber(c.rows)}</td>
-                                    <td className="num">{formatMB(c.totalSpaceMB)}</td>
-                                    <td className="num">{c.dataPointsFromAITotal != null ? formatNumber(c.dataPointsFromAITotal) : '—'}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </section>
-            )}
-        </div>
+                {!loading && !error && stats && !hasData && (
+                    <MessageBar intent="info">
+                        <MessageBarBody>
+                            <MessageBarTitle>No telemetry received yet</MessageBarTitle>
+                            Once an importer instance has StatsApiUrl and StatsApiSecret configured to point
+                            at this service, it will start reporting in.
+                        </MessageBarBody>
+                    </MessageBar>
+                )}
+
+                {!loading && !error && stats && hasData && (
+                    <Suspense
+                        fallback={
+                            <div className={styles.centre}>
+                                <Spinner size="large" label="Loading…" />
+                            </div>
+                        }
+                    >
+                        {selectedTab === 'overview' && <OverviewTab stats={stats} />}
+                        {selectedTab === 'tables' && <TablesTab stats={stats} />}
+                        {selectedTab === 'clients' && <ClientsTab clients={clients ?? []} />}
+                        {selectedTab === 'adoption' && <AdoptionTab stats={stats} />}
+                    </Suspense>
+                )}
+            </main>
+        </>
     );
 }
-
-function Card({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="card">
-            <div className="card-label">{label}</div>
-            <div className="card-value">{value}</div>
-        </div>
-    );
-}
-
-export default App;
