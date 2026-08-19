@@ -2,6 +2,7 @@ using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 
@@ -39,6 +40,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 catch (HttpRequestException ex)
                 {
+                    // A 404 means the resource simply isn't there (typically a user with no Exchange
+                    // mailbox, or a guest account). That's a permanent, expected tenant state - not an
+                    // application error - so log it at debug and surface a dedicated type that callers
+                    // can skip on. Logging it as an error would push an exception to Application
+                    // Insights on every single import cycle for a condition that never clears.
+                    if (callResponse.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        var notFound = new GraphResourceNotFoundException(url, callResponseBody, ex);
+                        _logger.LogDebug($"Got HTTP 404 calling {url} (Graph error code " +
+                            $"'{notFound.GraphErrorCode ?? "unknown"}'). Response body: {callResponseBody}");
+                        throw notFound;
+                    }
+
                     _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
                     throw;
                 }

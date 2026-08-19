@@ -32,8 +32,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         // skipped safely), the other gates how often the non-fresh Graph sections re-run.
         private readonly ISingleDateStore _activityReportsLastImportedStore;
         private readonly IImportLastRunStore _lastRunStore;
+        // Negative cache of users with no Exchange mailbox, so the sent-email import stops re-checking
+        // them (and logging a 404) on every cycle. Must be process-lifetime, hence injected.
+        private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
 
-        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null)
+        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
             : base(logger, settings)
         {
             _userGroupsCache = userGroupsCache;
@@ -44,6 +47,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Defensive: a per-instance in-memory store still works (just doesn't persist the gate
             // across cycles). Production passes the process-lifetime store hoisted in Program.cs.
             _lastRunStore = lastRunStore ?? new InMemoryImportLastRunStore();
+            _sentEmailMailboxSkipList = sentEmailMailboxSkipList ?? new InMemorySentEmailMailboxSkipList();
         }
 
         // Keys for the per-section "last run" timestamps used to daily-gate the non-fresh Graph imports.
@@ -213,7 +217,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         deltaTokenStore = new InMemoryDeltaTokenStore();
                     }
 
-                    var sentEmailImporter = new SentEmailImporter(_logger, _settings, httpClient, deltaTokenStore, _graphAppIndentityOAuthContext);
+                    var sentEmailImporter = new SentEmailImporter(_logger, _settings, httpClient, deltaTokenStore, _graphAppIndentityOAuthContext, _sentEmailMailboxSkipList);
                     await sentEmailImporter.ImportSentEmails();
 
                     sentEmailsTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);

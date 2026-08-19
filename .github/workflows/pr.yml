@@ -2,11 +2,21 @@ name: PR build
 
 on:
   pull_request:
+    # See issue #270: `ready_for_review` on its own never fires for a PR opened directly as
+    # non-draft (that emits `opened`), so this build simply never ran for most pull requests.
+    # `synchronize` also gets the artifacts rebuilt when new commits are pushed.
     types:
+      - opened
+      - synchronize
+      - reopened
       - ready_for_review
+    # Unlike tests.yml this workflow is NOT a required status check, so keeping the path filter
+    # is safe - a PR that never triggers it is not blocked by its absence.
     paths:
-      - src/**
+      - src/AnalyticsEngine/**
+      - src/SPO/AITracker/**
       - reports/**
+      - .github/workflows/pr.yml
   workflow_dispatch:
 
 env:
@@ -43,6 +53,8 @@ jobs:
     #   - Zip files
     #   - Publish artifacts
     runs-on: windows-latest
+    # Drafts are still work in progress - do not spend four Windows runners on them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     strategy:
       matrix:
         configuration: [Release] # [Debug, Release]
@@ -142,6 +154,7 @@ jobs:
     #   - Zip files
     #   - Publish artifacts
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - name: Checkout source
         uses: actions/checkout@v6

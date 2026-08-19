@@ -7,6 +7,7 @@ using System.Data.SqlClient;
 using System.Diagnostics;
 using Tests.FakeDataGen.Seeding;
 using UnitTests.FakeLoaderClasses;
+using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
@@ -36,6 +37,23 @@ namespace Tests.FakeDataGen.StressTests
 
         // Model names surfaced in ModelTransparencyDetails. DEEP_LEO drives premium (deep-reasoning) billing.
         private static readonly string[] ModelNames = { "gpt-4o", "gpt-4o-mini", "gpt-4.1", "DEEP_LEO" };
+
+        // Contexts[].Type. Deliberately ONLY the Teams-chat type: SaveSingleCopilotEventToSqlStaging
+        // routes on the context type, and a meeting or file type would send the event down
+        // TryAddMeetingAsync / TryAddFileAsync instead of AddChatOnly - changing this harness's
+        // workload mix (it exists to profile the chat-only merge, which carries the largest blobs) and
+        // making its numbers incomparable with previously recorded runs. A meeting-typed context would
+        // additionally be DISCARDED here, because StringUtils.GetOnlineMeetingId throws unless the
+        // context id contains "19:meeting_", and TryAddMeetingAsync swallows that and stages nothing.
+        // Every context is still written to contexts_json regardless of routing, so the new
+        // copilot_event_contexts path is fully exercised.
+        private static readonly string ContextType = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT;
+
+        // AISystemPlugin ids - the plugins / connectors that can ground an answer.
+        private static readonly string[] PluginIds = { "BingWebSearch", "SharePointSearch", "GraphConnector", "CodeInterpreter" };
+
+        // ClientRegion codes seen on the audit record.
+        private static readonly string[] ClientRegions = { "US", "WEU", "NEU", "IN", "AU" };
 
         // Synthetic document-name fragments. Deliberately includes non-Latin (Greek) text so round-trip /
         // truncation bugs surface in the nvarchar staging + merge path rather than in a customer tenant
@@ -365,10 +383,18 @@ WHERE u.user_name = @upn;";
 
             var content = new CopilotAuditLogContent
             {
+                // Record-level schema fields that now land on copilot_chats.
+                ClientRegion = ClientRegions[random.Next(ClientRegions.Length)],
+                CopilotLogVersion = "2024-11-30",
                 CopilotEventData = new CopilotEventData
                 {
                     AppHost = appHost,
-                    AccessedResources = accessedResources
+                    AccessedResources = accessedResources,
+                    // Threads repeat across interactions (a conversation is several events), which is what
+                    // makes thread_id worth storing - keep that shape here.
+                    ThreadId = $"19:stressthread-{random.Next(1, 2000)}@thread.v2",
+                    Contexts = BuildContexts(random),
+                    AISystemPlugin = BuildPlugins(random)
                 },
                 // Populate the parsed event so messages_json + model_transparency_json are exercised - these
                 // are the blobs the chat-only merge (common_upsert_copilot_agents.sql) re-parses with OPENJSON,
@@ -390,9 +416,9 @@ WHERE u.user_name = @upn;";
         }
 
         /// <summary>
-        /// Builds a realistic parsed Copilot event: a multi-turn conversation (prompt + response per turn,
-        /// only responses are billable / serialized) plus 1-2 transparency models. Mirrors the shape of real
-        /// BizChat chat-only events, which carry the largest messages_json blobs.
+        /// Builds a realistic parsed Copilot event: a multi-turn conversation (prompt + response per turn -
+        /// both are stored now, since Size only exists on the prompt row) plus 1-2 transparency models.
+        /// Mirrors the shape of real BizChat chat-only events, which carry the largest messages_json blobs.
         /// </summary>
         private static CopilotAuditEvent BuildParsedEvent(Random random, List<AccessedResource> accessedResources, int maxMessagesPerEvent)
         {
@@ -401,24 +427,35 @@ WHERE u.user_name = @upn;";
             var messages = new List<Message>(responseCount * 2);
             for (int m = 0; m < responseCount; m++)
             {
-                // User prompt (not billable, filtered out before SQL) ...
-                messages.Add(new Message { Id = Guid.NewGuid().ToString(), IsPrompt = true });
-                // ... followed by the Copilot response (billable, serialized to messages_json).
+                // User prompt - not billable, but its Size is the interaction's input volume.
+                messages.Add(new Message { Id = Guid.NewGuid().ToString(), IsPrompt = true, Size = random.Next(200, 8000) });
+                // ... followed by the Copilot response (billable).
                 messages.Add(new Message
                 {
                     Id = Guid.NewGuid().ToString(),
                     IsPrompt = false,
+                    Size = random.Next(500, 60000),
                     Type = ResponseTypes[random.Next(ResponseTypes.Length)]
                 });
             }
 
             var models = new List<ModelTransparencyDetail>
             {
-                new ModelTransparencyDetail { ModelName = ModelNames[random.Next(ModelNames.Length)] }
+                new ModelTransparencyDetail
+                {
+                    ModelName = ModelNames[random.Next(ModelNames.Length)],
+                    ModelProviderName = "OpenAI",
+                    ModelVersion = $"2026-0{random.Next(1, 10)}-01"
+                }
             };
             if (random.NextDouble() < 0.25)
             {
-                models.Add(new ModelTransparencyDetail { ModelName = ModelNames[random.Next(ModelNames.Length)] });
+                models.Add(new ModelTransparencyDetail
+                {
+                    ModelName = ModelNames[random.Next(ModelNames.Length)],
+                    ModelProviderName = "OpenAI",
+                    ModelVersion = $"2026-0{random.Next(1, 10)}-01"
+                });
             }
 
             return new CopilotAuditEvent
@@ -428,6 +465,52 @@ WHERE u.user_name = @upn;";
                 ModelTransparencyDetails = models,
                 AnswerType = ResponseTypes[random.Next(ResponseTypes.Length)]
             };
+        }
+
+        /// <summary>
+        /// 0-3 interaction contexts. Real payloads usually carry one, but the whole point of
+        /// copilot_event_contexts is the multi-context case that used to be dropped, so generate those too.
+        /// The context ref reuses the Greek-containing document fragments to keep the Unicode round-trip
+        /// under load.
+        ///
+        /// All contexts are Teams-chat typed on purpose - see <see cref="ContextType"/>: that is the only
+        /// type the staging routing treats as additive, so every generated event still stages exactly once
+        /// via AddChatOnly, exactly as it did before contexts were generated at all.
+        /// </summary>
+        private static List<Context> BuildContexts(Random random)
+        {
+            var contexts = new List<Context>();
+            var count = random.NextDouble() < 0.15 ? 0 : random.Next(1, 4);
+            for (int i = 0; i < count; i++)
+            {
+                contexts.Add(new Context
+                {
+                    Id = $"https://contoso.sharepoint.com/sites/example/Shared Documents/{DocNameFragments[random.Next(DocNameFragments.Length)]}-{random.Next(1, 100000)}.docx",
+                    Type = ContextType,
+                    ContainerId = random.NextDouble() < 0.5 ? $"container-{random.Next(1, 500)}" : null
+                });
+            }
+            return contexts;
+        }
+
+        /// <summary>
+        /// 0-2 AI system plugins. Deliberately drawn from a small set with a small set of versions, since a
+        /// tenant only ever sees a handful - that is what makes the lookup + junction shape correct.
+        /// </summary>
+        private static List<AISystemPlugin> BuildPlugins(Random random)
+        {
+            var plugins = new List<AISystemPlugin>();
+            var count = random.NextDouble() < 0.5 ? 0 : random.Next(1, 3);
+            for (int i = 0; i < count; i++)
+            {
+                plugins.Add(new AISystemPlugin
+                {
+                    Id = PluginIds[random.Next(PluginIds.Length)],
+                    Name = "BuiltIn",
+                    Version = $"1.{random.Next(0, 5)}"
+                });
+            }
+            return plugins;
         }
 
         /// <summary>

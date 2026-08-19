@@ -6,9 +6,9 @@ on:
       - main
       - dev
     paths:
-      - src/**
+      - src/AnalyticsEngine/**
       - reports/**
-      - .github/**
+      - .github/workflows/ci.yml
   workflow_dispatch:
 
 env:
