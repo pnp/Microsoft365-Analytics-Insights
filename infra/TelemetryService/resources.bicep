@@ -515,8 +515,11 @@ resource webAppSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     AZURE_TENANT_ID: azureAdTenantId
     DashboardCacheSeconds: '60'
     MaxDashboardItems: '5000'
+    // Telemetry is emitted in-process by Azure.Monitor.OpenTelemetry.AspNetCore (see
+    // Web.Server/Program.cs). Deliberately no ApplicationInsightsAgent_EXTENSION_VERSION:
+    // that codeless-attach setting only applies to Windows App Service, so on this Linux
+    // .NET site it silently does nothing while making the app look instrumented.
     APPLICATIONINSIGHTS_CONNECTION_STRING: appInsights.properties.ConnectionString
-    ApplicationInsightsAgent_EXTENSION_VERSION: '~3'
   }
   dependsOn: [
     cosmosDataRoleAssignment
