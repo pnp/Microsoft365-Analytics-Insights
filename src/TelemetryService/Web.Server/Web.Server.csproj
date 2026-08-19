@@ -11,6 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Aggregation helpers are internal so they stay off the public surface, but they hold the
+         logic most worth testing (medians, settings parsing, freshness bucketing). -->
+    <InternalsVisibleTo Include="Tests.Unit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       Must be >= the transitive version pulled in via UsageReporting -> DataUtils (currently 1.21.0),
       otherwise NuGet raises NU1605 (package downgrade) and the resulting binding redirect mess
