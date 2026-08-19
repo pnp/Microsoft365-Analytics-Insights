@@ -12,6 +12,7 @@ using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
+using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace WebJob.Office365ActivityImporter
@@ -30,14 +31,16 @@ namespace WebJob.Office365ActivityImporter
         private GraphUserGroupsCache _graphUserGroupsCache = null;
         private readonly ISingleDateStore _activityReportsLastImportedStore;
         private readonly IImportLastRunStore _graphLastRunStore;
+        private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
 
-        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null)
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
         {
             _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             _logger = logger;
             _settings = settings;
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
             _graphLastRunStore = graphLastRunStore;
+            _sentEmailMailboxSkipList = sentEmailMailboxSkipList;
         }
 
         internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl)
@@ -62,7 +65,7 @@ namespace WebJob.Office365ActivityImporter
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore);
+            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList);
 
             try
             {
