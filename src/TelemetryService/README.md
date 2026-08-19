@@ -62,6 +62,11 @@ installations (the AnalyticsEngine importer in
   token is the only thing that gets rejected. Verify with
   `az webapp auth show` that `aadClaimsAuthorization` lists the SPA client ID
   rather than `"allowed_client_applications":[]`.
+- **Restart the App Service after changing `authsettingsV2`.** The EasyAuth /
+  MISE runtime caches the auth configuration, so a corrected
+  `allowedApplications` is not honoured until the site restarts. Until then the
+  config APIs report the new value while requests are still rejected using the
+  old one, which makes the fix look like it did not work.
 
 ## Configuration
 
