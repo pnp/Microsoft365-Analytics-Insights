@@ -250,6 +250,9 @@ namespace Web.Dashboard
 
             stats.Versions = versionAccumulators.Values
                 .OrderByDescending(v => v.ClientCount)
+                // "(unknown)" is a real bucket but not a real version, so keep it last on ties -
+                // otherwise it can sort ahead of an actual build and read as the most common one.
+                .ThenBy(v => v.BuildVersionLabel == UnknownLabel ? 1 : 0)
                 .ThenBy(v => v.BuildVersionLabel, System.StringComparer.OrdinalIgnoreCase)
                 .ToList();
 

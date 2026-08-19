@@ -112,6 +112,46 @@ populate them. Two derived values are worth knowing about:
   clients — otherwise a newly added import would look widely disabled simply
   because older builds do not mention it.
 
+## Tests
+
+| Project | Runner | Command |
+| --- | --- | --- |
+| `Tests.Unit` | MSTest (net10.0) | `dotnet test src/TelemetryService/Tests.Unit/Tests.Unit.csproj` |
+| `web.client` | Vitest + Testing Library | `npm test` (from `src/TelemetryService/web.client`) |
+
+The server tests cover the dashboard aggregation (freshness bucketing, build and feature
+adoption, schema/table keying, medians), the settings-string parser, the upload endpoint's
+signature checks, the save/merge behaviour and configuration binding. `Aggregate` takes an
+injectable `nowUtc` so the freshness buckets are deterministic rather than dependent on when
+the suite runs, and the internal helpers are exposed to the test project via `InternalsVisibleTo`.
+
+The client tests cover the formatting helpers and the sortable table component. Fluent UI is
+inlined in `vitest.config.ts` (`server.deps.inline`) because `@fluentui/react-icons` ships
+extensionless ESM chunk imports that Vite's node resolver cannot follow.
+
+## Continuous delivery
+
+[`.github/workflows/telemetry-service.yml`](../../.github/workflows/telemetry-service.yml)
+builds, lints and tests both halves on every pull request, and deploys on pushes to `main` and
+`dev`. `dotnet publish` also builds the Vite client into `wwwroot`, so a single artifact is the
+whole deployable site. After deploying, the workflow polls `/health` so a build that deploys but
+fails to start is reported as a failed deployment rather than a successful one.
+
+Azure sign-in uses **OIDC federated credentials**, so no client secret is stored. Configure the
+app registration with a federated credential for this repository and the `telemetry-service`
+environment, and grant it Website Contributor (or Contributor) on the target App Service.
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Secret | `AZURE_CLIENT_ID` | App registration used for the federated deployment credential. |
+| Secret | `AZURE_TENANT_ID` | Tenant of that app registration. |
+| Secret | `AZURE_SUBSCRIPTION_ID` | Subscription containing the App Service. |
+| Variable | `TELEMETRY_APP_NAME` | App Service name to deploy to. |
+| Variable | `TELEMETRY_RESOURCE_GROUP` | Resource group containing that App Service. |
+
+The deploy job is guarded so it can only ever run from this repository on a push — never from a
+pull request and never from a fork.
+
 ## Configuration
 
 | Key | Required | Description |
