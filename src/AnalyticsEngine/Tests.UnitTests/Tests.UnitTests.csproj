@@ -166,6 +166,7 @@
     <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
     <Compile Include="CopilotUsageReportImportTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
+    <Compile Include="MigrationSnapshotTests.cs" />
     <Compile Include="ScratchDatabase.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressRunner.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressTests.cs" />
