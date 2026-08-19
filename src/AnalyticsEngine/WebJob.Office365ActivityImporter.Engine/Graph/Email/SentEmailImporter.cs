@@ -40,10 +40,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private readonly Func<AnalyticsEntitiesContext> _dbContextFactory;
         private readonly int _userChunkSize;
         private readonly int _graphLoadParallelism;
+        private readonly ISentEmailMailboxSkipList _mailboxSkipList;
+        private readonly int _noMailboxRetryHours;
+
+        // UPNs discovered during this run to have no mailbox at all (Graph 404). Concurrent because the
+        // Graph load phase populates it from parallel worker threads.
+        private readonly ConcurrentDictionary<string, byte> _noMailboxUpns =
+            new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
         // Stats collected across the whole run. All updated via Interlocked from worker threads.
         private int _mailboxesScanned;
         private int _mailboxesFailed;
+        private int _mailboxesNotFound;
+        private int _mailboxesSkipped;
         private int _messagesSeen;
         private int _messagesInserted;
         private int _recipientsInserted;
@@ -57,7 +66,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             ISentEmailSentimentScorer sentimentScorer,
             Func<AnalyticsEntitiesContext> dbContextFactory = null,
             int userChunkSize = DefaultUserChunkSize,
-            int graphLoadParallelism = DefaultGraphLoadParallelism)
+            int graphLoadParallelism = DefaultGraphLoadParallelism,
+            ISentEmailMailboxSkipList mailboxSkipList = null,
+            int noMailboxRetryHours = 0)
             : base(logger, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
@@ -65,6 +76,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             _dbContextFactory = dbContextFactory ?? (() => new AnalyticsEntitiesContext());
             _userChunkSize = userChunkSize > 0 ? userChunkSize : DefaultUserChunkSize;
             _graphLoadParallelism = graphLoadParallelism > 0 ? graphLoadParallelism : DefaultGraphLoadParallelism;
+            _mailboxSkipList = mailboxSkipList;
+            _noMailboxRetryHours = noMailboxRetryHours;
         }
 
         /// <summary>
@@ -76,12 +89,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             AppConfig settings,
             ManualGraphCallClient httpClient,
             IDeltaTokenStore deltaTokenStore,
-            DataUtils.Http.ImportAppIndentityOAuthContext appIdentity)
+            DataUtils.Http.ImportAppIndentityOAuthContext appIdentity,
+            ISentEmailMailboxSkipList mailboxSkipList = null)
             : this(
                 logger,
                 settings,
                 new GraphSentEmailSourceLoader(httpClient, deltaTokenStore, appIdentity, logger),
-                SentEmailSentimentScorerFactory.Create(settings, logger))
+                SentEmailSentimentScorerFactory.Create(settings, logger),
+                mailboxSkipList: mailboxSkipList,
+                noMailboxRetryHours: settings?.SentEmailNoMailboxRetryHours ?? 0)
         {
         }
 
@@ -105,26 +121,106 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 return;
             }
 
+            // Users with no Exchange mailbox (unlicensed, on-premises, inactive, or guest accounts) 404 on
+            // every call, forever. Skip the ones we already know about, and re-sweep the whole directory
+            // periodically so a newly-licensed user is picked up. A retry interval of 0 disables the cache.
+            var skipList = _mailboxSkipList != null ? await _mailboxSkipList.LoadAsync() : MailboxSkipList.Empty();
+            var fullSweepDue = ImportCadenceGate.ShouldRun(skipList.GeneratedUtc, _noMailboxRetryHours, force: false, nowUtc: DateTime.UtcNow);
+
+            var knownNoMailbox = fullSweepDue ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : skipList.UpnSet;
+            if (fullSweepDue && _mailboxSkipList != null && _noMailboxRetryHours > 0)
+            {
+                _logger.LogInformation(
+                    $"Sent emails: re-checking every mailbox (last full sweep {skipList.GeneratedUtc?.ToString("u") ?? "never"}, " +
+                    $"interval {_noMailboxRetryHours}h).");
+            }
+
+            var usersToScan = knownNoMailbox.Count == 0
+                ? users
+                : users.Where(u => string.IsNullOrEmpty(u.UserPrincipalName) || !knownNoMailbox.Contains(u.UserPrincipalName)).ToList();
+
+            _mailboxesSkipped = users.Count - usersToScan.Count;
+            if (_mailboxesSkipped > 0)
+            {
+                _logger.LogInformation(
+                    $"Sent emails: skipping {_mailboxesSkipped} of {users.Count} users already known to have no mailbox. " +
+                    $"They'll be re-checked after {skipList.GeneratedUtc?.AddHours(_noMailboxRetryHours):u} UTC.");
+            }
+
+            if (usersToScan.Count == 0)
+            {
+                _logger.LogInformation("No users left to scan for sent items once mailbox-less users are excluded.");
+                return;
+            }
+
             _logger.LogInformation(
-                $"Found {users.Count} users with email addresses to scan for sent items. " +
+                $"Found {usersToScan.Count} users with email addresses to scan for sent items. " +
                 $"Processing in chunks of {_userChunkSize} (Graph load parallelism: {_graphLoadParallelism}; " +
                 $"persistence uses single-connection multi-row SQL inserts to avoid unique-index deadlocks).");
 
-            for (int i = 0; i < users.Count; i += _userChunkSize)
+            for (int i = 0; i < usersToScan.Count; i += _userChunkSize)
             {
                 // GetRange instead of Skip().Take() - Skip() on a List walks past every
                 // prior element, so chunking N users in slices of K costs O(N^2/K). At
                 // 200k users with K=25 that's ~800M wasted iterations just for slicing.
-                var chunk = users.GetRange(i, Math.Min(_userChunkSize, users.Count - i));
+                var chunk = usersToScan.GetRange(i, Math.Min(_userChunkSize, usersToScan.Count - i));
                 _logger.LogInformation(
                     $"Processing user chunk {(i / _userChunkSize) + 1} of " +
-                    $"{(users.Count + _userChunkSize - 1) / _userChunkSize} ({chunk.Count} users).");
+                    $"{(usersToScan.Count + _userChunkSize - 1) / _userChunkSize} ({chunk.Count} users).");
 
                 await ProcessUserChunkAsync(chunk);
             }
 
+            await PersistMailboxSkipListAsync(skipList, knownNoMailbox, fullSweepDue);
+
             swTotal.Stop();
             LogRunSummary(swTotal.Elapsed);
+        }
+
+        /// <summary>
+        /// Writes back the no-mailbox negative cache. A full sweep replaces the set outright (so users who
+        /// have since been licensed drop out of it); an incremental run only adds newly-discovered entries
+        /// and keeps the original sweep timestamp, so the next full sweep still happens on schedule.
+        /// </summary>
+        private async Task PersistMailboxSkipListAsync(MailboxSkipList previous, HashSet<string> skippedThisRun, bool fullSweepDue)
+        {
+            if (_mailboxSkipList == null || _noMailboxRetryHours <= 0)
+                return;
+
+            var updated = BuildUpdatedSkipList(previous, _noMailboxUpns.Keys, skippedThisRun, fullSweepDue, DateTime.UtcNow);
+            await _mailboxSkipList.SaveAsync(updated);
+        }
+
+        /// <summary>
+        /// Pure decision logic for the no-mailbox negative cache, factored out so it can be unit tested
+        /// without Redis or a database (mirrors <see cref="ImportCadenceGate"/>).
+        /// </summary>
+        /// <param name="previous">The skip list as loaded at the start of the run.</param>
+        /// <param name="discoveredNoMailbox">UPNs that returned a Graph 404 during this run.</param>
+        /// <param name="skippedThisRun">UPNs that weren't checked because they were already in the list.</param>
+        /// <param name="fullSweepDue">True when every user was checked, so the set can be rebuilt outright.</param>
+        internal static MailboxSkipList BuildUpdatedSkipList(
+            MailboxSkipList previous,
+            IEnumerable<string> discoveredNoMailbox,
+            HashSet<string> skippedThisRun,
+            bool fullSweepDue,
+            DateTime nowUtc)
+        {
+            var updated = new HashSet<string>(discoveredNoMailbox ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+
+            if (!fullSweepDue && skippedThisRun != null)
+            {
+                // Incremental run: the users we skipped weren't re-checked, so carry them forward.
+                updated.UnionWith(skippedThisRun);
+            }
+
+            return new MailboxSkipList
+            {
+                // Only a full sweep moves the timestamp - otherwise an incremental run every 10 minutes
+                // would keep pushing the next sweep out and users would never get re-checked.
+                GeneratedUtc = fullSweepDue ? nowUtc : previous?.GeneratedUtc ?? nowUtc,
+                Upns = updated.ToList(),
+            };
         }
 
         /// <summary>
@@ -265,6 +361,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                         Interlocked.Add(ref _deltaTokenReads, load.DeltaTokenReads);
                         Interlocked.Add(ref _deltaTokenWrites, load.DeltaTokenWrites);
                         loaded.Add(new LoadedUser { User = user, Messages = load.Messages });
+                    }
+                    catch (GraphResourceNotFoundException ex)
+                    {
+                        // The mailbox genuinely doesn't exist - the user is unlicensed, on-premises,
+                        // inactive, or an external/guest account. Permanent, so record it and stop
+                        // re-checking every cycle. Not an error: nothing is wrong and nothing is lost.
+                        Interlocked.Increment(ref _mailboxesNotFound);
+                        if (!string.IsNullOrEmpty(user.UserPrincipalName))
+                            _noMailboxUpns[user.UserPrincipalName] = 0;
+
+                        _logger.LogDebug(
+                            $"User '{user.UserPrincipalName}' has no mailbox ({ex.GraphErrorCode ?? "unknown"}); " +
+                            "skipping and adding to the no-mailbox list.");
                     }
                     catch (System.Net.Http.HttpRequestException ex)
                     {
@@ -578,7 +687,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             _logger.LogInformation(
                 $"Finished sent emails import in {elapsed:hh\\:mm\\:ss}. " +
-                $"Mailboxes scanned: {_mailboxesScanned} (failed: {_mailboxesFailed}). " +
+                $"Mailboxes scanned: {_mailboxesScanned} (failed: {_mailboxesFailed}, " +
+                $"no mailbox: {_mailboxesNotFound}, skipped as already known to have no mailbox: {_mailboxesSkipped}). " +
                 $"Messages seen: {_messagesSeen}. Messages inserted: {_messagesInserted} " +
                 $"(recipient rows: {_recipientsInserted}). " +
                 $"Delta tokens read: {_deltaTokenReads}, written: {_deltaTokenWrites}.");

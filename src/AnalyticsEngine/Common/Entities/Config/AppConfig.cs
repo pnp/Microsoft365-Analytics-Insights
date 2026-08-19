@@ -160,6 +160,16 @@ namespace Common.Entities.Config
                 ? graphTeamsImportIntervalHours
                 : preset.NonFreshGraphIntervalHours;
 
+            // How long a user found to have no Exchange mailbox is skipped before being re-checked.
+            // Mailbox-less users (unlicensed, on-premises, inactive, or guest accounts) return HTTP 404
+            // from Graph on every sent-email call, forever, so re-checking them each 10-minute cycle is
+            // pure waste and noise. The whole directory is re-swept on this interval so newly-licensed
+            // users get picked up. 0 disables the skip list (re-checks everyone every cycle).
+            this.SentEmailNoMailboxRetryHours = int.TryParse(ConfigurationManager.AppSettings.Get("SentEmailNoMailboxRetryHours"), out var sentEmailNoMailboxRetryHours)
+                && sentEmailNoMailboxRetryHours >= 0
+                ? sentEmailNoMailboxRetryHours
+                : 24;
+
             // One-off force flag: bypass the cadence gate for the non-fresh Graph imports (user metadata,
             // user apps, Teams) for this run. Mirrors ForceUsageReportsImport. Default false.
             var forceGraphMetadataImport = ConfigurationManager.AppSettings.Get("ForceGraphMetadataImport");
@@ -409,6 +419,14 @@ namespace Common.Entities.Config
         /// for those imports. Default false.
         /// </summary>
         public bool ForceGraphMetadataImport { get; set; } = false;
+
+        /// <summary>
+        /// Hours a user found to have no Exchange mailbox is skipped by the sent-emails import before
+        /// being re-checked. Such users (unlicensed, on-premises, inactive, or guests) return HTTP 404
+        /// from Graph on every call, permanently. Default 24; 0 disables the skip list entirely.
+        /// Overridable with the <c>SentEmailNoMailboxRetryHours</c> AppSetting.
+        /// </summary>
+        public int SentEmailNoMailboxRetryHours { get; set; } = 24;
 
         /// <summary>
         /// One-off start offset (minutes) applied before the first import cycle, used to stagger the

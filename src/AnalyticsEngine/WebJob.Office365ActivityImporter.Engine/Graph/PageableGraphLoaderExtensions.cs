@@ -7,21 +7,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     public static class PageableGraphLoaderExtensions
     {
-        public static async Task<List<T>> LoadAllPagesWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger)
+        public static async Task<List<T>> LoadAllPagesWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, bool throwOnNotFound = false)
         {
-            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, null);
+            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, null, throwOnNotFound);
 
             return results;
         }
 
-        public static async Task<List<T>> LoadAllPagesPlusDeltaWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc)
+        public static async Task<List<T>> LoadAllPagesPlusDeltaWithThrottleRetries<T>(this ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc, bool throwOnNotFound = false)
         {
-            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, deltaTokenFunc);
+            var results = await LoadPageableGraphResponseAllWithOptionalDelta<T>(client, url, logger, deltaTokenFunc, throwOnNotFound);
 
             return results;
         }
 
-        static async Task<List<T>> LoadPageableGraphResponseAllWithOptionalDelta<T>(ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc)
+        /// <param name="throwOnNotFound">
+        /// When true, a 404 is rethrown as <see cref="GraphResourceNotFoundException"/> so the caller can
+        /// tell "this resource does not exist" apart from "this resource exists but is empty". Defaults to
+        /// false, which preserves the long-standing behaviour of returning the pages loaded so far - most
+        /// callers (usage reports, user loaders) genuinely want the partial result.
+        /// </param>
+        static async Task<List<T>> LoadPageableGraphResponseAllWithOptionalDelta<T>(ManualGraphCallClient client, string url, ILogger logger, Func<string, Task> deltaTokenFunc, bool throwOnNotFound = false)
         {
             var allResults = new List<T>();
 
@@ -38,20 +44,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     queryResult = await client.GetAsyncWithThrottleRetries<PageableGraphResponseWithDelta<T>>(nextUrl);
                     pageSuccess = true;
                 }
+                catch (GraphResourceNotFoundException ex)
+                {
+                    // 404 - the resource doesn't exist. Always terminal, never worth a retry.
+                    if (throwOnNotFound)
+                        throw;
+
+                    pageSuccess = false;
+                    logger.LogDebug($"Got 404 loading {typeof(T).Name} page {pageCount} ({ex.GraphErrorCode ?? "unknown"}). " +
+                        "Returning results up to current page.");
+                    nextUrl = null;
+                }
                 catch (System.Net.Http.HttpRequestException ex)
                 {
                     pageSuccess = false;
-                    logger.LogError(ex, $"Got unexpected HTTP exception on page {pageCount}: {ex.Message}.");
 
                     // Transient error?
                     if (ex.Message != null && ex.Message.ToLower().Contains("gateway timeout"))
                     {
-                        logger.LogInformation($"Got gateway timeout. Will retry page.");
+                        logger.LogInformation($"Got gateway timeout on page {pageCount}. Will retry page.");
                         await Task.Delay(1000);
                     }
                     else
                     {
-                        logger.LogError(ex, $"Unexpected HTTP error. Will not retry page & returning results upto current page.");
+                        // ManualGraphCallClient has already logged this at error level, with the URL and the
+                        // response body - which is strictly more useful than anything we can add here. Log
+                        // only the paging consequence, at warning, so a single failed call produces a single
+                        // Application Insights exception record instead of three.
+                        logger.LogWarning($"Unexpected HTTP error on page {pageCount}: {ex.Message}. " +
+                            "Will not retry page & returning results upto current page.");
                         nextUrl = null;
                     }
                 }
