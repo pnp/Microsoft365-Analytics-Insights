@@ -72,6 +72,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             };
 
             List<CopilotUserCountLog> parsed;
+            var droppedRows = 0;
             try
             {
                 _logger.LogInformation($"Loading Copilot aggregate report {request}...");
@@ -100,6 +101,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 parsed = isTrend
                     ? CopilotUserCountReportParser.ParseTrend(table)
                     : CopilotUserCountReportParser.ParseSummary(table);
+
+                // Graph gives one row per app per CSV line, so anything short of that means lines were
+                // dropped (an unparseable date, say). That matters most for the one-off D180 history
+                // backfill: recording a partial parse as a clean import would mark the backfill complete,
+                // switch later runs to D28, and silently lose the missing history for good. Flagging it as an
+                // error instead keeps it retryable, and a retry is cheap.
+                var expectedRows = table.Rows.Count * apps.Count;
+                if (parsed.Count < expectedRows)
+                {
+                    droppedRows = expectedRows - parsed.Count;
+                }
             }
             catch (Exception ex)
             {
@@ -121,6 +133,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             var written = await UpsertOrRecordFailure(db, parsed, isTrend ? CopilotUserCountReportTypes.Trend : CopilotUserCountReportTypes.Summary, importLog);
             importLog.RowsSaved = written;
+
+            if (droppedRows > 0)
+            {
+                // Recorded as an error so this import doesn't count as a clean one (see HasCompletedTrendBackfill).
+                // The rows that DID parse are still saved above - partial data beats none.
+                importLog.Error = Truncate($"{droppedRows} report row(s) could not be parsed and were skipped; the import is incomplete and will be retried.", 1000);
+                _logger.LogWarning($"Copilot aggregate report {request}: {droppedRows} row(s) could not be parsed and were skipped. " +
+                    "The rows that parsed have been saved, and the import is marked incomplete so it is retried.");
+            }
+
             await SaveImportLog(db, importLog);
 
             _logger.LogInformation($"Copilot aggregate report {request}: parsed {parsed.Count} row(s), wrote {written} to SQL.");

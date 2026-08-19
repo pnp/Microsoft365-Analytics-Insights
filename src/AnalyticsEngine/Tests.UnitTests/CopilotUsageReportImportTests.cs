@@ -232,19 +232,29 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void CsvParser_PreservesNonLatinDisplayNames()
+        public void CsvParser_PreservesNonLatinText()
         {
-            // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data). Display
-            // names routinely contain non-Latin scripts, and the columns are nvarchar for exactly this reason.
+            // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data). Display names
+            // and localised Microsoft app names routinely contain non-Latin scripts, and app_name is persisted
+            // as nvarchar for exactly this reason.
             const string greekName = "\u039A\u03B1\u03BB\u03B7\u03BC\u03AD\u03C1\u03B1 \u03BA\u03CC\u03C3\u03BC\u03B5";
             var csv =
                 "Report Refresh Date,User Principal Name,Display Name,Last Activity Date,Report Period\r\n" +
                 "2026-07-03,ada@contoso.onmicrosoft.com,\"" + greekName + "\",2026-07-02,28\r\n";
 
-            var row = CopilotUsageUserDetailParser.Parse(CsvReportTable.Parse(csv)).Single();
+            var table = CsvReportTable.Parse(csv);
 
-            Assert.AreEqual(greekName, row.DisplayName);
-            Assert.IsFalse(row.IsIdentityConcealed);
+            Assert.AreEqual(greekName, table.Rows.Single().GetString("Display Name"),
+                "Non-Latin text must survive CSV parsing byte-for-byte.");
+
+            // And through to a persisted column: app_name comes straight from the CSV header.
+            var aggregateCsv =
+                "Report Refresh Date,Report Period," + greekName + " Enabled Users," + greekName + " Active Users\r\n" +
+                "2026-07-03,28,250,44\r\n";
+
+            var appRow = CopilotUserCountReportParser.ParseSummary(CsvReportTable.Parse(aggregateCsv)).Single();
+            Assert.AreEqual(greekName, appRow.AppName);
+            Assert.AreEqual(44, appRow.ActiveUsers);
         }
 
         [TestMethod]
@@ -373,10 +383,8 @@ namespace Tests.UnitTests
             var upn = $"copilot.test.{Guid.NewGuid():N}@contoso.onmicrosoft.com";
             var storedUpn = upn.ToLowerInvariant();
 
-            var csv =
-                "Report Refresh Date,User Principal Name,Display Name,Last Activity Date,Report Period," +
-                "Prompts submitted for all apps,Active Usage Days for all apps,Copilot Agent Last Activity Date\r\n" +
-                $"{reportDate:yyyy-MM-dd},{upn},Ada Lovelace,{reportDate:yyyy-MM-dd},28,142,19,{reportDate:yyyy-MM-dd}\r\n";
+            var csv = UserDetailCsv(reportDate, upn, periodDays: 28, prompts: 142, activeDays: 19,
+                agentLastActivity: reportDate.ToString("yyyy-MM-dd"));
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -418,10 +426,7 @@ namespace Tests.UnitTests
             var knownUpn = $"copilot.test.{Guid.NewGuid():N}@contoso.onmicrosoft.com";
             var strangerUpn = $"copilot.test.{Guid.NewGuid():N}@not-this-tenant.example";
 
-            var csv =
-                "Report Refresh Date,User Principal Name,Display Name,Last Activity Date,Report Period," +
-                "Prompts submitted for all apps,Active Usage Days for all apps\r\n" +
-                $"{reportDate:yyyy-MM-dd},{strangerUpn},Stranger,{reportDate:yyyy-MM-dd},28,10,2\r\n";
+            var csv = UserDetailCsv(reportDate, strangerUpn, periodDays: 28, prompts: 10, activeDays: 2);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -525,9 +530,7 @@ namespace Tests.UnitTests
             var storedUpn = upn.ToLowerInvariant();
 
             string CsvFor(int periodDays, int prompts) =>
-                "Report Refresh Date,User Principal Name,Display Name,Last Activity Date,Report Period," +
-                "Prompts submitted for all apps,Active Usage Days for all apps\r\n" +
-                $"{reportDate:yyyy-MM-dd},{upn},Ada Lovelace,{reportDate:yyyy-MM-dd},{periodDays},{prompts},5\r\n";
+                UserDetailCsv(reportDate, upn, periodDays, prompts, activeDays: 5);
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -575,6 +578,41 @@ namespace Tests.UnitTests
                 Assert.IsFalse(string.IsNullOrEmpty(importLog.Error),
                     "The Health page must be able to see why the import refused to run.");
             }
+        }
+
+        // The complete version 2 header set. The loader requires ALL of it before it will treat a response as
+        // v2, so tests that exercise the loader must supply the real shape rather than a convenient subset.
+        private static readonly string[] UserDetailHeadersV2 =
+        {
+            "Report Refresh Date", "User Principal Name", "Display Name", "Last Activity Date",
+            "Copilot Chat Last Activity Date", "Microsoft Teams Copilot Last Activity Date",
+            "Word Copilot Last Activity Date", "Excel Copilot Last Activity Date",
+            "PowerPoint Copilot Last Activity Date", "Outlook Copilot Last Activity Date",
+            "OneNote Copilot Last Activity Date", "Loop Copilot Last Activity Date", "Report Period",
+            "Prompts submitted for all apps", "Prompts submitted for Copilot Chat (work)",
+            "Prompts submitted for Copilot Chat (web)", "Active Usage Days for all apps",
+            "Copilot Chat (work) Last Activity Date", "Copilot Chat (web) Last Activity Date",
+            "Microsoft 365 Copilot Last Activity Date", "Edge Last Activity Date",
+            "Copilot Agent Last Activity Date",
+        };
+
+        /// <summary>Builds a full-shape version 2 per-user CSV with a single row.</summary>
+        private static string UserDetailCsv(DateTime reportDate, string upn, int periodDays, int prompts, int activeDays,
+            string agentLastActivity = "")
+        {
+            var date = reportDate.ToString("yyyy-MM-dd");
+            var values = new[]
+            {
+                date, upn, "Ada Lovelace", date,
+                "", "", "", "", "", "", "", "",          // per-app v1 last-activity dates
+                periodDays.ToString(),
+                prompts.ToString(), "0", "0",
+                activeDays.ToString(),
+                "", "", "", "",                          // chat work/web, M365 Copilot, Edge
+                agentLastActivity,
+            };
+
+            return string.Join(",", UserDetailHeadersV2) + "\r\n" + string.Join(",", values) + "\r\n";
         }
 
         private static async Task ClearAggregateRowsFor(AnalyticsEntitiesContext db, DateTime reportDate)

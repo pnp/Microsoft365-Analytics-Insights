@@ -16,7 +16,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     {
         public DateTime ReportRefreshDate { get; set; }
         public string UserPrincipalName { get; set; }
-        public string DisplayName { get; set; }
         public int? ReportPeriodDays { get; set; }
         public DateTime? LastActivityDate { get; set; }
 
@@ -135,16 +134,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         };
 
         /// <summary>
-        /// True when the report contains the version 2 columns. Used to log loudly if we asked for v2 and
-        /// Graph answered with v1 anyway - otherwise the prompt columns would just silently be NULL.
+        /// Every column report version 2 adds. Version 2 is detected by requiring ALL of them: a response
+        /// missing only some is a shape we don't understand, and treating it as v2 would let the parser write
+        /// NULL over prompt counts a previous good import had stored.
+        /// </summary>
+        public static readonly string[] Version2Headers =
+        {
+            PromptsAllAppsHeader, PromptsChatWorkHeader, PromptsChatWebHeader, ActiveUsageDaysHeader,
+            ChatWorkLastActivityHeader, ChatWebLastActivityHeader, Microsoft365CopilotLastActivityHeader,
+            EdgeLastActivityHeader, AgentLastActivityHeader,
+        };
+
+        /// <summary>
+        /// True when the report contains the complete version 2 column set. Used to refuse a v1-shaped
+        /// response when v2 was requested - otherwise the prompt columns would just silently be NULL.
         /// </summary>
         public static bool IsVersion2(CsvReportTable table) => IsVersion2(table?.Headers);
 
         public static bool IsVersion2(IReadOnlyList<string> headers)
         {
             if (headers == null) return false;
-            return headers.Any(h => string.Equals(h, PromptsAllAppsHeader, StringComparison.OrdinalIgnoreCase))
-                || headers.Any(h => string.Equals(h, ActiveUsageDaysHeader, StringComparison.OrdinalIgnoreCase));
+            var present = new HashSet<string>(headers, StringComparer.OrdinalIgnoreCase);
+            return Version2Headers.All(present.Contains);
         }
 
         public static List<CopilotUsageUserDetailRow> Parse(CsvReportTable table)
@@ -178,7 +189,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             {
                 ReportRefreshDate = refreshDate.Value,
                 UserPrincipalName = upn,
-                DisplayName = row.GetString(DisplayNameHeader),
                 ReportPeriodDays = row.GetInt(ReportPeriodHeader),
                 LastActivityDate = row.GetDate(LastActivityDateHeader),
 

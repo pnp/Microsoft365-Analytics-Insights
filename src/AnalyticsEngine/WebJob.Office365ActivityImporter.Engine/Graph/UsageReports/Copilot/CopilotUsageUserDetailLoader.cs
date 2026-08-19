@@ -226,15 +226,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             // The period is part of the key: D7 and D28 describe the SAME user and date with different prompt
             // counts, active-day counts and last-activity values, so they are different facts, not a conflict.
             // A row that states no period and a request that can't supply one (ALL) has no key, so it is
-            // dropped rather than stored under the meaningless period 0.
+            // dropped rather than stored under the meaningless period 0. Filtered in place: at ~200k licensed
+            // users a second full-size list is a pointless copy of the whole report.
             var requestedPeriodDays = request.PeriodDays;
             var unkeyable = 0;
-            var keyable = new List<CopilotUsageUserDetailRow>(rows.Count);
-            foreach (var row in rows)
+            for (var i = rows.Count - 1; i >= 0; i--)
             {
-                row.ReportPeriodDays = row.ReportPeriodDays ?? requestedPeriodDays;
-                if (row.ReportPeriodDays.HasValue) keyable.Add(row);
-                else unkeyable++;
+                rows[i].ReportPeriodDays = rows[i].ReportPeriodDays ?? requestedPeriodDays;
+                if (!rows[i].ReportPeriodDays.HasValue)
+                {
+                    rows.RemoveAt(i);
+                    unkeyable++;
+                }
             }
 
             if (unkeyable > 0)
@@ -243,7 +246,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                     "A period is part of the row's identity, so it cannot be stored without one.");
             }
 
-            rows = keyable;
             if (rows.Count == 0) return 0;
 
             var reportDates = rows.Select(r => r.ReportRefreshDate.Date).Distinct().ToList();

@@ -123,8 +123,27 @@ namespace DataUtils.Http
                         _throttledCalls++;
                     }
 
+                    // Enforce the retry budget on EVERY 429, not just the ones without a 'retry-after'
+                    // header. Graph almost always sends that header, so the previous shape only counted
+                    // retries and never stopped: a persistently throttled endpoint looped forever, blocking
+                    // the calling import section indefinitely (which no exception handler can recover from).
+                    if (retries >= MaxRetries)
+                    {
+                        _logger.LogError($"{THROTTLE_ERROR}. Maximum retry attempts {MaxRetries} reached for {url}; giving up.");
+                        try
+                        {
+                            // Throws the usual HttpRequestException so callers handle it as a failed call.
+                            response.EnsureSuccessStatusCode();
+                        }
+                        finally
+                        {
+                            response.Dispose();
+                        }
+                    }
+
                     // Do we have a "retry-after" header & should we use it?
-                    var waitValue = response.GetRetryAfterHeaderSeconds();                    if (!ignoreRetryHeader && waitValue.HasValue)
+                    var waitValue = response.GetRetryAfterHeaderSeconds();
+                    if (!ignoreRetryHeader && waitValue.HasValue)
                     {
                         // Honour 'retry-after', but cap it: a single very large (or buggy) value would otherwise
                         // block this thread for that entire duration (we saw multi-minute stalls in usage-report
@@ -143,16 +162,7 @@ namespace DataUtils.Http
                     else
                     {
                         // We have to guess how much to back-off. Loop with ever-increasing wait.
-                        if (retries == MaxRetries)
-                        {
-                            // Don't try forever
-                            _logger.LogError($"{THROTTLE_ERROR}. Maximum retry attempts {MaxRetries} has been attempted for {url}.");
-
-                            // Allow normal HTTP exception & abort download
-                            response.EnsureSuccessStatusCode();
-                        }
-
-                        // We've not reached throttling max retries...keep retrying
+                        // (The retry budget itself is enforced above, for both header and no-header paths.)
                         _logger.LogInformation($"{THROTTLE_ERROR} downloading from REST. Waiting {retries} seconds to try again...");
 
                         secondsToWait = retries * 2;

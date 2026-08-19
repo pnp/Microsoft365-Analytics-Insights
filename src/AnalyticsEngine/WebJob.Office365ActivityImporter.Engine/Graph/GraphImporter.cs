@@ -175,10 +175,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 if (settings.ImportJobSettings.GraphCopilotUsageReports)
                 {
-                    // Refreshed on the same daily cadence as the other non-fresh Graph sections: Microsoft
-                    // publishes these reports roughly 48 hours behind, so polling more often costs Graph calls
-                    // and returns the same numbers.
-                    await RunGraphSectionIfDueAsync(GraphCopilotUsageReportsLastImportedKey, _settings.GraphMetadataImportIntervalHours, "Copilot usage reports",
+                    // Refreshed daily by default. Microsoft publishes these reports roughly 48 hours behind,
+                    // so polling more often costs a full re-download and re-process of every licensed user
+                    // and returns the same numbers. This uses its own interval rather than the shared
+                    // non-fresh Graph one, whose High-preset default is "every cycle".
+                    await RunGraphSectionIfDueAsync(GraphCopilotUsageReportsLastImportedKey, _settings.GraphCopilotUsageReportsIntervalHours, "Copilot usage reports",
                         () => ImportCopilotUsageReports(graphUserGroupsCache, userGroupsFilter));
                 }
                 else
