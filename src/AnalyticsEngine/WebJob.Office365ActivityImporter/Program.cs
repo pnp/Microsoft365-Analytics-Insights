@@ -19,6 +19,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
+using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
 
@@ -226,12 +227,30 @@ namespace WebJob.Office365ActivityImporter
                 graphLastRunStore = new InMemoryImportLastRunStore();
             }
 
+            // Negative cache of users with no Exchange mailbox, for the sent-emails import. Also created
+            // ONCE here so the in-memory fallback survives across cycles - a per-cycle instance would
+            // always start empty and re-check (and 404 on) every mailbox-less user every 10 minutes.
+            ISentEmailMailboxSkipList sentEmailMailboxSkipList;
+            if (!string.IsNullOrEmpty(configuredSettings.ConnectionStrings.RedisConnectionString))
+            {
+                sentEmailMailboxSkipList = new RedisSentEmailMailboxSkipList(
+                    configuredSettings.ConnectionStrings.RedisConnectionString,
+                    logger,
+                    tenantId: configuredSettings.TenantGUID.ToString(),
+                    clientId: configuredSettings.ClientID,
+                    clientSecret: configuredSettings.ClientSecret);
+            }
+            else
+            {
+                sentEmailMailboxSkipList = new InMemorySentEmailMailboxSkipList();
+            }
+
             // Run app
             while (runAgain)
             {
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore);
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
