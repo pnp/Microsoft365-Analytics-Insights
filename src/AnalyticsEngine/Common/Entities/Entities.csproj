@@ -109,7 +109,6 @@
     <Compile Include="LookupCaches\SPWebResolver.cs" />
     <Compile Include="LookupCaches\Discrete\StateOrProvinceCache.cs" />
     <Compile Include="LookupCaches\StreamLookupManager.cs" />
-    <Compile Include="LookupCaches\Discrete\TeamsAddOnCache.cs" />
     <Compile Include="LookupCaches\TeamsAndCallsDBLookupManager.cs" />
     <Compile Include="LookupCaches\Discrete\TeamsCache.cs" />
     <Compile Include="LookupCaches\Discrete\TeamsChannelCache.cs" />
@@ -162,8 +161,6 @@
     <Compile Include="Entities\Teams\ChannelStatsLog.cs" />
     <Compile Include="Entities\Teams\ChannelUserLog.cs" />
     <Compile Include="Entities\Teams\TeamDefinition.cs" />
-    <Compile Include="Entities\Teams\TeamAddOnLog.cs" />
-    <Compile Include="Entities\Teams\TeamAddOnDefinition.cs" />
     <Compile Include="Entities\Teams\TeamChannelDefinition.cs" />
     <Compile Include="Entities\Teams\TeamMembershipLog.cs" />
     <Compile Include="Entities\Teams\TeamOwners.cs" />
@@ -340,6 +337,10 @@
     <Compile Include="Migrations\202608190622001_CopilotDroppedAuditFields.Designer.cs">
       <DependentUpon>202608190622001_CopilotDroppedAuditFields.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202608191533567_DeprecateTeamsAddons.cs" />
+    <Compile Include="Migrations\202608191533567_DeprecateTeamsAddons.Designer.cs">
+      <DependentUpon>202608191533567_DeprecateTeamsAddons.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -510,6 +511,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608190622001_CopilotDroppedAuditFields.resx">
       <DependentUpon>202608190622001_CopilotDroppedAuditFields.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608191533567_DeprecateTeamsAddons.resx">
+      <DependentUpon>202608191533567_DeprecateTeamsAddons.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

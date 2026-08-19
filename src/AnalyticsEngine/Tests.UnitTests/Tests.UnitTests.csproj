@@ -188,7 +188,6 @@
     <Compile Include="FakeLoaderClasses\FakeActivityReportPersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeContentMetaDataLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
-    <Compile Include="FakeLoaderClasses\FakeUserAppLoader.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
     <Compile Include="SingleDateStoreTests.cs" />
     <Compile Include="AutoThrottleHttpClientTests.cs" />

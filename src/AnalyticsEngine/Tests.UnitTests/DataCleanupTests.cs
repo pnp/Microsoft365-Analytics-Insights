@@ -275,37 +275,11 @@ namespace Tests.UnitTests
             };
             db.TeamMembershipLogs.Add(membership);
 
-            var addonDef = new Common.Entities.Teams.TeamAddOnDefinition
-            {
-                GraphID = "AddOnGraph-" + ticks,
-                Name = "AddOn-" + ticks,
-                AddOnType = 1,
-                PublishedState = "published"
-            };
-            db.TeamAddOns.Add(addonDef);
-
-            var addonLog = new Common.Entities.Teams.TeamAddOnLog
-            {
-                Team = team,
-                AddOn = addonDef,
-                Date = oneYearAgo
-            };
-            db.TeamAddOnLogs.Add(addonLog);
-
-            var userAppLog = new Common.Entities.Teams.UserAppsLog
-            {
-                AddOn = addonDef,
-                User = user,
-                Date = oneYearAgo
-            };
-            db.UserAppsLog.Add(userAppLog);
-
             var tabDef = new TeamTabDefinition
             {
                 GraphID = "TabGraph-" + ticks,
                 Name = "Tab-" + ticks,
-                WebUrl = "https://tab/" + ticks,
-                TeamAddOnDefinition = addonDef
+                WebUrl = "https://tab/" + ticks
             };
             db.TeamTabDefinitions.Add(tabDef);
 

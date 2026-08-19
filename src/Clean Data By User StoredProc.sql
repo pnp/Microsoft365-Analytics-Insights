@@ -94,7 +94,10 @@ BEGIN
     DELETE FROM page_comments WHERE user_id = @UserId;
 
     -- Teams / user activity logs
-    DELETE FROM teams_addons_user_installed_log WHERE user_id = @UserId;
+    -- Deprecated Teams add-on tracking: the table is dropped by the DeprecateTeamsAddons migration
+    -- once empty, so only delete from it while it still exists.
+    IF OBJECT_ID('dbo.teams_addons_user_installed_log', 'U') IS NOT NULL
+        EXEC sp_executesql N'DELETE FROM teams_addons_user_installed_log WHERE user_id = @UserId;', N'@UserId INT', @UserId = @UserId;
     DELETE FROM teams_user_channel_reactions    WHERE user_id = @UserId;
     DELETE FROM team_membership_log             WHERE user_id = @UserId;
     DELETE FROM team_owners                     WHERE owner_id = @UserId;

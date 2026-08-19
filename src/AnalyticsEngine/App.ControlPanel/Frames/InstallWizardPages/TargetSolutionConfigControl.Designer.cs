@@ -35,7 +35,6 @@
             this.label2 = new System.Windows.Forms.Label();
             this.label1 = new System.Windows.Forms.Label();
             this.chkUserMetadata = new System.Windows.Forms.CheckBox();
-            this.chkUserApps = new System.Windows.Forms.CheckBox();
             this.chkWeb = new System.Windows.Forms.CheckBox();
             this.chkCalls = new System.Windows.Forms.CheckBox();
             this.pictureBox3 = new System.Windows.Forms.PictureBox();
@@ -76,7 +75,6 @@
             this.grpProductCfgInsights.Controls.Add(this.chkCopilot);
             this.grpProductCfgInsights.Controls.Add(this.chkSentEmails);
             this.grpProductCfgInsights.Controls.Add(this.chkPowerPlatform);
-            this.grpProductCfgInsights.Controls.Add(this.chkUserApps);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
             this.grpProductCfgInsights.Controls.Add(this.pictureBox3);
@@ -138,18 +136,6 @@
             this.chkUserMetadata.Text = "User Entra ID extended metadata";
             this.chkUserMetadata.UseVisualStyleBackColor = true;
             this.chkUserMetadata.CheckedChanged += new System.EventHandler(this.chkUserMetadata_CheckedChanged);
-            // 
-            // chkUserApps
-            // 
-            this.chkUserApps.AutoSize = true;
-            this.chkUserApps.Location = new System.Drawing.Point(4, 115);
-            this.chkUserApps.Margin = new System.Windows.Forms.Padding(2);
-            this.chkUserApps.Name = "chkUserApps";
-            this.chkUserApps.Size = new System.Drawing.Size(115, 17);
-            this.chkUserApps.TabIndex = 14;
-            this.chkUserApps.Text = "User installed apps";
-            this.chkUserApps.UseVisualStyleBackColor = true;
-            this.chkUserApps.CheckedChanged += new System.EventHandler(this.chkUserApps_CheckedChanged);
             // 
             // chkWeb
             // 
@@ -312,7 +298,6 @@
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.CheckBox chkUserMetadata;
-        private System.Windows.Forms.CheckBox chkUserApps;
         private System.Windows.Forms.CheckBox chkWeb;
         private System.Windows.Forms.CheckBox chkCalls;
         private System.Windows.Forms.PictureBox pictureBox3;

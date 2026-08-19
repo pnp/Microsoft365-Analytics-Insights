@@ -42,7 +42,7 @@ namespace Tests.UnitTests
         // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup,
         // IndexUsageReportSnapshots and IndexReportDateQueries are later, unrelated schema-only index
         // migrations, and CopilotDroppedAuditFields adds the Copilot audit columns/tables.
-        private const string LatestId = "202608190622001_CopilotDroppedAuditFields";
+        private const string LatestId = "202608191533567_DeprecateTeamsAddons";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

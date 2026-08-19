@@ -45,7 +45,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     this.Channels.Add(new ChannelWithReactions(c));
                 }
             this.Id = team.Id;
-            this.InstalledApps = team.InstalledApps;
         }
 
 
@@ -53,7 +52,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         #region Properties
 
-        public IEnumerable<TeamsAppInstallation> InstalledApps { get; set; }
         public List<ChannelWithReactions> Channels { get; set; } = new List<ChannelWithReactions>();
 
         public string DisplayName { get; set; } = string.Empty;
@@ -101,9 +99,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
             // Save members in each team
             await this.Users.SaveStatsForToday(this, lookupManager);
-
-            // Team apps
-            await this.InstalledApps.SaveStatsForToday(lookupManager, dbTeam);
 
             // Channels
             var dbChannels = new List<TeamChannel>();
@@ -235,13 +230,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     fullTeam.Users.Add(new BaseUser { UserPrincipalName = dbUser.UserPrincipalName });
                 }
             }
-
-            // Load apps
-            var appsPage = await context.GraphClient.Teams[teamId].InstalledApps.GetAsync(rc =>
-            {
-                rc.QueryParameters.Expand = new[] { "TeamsAppDefinition", "TeamsApp" };
-            });
-            fullTeam.InstalledApps = appsPage?.Value ?? new List<TeamsAppInstallation>();
 
             // Channels and tabs:
             var channelsLoaded = await context.GraphClient.Teams[teamId].Channels.GetAsync();

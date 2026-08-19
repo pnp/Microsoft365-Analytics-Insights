@@ -159,16 +159,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 foreach (var tab in channel.Tabs)
                 {
-                    // Add-ins are saved previously so should find any add-ons now no problem
-                    TeamAddOnDefinition tabAddOn = null;
-                    if (tab.TeamsApp != null)
-                    {
-                        // Find/create app def. This should be already saved from team installed apps?
-                        tabAddOn = await lookupManager.GetTeamAddOnDefinition(tab.TeamsApp.Id, tab.TeamsApp.DisplayName);
-                    }
-
                     // Get tab def
-                    var tabDB = await lookupManager.GetOrCreateTeamTab(tab.Id, tab.DisplayName, tab.WebUrl, tabAddOn);
+                    var tabDB = await lookupManager.GetOrCreateTeamTab(tab.Id, tab.DisplayName, tab.WebUrl);
 
                     // Check for tab log for today (UTC: DB Date column is UTC; using local time
                     // straddles a midnight rollover and produces duplicate per-day rows).

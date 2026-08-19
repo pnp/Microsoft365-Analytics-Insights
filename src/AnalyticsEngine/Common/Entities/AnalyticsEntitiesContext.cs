@@ -113,7 +113,6 @@ namespace Common.Entities
 
 
             modelBuilder.Entity<TeamDefinition>().HasIndex(b => b.GraphID).IsUnique();
-            modelBuilder.Entity<TeamAddOnDefinition>().HasIndex(b => b.GraphID).IsUnique();
             modelBuilder.Entity<TeamChannel>().HasIndex(b => b.GraphID).IsUnique();
 
             modelBuilder.Entity<CallModality>().HasIndex(b => b.Name).IsUnique();
@@ -287,11 +286,8 @@ namespace Common.Entities
 
         public virtual DbSet<TeamDefinition> Teams { get; set; }
         public virtual DbSet<TeamOwners> TeamOwners { get; set; }
-        public virtual DbSet<TeamAddOnDefinition> TeamAddOns { get; set; }
         public virtual DbSet<TeamChannel> TeamChannels { get; set; }
         public virtual DbSet<TeamMembershipLog> TeamMembershipLogs { get; set; }
-        public virtual DbSet<TeamAddOnLog> TeamAddOnLogs { get; set; }
-        public virtual DbSet<UserAppsLog> UserAppsLog { get; set; }
         public virtual DbSet<GlobalTeamsUserUsageLog> TeamUserActivityLogs { get; set; }
         public virtual DbSet<GlobalTeamsUserDeviceUsageLog> TeamsUserDeviceUsageLog { get; set; }
         public virtual DbSet<AppPlatformUserActivityLog> AppPlatformUserUsageLog { get; set; }
