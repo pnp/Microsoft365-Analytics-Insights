@@ -43,7 +43,6 @@ namespace Tests.UnitTests
             var settings = new ImportTaskSettings();
             Assert.IsFalse(settings.Calls, "Calls should default to false");
             Assert.IsFalse(settings.GraphUsersMetadata, "GraphUsersMetadata should default to false");
-            Assert.IsFalse(settings.GraphUserApps, "GraphUserApps should default to false");
             Assert.IsFalse(settings.GraphUsageReports, "GraphUsageReports should default to false");
             Assert.IsFalse(settings.GraphTeams, "GraphTeams should default to false");
             Assert.IsFalse(settings.ActivityLog, "ActivityLog should default to false");
@@ -75,12 +74,11 @@ namespace Tests.UnitTests
         {
             // Parse honours =True for every [ImportProp] (opt-in model).
             var settings = new ImportTaskSettings(
-                "Calls=True;GraphUsersMetadata=True;GraphUserApps=True;GraphUsageReports=True;" +
+                "Calls=True;GraphUsersMetadata=True;GraphUsageReports=True;" +
                 "GraphTeams=True;ActivityLog=True;WebTraffic=True;SentEmails=True");
 
             Assert.IsTrue(settings.Calls);
             Assert.IsTrue(settings.GraphUsersMetadata);
-            Assert.IsTrue(settings.GraphUserApps);
             Assert.IsTrue(settings.GraphUsageReports);
             Assert.IsTrue(settings.GraphTeams);
             Assert.IsTrue(settings.ActivityLog);
@@ -152,7 +150,6 @@ namespace Tests.UnitTests
             {
                 Calls = false,
                 GraphUsersMetadata = true,
-                GraphUserApps = false,
                 GraphUsageReports = true,
                 GraphTeams = false,
                 ActivityLog = true,
@@ -165,7 +162,6 @@ namespace Tests.UnitTests
             Assert.IsTrue(reloaded.Equals(original), "All [ImportProp] values should round-trip exactly");
             Assert.AreEqual(original.Calls, reloaded.Calls);
             Assert.AreEqual(original.GraphUsersMetadata, reloaded.GraphUsersMetadata);
-            Assert.AreEqual(original.GraphUserApps, reloaded.GraphUserApps);
             Assert.AreEqual(original.GraphUsageReports, reloaded.GraphUsageReports);
             Assert.AreEqual(original.GraphTeams, reloaded.GraphTeams);
             Assert.AreEqual(original.ActivityLog, reloaded.ActivityLog);
@@ -179,7 +175,7 @@ namespace Tests.UnitTests
             var settingsString = new ImportTaskSettings().ToSettingsString();
             foreach (var propName in new[]
             {
-                "Calls", "GraphUsersMetadata", "GraphUserApps", "GraphUsageReports",
+                "Calls", "GraphUsersMetadata", "GraphUsageReports",
                 "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
             })
             {
@@ -195,13 +191,32 @@ namespace Tests.UnitTests
             var settingsString = new ImportTaskSettings().ToSettingsString();
             foreach (var propName in new[]
             {
-                "Calls", "GraphUsersMetadata", "GraphUserApps", "GraphUsageReports",
+                "Calls", "GraphUsersMetadata", "GraphUsageReports",
                 "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
             })
             {
                 Assert.IsTrue(settingsString.Contains(propName + "=False"),
                     $"Settings string should contain '{propName}=False' but was: {settingsString}");
             }
+        }
+
+        /// <summary>
+        /// Teams add-on / app-install tracking was deprecated and the GraphUserApps flag removed.
+        /// A config saved by an older installer still carries the token, so parsing must ignore it
+        /// (rather than throw) and must not resurrect the flag in the settings string.
+        /// </summary>
+        [TestMethod]
+        public void ImportTaskSettings_DeprecatedGraphUserAppsToken_IsIgnored()
+        {
+            // A legacy-only settings string must not enable anything.
+            Assert.IsFalse(new ImportTaskSettings("GraphUserApps=True").HaveSomethingToDo(),
+                "The deprecated GraphUserApps token must not enable any import");
+
+            // ...and must not break parsing of the tokens around it.
+            var settings = new ImportTaskSettings("GraphUserApps=True;GraphTeams=True");
+            Assert.IsTrue(settings.GraphTeams, "Neighbouring tokens must still parse");
+            Assert.IsFalse(settings.ToSettingsString().Contains("GraphUserApps"),
+                "Deprecated GraphUserApps must not be written back out");
         }
 
         [TestMethod]
@@ -243,7 +258,6 @@ namespace Tests.UnitTests
             // Enabling any single opt-in flag is enough to have work to do.
             Assert.IsTrue(new ImportTaskSettings { Calls = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { GraphUsersMetadata = true }.HaveSomethingToDo());
-            Assert.IsTrue(new ImportTaskSettings { GraphUserApps = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { GraphUsageReports = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { GraphTeams = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { ActivityLog = true }.HaveSomethingToDo());

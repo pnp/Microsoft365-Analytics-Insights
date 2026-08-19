@@ -443,7 +443,6 @@ namespace Web.AnalyticsWeb.Models.Health
                     if (config.ImportJobSettings.Copilot) section.EnabledImports.Add("Copilot");
                     if (config.ImportJobSettings.ImportPowerPlatform) section.EnabledImports.Add("Power Platform");
                     if (config.ImportJobSettings.GraphUsersMetadata) section.EnabledImports.Add("User metadata");
-                    if (config.ImportJobSettings.GraphUserApps) section.EnabledImports.Add("User apps");
                     if (config.ImportJobSettings.GraphUsageReports) section.EnabledImports.Add("Usage reports");
                     if (config.ImportJobSettings.GraphCopilotUsageReports) section.EnabledImports.Add("Copilot usage reports (Graph)");
                     if (config.ImportJobSettings.GraphTeams) section.EnabledImports.Add("Teams");

@@ -10,10 +10,8 @@ namespace Common.Entities.Entities.Teams
         [Column("url")]
         public string WebUrl { get; set; }
 
-        [Column("teams_addon_id")]
-        [ForeignKey(nameof(TeamAddOnDefinition))]
-        public int? TeamsAppDefinitionID { get; set; }
-
-        public TeamAddOnDefinition TeamAddOnDefinition { get; set; }
+        // Note: the underlying table still has a nullable "teams_addon_id" column left over from the
+        // deprecated Teams add-on tracking (see migration DeprecateTeamsAddons). It is deliberately not
+        // mapped: the add-on entities are gone, and dropping the column would rewrite a table we keep.
     }
 }

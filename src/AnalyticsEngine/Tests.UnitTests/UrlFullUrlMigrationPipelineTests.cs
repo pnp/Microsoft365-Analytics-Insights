@@ -41,8 +41,9 @@ namespace Tests.UnitTests
         // performs the urls.full_url nvarchar(850) conversion asserted below) still runs as part of the path;
         // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup,
         // IndexUsageReportSnapshots and IndexReportDateQueries are later, unrelated schema-only index
-        // migrations, and AddCopilotUsageReports only adds new Copilot usage-report tables.
-        private const string LatestId = "202608190725064_AddCopilotUsageReports";
+        // migrations, AddCopilotUsageReports adds the Copilot usage-report tables, and
+        // DeprecateTeamsAddons drops the Teams add-on tables when they are empty.
+        private const string LatestId = "202608191533567_DeprecateTeamsAddons";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

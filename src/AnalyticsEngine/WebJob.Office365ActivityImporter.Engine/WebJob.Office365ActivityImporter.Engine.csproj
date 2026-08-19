@@ -157,7 +157,6 @@
     <Compile Include="Graph\GraphServiceClientFactory.cs" />
     <Compile Include="Graph\ManualGraphCallClient.cs" />
     <Compile Include="Graph\Teams\O365Team.cs" />
-    <Compile Include="Graph\Teams\Extensions\ITeamInstalledAppsCollectionPageExtensions.cs" />
     <Compile Include="Graph\GraphLookupCache.cs" />
     <Compile Include="Graph\GraphImporter.cs" />
     <Compile Include="Graph\UsageReports\AbstractUserDailyActivityLoader.cs" />
@@ -186,10 +185,6 @@
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
-    <Compile Include="Graph\User\UserApps\AbstractUserAppLoader.cs" />
-    <Compile Include="Graph\User\UserApps\GraphAndSqlUserAppLoader.cs" />
-    <Compile Include="Graph\User\UserApps\Models.cs" />
-    <Compile Include="Graph\User\UserApps\UserAppLogUpdater.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
@@ -198,7 +193,6 @@
     <Compile Include="Graph\User\UserLicenseProcessor.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
-    <Compile Include="Graph\User\UserTeamApp.cs" />
     <Compile Include="OAuthContext.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Entities\TimePeriod.cs" />
