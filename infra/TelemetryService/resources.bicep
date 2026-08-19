@@ -442,6 +442,19 @@ resource easyAuthSettings 'Microsoft.Web/sites/config@2024-04-01' = {
             azureAdClientId
             'api://${azureAdClientId}'
           ]
+          // MUST be set explicitly. With no defaultAuthorizationPolicy the platform
+          // materialises allowed_client_applications as an EMPTY array, and EasyAuth reads
+          // an empty allow-list as "permit nothing" - so it authenticates the caller and
+          // then rejects it with a bare 403 before the request ever reaches the app.
+          // The symptom is baffling: anonymous requests succeed (AllowAnonymous) and a
+          // token with a bad signature also succeeds (it fails validation, so it is treated
+          // as anonymous), while a perfectly valid token is the only thing that gets a 403.
+          // The SPA client is this same registration, so allow it explicitly.
+          defaultAuthorizationPolicy: {
+            allowedApplications: [
+              azureAdClientId
+            ]
+          }
         }
       }
     }
