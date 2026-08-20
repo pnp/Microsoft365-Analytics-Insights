@@ -1,6 +1,7 @@
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
+using Web.Auth;
 using Web.Startup;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,7 +23,20 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNEC
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
-builder.Services.AddAuthorization();
+
+// Registers Microsoft.Identity.Web's ScopeAuthorizationHandler. Without it a ScopeAuthorizationRequirement
+// has nothing to evaluate it, so any scope check silently passes.
+builder.Services.AddRequiredScopeAuthorization();
+
+builder.Services.AddAuthorization(options =>
+{
+    // Role and scope are deliberately combined into a single policy - see DashboardAuthorization.PolicyName
+    // for why [Authorize(Roles = ...)] together with [RequiredScope(...)] only enforces the role.
+    options.AddPolicy(DashboardAuthorization.PolicyName, policy => policy
+        .RequireAuthenticatedUser()
+        .RequireRole(DashboardAuthorization.RequiredRole)
+        .RequireScope(DashboardAuthorization.RequiredScope));
+});
 
 // Config, Cosmos, telemetry store and dashboard services (see TelemetryServiceCollectionExtensions).
 builder.Services.AddTelemetryServices(builder.Configuration);
