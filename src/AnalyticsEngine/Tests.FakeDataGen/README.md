@@ -116,6 +116,36 @@ entire generated data set in the EF change tracker.
 the source data before compiling, or clear/rebuild previously compiled fake-data
 weeks before re-running the weekly procedure.
 
+### Copilot prompt history (AI interaction history)
+
+`CopilotInteractionHistoryGenerator` fills the per-turn interaction-history tables that the
+Graph `getAllEnterpriseInteractions` import writes, so **interaction reports can be built and
+measured without a real tenant**. It writes sessions, interactions, the five lookups, key-phrase
+links, per-user watermarks and an import-log row.
+
+It generates report *shape*, not uniform noise:
+
+- **Real turns.** Every `userPrompt` is followed by an `aiResponse` sharing its `request_id`, which is
+  what makes turn counts and prompt-to-response ratios meaningful. `response_latency_ms` is set on the
+  response only - never the prompt - matching what the importer stores. Latency has a deliberate long
+  tail so percentile reports have something to show.
+- **Prompt-only enrichment.** Sentiment, language and key phrases land on `userPrompt` rows only,
+  because the importer never scores Copilot's own output. A report that averaged sentiment across all
+  rows would look correct against uniform data and be wrong in production.
+- **Shared threads.** A configurable share of conversations exist under the same `session_ref` for two
+  users - a Teams meeting Copilot session in more than one participant's history. That is why the
+  sessions table is unique on (user, ref) rather than ref alone.
+- **Skew.** App class, device and locale are weighted and turns-per-conversation varies, so "top N"
+  reports have something to rank.
+- **Unicode.** Locales and key phrases include Greek, so a truncation or collation bug surfaces here
+  rather than in a customer tenant.
+
+**No prompt or response text is generated or stored.** The real import keeps only counts, so this keeps
+only counts; the sole free text is topical key phrases of the kind Azure AI Language returns.
+
+Prompts for users, conversations per user, turns per conversation, window, enrichment percentage and
+shared-thread percentage. Roughly `users x conversations x turns x 2` interaction rows.
+
 ### Combined profiling data
 
 The combined option prompts once for the event count, shared user count, and date
