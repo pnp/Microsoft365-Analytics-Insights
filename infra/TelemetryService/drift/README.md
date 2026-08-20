@@ -109,6 +109,14 @@ node filter-what-if.mjs what-if.json drift-ignore.json
 node --test          # the filter's own tests
 ```
 
-`what-if.json` contains subscription and resource-group identifiers. Do not commit it or paste it
-into an issue — the filter's summary output is deliberately trimmed to the provider-relative
-resource id for the same reason.
+`what-if.json` contains subscription and resource-group identifiers, and — because the check runs with
+`--result-format FullResourcePayloads` — full resource payloads including app settings. Do not commit
+it or paste it into an issue.
+
+The job summary is safe to publish: `shortenResourceId` trims every reported id to its
+provider-relative part, and **string values are redacted**, leaving only the property path, the change
+type, and the value's type/size. Booleans and numbers are published because they cannot carry a
+secret and they are usually the finding itself (`alwaysOn: false -> true`). Without that redaction a
+drifted app-settings resource would print the Application Insights connection string — instrumentation
+key included — into a world-readable summary on a public repository. There are regression tests for
+both behaviours.
