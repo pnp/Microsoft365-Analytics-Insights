@@ -158,6 +158,40 @@ BEGIN
     WHERE event_id IN (SELECT Id FROM #UserEvents);
 
     -------------------------------------------------
+    -- Copilot AI interaction history (optional import)
+    --
+    -- Deleted explicitly rather than left to cascade. copilot_interactions.user_id is intentionally a
+    -- non-cascading FK (users already reach interactions via copilot_interaction_sessions, and two
+    -- cascade paths to the same table is something SQL Server rejects outright), so relying on cascade
+    -- ordering here would be fragile. Leaf -> parent order: key phrases, interactions, then sessions.
+    -- The shared keywords/languages lookups are left alone - they are tenant-wide vocabulary, not user
+    -- data, and are referenced by Teams channel analysis too.
+    -------------------------------------------------
+    IF OBJECT_ID('dbo.copilot_interaction_keywords', 'U') IS NOT NULL
+        DELETE k
+        FROM copilot_interaction_keywords k
+        INNER JOIN copilot_interactions i ON i.id = k.interaction_id
+        WHERE i.user_id = @UserId;
+
+    IF OBJECT_ID('dbo.copilot_interactions', 'U') IS NOT NULL
+        DELETE FROM copilot_interactions WHERE user_id = @UserId;
+
+    IF OBJECT_ID('dbo.copilot_interaction_sessions', 'U') IS NOT NULL
+        DELETE FROM copilot_interaction_sessions WHERE user_id = @UserId;
+
+    IF OBJECT_ID('dbo.copilot_interaction_user_watermarks', 'U') IS NOT NULL
+        DELETE FROM copilot_interaction_user_watermarks WHERE user_id = @UserId;
+
+    -- An extracted key phrase can amount to a whole short prompt, so purging a user must not leave their
+    -- phrases behind. Only phrases now referenced by nothing are removed - the keywords table is shared
+    -- with Teams channel analysis, so both referencing tables are checked.
+    IF OBJECT_ID('dbo.copilot_interaction_keywords', 'U') IS NOT NULL
+        DELETE k
+        FROM keywords k
+        WHERE NOT EXISTS (SELECT 1 FROM copilot_interaction_keywords ck WHERE ck.keyword_id = k.id)
+          AND NOT EXISTS (SELECT 1 FROM teams_channel_stats_log_keywords tk WHERE tk.keyword_id = k.id);
+
+    -------------------------------------------------
     -- Other event metadata (add more if needed)
     -------------------------------------------------
     DELETE FROM event_meta_sharepoint WHERE event_id IN (SELECT Id FROM #UserEvents);

@@ -1,6 +1,7 @@
 using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
+using Common.Entities.Entities.Copilot;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Entities.UsageReports;
 using Common.Entities.Entities.Email;
@@ -190,8 +191,7 @@ namespace Common.Entities
              .IsUnique();
 
             // Power Platform lookups - unique by external id so we don't duplicate apps/flows/environments
-            modelBuilder.Entity<PowerApp>().HasIndex(p => p.AppId).IsUnique();
-            modelBuilder.Entity<PowerAutomateFlow>().HasIndex(f => f.FlowId).IsUnique();
+            modelBuilder.Entity<PowerApp>().HasIndex(p => p.AppId).IsUnique();            modelBuilder.Entity<PowerAutomateFlow>().HasIndex(f => f.FlowId).IsUnique();
             modelBuilder.Entity<PowerAppEnvironment>().HasIndex(e => e.EnvironmentId).IsUnique();
             modelBuilder.Entity<PowerPlatformClientType>().HasIndex(t => t.Name).IsUnique();
             modelBuilder.Entity<PowerPlatformConnector>().HasIndex(c => c.Name).IsUnique();
@@ -253,6 +253,71 @@ namespace Common.Entities
             modelBuilder.Entity<CopilotUsageUserActivityLog>()
              .HasIndex(c => new { c.Date, c.UserID, c.ReportPeriodDays })
              .IsUnique();
+
+            #region Copilot AI interaction history
+
+            // One row per Copilot thread per user. The key is (user, session_ref) rather than session_ref
+            // alone because a thread can be shared - a Teams meeting Copilot session, for instance, shows up
+            // in more than one participant's history. A globally unique session_ref would make the second
+            // pilot user's insert collide and abort the batch.
+            modelBuilder.Entity<CopilotInteractionSession>()
+             .HasIndex(s => new { s.UserId, s.SessionRef })
+             .IsUnique();
+
+            // Non-unique index on session_ref on its own, so joining back to copilot_chats.thread_id (which
+            // doesn't know about our user id) still seeks rather than scans.
+            modelBuilder.Entity<CopilotInteractionSession>()
+             .HasIndex(s => s.SessionRef);
+
+            // The importer's idempotency guarantee. It deliberately re-reads a few seconds either side of
+            // each user's watermark (Graph's createdDateTime filter is a strict 'gt', so without the overlap
+            // a second interaction created in the same second as the watermark would be lost for good). The
+            // re-read rows are filtered out by an existence check on this key; the unique constraint is the
+            // backstop if two cycles ever overlap.
+            modelBuilder.Entity<CopilotInteraction>()
+             .HasIndex(i => new { i.SessionId, i.GraphInteractionId })
+             .IsUnique();
+
+            // Reporting is always a date range, usually sliced by user.
+            modelBuilder.Entity<CopilotInteraction>()
+             .HasIndex(i => new { i.UserId, i.CreatedUtc });
+
+            modelBuilder.Entity<CopilotInteraction>()
+             .HasIndex(i => i.CreatedUtc);
+
+            // Pairing a prompt with its response across import batches.
+            modelBuilder.Entity<CopilotInteraction>()
+             .HasIndex(i => i.RequestId);
+
+            // user_id here is denormalised from the session purely so per-user reporting doesn't need a
+            // join. Cascade must be off: users -> sessions -> interactions is already a delete path, and
+            // adding users -> interactions on top gives SQL Server two cascade paths to the same table,
+            // which it rejects outright ("may cause cycles or multiple cascade paths"). Interactions are
+            // still removed with their session, and CleanDataByUser deletes them explicitly by user.
+            modelBuilder.Entity<CopilotInteraction>()
+             .HasRequired(i => i.User)
+             .WithMany()
+             .HasForeignKey(i => i.UserId)
+             .WillCascadeOnDelete(false);
+
+            // Stops a prompt accumulating duplicate key phrases if it is ever re-scored.
+            modelBuilder.Entity<CopilotInteractionKeyword>()
+             .HasIndex(k => new { k.InteractionId, k.KeyWordId })
+             .IsUnique();
+
+            // One watermark per user - the importer's read-modify-write depends on it.
+            modelBuilder.Entity<CopilotInteractionUserWatermark>()
+             .HasIndex(w => w.UserId)
+             .IsUnique();
+
+            // Lookup tables are resolved by name, so duplicates would silently split reporting.
+            modelBuilder.Entity<CopilotInteractionAppClass>().HasIndex(t => t.Name).IsUnique();
+            modelBuilder.Entity<CopilotInteractionConversationType>().HasIndex(t => t.Name).IsUnique();
+            modelBuilder.Entity<CopilotInteractionTypeLookup>().HasIndex(t => t.Name).IsUnique();
+            modelBuilder.Entity<CopilotInteractionLocale>().HasIndex(t => t.Name).IsUnique();
+            modelBuilder.Entity<CopilotInteractionDevice>().HasIndex(t => t.Name).IsUnique();
+
+            #endregion
 
             base.OnModelCreating(modelBuilder);
         }
@@ -434,6 +499,31 @@ namespace Common.Entities
         public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
         public virtual DbSet<SentEmail> SentEmails { get; set; }
         public virtual DbSet<SentEmailRecipient> SentEmailRecipients { get; set; }
+        #endregion
+
+        #region Copilot AI interaction history (optional import)
+
+        /// <summary>Copilot conversation threads. <c>session_ref</c> joins to <c>copilot_chats.thread_id</c>.</summary>
+        public virtual DbSet<CopilotInteractionSession> CopilotInteractionSessions { get; set; }
+
+        /// <summary>Per-turn Copilot interaction statistics. Never contains prompt or response text.</summary>
+        public virtual DbSet<CopilotInteraction> CopilotInteractions { get; set; }
+
+        public virtual DbSet<CopilotInteractionAppClass> CopilotInteractionAppClasses { get; set; }
+        public virtual DbSet<CopilotInteractionConversationType> CopilotInteractionConversationTypes { get; set; }
+        public virtual DbSet<CopilotInteractionTypeLookup> CopilotInteractionTypes { get; set; }
+        public virtual DbSet<CopilotInteractionLocale> CopilotInteractionLocales { get; set; }
+        public virtual DbSet<CopilotInteractionDevice> CopilotInteractionDevices { get; set; }
+
+        /// <summary>Key phrases extracted from user prompts when cognitive services are enabled.</summary>
+        public virtual DbSet<CopilotInteractionKeyword> CopilotInteractionKeywords { get; set; }
+
+        /// <summary>Per-user incremental import state and back-off list.</summary>
+        public virtual DbSet<CopilotInteractionUserWatermark> CopilotInteractionUserWatermarks { get; set; }
+
+        /// <summary>Per-run diagnostics for the interaction-history import.</summary>
+        public virtual DbSet<CopilotInteractionImportLog> CopilotInteractionImportLogs { get; set; }
+
         #endregion
     }
 

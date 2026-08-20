@@ -112,6 +112,25 @@ namespace Common.Entities
         [ImportProp]
         public bool GraphCopilotUsageReports { get; set; } = false;
 
+        /// <summary>
+        /// Import Microsoft 365 Copilot AI interaction history from Microsoft Graph
+        /// (<c>/copilot/users/{id}/interactionHistory/getAllEnterpriseInteractions</c>).
+        /// </summary>
+        /// <remarks>
+        /// Opt-in and off by default, deliberately more so than the other flags. The endpoint is
+        /// <b>one HTTP call per user</b>, so at the ~200k-user design target an unscoped run would mean 200k
+        /// Graph calls per cycle - it must be pointed at a pilot group via <c>UserGroupsFilter</c> and is
+        /// additionally capped per cycle. It also needs the <c>AiEnterpriseInteraction.Read.All</c>
+        /// application permission, which is not granted by the installer and requires explicit admin consent,
+        /// and the <c>M365_COPILOT_BUSINESS_CHAT</c> service plan on each user.
+        /// <para>
+        /// Note the importer never stores prompt or response text - only derived statistics, plus sentiment
+        /// and key phrases when cognitive services are configured.
+        /// </para>
+        /// </remarks>
+        [ImportProp]
+        public bool CopilotInteractionHistory { get; set; } = false;
+
         IEnumerable<PropertyInfo> GetImportProps()
         {
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));

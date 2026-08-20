@@ -85,6 +85,47 @@ delete from yammer_device_activity_log where [date] < @archiveDateMax
 delete from yammer_group_activity_log where [date] < @archiveDateMax
 delete from yammer_user_activity_log where [date] < @archiveDateMax
 
+-- Copilot AI interaction history (optional import).
+--
+-- Retention matters more here than anywhere else in the schema: these rows describe how individual
+-- people used Copilot, turn by turn. No prompt or response text is ever stored - only counts, plus a
+-- sentiment score and key phrases when cognitive services are enabled - but the rows are still
+-- personal usage data and should not be kept indefinitely.
+--
+-- Guarded with OBJECT_ID because the tables only exist once the AddCopilotInteractionHistory migration
+-- has been applied, and this script is run against databases at a range of versions.
+-- Leaf -> parent order: key phrases, interactions, then the sessions left with nothing in them.
+if OBJECT_ID('dbo.copilot_interaction_keywords', 'U') is not null
+	delete k from copilot_interaction_keywords k
+		inner join copilot_interactions i on i.id = k.interaction_id
+		where i.created_utc < @archiveDateMax
+
+if OBJECT_ID('dbo.copilot_interactions', 'U') is not null
+	delete from copilot_interactions where created_utc < @archiveDateMax
+
+-- Sessions are only removed once every interaction in them has aged out, so a long-running
+-- conversation that is still partly inside the retention window keeps its thread.
+if OBJECT_ID('dbo.copilot_interaction_sessions', 'U') is not null
+	delete s from copilot_interaction_sessions s
+		where not exists (select 1 from copilot_interactions i where i.session_id = s.id)
+
+-- Import run diagnostics are pure operational telemetry.
+if OBJECT_ID('dbo.copilot_interaction_import_log', 'U') is not null
+	delete from copilot_interaction_import_log where run_started_utc < @archiveDateMax
+
+-- Extracted key phrases can be a whole short prompt, so a phrase left behind after its interaction has
+-- aged out would outlive the data it came from. Remove any keyword no longer referenced by anything.
+-- The keywords table is shared with Teams channel analysis, so both referencing tables are checked.
+if OBJECT_ID('dbo.copilot_interaction_keywords', 'U') is not null
+	delete k from keywords k
+		where not exists (select 1 from copilot_interaction_keywords ck where ck.keyword_id = k.id)
+		  and not exists (select 1 from teams_channel_stats_log_keywords tk where tk.keyword_id = k.id)
+
+-- NB: copilot_interaction_user_watermarks is deliberately NOT cleaned here. It holds no interaction
+-- data (just "how far did we get for this user"), and deleting it would make the next import re-scan
+-- each user's whole backfill window - one Graph call per user, which is the exact cost this feature
+-- is designed to avoid.
+
 -- commit/rollback
 --rollback transaction archive
 

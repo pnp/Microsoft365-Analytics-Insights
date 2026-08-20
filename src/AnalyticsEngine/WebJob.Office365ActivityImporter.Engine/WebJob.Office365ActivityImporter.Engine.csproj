@@ -124,6 +124,13 @@
     <Compile Include="Entities\WebActivityReportSet.cs" />
     <Compile Include="ExceptionHandler.cs" />
     <Compile Include="Graph\DeltaValueProvider.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\GraphAiInteractionSourceLoader.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\GraphPilotGroupMemberResolver.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\IAiInteractionSourceLoader.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\InteractionCognitiveEnricher.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\InteractionStatsExtractor.cs" />
     <Compile Include="Graph\Email\DeltaTokenStores.cs" />
     <Compile Include="Graph\Email\GraphSentEmailSourceLoader.cs" />
     <Compile Include="Graph\Email\ISentEmailSentimentScorer.cs" />
@@ -248,6 +255,7 @@
   <ItemGroup>
     <None Include="App.config" />
     <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
+    <None Include="Graph\Copilot\InteractionHistory\readme.md" />
     <None Include="Graph\Email\readme.md" />
     <None Include="Graph\User\REFACTORING_SUMMARY.md" />
   </ItemGroup>
