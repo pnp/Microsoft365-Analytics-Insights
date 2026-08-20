@@ -21,17 +21,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
     /// <para>
     /// <b>Cost model.</b> <c>getAllEnterpriseInteractions</c> has no tenant-wide or delta form, so this
     /// import costs at least one HTTP call for every user it looks at. At the product's ~200k-user design
-    /// target that would be 200k calls per cycle, which is why the import is off by default and why four
-    /// independent brakes apply, in this order:
+    /// target that would be 200k calls per cycle if it were unbounded, which is why the import is off by
+    /// default and why these brakes apply, in this order:
     /// <list type="number">
-    /// <item>the <c>CopilotInteractionHistory</c> feature toggle (off by default);</item>
-    /// <item>the <c>UserGroupsFilter</c> scope, which must be set - an unscoped run is refused unless
-    /// <c>CopilotInteractionHistoryAllowUnscoped</c> is explicitly turned on;</item>
+    /// <item>the <c>CopilotInteractionHistory</c> feature toggle (off by default), and the
+    /// <c>AiEnterpriseInteraction.Read.All</c> application permission, which the installer does not grant.
+    /// Those two are the real controls: to stop this import, turn the workload off or withhold the
+    /// permission;</item>
+    /// <item><c>UserGroupsFilter</c>, an <b>optional</b> narrowing to one or more Entra ID groups. Recommended
+    /// for a pilot, but not required - without it every enabled user is eligible, still subject to the
+    /// ceiling below;</item>
     /// <item><c>CopilotInteractionHistoryMaxUsersPerCycle</c>, a hard per-cycle ceiling. Users are taken
     /// least-recently-run first, so a scope bigger than the cap is still covered - just round-robin over
     /// several cycles rather than all at once;</item>
     /// <item>a per-user back-off list, so users who return nothing (almost always because they have no
-    /// <c>M365_COPILOT_BUSINESS_CHAT</c> service plan) stop consuming the budget.</item>
+    /// <c>M365_COPILOT_BUSINESS_CHAT</c> service plan) stop consuming the budget;</item>
+    /// <item>the cadence gate (<c>CopilotInteractionHistoryIntervalHours</c>, daily by default).</item>
     /// </list>
     /// On top of that the import is incremental: each user has a watermark, so a steady-state cycle only asks
     /// for interactions created since the last successful run.
@@ -101,15 +106,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
         /// <summary>
         /// Runs one import cycle. Returns the run log that was persisted, or null when the import declined to
-        /// run at all (missing permission, or an unscoped configuration).
+        /// run at all (missing permission).
         /// </summary>
         public async Task<CopilotInteractionImportLog> ImportAsync()
         {
             _logger.LogInformation("Starting Copilot AI interaction history import...");
             var sw = Stopwatch.StartNew();
-
-            if (!ValidateScopeConfiguration())
-                return null;
 
             if (!await _sourceLoader.HasInteractionReadAccessAsync())
             {
@@ -125,31 +127,39 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
             try
             {
-                var scopedUsers = await ResolveScopedUsersAsync();
-                runLog.UsersInScope = scopedUsers.Count;
+                var due = await SelectDueUsersAsync(runLog);
 
-                if (scopedUsers.Count == 0)
+                if (runLog.UsersInScope == 0)
                 {
-                    _logger.LogWarning(
-                        $"No users matched the UserGroupsFilter ('{_settings.UserGroupsFilter}') for the Copilot " +
-                        "interaction history import, so there is nothing to do. Check the group name(s) - the filter " +
-                        "matches Entra ID group display names and supports * wildcards.");
+                    if (_userGroupsFilter.Patterns.Count > 0)
+                    {
+                        _logger.LogWarning(
+                            $"No users matched the UserGroupsFilter ('{_settings.UserGroupsFilter}') for the Copilot " +
+                            "interaction history import, so there is nothing to do. Check the group name(s) - the filter " +
+                            "matches Entra ID group display names and supports * wildcards.");
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "The Copilot interaction history import found no enabled users to look at, so there is " +
+                            "nothing to do.");
+                    }
                     return await FinishRunAsync(runLog, sw);
                 }
 
-                var due = await SelectDueUsersAsync(scopedUsers, runLog);
                 if (due.Count == 0)
                 {
                     _logger.LogInformation(
-                        $"Copilot interaction history: all {scopedUsers.Count} in-scope user(s) are inside their " +
+                        $"Copilot interaction history: all {runLog.UsersInScope} in-scope user(s) are inside their " +
                         "back-off window, so no Graph calls were made this cycle.");
                     return await FinishRunAsync(runLog, sw);
                 }
 
                 _logger.LogInformation(
-                    $"Copilot interaction history: {scopedUsers.Count} user(s) in scope, calling Graph for {due.Count} " +
-                    $"of them this cycle (cap {_settings.CopilotInteractionHistoryMaxUsersPerCycle}, least-recently-run " +
-                    $"first). Cognitive enrichment is {(_cognitiveEnricher.IsEnabled ? "enabled" : "disabled")}.");
+                    $"Copilot interaction history: {runLog.UsersInScope} user(s) in scope" +
+                    $"{(_userGroupsFilter.Patterns.Count > 0 ? $" (narrowed by UserGroupsFilter '{_settings.UserGroupsFilter}')" : " (no UserGroupsFilter set - every enabled user is eligible)")}, " +
+                    $"calling Graph for {due.Count} of them this cycle (cap {_settings.CopilotInteractionHistoryMaxUsersPerCycle}, " +
+                    $"least-recently-run first). Cognitive enrichment is {(_cognitiveEnricher.IsEnabled ? "enabled" : "disabled")}.");
 
                 for (int i = 0; i < due.Count; i += _userChunkSize)
                 {
@@ -170,79 +180,73 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
         #region Scope and scheduling
 
+
         /// <summary>
-        /// Refuses to run against an unbounded user set. Without this, an operator who ticks the box but
-        /// leaves <c>UserGroupsFilter</c> empty would silently start one Graph call per user in the tenant.
+        /// Picks the users to call Graph for this cycle: optionally narrowed by <c>UserGroupsFilter</c>, with
+        /// backed-off users dropped, ordered least-recently-run first, and capped.
         /// </summary>
-        internal bool ValidateScopeConfiguration()
+        /// <remarks>
+        /// <para>
+        /// <c>UserGroupsFilter</c> is an <b>optional narrowing</b>, not a precondition. With it set, only that
+        /// group's members are eligible; without it, every enabled user is. The controls that decide whether
+        /// this import runs at all are the workload toggle and the <c>AiEnterpriseInteraction.Read.All</c>
+        /// permission - not the filter.
+        /// </para>
+        /// <para>
+        /// Ordering by last run (nulls first) is what makes the cap safe: a scope bigger than the cap is still
+        /// covered, just spread over consecutive cycles, and never-imported users are always preferred over
+        /// ones already up to date.
+        /// </para>
+        /// <para>
+        /// The two paths are deliberately different. Narrowed, the member list is small, so users are fetched
+        /// by UPN in chunks and ordered in memory. Unnarrowed - now the default - the whole selection is done
+        /// in SQL: joined to the watermarks, back-off filtered, ordered and <c>TOP</c>-capped, so the cycle
+        /// materialises at most <c>CopilotInteractionHistoryMaxUsersPerCycle</c> users no matter how large the
+        /// directory is. Pulling 200,000 users back to filter them in memory would otherwise become the normal
+        /// case rather than the exception.
+        /// </para>
+        /// </remarks>
+        private async Task<List<UserImportState>> SelectDueUsersAsync(CopilotInteractionImportLog runLog)
         {
+            var now = DateTime.UtcNow;
+            var cap = _settings.CopilotInteractionHistoryMaxUsersPerCycle > 0
+                ? _settings.CopilotInteractionHistoryMaxUsersPerCycle
+                : AppConfig.DefaultCopilotInteractionHistoryMaxUsersPerCycle;
+
             if (_userGroupsFilter.Patterns.Count > 0)
-                return true;
+                return await SelectDueUsersInGroupsAsync(runLog, now, cap);
 
-            if (_settings.CopilotInteractionHistoryAllowUnscoped)
-            {
-                _logger.LogWarning(
-                    "Copilot interaction history is running UNSCOPED (no UserGroupsFilter) because " +
-                    "CopilotInteractionHistoryAllowUnscoped is true. This costs one Graph call per user in the " +
-                    $"database, limited to {_settings.CopilotInteractionHistoryMaxUsersPerCycle} per cycle. " +
-                    "Setting UserGroupsFilter to a pilot group is strongly recommended.");
-                return true;
-            }
-
-            _logger.LogWarning(
-                "Skipping the Copilot interaction history import: no UserGroupsFilter is configured. This import " +
-                "makes one Microsoft Graph call per user, so it must be pointed at a pilot group. Set the " +
-                "UserGroupsFilter app setting to one or more Entra ID group display names (';'-separated, '*' " +
-                "wildcards allowed), or set CopilotInteractionHistoryAllowUnscoped=true to accept the cost of " +
-                "scanning every user.");
-            return false;
+            return await SelectDueUsersAcrossDirectoryAsync(runLog, now, cap);
         }
 
         /// <summary>
-        /// Users eligible for the import: enabled accounts with a usable identifier that are members of a
-        /// group matching the filter.
+        /// Narrowed path: resolve the group's members from Graph, then fetch just those users.
         /// </summary>
         /// <remarks>
-        /// Resolution is deliberately group-first - list the pilot group's members, then intersect with the
-        /// users table - rather than asking "is this user in the group?" for every user in the database.
-        /// The latter is one Graph call per tenant user, which at the ~200k-user design target would spend
-        /// 200,000 calls just working out who to import, before reading a single interaction.
+        /// Resolution is deliberately group-first - list the group's members, then look those up in the users
+        /// table - rather than asking "is this user in the group?" for every user in the database. The latter
+        /// is one Graph call per tenant user, which at the ~200k-user design target would spend 200,000 calls
+        /// just working out who to import, before reading a single interaction.
         /// </remarks>
-        private async Task<List<Common.Entities.User>> ResolveScopedUsersAsync()
+        private async Task<List<UserImportState>> SelectDueUsersInGroupsAsync(
+            CopilotInteractionImportLog runLog, DateTime now, int cap)
         {
-            if (_userGroupsFilter.Patterns.Count == 0)
-            {
-                // Only reachable when the operator explicitly opted in to an unscoped run, which is the one
-                // case where we genuinely do want every enabled user.
-                using (var db = _dbContextFactory())
-                {
-                    return await db.users
-                        .Where(u => u.UserPrincipalName != null && u.UserPrincipalName != ""
-                                    && (u.AccountEnabled == null || u.AccountEnabled == true))
-                        .ToListAsync();
-                }
-            }
-
             if (_pilotGroupResolver == null)
             {
                 _logger.LogWarning(
-                    "A UserGroupsFilter is configured but no pilot-group resolver is available, so membership can't " +
-                    "be checked. Skipping the Copilot interaction history import rather than risk scanning every user.");
-                return new List<Common.Entities.User>();
+                    "A UserGroupsFilter is configured but no group resolver is available, so membership can't be " +
+                    "checked. Skipping this cycle rather than silently widening the scope to every user.");
+                return new List<UserImportState>();
             }
 
             var memberUpns = await _pilotGroupResolver.GetMemberUpnsAsync(_userGroupsFilter);
             if (memberUpns.Count == 0)
-                return new List<Common.Entities.User>();
+            {
+                runLog.UsersInScope = 0;
+                return new List<UserImportState>();
+            }
 
-            // Query BY the pilot members rather than loading the directory and filtering in memory. The old
-            // shape materialised every enabled user - ~200,000 tracked entities at the design baseline - just
-            // to keep the handful in a pilot group, every cycle. Chunked to stay inside SQL Server's
-            // 2100-parameter limit.
-            //
-            // Disabled accounts are still excluded here: they can't generate new Copilot interactions, so
-            // calling Graph for them would spend the per-cycle budget on guaranteed-empty results.
-            var inScope = new List<Common.Entities.User>();
+            var candidates = new List<UserImportState>();
             using (var db = _dbContextFactory())
             {
                 foreach (var upnChunk in ChunkStrings(memberUpns.ToList()))
@@ -250,65 +254,76 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                     var rows = await db.users
                         .Where(u => upnChunk.Contains(u.UserPrincipalName)
                                     && (u.AccountEnabled == null || u.AccountEnabled == true))
-                        .ToListAsync();
-
-                    inScope.AddRange(rows);
-                }
-            }
-
-            _logger.LogInformation(
-                $"Copilot interaction history: the pilot group(s) have {memberUpns.Count} member(s), of which " +
-                $"{inScope.Count} are enabled users present in the analytics database.");
-
-            return inScope;
-        }
-
-        /// <summary>
-        /// Picks which in-scope users to actually call Graph for this cycle: drops those still inside a
-        /// back-off window, then takes the least-recently-run first up to the cap.
-        /// </summary>
-        /// <remarks>
-        /// Ordering by last run (nulls first) is what makes the cap safe. A pilot group larger than the cap
-        /// still gets fully covered, just spread over consecutive cycles, and never-imported users are always
-        /// preferred over ones already up to date.
-        /// </remarks>
-        private async Task<List<UserImportState>> SelectDueUsersAsync(List<Common.Entities.User> scopedUsers, CopilotInteractionImportLog runLog)
-        {
-            var now = DateTime.UtcNow;
-            var userIds = scopedUsers.Select(u => u.ID).ToList();
-
-            var watermarksByUserId = new Dictionary<int, CopilotInteractionUserWatermark>();
-            using (var db = _dbContextFactory())
-            {
-                foreach (var idChunk in ChunkIds(userIds))
-                {
-                    var rows = await db.CopilotInteractionUserWatermarks
-                        .Where(w => idChunk.Contains(w.UserId))
+                        .GroupJoin(
+                            db.CopilotInteractionUserWatermarks,
+                            u => u.ID,
+                            w => w.UserId,
+                            (u, ws) => new { User = u, Watermark = ws.FirstOrDefault() })
                         .ToListAsync();
 
                     foreach (var row in rows)
-                        watermarksByUserId[row.UserId] = row;
+                        candidates.Add(new UserImportState { User = row.User, Watermark = row.Watermark });
                 }
             }
 
-            var due = new List<UserImportState>();
-            foreach (var user in scopedUsers)
-            {
-                watermarksByUserId.TryGetValue(user.ID, out var watermark);
+            runLog.UsersInScope = candidates.Count;
 
-                if (watermark?.SkipUntilUtc != null && watermark.SkipUntilUtc.Value > now)
+            var due = new List<UserImportState>(candidates.Count);
+            foreach (var candidate in candidates)
+            {
+                if (candidate.Watermark?.SkipUntilUtc != null && candidate.Watermark.SkipUntilUtc.Value > now)
                 {
                     runLog.UsersSkipped++;
                     continue;
                 }
-
-                due.Add(new UserImportState { User = user, Watermark = watermark });
+                due.Add(candidate);
             }
 
             return due
                 .OrderBy(d => d.Watermark?.LastRunUtc ?? DateTime.MinValue)
-                .Take(_settings.CopilotInteractionHistoryMaxUsersPerCycle)
+                .Take(cap)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Unnarrowed path: every enabled user is eligible, but the selection happens in SQL so only the
+        /// capped number of users is ever materialised.
+        /// </summary>
+        private async Task<List<UserImportState>> SelectDueUsersAcrossDirectoryAsync(
+            CopilotInteractionImportLog runLog, DateTime now, int cap)
+        {
+            using (var db = _dbContextFactory())
+            {
+                var eligible = db.users
+                    .Where(u => u.UserPrincipalName != null && u.UserPrincipalName != ""
+                                && (u.AccountEnabled == null || u.AccountEnabled == true));
+
+                // Reported for the run log so an operator can see the ratio of scope to per-cycle budget.
+                // One COUNT per cycle (daily by default) against the Graph calls that follow it.
+                runLog.UsersInScope = await eligible.CountAsync();
+
+                if (runLog.UsersInScope == 0)
+                    return new List<UserImportState>();
+
+                // Back-off, ordering and the cap all resolve server-side: SQL Server sorts NULL LastRunUtc
+                // first ascending, which is exactly the "never imported goes first" rule.
+                var rows = await eligible
+                    .GroupJoin(
+                        db.CopilotInteractionUserWatermarks,
+                        u => u.ID,
+                        w => w.UserId,
+                        (u, ws) => new { User = u, Watermark = ws.FirstOrDefault() })
+                    .Where(x => x.Watermark == null
+                                || x.Watermark.SkipUntilUtc == null
+                                || x.Watermark.SkipUntilUtc <= now)
+                    .OrderBy(x => x.Watermark.LastRunUtc)
+                    .Take(cap)
+                    .ToListAsync();
+
+                return rows
+                    .Select(r => new UserImportState { User = r.User, Watermark = r.Watermark })
+                    .ToList();
+            }
         }
 
         #endregion
