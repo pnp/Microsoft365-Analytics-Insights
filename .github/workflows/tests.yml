@@ -183,3 +183,8 @@ jobs:
           vstestLocation: C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\Extensions\\TestPlatform\\vstest.console.exe
         env:
           Configuration: ${{ matrix.configuration }}
+          # DownloadLatestReleaseZipsHaveContent calls the GitHub REST API. Anonymous requests are limited
+          # to 60/hour per IP and Actions runners share outbound addresses, so the budget is often already
+          # spent and the API answers 403 - failing the required check for reasons unrelated to the change.
+          # The built-in token raises it to 5,000/hour. Read-only public metadata; no extra permission needed.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
