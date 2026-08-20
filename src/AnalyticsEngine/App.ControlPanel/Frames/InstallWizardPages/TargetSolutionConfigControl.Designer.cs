@@ -48,6 +48,7 @@
             this.chkSentEmails = new System.Windows.Forms.CheckBox();
             this.chkPowerPlatform = new System.Windows.Forms.CheckBox();
             this.chkCopilotUsageReports = new System.Windows.Forms.CheckBox();
+            this.chkCopilotInteractionHistory = new System.Windows.Forms.CheckBox();
             this.pnlSolutionSelectionContainer.SuspendLayout();
             this.grpProductCfgInsights.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).BeginInit();
@@ -77,6 +78,7 @@
             this.grpProductCfgInsights.Controls.Add(this.chkSentEmails);
             this.grpProductCfgInsights.Controls.Add(this.chkPowerPlatform);
             this.grpProductCfgInsights.Controls.Add(this.chkCopilotUsageReports);
+            this.grpProductCfgInsights.Controls.Add(this.chkCopilotInteractionHistory);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
             this.grpProductCfgInsights.Controls.Add(this.pictureBox3);
@@ -273,6 +275,17 @@
             this.chkCopilotUsageReports.Text = "Copilot usage reports (Microsoft Graph)";
             this.chkCopilotUsageReports.UseVisualStyleBackColor = true;
             // 
+            // chkCopilotInteractionHistory
+            // 
+            this.chkCopilotInteractionHistory.AutoSize = true;
+            this.chkCopilotInteractionHistory.Location = new System.Drawing.Point(4, 325);
+            this.chkCopilotInteractionHistory.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotInteractionHistory.Name = "chkCopilotInteractionHistory";
+            this.chkCopilotInteractionHistory.Size = new System.Drawing.Size(280, 17);
+            this.chkCopilotInteractionHistory.TabIndex = 27;
+            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (pilot group only)";
+            this.chkCopilotInteractionHistory.UseVisualStyleBackColor = true;
+            // 
             // lblGUITargetsHeader
             // 
             this.lblGUITargetsHeader.AutoSize = true;
@@ -324,5 +337,6 @@
         private System.Windows.Forms.CheckBox chkSentEmails;
         private System.Windows.Forms.CheckBox chkPowerPlatform;
         private System.Windows.Forms.CheckBox chkCopilotUsageReports;
+        private System.Windows.Forms.CheckBox chkCopilotInteractionHistory;
     }
 }

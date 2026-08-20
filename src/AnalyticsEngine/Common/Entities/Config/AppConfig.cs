@@ -197,6 +197,34 @@ namespace Common.Entities.Config
                 && importStartStaggerMinutes >= 0
                 ? importStartStaggerMinutes
                 : 0;
+
+            // ---- Copilot AI interaction history (optional, one Graph call per user) -------------------
+            // This import is uniquely expensive, so every knob below exists to bound how much of a cycle
+            // it can consume. See CopilotInteractionHistoryImporter for how they combine.
+            this.CopilotInteractionHistoryIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryIntervalHours"), out var interactionIntervalHours)
+                && interactionIntervalHours >= 0
+                ? interactionIntervalHours
+                : DefaultCopilotInteractionHistoryIntervalHours;
+
+            this.CopilotInteractionHistoryMaxUsersPerCycle = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryMaxUsersPerCycle"), out var interactionMaxUsers)
+                && interactionMaxUsers > 0
+                ? interactionMaxUsers
+                : DefaultCopilotInteractionHistoryMaxUsersPerCycle;
+
+            this.CopilotInteractionHistoryMaxDaysBackOnFirstRun = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryMaxDaysBackOnFirstRun"), out var interactionMaxDaysBack)
+                && interactionMaxDaysBack > 0
+                ? interactionMaxDaysBack
+                : DefaultCopilotInteractionHistoryMaxDaysBackOnFirstRun;
+
+            this.CopilotInteractionHistoryEmptyUserBackOffHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryEmptyUserBackOffHours"), out var interactionBackOffHours)
+                && interactionBackOffHours >= 0
+                ? interactionBackOffHours
+                : DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
+
+            // Guard rail: refuse to run tenant-wide unless an admin has explicitly said so. Without this
+            // an empty UserGroupsFilter would silently mean "every user in the tenant".
+            this.CopilotInteractionHistoryAllowUnscoped = bool.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryAllowUnscoped"), out var interactionAllowUnscoped)
+                && interactionAllowUnscoped;
         }
 
         /// <summary>
@@ -458,6 +486,64 @@ namespace Common.Entities.Config
         /// the cycle pause. 0 disables.
         /// </summary>
         public int ImportStartStaggerMinutes { get; set; } = 0;
+
+        #region Copilot AI interaction history
+
+        /// <summary>Default cadence for the interaction-history import: once a day.</summary>
+        public const int DefaultCopilotInteractionHistoryIntervalHours = 24;
+
+        /// <summary>
+        /// Default per-cycle user cap. Deliberately small: the endpoint is one HTTP call per user and this
+        /// feature is meant for a pilot group, not a whole tenant.
+        /// </summary>
+        public const int DefaultCopilotInteractionHistoryMaxUsersPerCycle = 500;
+
+        /// <summary>Default backfill window the first time a user is seen.</summary>
+        public const int DefaultCopilotInteractionHistoryMaxDaysBackOnFirstRun = 30;
+
+        /// <summary>Default back-off before re-calling a user who keeps returning nothing.</summary>
+        public const int DefaultCopilotInteractionHistoryEmptyUserBackOffHours = 72;
+
+        /// <summary>
+        /// Minimum hours between Copilot interaction-history imports. Defaults to
+        /// <see cref="DefaultCopilotInteractionHistoryIntervalHours"/>; override with the
+        /// <c>CopilotInteractionHistoryIntervalHours</c> AppSetting. 0 disables the gate (runs every cycle),
+        /// which is only sensible for a very small pilot group.
+        /// </summary>
+        public int CopilotInteractionHistoryIntervalHours { get; set; } = DefaultCopilotInteractionHistoryIntervalHours;
+
+        /// <summary>
+        /// Hard ceiling on how many users the interaction-history import will call Graph for in a single
+        /// cycle. Users are processed oldest-watermark-first, so a scope larger than the cap still gets
+        /// covered - just over several cycles, round-robin. Override with
+        /// <c>CopilotInteractionHistoryMaxUsersPerCycle</c>.
+        /// </summary>
+        public int CopilotInteractionHistoryMaxUsersPerCycle { get; set; } = DefaultCopilotInteractionHistoryMaxUsersPerCycle;
+
+        /// <summary>
+        /// How far back to reach the first time a user is imported (they have no watermark yet). Bounds the
+        /// cost of onboarding a pilot group. Override with
+        /// <c>CopilotInteractionHistoryMaxDaysBackOnFirstRun</c>.
+        /// </summary>
+        public int CopilotInteractionHistoryMaxDaysBackOnFirstRun { get; set; } = DefaultCopilotInteractionHistoryMaxDaysBackOnFirstRun;
+
+        /// <summary>
+        /// How long a user who returned no interactions (usually because they have no
+        /// <c>M365_COPILOT_BUSINESS_CHAT</c> service plan) is skipped before being retried. Stops unlicensed
+        /// users consuming the per-cycle call budget forever. 0 disables the back-off. Override with
+        /// <c>CopilotInteractionHistoryEmptyUserBackOffHours</c>.
+        /// </summary>
+        public int CopilotInteractionHistoryEmptyUserBackOffHours { get; set; } = DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
+
+        /// <summary>
+        /// Permits the interaction-history import to run with no <see cref="UserGroupsFilter"/> set, i.e.
+        /// against every user in the database. Off by default and intentionally awkward to turn on: at the
+        /// ~200k-user design target an unscoped run is 200k Graph calls per cycle. Override with
+        /// <c>CopilotInteractionHistoryAllowUnscoped</c>.
+        /// </summary>
+        public bool CopilotInteractionHistoryAllowUnscoped { get; set; } = false;
+
+        #endregion
     }
 
     /// <summary>

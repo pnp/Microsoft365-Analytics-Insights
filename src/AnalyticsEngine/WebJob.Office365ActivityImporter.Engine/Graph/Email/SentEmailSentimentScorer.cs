@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
@@ -18,9 +17,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     {
         private const int SentimentBatchSize = 10;
         private const int MaxSentimentDocChars = 5_000;
-
-        private static readonly Regex HtmlTagRegex =
-            new Regex("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private readonly CognitiveServicesClient _client;
         private readonly AnalyticsLogger _logger;
@@ -89,12 +85,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
         internal static string StripHtml(string html)
         {
-            if (string.IsNullOrEmpty(html))
-                return html;
-
-            var text = HtmlTagRegex.Replace(html, " ");
-            text = System.Net.WebUtility.HtmlDecode(text);
-            return text.Trim();
+            // Shared with the Copilot interaction-history import, which measures bodies the same way.
+            return StringUtils.StripHtmlToPlainText(html);
         }
     }
 

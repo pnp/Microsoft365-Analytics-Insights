@@ -5,6 +5,9 @@ using System;
 using System.Data;
 using System.Data.Entity.Migrations;
 using System.Data.SqlClient;
+// Aliased rather than imported: an unqualified `using System.Configuration` makes `Configuration`
+// ambiguous with the EF migrations Configuration this file already uses.
+using ConfigurationManager = System.Configuration.ConfigurationManager;
 
 namespace Tests.UnitTests
 {
@@ -41,9 +44,10 @@ namespace Tests.UnitTests
         // performs the urls.full_url nvarchar(850) conversion asserted below) still runs as part of the path;
         // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup,
         // IndexUsageReportSnapshots and IndexReportDateQueries are later, unrelated schema-only index
-        // migrations, AddCopilotUsageReports adds the Copilot usage-report tables, and
-        // DeprecateTeamsAddons drops the Teams add-on tables when they are empty.
-        private const string LatestId = "202608191533567_DeprecateTeamsAddons";
+        // migrations, AddCopilotUsageReports adds the Copilot usage-report tables,
+        // DeprecateTeamsAddons drops the Teams add-on tables when they are empty, and
+        // AddCopilotInteractionHistory adds the Copilot interaction-history tables.
+        private const string LatestId = "202608200600001_AddCopilotInteractionHistory";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
@@ -61,10 +65,10 @@ namespace Tests.UnitTests
                 // context's initializer is CreateDatabaseIfNotExists, which validates the current model
                 // against the last __MigrationHistory row and throws "The model backing the
                 // 'AnalyticsEntitiesContext' context has changed since the database was created" whenever the
-                // two differ. That only stayed quiet while every recent migration was raw-SQL and reused its
-                // predecessor's snapshot; the first model-changing migration after this point makes
-                // constructing a context at an old state throw. The connection string is the only thing
-                // wanted here, so take it from config and never touch EF.
+                // two differ. In DEBUG the constructor is worse still: it touches ObjectContext (to set
+                // CommandTimeout), which is enough to run MigrateDatabaseToLatestVersion and silently jump the
+                // database forward in between MigrateTo(...) and the assertion. The connection string is the
+                // only thing wanted here, so take it from config and never touch EF.
                 var configured = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
                 if (configured != null)
                 {
@@ -72,8 +76,7 @@ namespace Tests.UnitTests
                 }
                 else
                 {
-                    using (var db = new AnalyticsEntitiesContext())
-                        _connStr = db.Database.Connection.ConnectionString;
+                    throw new InvalidOperationException("Connection string 'SPOInsightsEntities' is not configured for the test run.");
                 }
             }
             return _connStr;

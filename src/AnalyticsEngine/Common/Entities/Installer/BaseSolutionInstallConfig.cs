@@ -19,7 +19,9 @@ namespace Common.Entities.Installer
         //          1.10.0 -> 2.0.0 BREAKING: removed ImportTaskSettings.GraphUserApps - Teams add-on / app-install
         //          tracking is deprecated and the import no longer exists. Older configs still load; the
         //          property is simply ignored.
-        const string CONFIG_VERSION = "2.0.0";
+        //          2.0.0 -> 2.1.0 added ImportTaskSettings.CopilotInteractionHistory (opt-in Copilot AI
+        //          interaction history import).
+        const string CONFIG_VERSION = "2.1.0";
 
         public BaseSolutionInstallConfig()
         {
