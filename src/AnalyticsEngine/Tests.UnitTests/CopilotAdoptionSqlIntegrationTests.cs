@@ -462,6 +462,24 @@ namespace Tests.UnitTests
                 Assert.IsTrue(trend.Any(t => t.SeriesName == "Cowork users"),
                     "The Cowork series must be produced when Cowork interactions exist.");
 
+                // Values, not just presence. Both series are computed in one pass with a conditional
+                // COUNT(DISTINCT ...) (#295), so a regression there would still produce two correctly-named
+                // series carrying the wrong numbers. This fixture has one user with two interactions in the
+                // same week - one Teams, one Cowork - so both series are exactly 1 for that week: the user is
+                // counted once despite two interactions, and the Cowork condition selects the same user.
+                var activeWeeks = trend.Where(t => t.SeriesName == "Active licensed users").ToList();
+                var coworkWeeks = trend.Where(t => t.SeriesName == "Cowork users").ToList();
+
+                Assert.AreEqual(1, activeWeeks.Count, "Both interactions fall in the same week.");
+                Assert.AreEqual(1d, activeWeeks[0].Value,
+                    "One distinct user, counted once - not once per interaction.");
+
+                Assert.AreEqual(1, coworkWeeks.Count);
+                Assert.AreEqual(1d, coworkWeeks[0].Value,
+                    "The Cowork conditional count must select the same user.");
+                Assert.AreEqual(activeWeeks[0].WeekStart, coworkWeeks[0].WeekStart,
+                    "Both series are bucketed from the same rows, so the week must match.");
+
                 var unlicensed = Query<int?>(db,
                     CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }),
                     new SqlParameter("@from", from));
