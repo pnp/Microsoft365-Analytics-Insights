@@ -47,6 +47,15 @@ installations (the AnalyticsEngine importer in
   both the `Telemetry.Read` scope and the `Telemetry.Dashboard.Read` app role,
   so only explicitly assigned users or groups can view the reports. The SPA
   uses MSAL and stores tokens in session storage.
+
+  Both checks live in a **single authorization policy**
+  (`DashboardAuthorization.PolicyName`), not in separate `[Authorize(Roles = …)]`
+  and `[RequiredScope(…)]` attributes. That attribute pair reads as if it
+  enforces both, but only the role is applied: `RequiredScopeAttribute` is
+  endpoint *metadata*, and the handler that evaluates it is reached only through
+  the default authorization policy — which `[Authorize(Roles = …)]` replaces
+  rather than extends. The integration tests assert the scope is genuinely
+  enforced.
 - **App Service Authentication** runs in allow-anonymous mode so it validates
   bearer tokens and emits MISE key-discovery telemetry without becoming the
   authorization boundary. The ASP.NET Core API still performs the scope and
@@ -128,6 +137,24 @@ the suite runs, and the internal helpers are exposed to the test project via `In
 The client tests cover the formatting helpers and the sortable table component. Fluent UI is
 inlined in `vitest.config.ts` (`server.deps.inline`) because `@fluentui/react-icons` ships
 extensionless ESM chunk imports that Vite's node resolver cannot follow.
+
+### Integration tests
+
+`IntegrationTests.cs` hosts the real application with `WebApplicationFactory` (see
+`TelemetryWebAppFactory.cs`), so routing, the authorisation pipeline, model binding and the DI
+graph are exercised as they run in Azure. The Cosmos adaptors are replaced with the in-memory
+`FakeTelemetryStore` and JWT bearer validation with a header-driven test scheme, so the tests need
+no Azure resources and no real tokens; they run in the ordinary `dotnet test` pass.
+
+They assert that `/health` and `/api/auth/config` stay anonymous, that the dashboard endpoints
+return `401` unauthenticated and `403` for a token missing either the role or the scope, and that
+the signed upload endpoint accepts a correct signature and rejects a wrong one.
+
+Configuration is supplied through **environment variables** rather than
+`ConfigureAppConfiguration`. `Program.cs` reads `builder.Configuration` while registering services,
+which happens inside `Main` — before `WebApplicationFactory` applies its configuration callbacks at
+`Build()`. Environment variables are read by `WebApplication.CreateBuilder` itself, so they are the
+only injection point early enough.
 
 ## Continuous delivery
 
