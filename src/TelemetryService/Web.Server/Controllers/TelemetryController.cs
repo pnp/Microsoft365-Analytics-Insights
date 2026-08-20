@@ -1,6 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Identity.Web.Resource;
 using UsageReporting;
 using Web.Auth;
 using Web.Config;
@@ -53,8 +52,7 @@ namespace Web
         }
 
         [HttpGet("stats")]
-        [Authorize(Roles = DashboardAuthorization.RequiredRole)]
-        [RequiredScope(DashboardAuthorization.RequiredScope)]
+        [Authorize(Policy = DashboardAuthorization.PolicyName)]
         public async Task<ActionResult<DashboardStats>> GetStats()
         {
             var stats = await _dashboardService.GetStatsAsync();
@@ -62,8 +60,7 @@ namespace Web
         }
 
         [HttpGet("clients")]
-        [Authorize(Roles = DashboardAuthorization.RequiredRole)]
-        [RequiredScope(DashboardAuthorization.RequiredScope)]
+        [Authorize(Policy = DashboardAuthorization.PolicyName)]
         public async Task<ActionResult<IReadOnlyList<ClientSummary>>> GetClients()
         {
             var clients = await _dashboardService.GetClientsAsync();
