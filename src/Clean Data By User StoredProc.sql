@@ -182,6 +182,15 @@ BEGIN
     IF OBJECT_ID('dbo.copilot_interaction_user_watermarks', 'U') IS NOT NULL
         DELETE FROM copilot_interaction_user_watermarks WHERE user_id = @UserId;
 
+    -- Copilot usage reports (optional import) - issue #286.
+    --
+    -- Microsoft's own per-user Copilot figures. Deleted explicitly for the same reason as the
+    -- interaction history above: this is per-user usage data, so a request to purge a user has to take
+    -- it with them. copilot_user_count_log is deliberately NOT touched - it is a tenant-level count per
+    -- app and date with no user dimension, so there is nothing user-identifying in it to remove.
+    IF OBJECT_ID('dbo.copilot_usage_user_activity_log', 'U') IS NOT NULL
+        DELETE FROM copilot_usage_user_activity_log WHERE user_id = @UserId;
+
     -- An extracted key phrase can amount to a whole short prompt, so purging a user must not leave their
     -- phrases behind. Only phrases now referenced by nothing are removed - the keywords table is shared
     -- with Teams channel analysis, so both referencing tables are checked.
