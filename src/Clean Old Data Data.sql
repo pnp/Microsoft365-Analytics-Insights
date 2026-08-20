@@ -126,6 +126,28 @@ if OBJECT_ID('dbo.copilot_interaction_keywords', 'U') is not null
 -- each user's whole backfill window - one Graph call per user, which is the exact cost this feature
 -- is designed to avoid.
 
+
+-- Copilot usage reports (optional import) - issue #286.
+--
+-- These are Microsoft's own per-user Copilot figures, one row per (date, user, report period). The
+-- import refreshes them daily and keeps every historical snapshot, so the table grows by roughly
+-- (licensed users x report periods) rows per day forever. On a large tenant that is the
+-- fastest-growing table this feature adds, and it had no retention bound at all - which is how the
+-- deprecated Teams add-on tables got so expensive.
+--
+-- Bounded on [date] (the report's own snapshot date), matching how every other daily log here is aged.
+-- Guarded with OBJECT_ID because the tables only exist once the AddCopilotUsageReports migration has
+-- run, and this script is also used against older databases.
+if OBJECT_ID('dbo.copilot_usage_user_activity_log', 'U') is not null
+	delete from copilot_usage_user_activity_log where [date] < @archiveDateMax
+
+if OBJECT_ID('dbo.copilot_user_count_log', 'U') is not null
+	delete from copilot_user_count_log where report_date < @archiveDateMax
+
+-- The per-run diagnostics log, aged like the interaction-history one above.
+if OBJECT_ID('dbo.copilot_usage_report_import_log', 'U') is not null
+	delete from copilot_usage_report_import_log where imported_utc < @archiveDateMax
+
 -- commit/rollback
 --rollback transaction archive
 
