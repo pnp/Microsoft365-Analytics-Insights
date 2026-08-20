@@ -2,6 +2,7 @@ using System;
 using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Migrations;
 using System.Data.SqlClient;
+using System.Linq;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -77,15 +78,56 @@ namespace Tests.UnitTests
                 Assert.AreEqual(GreekUrl, ScalarString(connectionString, "SELECT TOP 1 full_url FROM dbo.urls"),
                     "Non-ASCII URL did not survive the upgrade intact.");
 
-                // 5. The new tables this release adds exist.
-                foreach (var table in new[] { "copilot_usage_report_import_log", "copilot_usage_user_activity_log", "copilot_user_count_log" })
+                // 5. The upgrade actually reached the newest migration in the assembly.
+                //
+                //    Deliberately compared against the migrator's own list rather than a hard-coded id: a
+                //    literal here would silently stop covering the newest migration the moment one is added,
+                //    which is exactly when this test matters most.
+                var newestAvailable = NewMigrator(connectionString).GetLocalMigrations().Last();
+                Assert.AreEqual(newestAvailable, LatestApplied(connectionString),
+                    "Upgrade did not reach the newest migration in the assembly.");
+
+                // 6. The new tables this release adds exist - the usage-report tables, the Copilot audit
+                //    tables that were previously parsed and dropped, and the interaction-history tables.
+                var expectedTables = new[]
+                {
+                    // Graph Copilot usage reports
+                    "copilot_usage_report_import_log", "copilot_usage_user_activity_log", "copilot_user_count_log",
+                    // Copilot audit fields that used to be discarded
+                    "copilot_event_accessed_resource_actions", "copilot_ai_system_plugins",
+                    "copilot_event_context_types", "copilot_event_ai_system_plugins", "copilot_event_contexts",
+                    // Copilot AI interaction history
+                    "copilot_interactions", "copilot_interaction_sessions", "copilot_interaction_keywords",
+                    "copilot_interaction_user_watermarks", "copilot_interaction_import_log",
+                    "copilot_interaction_app_classes", "copilot_interaction_conversation_types",
+                    "copilot_interaction_types", "copilot_interaction_locales", "copilot_interaction_devices",
+                };
+
+                foreach (var table in expectedTables)
                 {
                     Assert.AreEqual(1L, ScalarLong(connectionString,
                         "SELECT COUNT_BIG(*) FROM sys.tables WHERE name = '" + table + "'"),
                         "Expected new table " + table + " after upgrade.");
                 }
 
-                // 6. DeprecateTeamsAddons drops its tables only when they were empty.
+                // 7. Columns added to existing tables landed too. A migration that creates its new tables but
+                //    silently skips an AddColumn leaves the importer writing to a column that isn't there.
+                foreach (var column in new[]
+                {
+                    "copilot_chats.thread_id", "copilot_chats.client_region", "copilot_chats.copilot_log_version",
+                    "copilot_event_messages.size", "copilot_event_messages.is_prompt",
+                    "copilot_event_accessed_resources.action_id",
+                    "copilot_event_accessed_resources.list_item_unique_id_id",
+                    "copilot_ai_models.version",
+                })
+                {
+                    var parts = column.Split('.');
+                    Assert.AreEqual(1L, ScalarLong(connectionString,
+                        "SELECT COUNT_BIG(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo." + parts[0] + "') AND name = '" + parts[1] + "'"),
+                        "Expected new column " + column + " after upgrade.");
+                }
+
+                // 8. DeprecateTeamsAddons drops its tables only when they were empty.
                 var addonTableCount = ScalarLong(connectionString,
                     "SELECT COUNT_BIG(*) FROM sys.tables WHERE name IN ('teams_addons','teams_addons_log','teams_addons_user_installed_log')");
 
