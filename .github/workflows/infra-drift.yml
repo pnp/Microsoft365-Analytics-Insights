@@ -1,0 +1,155 @@
+name: Infrastructure drift
+
+# Reports when the deployed telemetry-service resource group has drifted from the committed Bicep
+# template (infra/TelemetryService).
+#
+# This exists because two separate configuration drifts were found on the same service in one
+# afternoon, and nothing in the repository could have told you about either: `alwaysOn` had been
+# flipped to false (so the app cold-started after idle), and EasyAuth's
+# `defaultAuthorizationPolicy.allowedApplications` had materialised as an empty array, which EasyAuth
+# reads as "permit nothing" - a full dashboard outage that presented as a bare 403 on valid tokens
+# only. In both cases the template was right and the deployment was wrong.
+#
+# Strictly read-only: `what-if` computes a diff server-side and changes nothing. There is no
+# deployment step here on purpose - a drift check that can "fix" things is a deployment, and would
+# happily undo a deliberate out-of-band change.
+
+on:
+  schedule:
+    # Mondays 07:00 UTC. Drift is slow-moving; more often than this is just noise.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - infra/TelemetryService/**
+      - .github/workflows/infra-drift.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-drift-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The filter is the part that decides what counts as drift, so it is tested like any other code -
+  # and on a pull request this is the only job that runs, because a PR must never touch Azure.
+  filter_tests:
+    name: Test the drift filter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+
+      - name: Run filter tests
+        working-directory: infra/TelemetryService/drift
+        run: node --test
+
+  drift:
+    name: Check deployed resources against the template
+    needs: filter_tests
+    runs-on: ubuntu-latest
+    # Never from a pull request (no Azure access from forks, and no secrets on PR runs) and never
+    # from a fork of this repository.
+    if: >
+      github.event_name != 'pull_request'
+      && github.repository == 'pnp/Microsoft365-Analytics-Insights'
+    permissions:
+      contents: read
+      id-token: write # OIDC federated credential for azure/login
+    environment:
+      name: telemetry-service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Everything identifying the environment comes from repository variables/secrets, never from
+      # the repository itself - this repo is public.
+      - name: Check the drift check is configured
+        id: config
+        env:
+          RESOURCE_GROUP: ${{ vars.TELEMETRY_RESOURCE_GROUP }}
+          INFRA_PARAMETERS: ${{ vars.TELEMETRY_INFRA_PARAMETERS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RESOURCE_GROUP}" ] || [ -z "${INFRA_PARAMETERS}" ]; then
+            echo "::notice::Drift checking is not configured (TELEMETRY_RESOURCE_GROUP and/or TELEMETRY_INFRA_PARAMETERS are unset). Skipping."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Azure login
+        if: steps.config.outputs.configured == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Node
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+
+      - name: Install Bicep
+        if: steps.config.outputs.configured == 'true'
+        run: az bicep install
+
+      # TELEMETRY_INFRA_PARAMETERS is the readable {"name": value} form because a human sets it;
+      # ARM wants {"name": {"value": ...}}. build-parameters.mjs does the conversion and is unit
+      # tested, so a malformed variable fails here with a clear message rather than inside az.
+      - name: Build the parameters file
+        if: steps.config.outputs.configured == 'true'
+        env:
+          TELEMETRY_INFRA_PARAMETERS: ${{ vars.TELEMETRY_INFRA_PARAMETERS }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: node infra/TelemetryService/drift/build-parameters.mjs "${RUNNER_TEMP}/drift-parameters.json"
+
+      - name: Run what-if
+        if: steps.config.outputs.configured == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TELEMETRY_RESOURCE_GROUP }}
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/TelemetryService/resources.bicep \
+            --parameters "@${RUNNER_TEMP}/drift-parameters.json" \
+            --result-format FullResourcePayloads \
+            --no-pretty-print \
+            --output json > "${RUNNER_TEMP}/what-if.json"
+
+      # Exits 1 on drift, 2 if the what-if output could not be evaluated (which must not be read as
+      # "no drift"). The summary deliberately prints only the provider-relative resource id.
+      - name: Evaluate drift
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          node infra/TelemetryService/drift/filter-what-if.mjs \
+            "${RUNNER_TEMP}/what-if.json" \
+            infra/TelemetryService/drift/drift-ignore.json \
+            "${RUNNER_TEMP}/drift-summary.md"
+          cat "${RUNNER_TEMP}/drift-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # Raw what-if output contains subscription and resource-group identifiers, so it is NOT
+      # uploaded as an artifact. The filtered summary above is the reportable form.
+      - name: Publish summary on failure
+        if: failure() && steps.config.outputs.configured == 'true'
+        run: |
+          if [ -f "${RUNNER_TEMP}/drift-summary.md" ]; then
+            cat "${RUNNER_TEMP}/drift-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true

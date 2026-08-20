@@ -148,9 +148,15 @@ environment, and grant it Website Contributor (or Contributor) on the target App
 | Secret | `AZURE_SUBSCRIPTION_ID` | Subscription containing the App Service. |
 | Variable | `TELEMETRY_APP_NAME` | App Service name to deploy to. |
 | Variable | `TELEMETRY_RESOURCE_GROUP` | Resource group containing that App Service. |
+| Variable | `TELEMETRY_INFRA_PARAMETERS` | Non-secret Bicep parameters as a JSON object, used by the [drift check](../../infra/TelemetryService/drift/README.md#configuration). Only needed for `infra-drift.yml`. |
 
 The deploy job is guarded so it can only ever run from this repository on a push — never from a
 pull request and never from a fork.
+
+Configuration drift between these deployed resources and `infra/TelemetryService/resources.bicep` is
+detected weekly by [`.github/workflows/infra-drift.yml`](../../.github/workflows/infra-drift.yml),
+which runs a read-only `az deployment group what-if` and deploys nothing. See
+[`infra/TelemetryService/drift/README.md`](../../infra/TelemetryService/drift/README.md).
 
 ## Configuration
 

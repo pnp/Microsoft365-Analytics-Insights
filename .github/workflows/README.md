@@ -27,3 +27,13 @@ are scoped to that path plus `reports/**` and their own workflow file. Changes e
 * Deploys on pushes to `main` and `dev`; never from a pull request or a fork.
 * Requires the repository secrets/variables listed in
   [`src/TelemetryService/README.md`](../../src/TelemetryService/README.md#continuous-delivery).
+
+## infra-drift
+
+* Weekly (and on demand) check that the deployed telemetry-service resource group still matches
+  `infra/TelemetryService/resources.bicep`, via read-only `az deployment group what-if`.
+* Deploys nothing and can change nothing — it only reports.
+* On a pull request only the filter's own unit tests run; the Azure job is skipped, so a PR never
+  needs Azure access.
+* Skips with a notice when the environment variables are not configured, so forks stay green.
+* See [`infra/TelemetryService/drift/README.md`](../../infra/TelemetryService/drift/README.md).
