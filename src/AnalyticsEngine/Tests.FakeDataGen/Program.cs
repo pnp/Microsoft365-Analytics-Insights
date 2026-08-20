@@ -1,10 +1,12 @@
 using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Models;
+using Common.Entities;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using Tests.FakeDataGen.Copilot;
+using Tests.FakeDataGen.Office365;
 using Tests.FakeDataGen.StressTests;
 using Tests.FakeDataGen.StressTests.LoadTest;
 
@@ -24,6 +26,10 @@ namespace Tests.FakeDataGen
             // Data generation
             new MenuItem("Generate fake Copilot activity", MenuCategory.DataGeneration,
                 ctx => RunCopilotActivityGenerator(ctx.RequireConnectionString())),
+            new MenuItem("Generate fake O365 audit activity", MenuCategory.DataGeneration,
+                ctx => RunOffice365ActivityGenerator(ctx.RequireConnectionString())),
+            new MenuItem("Generate combined profiling data (O365 + Copilot)", MenuCategory.DataGeneration,
+                ctx => RunCombinedActivityGenerator(ctx.RequireConnectionString())),
 
             // Stress tests
             new MenuItem("ActivityAPI import stress test", MenuCategory.StressTest,
@@ -314,11 +320,87 @@ namespace Tests.FakeDataGen
             Console.WriteLine("Copilot activity generation completed successfully!");
         }
 
+        private static void RunOffice365ActivityGenerator(string connectionString)
+        {
+            Console.WriteLine("===========================================");
+            Console.WriteLine("  Generate Fake O365 Audit Activity");
+            Console.WriteLine("===========================================");
+            Console.WriteLine();
+
+            if (!ConfirmDatabaseSafeToWrite(connectionString))
+            {
+                Console.WriteLine("Operation cancelled by user.");
+                return;
+            }
+
+            int count = PromptInt("How many events to generate?", 5000, 1, int.MaxValue);
+            int userCount = PromptInt("How many users to generate (if the database has none)?", 250, 1, int.MaxValue);
+            int daysBack = PromptInt("How many days back should activity be spread across?", 90, 1, 3650);
+
+            Console.WriteLine();
+            var generator = new Office365ActivityGenerator(connectionString);
+            generator.GenerateOffice365Activity(count, userCount, daysBack);
+
+            Console.WriteLine();
+            Console.WriteLine("O365 audit activity generation completed successfully!");
+        }
+
+        private static void RunCombinedActivityGenerator(string connectionString)
+        {
+            Console.WriteLine("====================================================");
+            Console.WriteLine("  Generate Combined Profiling Data");
+            Console.WriteLine("  O365 Usage + Copilot Activity");
+            Console.WriteLine("====================================================");
+            Console.WriteLine();
+
+            if (!ConfirmDatabaseSafeToWrite(connectionString))
+            {
+                Console.WriteLine("Operation cancelled by user.");
+                return;
+            }
+
+            int count = PromptInt("How many events should each generator create?", 5000, 1, int.MaxValue);
+            int userCount = PromptInt("How many users should both generators share?", 250, 1, int.MaxValue);
+            int daysBack = PromptInt("How many days back should both data sets cover?", 90, 1, 3650);
+            int agentPercent = PromptInt("Percentage of Copilot events with agents (0-100)", 30, 0, 100);
+            int customAgentPercent = PromptInt("Percentage of agent events using custom agents (0-100)", 10, 0, 100);
+            int copilotLicensePercent = PromptInt("Percentage of users with Copilot licenses (0-100)", 50, 0, 100);
+
+            DateTime windowEndUtc = DateTime.UtcNow;
+
+            Console.WriteLine();
+            Console.WriteLine($"Generating {count:N0} Copilot + {count:N0} O365 events across the same {daysBack:N0}-day window...");
+            Console.WriteLine();
+
+            // Copilot runs first so an empty database gets one shared user population with
+            // the requested Copilot-license distribution. O365 then reuses those users.
+            var copilotGenerator = new CopilotActivityGenerator(connectionString);
+            copilotGenerator.GenerateCopilotActivity(
+                count,
+                customAgentPercent,
+                agentPercent,
+                copilotLicensePercent,
+                userCount,
+                daysBack,
+                windowEndUtc);
+
+            Console.WriteLine();
+            var office365Generator = new Office365ActivityGenerator(connectionString);
+            office365Generator.GenerateOffice365Activity(
+                count,
+                userCount,
+                daysBack,
+                windowEndUtc);
+
+            Console.WriteLine();
+            Console.WriteLine("Combined O365 + Copilot profiling data generation completed successfully!");
+        }
+
         private static bool ConfirmDatabaseSafeToWrite(string connectionString)
         {
             try
             {
-                using (var db = new CopilotActivityGenerator(connectionString).CreateContext())
+                using (var db = new AnalyticsEntitiesContext(connectionString, true, false))
                 {
                     int copilotCount = db.CopilotChats.Count();
                     int userCount = db.users.Count();

@@ -29,12 +29,16 @@ When launched, an interactive menu is shown:
 ```
 DATA GENERATION
   1. Generate fake Copilot activity
+  2. Generate fake O365 audit activity
+  3. Generate combined profiling data (O365 + Copilot)
 
 STRESS TESTS
-  2. ActivityAPI import stress test
-  3. Copilot event import stress test
-  4. Power Platform event import stress test
-  5. User activity data stress test (profiling SQL inputs)
+  4. ActivityAPI import stress test
+  5. ActivityAPI import stress test (DB-backed, COLD+WARM)
+  6. Copilot event import stress test
+  7. Power Platform event import stress test
+  8. Sent email importer stress test
+  9. User activity data stress test (profiling SQL inputs)
 
   0. Exit
 ```
@@ -46,6 +50,8 @@ Tests.FakeDataGen/
 ├── Program.cs                # menu + dispatcher
 ├── App.config                # EF + Azure binding redirects
 ├── Copilot/                  # realistic Copilot data generators
+├── Generation/               # shared synthetic activity helpers
+├── Office365/                # O365 audit activity generator
 ├── Seeding/                  # shared user / license / lookup seed data
 │   ├── SeedDataCatalogue.cs
 │   └── UserMetadataSeeder.cs
@@ -86,6 +92,38 @@ domains, and a manager in their own company.
 
 The generator confirms before writing if the target database already has data.
 
+### O365 audit activity
+
+`Office365ActivityGenerator` inserts a realistic weighted mix of:
+
+- SharePoint and OneDrive file activity with reusable sites, webs, URLs, file
+  metadata, and Unicode paths.
+- Exchange mailbox activity with synthetic client, IP, and logon properties.
+- Microsoft Entra ID sign-in and directory activity with authentication and
+  result properties.
+- Matching `audit_events` rows, operations, users, licenses, and workload-specific
+  metadata rows.
+- Daily SharePoint, OneDrive, Outlook, and Teams usage-report source rows so
+  `[profiling].[usp_CompileWeekly]` produces non-zero weekly metrics from the
+  generated activity. Entra ID does not have an `ActivitiesWeekly` metric.
+
+Activity is spread across a configurable date window, weighted toward weekdays
+and business hours, and saved in bounded batches so large runs do not retain the
+entire generated data set in the EF change tracker.
+
+`usp_CompileActivityWeek` deliberately skips weeks already present in
+`profiling.ActivitiesWeekly` and `profiling.ActivitiesWeeklyColumns`. Generate
+the source data before compiling, or clear/rebuild previously compiled fake-data
+weeks before re-running the weekly procedure.
+
+### Combined profiling data
+
+The combined option prompts once for the event count, shared user count, and date
+window, then generates both Copilot and O365 data with the same UTC window
+endpoint. Copilot runs first so a new database gets one user population with the
+requested Copilot-license distribution; the O365 generator reuses those users
+while adding SharePoint, OneDrive, Outlook, and Teams profiling sources.
+
 ## Stress tests
 
 Each stress test prompts for load parameters (event counts, batch sizes, GC
@@ -100,10 +138,12 @@ behaviour, verbosity) and reports:
 
 | # | Test | Purpose |
 | - | ---- | ------- |
-| 2 | `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
-| 3 | `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
-| 4 | `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across the four Power Platform workloads (Power Apps, Power Automate, Power BI, Copilot Studio). |
-| 5 | `UserActivityStressTest` | Bulk-loads the user + license + per-workload activity tables so the profiling SQL in `App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql` can be exercised against realistic volumes. After the seed, optionally invokes `[profiling].[usp_CompileWeekly]` to roll the daily rows into the weekly profiling tables straight away (the same proc that `WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/Weekly.ps1` runs on schedule). |
+| 4 | `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
+| 5 | `ActivityApiDbStressTest` | Drives the real SQL persistence path through repeatable cold and warm scenarios. |
+| 6 | `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
+| 7 | `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across the four Power Platform workloads (Power Apps, Power Automate, Power BI, Copilot Studio). |
+| 8 | `SentEmailImporterStressTest` | Exercises sent-email persistence and sentiment-scoring boundaries with synthetic messages. |
+| 9 | `UserActivityStressTest` | Bulk-loads the user + license + per-workload activity tables so the profiling SQL in `App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql` can be exercised against realistic volumes. After the seed, optionally invokes `[profiling].[usp_CompileWeekly]` to roll the daily rows into the weekly profiling tables straight away (the same proc that `WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/Weekly.ps1` runs on schedule). |
 
 ### Adding a new stress test
 
