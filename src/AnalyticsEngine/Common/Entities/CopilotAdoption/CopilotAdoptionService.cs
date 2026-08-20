@@ -139,6 +139,19 @@ namespace Common.Entities.CopilotAdoption
                 new SqlParameter("@settled", settled));
             summary.DataSources.CopilotUsageReportAvailable = summary.DataSources.CopilotUsageReportDate.HasValue;
 
+            if (summary.DataSources.CopilotUsageReportDate.HasValue)
+            {
+                // Pin the report period as well as the date. Without this the snapshot join fans every
+                // licensed user out across D7/D28/D90/D180 - see LatestCopilotReportPeriodSql.
+                summary.DataSources.CopilotUsageReportPeriodDays = await SafeScalarAsync(
+                    CopilotAdoptionSql.LatestCopilotReportPeriodSql,
+                    summary.Warnings,
+                    "Copilot usage-report snapshot period",
+                    cancellationToken,
+                    new SqlParameter("@copilotReportDate", summary.DataSources.CopilotUsageReportDate.Value),
+                    new SqlParameter("@windowDays", _options.WindowDays));
+            }
+
             summary.DataSources.M365UsageReportDate = await SafeDateAsync(
                 CopilotAdoptionSql.LatestM365ReportDateSql,
                 summary.Warnings,
@@ -246,6 +259,7 @@ namespace Common.Entities.CopilotAdoption
             if (includeReport)
             {
                 parameters["@copilotReportDate"] = summary.DataSources.CopilotUsageReportDate.Value;
+                parameters["@copilotReportPeriodDays"] = summary.DataSources.CopilotUsageReportPeriodDays;
             }
 
             analysis.Sql["licensedUsers"] = CopilotAdoptionSql.ForDisplay(detailSql, parameters);
@@ -369,7 +383,11 @@ namespace Common.Entities.CopilotAdoption
         {
             var summary = analysis.Summary;
 
-            if (summary.DataSources.AuditAvailable && seatIds.Count > 0)
+            // Deliberately not gated on seatIds.Count: the "should we buy Copilot?" case has no seat SKUs at
+            // all, and that is exactly when this count matters most. UnlicensedActiveUsersSql renders an
+            // empty id list as IN (-1), so every active user correctly counts as unlicensed. Requiring seats
+            // here reported a flat zero while the candidate list below simultaneously showed real users.
+            if (summary.DataSources.AuditAvailable)
             {
                 var unlicensedSql = CopilotAdoptionSql.UnlicensedActiveUsersSql(seatIds);
                 analysis.Sql["unlicensedActiveUsers"] = CopilotAdoptionSql.ForDisplay(
@@ -565,6 +583,14 @@ namespace Common.Entities.CopilotAdoption
             try
             {
                 return await query();
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is not a query failure and must not be degraded into a warning. The analysis
+                // is cached as a shared Task, so swallowing this would let an aborted run complete as a
+                // "successful" empty result and be served to every other caller until the entry expires.
+                // Letting it propagate faults the task, which the cache then evicts.
+                throw;
             }
             catch (Exception ex)
             {

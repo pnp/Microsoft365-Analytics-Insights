@@ -174,6 +174,19 @@ export function evaluate(whatIf, ignoreRules) {
   return { drift, suppressed, informational };
 }
 
+/**
+ * Renders a property value for the job summary.
+ *
+ * The summary is written to $GITHUB_STEP_SUMMARY, which on a public repository is world-readable,
+ * and what-if runs with --result-format FullResourcePayloads. Deployed values therefore routinely
+ * include things that must never be published: the Application Insights connection string (which
+ * embeds the instrumentation key), the Cosmos endpoint, tenant and client ids, address prefixes.
+ *
+ * So values are redacted by default. Booleans and numbers are published because they cannot carry a
+ * secret and they are what make a drift report actionable - the two defects that motivated this
+ * feature were `alwaysOn: false` (a boolean) and an emptied array. For everything else the type and
+ * size are enough to identify the change; the actual value is read from the Azure portal.
+ */
 function format(value) {
   if (value === undefined) {
     return '_(absent)_';
@@ -181,9 +194,16 @@ function format(value) {
   if (value === null) {
     return '`null`';
   }
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
-  const trimmed = text.length > 120 ? `${text.slice(0, 117)}...` : text;
-  return `\`${trimmed.replace(/\|/g, '\\|')}\``;
+  if (typeof value === 'boolean' || typeof value === 'number') {
+    return `\`${value}\``;
+  }
+  if (Array.isArray(value)) {
+    return `_(array, ${value.length} item${value.length === 1 ? '' : 's'} - redacted)_`;
+  }
+  if (typeof value === 'object') {
+    return `_(object, ${Object.keys(value).length} propert${Object.keys(value).length === 1 ? 'y' : 'ies'} - redacted)_`;
+  }
+  return `_(${typeof value}, ${String(value).length} chars - redacted)_`;
 }
 
 /**
@@ -207,6 +227,9 @@ export function buildSummary({ drift, suppressed, informational }) {
       '',
       'The template is the source of truth. Either redeploy it, or update the template if the',
       'deployed value is the one you actually want.',
+      '',
+      'String values are redacted - this summary is world-readable on a public repository. Read the',
+      'actual values from the Azure portal or `az deployment group what-if` run locally.',
       '',
     );
 

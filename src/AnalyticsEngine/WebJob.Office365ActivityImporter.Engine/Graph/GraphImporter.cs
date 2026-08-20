@@ -218,6 +218,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // Cadence-gated like the other non-fresh Graph sections, but for a different reason: this
                     // one costs a Graph call per in-scope user, so running it every cycle would be expensive
                     // even for a modest pilot group. Defaults to daily.
+                    //
+                    // Uses the bool overload deliberately. ImportAsync returns null when it declined to run
+                    // (no UserGroupsFilter, or the app registration has no AiEnterpriseInteraction.Read.All
+                    // consent) and sets Error on the run log when it caught one. Reporting those as success
+                    // would stamp the daily gate on a cycle that imported nothing, so enabling the feature
+                    // before admin consent is granted would silently do nothing for another 24 hours.
                     await RunGraphSectionIfDueAsync(CopilotInteractionHistoryLastImportedKey, _settings.CopilotInteractionHistoryIntervalHours, "Copilot interaction history import", async () =>
                     {
                         var interactionImporter = new CopilotInteractionHistoryImporter(
@@ -228,7 +234,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             new GraphPilotGroupMemberResolver(httpClient, _logger),
                             userGroupsFilter);
 
-                        await interactionImporter.ImportAsync();
+                        var interactionLog = await interactionImporter.ImportAsync();
+                        return interactionLog != null && string.IsNullOrEmpty(interactionLog.Error);
                     });
                 }
                 else

@@ -291,6 +291,76 @@ describe('summary output', () => {
     assert.match(summary, /alwaysOn/);
   });
 
+  test('publishes boolean values, because they cannot carry a secret and they are the finding', () => {
+    const summary = buildSummary(evaluate({
+      status: 'Succeeded',
+      changes: [
+        {
+          changeType: 'Modify',
+          resourceId: SITE,
+          delta: [{ path: 'properties.siteConfig.alwaysOn', propertyChangeType: 'Modify', before: false, after: true }],
+        },
+      ],
+    }, shippedRules));
+
+    assert.match(summary, /`false`/);
+    assert.match(summary, /`true`/);
+  });
+
+  test('REDACTS string values - what-if returns full resource payloads', () => {
+    // Regression guard. FullResourcePayloads includes app settings, so an unredacted summary would
+    // publish the Application Insights connection string (instrumentation key and all) to anyone.
+    const connectionString =
+      'InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://example.invalid/';
+
+    const summary = buildSummary(evaluate({
+      status: 'Succeeded',
+      changes: [
+        {
+          changeType: 'Modify',
+          resourceId: APPSETTINGS,
+          delta: [{
+            path: 'properties.APPLICATIONINSIGHTS_CONNECTION_STRING',
+            propertyChangeType: 'Modify',
+            before: connectionString,
+            after: 'InstrumentationKey=11111111-1111-1111-1111-111111111111;IngestionEndpoint=https://example.invalid/',
+          }],
+        },
+      ],
+    }, shippedRules));
+
+    assert.doesNotMatch(summary, /InstrumentationKey/,
+      'a connection string must never reach the job summary');
+    assert.doesNotMatch(summary, /IngestionEndpoint/);
+    assert.match(summary, /APPLICATIONINSIGHTS_CONNECTION_STRING/,
+      'the property path is still reported, so the drift is actionable');
+    assert.match(summary, /redacted/);
+  });
+
+  test('redacts array and object values but reports their size', () => {
+    const summary = buildSummary(evaluate({
+      status: 'Succeeded',
+      changes: [
+        {
+          changeType: 'Modify',
+          resourceId: AUTHSETTINGS,
+          delta: [{
+            path: 'properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications',
+            propertyChangeType: 'Array',
+            before: [],
+            after: ['11111111-1111-1111-1111-111111111111'],
+          }],
+        },
+      ],
+    }, shippedRules));
+
+    assert.doesNotMatch(summary, /11111111-1111-1111-1111-111111111111/,
+      'a client id must not be published');
+    assert.match(summary, /allowedApplications/);
+    assert.match(summary, /0 items/);
+    assert.match(summary, /1 item\b/);
+  });
+
   test('shortenResourceId keeps only the provider-relative part', () => {
     assert.equal(shortenResourceId(SITE), 'Microsoft.Web/sites/app-contoso-telemetry');
   });

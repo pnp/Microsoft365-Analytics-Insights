@@ -236,9 +236,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
         private void LogCognitiveFailure(Exception ex, string operation, int docCount)
         {
-            // Warning, not Error: cognitive enrichment is optional and the import continues without it. The
-            // exception detail is included so a misconfigured endpoint is still diagnosable, but the prompt
-            // text never is - RequestFailedException messages from Azure AI Language do not echo the document.
+            // Warning, not Error: cognitive enrichment is optional and the import continues without it.
+            //
+            // Only RequestFailedException detail is logged. Azure AI Language's own service errors are
+            // status/code pairs that never echo the document, but an arbitrary exception message can:
+            // a serialisation or argument failure routinely quotes the offending value, which here is the
+            // user's literal Copilot prompt. Logging ex.Message on the general path would write prompt text
+            // into Application Insights in clear - the one thing this feature must never do - so unexpected
+            // exceptions are reduced to their type name.
             if (ex is RequestFailedException rfe)
             {
                 _logger.LogWarning($"Copilot interaction {operation} failed for {docCount} prompt(s) " +
@@ -246,7 +251,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             }
             else
             {
-                _logger.LogWarning($"Copilot interaction {operation} failed for {docCount} prompt(s): {ex.Message}. Continuing without scores for this batch.");
+                _logger.LogWarning($"Copilot interaction {operation} failed for {docCount} prompt(s) " +
+                    $"({ex.GetType().Name}). Continuing without scores for this batch. " +
+                    "The exception message is withheld because it can contain prompt text.");
             }
         }
     }

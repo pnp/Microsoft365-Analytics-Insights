@@ -629,6 +629,14 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("copilotUsageReportDate")]
         public DateTime? CopilotUsageReportDate { get; set; }
 
+        /// <summary>
+        /// Which Graph report period (7 / 28 / 90 / 180) the snapshot above was read from; 0 when the
+        /// imported rows predate the period being recorded. Pinned because the usage-report table holds one
+        /// row per (date, user, period), so a date-only snapshot duplicates every user.
+        /// </summary>
+        [JsonProperty("copilotUsageReportPeriodDays")]
+        public int CopilotUsageReportPeriodDays { get; set; }
+
         /// <summary>The snapshot date the Microsoft 365 workload figures came from.</summary>
         [JsonProperty("m365UsageReportDate")]
         public DateTime? M365UsageReportDate { get; set; }

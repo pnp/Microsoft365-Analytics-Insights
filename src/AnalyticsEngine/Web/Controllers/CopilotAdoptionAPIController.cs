@@ -363,6 +363,21 @@ namespace Web.AnalyticsWeb.Controllers
         /// starting their own scan of the Copilot audit history. A failed analysis is evicted so the
         /// next request retries rather than serving a cached error for ten minutes.
         /// </summary>
+        /// <remarks>
+        /// Two details are load-bearing.
+        /// <para>
+        /// The work is wrapped in a <see cref="Lazy{T}"/> and only the winner of
+        /// <c>AddOrGetExisting</c> is evaluated. Starting the task first and then racing to insert it does
+        /// not share anything: a C# async method runs eagerly, so the loser has already issued its queries
+        /// and "abandoning" it only discards the result. Two concurrent first hits meant two full scans of
+        /// the audit history - and the SPA loads summary, filters and SQL concurrently on a cold page.
+        /// </para>
+        /// <para>
+        /// The shared execution deliberately does NOT take the caller's <see cref="CancellationToken"/>.
+        /// The token is bound to one HTTP request, so an admin navigating away would cancel the analysis
+        /// that every other waiter is awaiting.
+        /// </para>
+        /// </remarks>
         private static Task<CopilotAdoptionAnalysis> GetAnalysisAsync(
             int windowDays,
             string seatLicenceTypeIds,
@@ -373,26 +388,30 @@ namespace Web.AnalyticsWeb.Controllers
             var cacheKey = CacheKeyPrefix + window + "::"
                            + (overrideIds.Count == 0 ? "auto" : string.Join(",", overrideIds.OrderBy(i => i)));
 
-            var existing = MemoryCache.Default.Get(cacheKey) as Task<CopilotAdoptionAnalysis>;
-            if (existing != null && !existing.IsFaulted && !existing.IsCanceled)
+            var existing = MemoryCache.Default.Get(cacheKey) as Lazy<Task<CopilotAdoptionAnalysis>>;
+            if (existing != null && !IsDead(existing))
             {
-                return existing;
+                return existing.Value;
             }
 
-            var options = CopilotAdoptionOptions.Default;
-            options.WindowDays = window;
+            var candidate = new Lazy<Task<CopilotAdoptionAnalysis>>(() =>
+            {
+                var options = CopilotAdoptionOptions.Default;
+                options.WindowDays = window;
 
-            var service = new CopilotAdoptionService(options);
-            var task = service.AnalyseAsync(overrideIds.Count == 0 ? null : overrideIds, cancellationToken);
+                var service = new CopilotAdoptionService(options);
+                return service.AnalyseAsync(overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
+            }, LazyThreadSafetyMode.ExecutionAndPublication);
 
-            // AddOrGetExisting is atomic, so if another request got there first we use its task and
-            // abandon ours rather than running the analysis twice.
+            // AddOrGetExisting is atomic. Because the Lazy has not been evaluated yet, the loser costs
+            // nothing at all - no query is issued for it.
             var winner = MemoryCache.Default.AddOrGetExisting(
-                cacheKey, task, DateTimeOffset.UtcNow.AddMinutes(CacheMinutes)) as Task<CopilotAdoptionAnalysis>;
+                cacheKey, candidate, DateTimeOffset.UtcNow.AddMinutes(CacheMinutes)) as Lazy<Task<CopilotAdoptionAnalysis>>;
 
-            var effective = winner ?? task;
+            var effective = winner ?? candidate;
+            var task = effective.Value;
 
-            effective.ContinueWith(
+            task.ContinueWith(
                 completed =>
                 {
                     if (completed.IsFaulted || completed.IsCanceled)
@@ -402,7 +421,17 @@ namespace Web.AnalyticsWeb.Controllers
                 },
                 TaskContinuationOptions.ExecuteSynchronously);
 
-            return effective;
+            return task;
+        }
+
+        /// <summary>A cached entry whose analysis already failed must not be served again.</summary>
+        private static bool IsDead(Lazy<Task<CopilotAdoptionAnalysis>> entry)
+        {
+            if (!entry.IsValueCreated)
+                return false;
+
+            var task = entry.Value;
+            return task.IsFaulted || task.IsCanceled;
         }
 
         #endregion

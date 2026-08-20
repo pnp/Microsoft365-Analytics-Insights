@@ -259,6 +259,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         /// always sent even for an open-ended catch-up; <paramref name="toUtc"/> is simply "now" in that case.
         /// <c>sessionId</c> and <c>requestId</c> are not filterable, which is why incremental loading has to
         /// key off the timestamp.
+        /// <para>
+        /// <c>$orderby=createdDateTime asc</c> is required, not cosmetic. When a user's window exceeds the
+        /// per-cycle page cap the read is truncated and the watermark advances to the newest interaction
+        /// actually received, on the assumption that everything older has been seen. That assumption only
+        /// holds if pages arrive oldest-first. Graph does not document a default order and history feeds
+        /// commonly return newest-first, in which case a truncated first-run backfill would read the newest
+        /// N interactions, push the watermark to almost-now, and permanently skip every older unread
+        /// interaction in the window - silent data loss that looks like a clean resume.
+        /// </para>
         /// </remarks>
         internal static string BuildInteractionsUrl(string userKey, DateTime fromUtc, DateTime toUtc)
         {
@@ -270,6 +279,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             sb.Append("/interactionHistory/getAllEnterpriseInteractions");
             sb.Append("?$filter=");
             sb.Append(Uri.EscapeDataString(filter));
+            sb.Append("&$orderby=");
+            sb.Append(Uri.EscapeDataString("createdDateTime asc"));
             sb.Append("&$top=");
             sb.Append(GraphPageSize.ToString(CultureInfo.InvariantCulture));
 

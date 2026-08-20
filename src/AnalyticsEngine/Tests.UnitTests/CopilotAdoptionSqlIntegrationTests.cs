@@ -187,6 +187,7 @@ namespace Tests.UnitTests
                     new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
                     new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-365)),
                     new SqlParameter("@copilotReportDate", snapshot),
+                    new SqlParameter("@copilotReportPeriodDays", 28),
                     new SqlParameter("@maxRows", 1000));
 
                 Assert.AreEqual(1, rows.Count);
@@ -198,6 +199,70 @@ namespace Tests.UnitTests
                     "Teams, Word and the collapsed chat surface are inside the window; Excel is not.");
                 Assert.AreEqual(inWindow, row.ReportLastActivityUtc,
                     "The last-activity date is the latest across every per-app column.");
+            }
+        }
+
+        [TestMethod]
+        public void LicensedUsersQuery_PinsTheReportPeriodSoUsersAreNotDuplicated()
+        {
+            // Regression guard. copilot_usage_user_activity_log holds one row per
+            // (date, user_id, report_period_days), and Graph publishes D7/D28/D90/D180 - so a snapshot
+            // selected by date alone returns several rows for the same user. Joined to dbo.users that
+            // multiplies every licensed user by the number of stored periods, which inflated adoption
+            // counts past the licensed population and burned the row cap on duplicates.
+            using (var db = ScratchDatabase.Create("CopilotAdoptPeriod"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotReportTable(db);
+
+                var snapshot = DateTime.UtcNow.Date.AddDays(-3);
+                var inWindow = DateTime.UtcNow.Date.AddDays(-5);
+
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id)
+                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'period@contoso.com', 1);
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+
+                       -- The SAME user and date, published for two different periods.
+                       INSERT INTO dbo.copilot_usage_user_activity_log
+                           (id, [date], user_id, last_activity_date, report_period_days,
+                            prompts_all_apps, active_usage_days,
+                            teams_last_activity_date, word_last_activity_date, excel_last_activity_date,
+                            chat_last_activity_date)
+                       VALUES
+                           (1, '{snapshot:yyyy-MM-dd}', 1, '{inWindow:yyyy-MM-dd}', 7,
+                            11, 3,
+                            '{inWindow:yyyy-MM-dd}', NULL, NULL, NULL),
+                           (2, '{snapshot:yyyy-MM-dd}', 1, '{inWindow:yyyy-MM-dd}', 28,
+                            47, 12,
+                            '{inWindow:yyyy-MM-dd}', NULL, NULL, NULL);");
+
+                var sql = CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], includeCopilotReport: true);
+
+                var d28 = Query<LicensedUserUsageRow>(
+                    db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-365)),
+                    new SqlParameter("@copilotReportDate", snapshot),
+                    new SqlParameter("@copilotReportPeriodDays", 28),
+                    new SqlParameter("@maxRows", 1000));
+
+                Assert.AreEqual(1, d28.Count, "One licensed user must produce exactly one row, not one per period.");
+                Assert.AreEqual(47, d28[0].ReportPrompts, "The pinned D28 figures must be the ones returned.");
+
+                // Asking for the other period returns that period's numbers for the same single user.
+                var d7 = Query<LicensedUserUsageRow>(
+                    db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-365)),
+                    new SqlParameter("@copilotReportDate", snapshot),
+                    new SqlParameter("@copilotReportPeriodDays", 7),
+                    new SqlParameter("@maxRows", 1000));
+
+                Assert.AreEqual(1, d7.Count);
+                Assert.AreEqual(11, d7[0].ReportPrompts);
             }
         }
 

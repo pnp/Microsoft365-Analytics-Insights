@@ -81,6 +81,29 @@ namespace Common.Entities.CopilotAdoption
             "WHERE r.[date] <= @settled;";
 
         /// <summary>
+        /// The report period to read for a given snapshot date, chosen as the one closest to the analysis
+        /// window.
+        /// </summary>
+        /// <remarks>
+        /// <c>copilot_usage_user_activity_log</c> is unique on <c>(date, user_id, report_period_days)</c>:
+        /// Graph publishes D7, D28, D90 and D180, and a user has a separate row per period on the same date
+        /// with different prompt and active-day counts. Selecting a snapshot by date alone therefore returns
+        /// several rows per user, and joining that to <c>users</c> multiplies every licensed user by the
+        /// number of stored periods - inflating adoption counts (which can then exceed the licensed
+        /// population) and burning the row cap on duplicates. The period has to be pinned as well.
+        /// Returns 0 when the column is NULL for every row on that date, which is how reports imported
+        /// before the period was recorded are handled.
+        /// </remarks>
+        public const string LatestCopilotReportPeriodSql =
+            "SELECT TOP (1) ISNULL(r.report_period_days, 0) AS Value\r\n" +
+            "FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
+            "WHERE r.[date] = @copilotReportDate\r\n" +
+            "GROUP BY r.report_period_days\r\n" +
+            "ORDER BY CASE WHEN r.report_period_days IS NULL THEN 1 ELSE 0 END,\r\n" +
+            "         ABS(ISNULL(r.report_period_days, 0) - @windowDays),\r\n" +
+            "         ISNULL(r.report_period_days, 0);";
+
+        /// <summary>
         /// The most recent settled Microsoft 365 usage-report snapshot. Teams is used as the reference
         /// workload because every tenant that imports usage reports at all imports Teams, and mixing
         /// snapshot dates across workloads would compare a user's Monday against someone else's Friday.
@@ -191,7 +214,12 @@ namespace Common.Entities.CopilotAdoption
                     "           " + ReportLastActivityExpression() + " AS ReportLastActivityUtc,\r\n" +
                     "           r.agent_last_activity_date AS ReportAgentLastActivityUtc\r\n" +
                     "    FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
+                    // Both the date AND the period are pinned: the table holds one row per
+                    // (date, user, period), so filtering on date alone returns D7/D28/D90/D180 rows for the
+                    // same user and fans every licensed user out by the number of stored periods.
                     "    WHERE r.[date] = @copilotReportDate\r\n" +
+                    "      AND ((@copilotReportPeriodDays > 0 AND r.report_period_days = @copilotReportPeriodDays)\r\n" +
+                    "           OR (@copilotReportPeriodDays = 0 AND r.report_period_days IS NULL))\r\n" +
                     ")";
             }
 
