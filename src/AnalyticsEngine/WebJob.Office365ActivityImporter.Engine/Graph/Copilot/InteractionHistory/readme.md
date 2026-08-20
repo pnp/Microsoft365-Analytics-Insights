@@ -55,28 +55,39 @@ Copilot responses are never scored: they are model output rather than a signal a
 longer than prompts (so they would dominate the per-character cognitive bill), and the question this feature
 answers is "what were our people asking for, and how did they feel about it".
 
-## The cost problem, and the four brakes
+## The cost problem, and the brakes
 
 `getAllEnterpriseInteractions` has **no tenant-wide form and no delta form**. It is one HTTP call per user.
 At this product's stated design target of ~200,000 users that would be 200,000 Graph calls per import cycle,
 which is a non-starter as an always-on import.
 
-Four independent brakes apply, in order:
+These brakes apply, in order:
 
-1. **The feature toggle.** `ImportTaskSettings.CopilotInteractionHistory`, off by default.
-2. **Group scope.** `UserGroupsFilter` must be set - the import **refuses to run** without it unless
-   `CopilotInteractionHistoryAllowUnscoped=true` is set explicitly. Scope is resolved **group-first**: the
-   matching Entra ID groups are listed once and their members paged, then intersected with the users table.
-   The obvious alternative - asking "is this user in the pilot group?" for each user - is one Graph call per
-   *tenant* user, so it would spend 200,000 calls just deciding who to import. Group-first is
-   O(groups + pilot members) instead, and it also pages membership properly rather than reading only the
-   first page of a user's `memberOf`.
+1. **The feature toggle and the permission.** `ImportTaskSettings.CopilotInteractionHistory` is off by
+   default, and the import needs `AiEnterpriseInteraction.Read.All`, which the installer does not grant.
+   **These two are the real controls: to stop this import, turn the workload off or withhold the
+   permission.**
+2. **Group scope — optional.** `UserGroupsFilter` narrows the import to one or more Entra ID groups.
+   Recommended for a pilot, but **not required**; without it every enabled user is eligible, still bounded by
+   the ceiling below. When it *is* set, scope is resolved **group-first**: the matching groups are listed once
+   and their members paged, then looked up in the users table. The obvious alternative - asking "is this user
+   in the group?" for each user - is one Graph call per *tenant* user, so it would spend 200,000 calls just
+   deciding who to import. Group-first is O(groups + members) instead, and it pages membership properly rather
+   than reading only the first page of a user's `memberOf`.
 3. **A per-cycle ceiling.** `CopilotInteractionHistoryMaxUsersPerCycle` (default 500). Users are taken
-   least-recently-run first, so a pilot group larger than the cap is still fully covered - just round-robin
-   over consecutive cycles.
+   least-recently-run first, so a scope larger than the cap is still fully covered - just round-robin over
+   consecutive cycles. **With the group filter optional, this is the brake that bounds an unnarrowed run.**
 4. **A per-user back-off.** Users who return nothing twice in a row (almost always because they lack the
    `M365_COPILOT_BUSINESS_CHAT` service plan) are skipped for `CopilotInteractionHistoryEmptyUserBackOffHours`
    (default 72). The back-off always expires, so a newly-licensed user is picked up again.
+
+### How the user selection scales without a filter
+
+Because running unnarrowed is a normal configuration rather than an escape hatch, the unnarrowed path does the
+whole selection **in SQL** - joined to the watermarks, back-off filtered, ordered least-recently-run first and
+`TOP`-capped - so a cycle materialises at most `CopilotInteractionHistoryMaxUsersPerCycle` users however large
+the directory is. Only the narrowed path fetches users by UPN in chunks, which is safe because a group's
+membership is small by definition.
 
 On top of that the import is **incremental**: each user has a watermark, so a steady-state cycle only asks for
 interactions created since the last successful run. The whole section is additionally cadence-gated by
@@ -142,8 +153,7 @@ Data is only returned for users licensed with the **`M365_COPILOT_BUSINESS_CHAT`
 | Setting | Default | Purpose |
 |---|---|---|
 | `ImportJobSettings` -> `CopilotInteractionHistory` | off | Master toggle (installer checkbox) |
-| `UserGroupsFilter` | none | Entra ID group display names, `;`-separated, `*` wildcards. **Required.** |
-| `CopilotInteractionHistoryAllowUnscoped` | `false` | Permits running with no group filter. Understand the cost first. |
+| `UserGroupsFilter` | none | Entra ID group display names, `;`-separated, `*` wildcards. **Optional** - narrows the import; without it every enabled user is eligible. |
 | `CopilotInteractionHistoryMaxUsersPerCycle` | `500` | Hard ceiling on Graph calls per cycle |
 | `CopilotInteractionHistoryIntervalHours` | `24` | Minimum gap between runs; 0 = every cycle |
 | `CopilotInteractionHistoryMaxDaysBackOnFirstRun` | `30` | Backfill window for a newly in-scope user |
