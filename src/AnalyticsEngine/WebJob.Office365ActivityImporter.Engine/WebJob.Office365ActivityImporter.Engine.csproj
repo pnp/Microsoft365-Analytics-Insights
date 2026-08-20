@@ -131,6 +131,7 @@
     <Compile Include="Graph\Copilot\InteractionHistory\IAiInteractionSourceLoader.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionCognitiveEnricher.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\InteractionStatsExtractor.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\PilotGroupResolution.cs" />
     <Compile Include="Graph\Email\DeltaTokenStores.cs" />
     <Compile Include="Graph\Email\GraphSentEmailSourceLoader.cs" />
     <Compile Include="Graph\Email\ISentEmailSentimentScorer.cs" />
