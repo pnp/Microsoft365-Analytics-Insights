@@ -220,11 +220,6 @@ namespace Common.Entities.Config
                 && interactionBackOffHours >= 0
                 ? interactionBackOffHours
                 : DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
-
-            // Guard rail: refuse to run tenant-wide unless an admin has explicitly said so. Without this
-            // an empty UserGroupsFilter would silently mean "every user in the tenant".
-            this.CopilotInteractionHistoryAllowUnscoped = bool.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryAllowUnscoped"), out var interactionAllowUnscoped)
-                && interactionAllowUnscoped;
         }
 
         /// <summary>
@@ -534,14 +529,6 @@ namespace Common.Entities.Config
         /// <c>CopilotInteractionHistoryEmptyUserBackOffHours</c>.
         /// </summary>
         public int CopilotInteractionHistoryEmptyUserBackOffHours { get; set; } = DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
-
-        /// <summary>
-        /// Permits the interaction-history import to run with no <see cref="UserGroupsFilter"/> set, i.e.
-        /// against every user in the database. Off by default and intentionally awkward to turn on: at the
-        /// ~200k-user design target an unscoped run is 200k Graph calls per cycle. Override with
-        /// <c>CopilotInteractionHistoryAllowUnscoped</c>.
-        /// </summary>
-        public bool CopilotInteractionHistoryAllowUnscoped { get; set; } = false;
 
         #endregion
     }

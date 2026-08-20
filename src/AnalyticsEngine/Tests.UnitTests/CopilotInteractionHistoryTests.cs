@@ -333,35 +333,30 @@ namespace Tests.UnitTests
         #region Cost controls
 
         [TestMethod]
-        public void Import_RefusesToRunWithoutAGroupScope()
+        public void Import_DoesNotRequireAGroupScope()
         {
+            // UserGroupsFilter is an optional narrowing, not a precondition. The controls that decide whether
+            // this import runs at all are the workload toggle and the AiEnterpriseInteraction.Read.All
+            // permission - to stop it, turn the workload off or withhold the permission. Requiring a group
+            // filter as well meant an admin who wanted tenant-wide history had to opt in twice.
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var settings = new AppConfig { CopilotInteractionHistoryAllowUnscoped = false };
+            var importer = NewImporter(logger, new AppConfig(), new UserGroupsFilterModel(string.Empty));
 
-            var importer = NewImporter(logger, settings, new UserGroupsFilterModel(string.Empty));
-
-            // An empty filter would mean "every user in the tenant", i.e. one Graph call each. At the
-            // ~200k-user design target that is 200k calls per cycle, so it must be refused outright.
-            Assert.IsFalse(importer.ValidateScopeConfiguration());
+            Assert.IsNotNull(importer,
+                "An empty UserGroupsFilter is a valid configuration - every enabled user is eligible, still " +
+                "bounded by CopilotInteractionHistoryMaxUsersPerCycle.");
         }
 
         [TestMethod]
-        public void Import_RunsUnscopedOnlyWhenExplicitlyAllowed()
+        public void PerCycleCap_IsTheBrakeThatBoundsAnUnnarrowedRun()
         {
-            var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var settings = new AppConfig { CopilotInteractionHistoryAllowUnscoped = true };
+            // With the group filter now optional, this cap is what stops an unnarrowed run costing one Graph
+            // call per user in the directory. A zero or negative setting must fall back to the default rather
+            // than being read as "no limit".
+            Assert.AreEqual(500, AppConfig.DefaultCopilotInteractionHistoryMaxUsersPerCycle);
 
-            var importer = NewImporter(logger, settings, new UserGroupsFilterModel(string.Empty));
-            Assert.IsTrue(importer.ValidateScopeConfiguration());
-        }
-
-        [TestMethod]
-        public void Import_AcceptsAConfiguredGroupScope()
-        {
-            var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var importer = NewImporter(logger, new AppConfig(), new UserGroupsFilterModel("Copilot Pilot*"));
-
-            Assert.IsTrue(importer.ValidateScopeConfiguration());
+            var configured = new AppConfig { CopilotInteractionHistoryMaxUsersPerCycle = 250 };
+            Assert.AreEqual(250, configured.CopilotInteractionHistoryMaxUsersPerCycle);
         }
 
         [TestMethod]
