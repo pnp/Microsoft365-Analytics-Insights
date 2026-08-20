@@ -584,6 +584,28 @@ namespace Common.Entities.CopilotAdoption
         /// which splits weeks on Sunday and would push Sunday's rows into the following week. The same
         /// bucketing as the Reports area, so the two agree.
         /// </summary>
+        /// <remarks>
+        /// Both series are computed in ONE pass over the range (issue #295). They used to be two
+        /// <c>SELECT</c>s joined by <c>UNION ALL</c>, each repeating the same <c>copilot_chats</c> to
+        /// <c>audit_events</c> join over the same six months - so a range holding R Copilot rows was
+        /// processed twice, and the join performed twice, for two numbers that come from the same rows.
+        /// <para>
+        /// The Cowork figure is now a conditional <c>COUNT(DISTINCT ...)</c>: <c>COUNT</c> ignores NULLs,
+        /// so the <c>CASE</c> yielding NULL for non-Cowork rows counts exactly the users the second query
+        /// used to select.
+        /// </para>
+        /// <para>
+        /// Unpivoted with <c>CROSS APPLY (VALUES ...)</c> rather than by selecting from the CTE twice.
+        /// A CTE referenced twice can be expanded and evaluated twice, which would reintroduce the very
+        /// double scan this removes; referencing it once cannot.
+        /// </para>
+        /// <para>
+        /// Output is deliberately identical to before, including the absence of a Cowork point in weeks
+        /// with no Cowork usage. Emitting explicit zeros would arguably suit a trend chart better - a
+        /// missing week is ambiguous between "no data" and "no usage" - but that is a reporting decision,
+        /// not something to slip in with a performance fix.
+        /// </para>
+        /// </remarks>
         public static string WeeklyAdoptionTrendSql(IEnumerable<int> seatLicenceTypeIds, IEnumerable<int> coworkAgentIds)
         {
             var week = WeekBucket("au.time_stamp");
@@ -595,24 +617,26 @@ namespace Common.Entities.CopilotAdoption
                 "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
                 "    FROM dbo.user_license_type_lookups AS ul\r\n" +
                 $"    WHERE ul.license_type_id IN ({seats})\r\n" +
+                "),\r\n" +
+                "Weekly AS (\r\n" +
+                $"    SELECT {week} AS WeekStart,\r\n" +
+                "           COUNT(DISTINCT au.user_id) AS ActiveUsers,\r\n" +
+                $"           COUNT(DISTINCT CASE WHEN ({cowork}) THEN au.user_id END) AS CoworkUsers\r\n" +
+                "    FROM dbo.copilot_chats AS c\r\n" +
+                "    " + AuditJoin + "\r\n" +
+                "    JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
+                "    WHERE au.time_stamp >= @trendFrom\r\n" +
+                $"    GROUP BY {week}\r\n" +
                 ")\r\n" +
-                "SELECT 'Active licensed users' AS SeriesName,\r\n" +
-                $"       {week} AS WeekStart,\r\n" +
-                "       CAST(COUNT(DISTINCT au.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.copilot_chats AS c\r\n" +
-                "" + AuditJoin + "\r\n" +
-                "JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
-                "WHERE au.time_stamp >= @trendFrom\r\n" +
-                $"GROUP BY {week}\r\n" +
-                "UNION ALL\r\n" +
-                "SELECT 'Cowork users' AS SeriesName,\r\n" +
-                $"       {week} AS WeekStart,\r\n" +
-                "       CAST(COUNT(DISTINCT au.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.copilot_chats AS c\r\n" +
-                "" + AuditJoin + "\r\n" +
-                "JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
-                $"WHERE au.time_stamp >= @trendFrom AND ({cowork})\r\n" +
-                $"GROUP BY {week}\r\n" +
+                "SELECT v.SeriesName AS SeriesName,\r\n" +
+                "       w.WeekStart AS WeekStart,\r\n" +
+                "       CAST(v.Value AS float) AS Value\r\n" +
+                "FROM Weekly AS w\r\n" +
+                "CROSS APPLY (VALUES\r\n" +
+                "    ('Active licensed users', w.ActiveUsers),\r\n" +
+                "    ('Cowork users', w.CoworkUsers)\r\n" +
+                ") AS v(SeriesName, Value)\r\n" +
+                "WHERE NOT (v.SeriesName = 'Cowork users' AND v.Value = 0)\r\n" +
                 "ORDER BY SeriesName, WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
         }
