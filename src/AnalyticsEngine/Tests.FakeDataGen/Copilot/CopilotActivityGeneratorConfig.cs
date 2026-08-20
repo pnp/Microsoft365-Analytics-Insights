@@ -6,7 +6,9 @@ namespace Tests.FakeDataGen.Copilot
     public static class CopilotActivityGeneratorConfig
     {
         // App host options for Copilot
-        public static readonly string[] AppHosts = { "Teams", "Word", "Excel", "PowerPoint", "Outlook", "M365Chat" };
+        // Keep these aligned with the app_host PIVOT in profiling.usp_UpsertCopilot.
+        // bizchat is the M365 Chat experience; appchat covers in-app Copilot experiences.
+        public static readonly string[] AppHosts = { "Teams", "Word", "Excel", "PowerPoint", "Outlook", "bizchat", "appchat" };
 
         // Agent names for custom agents
         public static readonly string[] AgentNames = { "Researcher", "Sales Assistant", "HR Helper", "IT Support Bot", "Marketing Agent" };

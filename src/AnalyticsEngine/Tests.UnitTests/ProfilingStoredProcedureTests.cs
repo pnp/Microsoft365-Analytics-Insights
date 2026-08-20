@@ -508,6 +508,27 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task UspCompileActivityWeek_CopilotSundayActivity_IsIncluded()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(98);
+                var sundayLate = monday.AddDays(6).AddHours(23).AddMinutes(59);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+                await InsertCopilotChat(db, TEST_USER_ID, sundayLate, "Teams");
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                Assert.AreEqual(
+                    1,
+                    await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Chats"),
+                    "Copilot activity from the full Sunday must be included in the Mon-Sun week");
+            }
+        }
+
         // ---- usp_CompileUsageWeek / UsageWeekly - previously untested entirely ----
 
         [TestMethod]

@@ -3,6 +3,7 @@ using Common.Entities.Entities;
 using Common.Entities.Entities.AuditLog;
 using System;
 using System.Linq;
+using Tests.FakeDataGen.Generation;
 
 namespace Tests.FakeDataGen.Copilot
 {
@@ -33,9 +34,25 @@ namespace Tests.FakeDataGen.Copilot
         /// <param name="agentPercentage">Percentage of events that should have agents (0-100)</param>
         /// <param name="copilotLicensePercentage">Percentage of users that should have Copilot licenses (0-100)</param>
         /// <param name="userCount">Number of test users to create when the database has none (defaults to a medium-sized company)</param>
-        public void GenerateCopilotActivity(int count, int customAgentPercentage = 10, int agentPercentage = 30, int copilotLicensePercentage = 30, int userCount = 250)
+        /// <param name="daysBack">Number of days across which generated activity is spread</param>
+        /// <param name="windowEndUtc">Optional shared UTC endpoint for the generated date window</param>
+        public void GenerateCopilotActivity(
+            int count,
+            int customAgentPercentage = 10,
+            int agentPercentage = 30,
+            int copilotLicensePercentage = 30,
+            int userCount = 250,
+            int daysBack = 90,
+            DateTime? windowEndUtc = null)
         {
+            if (count < 1) throw new ArgumentOutOfRangeException(nameof(count));
+            if (userCount < 1) throw new ArgumentOutOfRangeException(nameof(userCount));
+            if (daysBack < 1) throw new ArgumentOutOfRangeException(nameof(daysBack));
+
+            DateTime effectiveWindowEndUtc = windowEndUtc ?? DateTime.UtcNow;
+
             Console.WriteLine($"Generating {count} copilot activity events...");
+            Console.WriteLine($"- Spread across the last {daysBack} day(s)");
             Console.WriteLine($"- {agentPercentage}% will have agents");
             Console.WriteLine($"- {customAgentPercentage}% of those will be custom agents");
             Console.WriteLine($"- {copilotLicensePercentage}% of users will have Copilot licenses");
@@ -47,7 +64,7 @@ namespace Tests.FakeDataGen.Copilot
 
                 // Ensure we have users. Pull up to userCount existing users so activity is spread
                 // across a realistic population rather than a handful of accounts.
-                var users = db.users.Take(userCount).ToList();
+                var users = db.users.OrderBy(u => u.ID).Take(userCount).ToList();
                 if (users.Count == 0)
                 {
                     Console.WriteLine($"No users found in database. Creating {userCount} test users...");
@@ -78,7 +95,14 @@ namespace Tests.FakeDataGen.Copilot
                     bool shouldHaveAgent = _random.Next(100) < agentPercentage;
                     bool isCustomAgent = shouldHaveAgent && _random.Next(100) < customAgentPercentage;
 
-                    var copilotEvent = GenerateSingleCopilotEvent(db, user, copilotOperation, shouldHaveAgent, isCustomAgent);
+                    var copilotEvent = GenerateSingleCopilotEvent(
+                        db,
+                        user,
+                        copilotOperation,
+                        shouldHaveAgent,
+                        isCustomAgent,
+                        daysBack,
+                        effectiveWindowEndUtc);
 
                     if (shouldHaveAgent)
                     {
@@ -110,7 +134,14 @@ namespace Tests.FakeDataGen.Copilot
             }
         }
 
-        private CopilotChat GenerateSingleCopilotEvent(AnalyticsEntitiesContext db, User user, EventOperation operation, bool withAgent, bool isCustomAgent)
+        private CopilotChat GenerateSingleCopilotEvent(
+            AnalyticsEntitiesContext db,
+            User user,
+            EventOperation operation,
+            bool withAgent,
+            bool isCustomAgent,
+            int daysBack,
+            DateTime windowEndUtc)
         {
             // Generate unique event ID - ensure it doesn't already exist
             Guid eventId;
@@ -119,7 +150,7 @@ namespace Tests.FakeDataGen.Copilot
                 eventId = Guid.NewGuid();
             } while (db.AuditEventsCommon.Any(e => e.Id == eventId));
 
-            var timestamp = GenerateRealisticTimestamp();
+            var timestamp = ActivityTimestampGenerator.Next(_random, daysBack, windowEndUtc);
 
             // Create common audit event
             var auditEvent = new CommonAuditEvent
@@ -336,42 +367,6 @@ namespace Tests.FakeDataGen.Copilot
         private string GenerateEventData()
         {
             return $"{{\"TestData\": \"Generated at {DateTime.UtcNow}\"}}";
-        }
-
-        /// <summary>
-        /// Produces a timestamp within the last ~90 days that mimics real working patterns:
-        /// activity lands almost entirely on weekdays and clusters around typical business hours,
-        /// with only occasional out-of-hours usage. This keeps generated data looking realistic
-        /// when rolled up into daily/hourly reports instead of a flat random spread.
-        /// </summary>
-        private DateTime GenerateRealisticTimestamp()
-        {
-            // Pick a day in the last 90 days, then push weekends onto a nearby weekday most of the time.
-            DateTime day = DateTime.UtcNow.Date.AddDays(-_random.Next(0, 90));
-            if (day.DayOfWeek == DayOfWeek.Saturday || day.DayOfWeek == DayOfWeek.Sunday)
-            {
-                // ~90% of the time move weekend activity to the preceding Friday.
-                if (_random.Next(100) < 90)
-                {
-                    while (day.DayOfWeek == DayOfWeek.Saturday || day.DayOfWeek == DayOfWeek.Sunday)
-                    {
-                        day = day.AddDays(-1);
-                    }
-                }
-            }
-
-            // Business hours cluster (9-17) most of the time, with a few early/late outliers.
-            int hour;
-            if (_random.Next(100) < 85)
-            {
-                hour = 9 + _random.Next(0, 9); // 9:00 - 17:59
-            }
-            else
-            {
-                hour = _random.Next(0, 24);
-            }
-
-            return day.AddHours(hour).AddMinutes(_random.Next(0, 60)).AddSeconds(_random.Next(0, 60));
         }
 
         private string GetRandomExtension()
