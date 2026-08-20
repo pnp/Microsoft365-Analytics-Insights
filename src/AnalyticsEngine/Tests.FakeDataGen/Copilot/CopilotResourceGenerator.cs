@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Entities.AuditLog;
 using System;
 using System.Linq;
@@ -53,6 +53,45 @@ namespace Tests.FakeDataGen.Copilot
             }
         }
 
+        /// <summary>
+        /// Sets the action Copilot performed and the SharePoint list item id behind the resource.
+        /// </summary>
+        /// <remarks>
+        /// <paramref name="listItemSourceId"/> is deliberately the SAME lookup row as the resource id most of
+        /// the time. The audit payload very often repeats the resource Id verbatim as listItemUniqueId, and
+        /// both columns are dimensioned against <c>copilot_event_accessed_resource_ids</c> precisely so the
+        /// two de-duplicate against each other instead of storing the string twice on the largest Copilot
+        /// table. Generating a distinct value every time would hide that, and would inflate the dimension in
+        /// a way real data does not.
+        /// </remarks>
+        private void AddActionAndListItem(AnalyticsEntitiesContext db, CopilotEventAccessedResource resource, bool sharePointBacked)
+        {
+            resource.Action = GetOrCreateAccessedResourceAction(db,
+                CopilotActivityGeneratorConfig.AccessedResourceActions[
+                    _random.Next(CopilotActivityGeneratorConfig.AccessedResourceActions.Length)]);
+
+            if (!sharePointBacked)
+                return;
+
+            resource.ListItemUniqueId = _random.Next(100) < 80
+                ? resource.ResourceId
+                : GetOrCreateAccessedResourceId(db, Guid.NewGuid().ToString().ToUpperInvariant());
+        }
+
+        private CopilotAccessedResourceAction GetOrCreateAccessedResourceAction(AnalyticsEntitiesContext db, string name)
+        {
+            var action = db.CopilotAccessedResourceActions.Local.FirstOrDefault(a => a.Name == name)
+                ?? db.CopilotAccessedResourceActions.FirstOrDefault(a => a.Name == name);
+
+            if (action == null)
+            {
+                action = new CopilotAccessedResourceAction { Name = name };
+                db.CopilotAccessedResourceActions.Add(action);
+            }
+
+            return action;
+        }
+
         private void AddSharePointResource(AnalyticsEntitiesContext db, CopilotEventAccessedResource resource)
         {
             // SharePoint/OneDrive document
@@ -65,6 +104,7 @@ namespace Tests.FakeDataGen.Copilot
             resource.ResourceName = GetOrCreateAccessedResourceName(db, docName);
             resource.ResourceSiteUrl = GetOrCreateAccessedResourceSiteUrl(db, siteUrl);
             resource.ResourceType = GetOrCreateAccessedResourceType(db, "File");
+            AddActionAndListItem(db, resource, sharePointBacked: true);
         }
 
         private void AddOutlookResource(AnalyticsEntitiesContext db, CopilotEventAccessedResource resource)
@@ -79,13 +119,14 @@ namespace Tests.FakeDataGen.Copilot
             resource.ResourceName = GetOrCreateAccessedResourceName(db, attachmentName);
             resource.ResourceSiteUrl = GetOrCreateAccessedResourceSiteUrl(db, "https://outlook.office365.com/owa");
             resource.ResourceType = GetOrCreateAccessedResourceType(db, "Email");
+            AddActionAndListItem(db, resource, sharePointBacked: false);
         }
 
         private void AddWebPageResource(AnalyticsEntitiesContext db, CopilotEventAccessedResource resource)
         {
             // Web page or other resource
             string webUrl = CopilotActivityGeneratorConfig.ResourceSiteUrls[_random.Next(CopilotActivityGeneratorConfig.ResourceSiteUrls.Length)];
-            string resourceName = webUrl.Contains("accuweather") ? "Weather Forecast - S�o Tom�" : "Email Message";
+            string resourceName = webUrl.Contains("accuweather") ? "Weather Forecast - São Tomé" : "Email Message";
 
             resource.ResourceId = GetOrCreateAccessedResourceId(db, webUrl);
             resource.ResourceName = GetOrCreateAccessedResourceName(db, resourceName);

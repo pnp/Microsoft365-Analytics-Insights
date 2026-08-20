@@ -30,6 +30,8 @@ namespace Tests.FakeDataGen
                 ctx => RunOffice365ActivityGenerator(ctx.RequireConnectionString())),
             new MenuItem("Generate combined profiling data (O365 + Copilot)", MenuCategory.DataGeneration,
                 ctx => RunCombinedActivityGenerator(ctx.RequireConnectionString())),
+            new MenuItem("Generate fake Copilot prompt history (AI interaction history)", MenuCategory.DataGeneration,
+                ctx => RunCopilotInteractionHistoryGenerator(ctx.RequireConnectionString())),
 
             // Stress tests
             new MenuItem("ActivityAPI import stress test", MenuCategory.StressTest,
@@ -318,6 +320,40 @@ namespace Tests.FakeDataGen
 
             Console.WriteLine();
             Console.WriteLine("Copilot activity generation completed successfully!");
+        }
+
+        /// <summary>
+        /// Generates the per-turn Copilot "prompt history" tables so interaction reports can be built and
+        /// measured without a real tenant. No prompt text is generated or stored - the real import keeps only
+        /// counts, so this does too.
+        /// </summary>
+        private static void RunCopilotInteractionHistoryGenerator(string connectionString)
+        {
+            Console.WriteLine("===========================================");
+            Console.WriteLine("  Generate Fake Copilot Prompt History");
+            Console.WriteLine("===========================================");
+            Console.WriteLine();
+
+            if (!ConfirmDatabaseSafeToWrite(connectionString))
+            {
+                Console.WriteLine("Operation cancelled by user.");
+                return;
+            }
+
+            int userCount = PromptInt("How many users should have history?", 250, 1, int.MaxValue);
+            int sessionsPerUser = PromptInt("Average conversations per user", 8, 1, 10000);
+            int turnsPerSession = PromptInt("Average turns per conversation (each turn = a prompt + a response)", 6, 1, 10000);
+            int daysBack = PromptInt("How many days back should history be spread across?", 90, 1, 3650);
+            int cognitivePercent = PromptInt("Percentage of prompts with sentiment / language / key phrases (0-100)", 70, 0, 100);
+            int sharedPercent = PromptInt("Percentage of conversations shared with a second user (0-100)", 5, 0, 100);
+
+            Console.WriteLine();
+            var generator = new CopilotInteractionHistoryGenerator(connectionString);
+            generator.GenerateInteractionHistory(userCount, sessionsPerUser, turnsPerSession, daysBack,
+                cognitivePercent, sharedPercent);
+
+            Console.WriteLine();
+            Console.WriteLine("Copilot prompt history generation completed successfully!");
         }
 
         private static void RunOffice365ActivityGenerator(string connectionString)

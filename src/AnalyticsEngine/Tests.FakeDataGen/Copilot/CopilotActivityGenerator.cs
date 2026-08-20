@@ -17,6 +17,15 @@ namespace Tests.FakeDataGen.Copilot
         private readonly CopilotLicenseManager _licenseManager;
         private readonly CopilotUserManager _userManager;
         private readonly CopilotResourceGenerator _resourceGenerator;
+        private readonly CopilotEventDetailGenerator _detailGenerator;
+
+        /// <summary>
+        /// The last few conversation ids seen per user, so consecutive interactions can share a thread rather
+        /// than every interaction being its own conversation. <c>thread_id</c> exists to group interactions,
+        /// so generating a unique one per row would make it useless for exactly the reports it is for.
+        /// </summary>
+        private readonly System.Collections.Generic.Dictionary<int, System.Collections.Generic.List<string>> _recentThreadsByUser
+            = new System.Collections.Generic.Dictionary<int, System.Collections.Generic.List<string>>();
 
         public CopilotActivityGenerator(string connectionString)
         {
@@ -24,6 +33,7 @@ namespace Tests.FakeDataGen.Copilot
             _licenseManager = new CopilotLicenseManager();
             _userManager = new CopilotUserManager(_random, _licenseManager);
             _resourceGenerator = new CopilotResourceGenerator(_random);
+            _detailGenerator = new CopilotEventDetailGenerator(_random);
         }
 
         /// <summary>
@@ -170,7 +180,15 @@ namespace Tests.FakeDataGen.Copilot
                 EventID = eventId,
                 AuditEvent = auditEvent,
                 AppHost = CopilotActivityGeneratorConfig.AppHosts[_random.Next(CopilotActivityGeneratorConfig.AppHosts.Length)],
-                CopilotCreditEstimateTotal = _random.Next(1, 50)
+                CopilotCreditEstimateTotal = _random.Next(1, 50),
+
+                // Fields the importer parses but used to discard. Generating them keeps any report built
+                // over them honest - an empty column looks the same as a working report on no data.
+                ThreadId = NextThreadId(user.ID),
+                ClientRegion = CopilotActivityGeneratorConfig.ClientRegions[
+                    _random.Next(CopilotActivityGeneratorConfig.ClientRegions.Length)],
+                CopilotLogVersion = CopilotActivityGeneratorConfig.CopilotLogVersions[
+                    _random.Next(CopilotActivityGeneratorConfig.CopilotLogVersions.Length)]
             };
 
             // Add agent if requested
@@ -188,6 +206,13 @@ namespace Tests.FakeDataGen.Copilot
 
             db.CopilotChats.Add(copilotChat);
 
+            // Detail tables that hang off the same audit record: both messages, every context, the models
+            // that answered and the plugins that grounded it.
+            _detailGenerator.AddMessages(db, copilotChat);
+            _detailGenerator.AddContexts(db, copilotChat);
+            _detailGenerator.AddAIModels(db, copilotChat);
+            _detailGenerator.AddSystemPlugins(db, copilotChat);
+
             // Randomly decide if this is a file, meeting, or chat-only event
             int eventType = _random.Next(3);
 
@@ -204,6 +229,36 @@ namespace Tests.FakeDataGen.Copilot
             // Otherwise it's chat-only (no additional metadata)
 
             return copilotChat;
+        }
+
+        /// <summary>
+        /// Picks a conversation id for this user: usually continues a recent conversation, sometimes starts a
+        /// new one. A fresh id per interaction would make <c>thread_id</c> useless for the grouping it exists
+        /// to support.
+        /// </summary>
+        private string NextThreadId(int userId)
+        {
+            if (!_recentThreadsByUser.TryGetValue(userId, out var recent))
+            {
+                recent = new System.Collections.Generic.List<string>();
+                _recentThreadsByUser[userId] = recent;
+            }
+
+            // 60% continue an existing conversation, so threads have several turns.
+            if (recent.Count > 0 && _random.Next(100) < 60)
+            {
+                return recent[_random.Next(recent.Count)];
+            }
+
+            var threadId = $"19:copilot_{Guid.NewGuid():N}@thread.v2";
+            recent.Add(threadId);
+
+            // Only the last few conversations stay "open" - otherwise every user accumulates every thread
+            // they have ever had and the distribution flattens out.
+            if (recent.Count > 5)
+                recent.RemoveAt(0);
+
+            return threadId;
         }
 
         private void CreateMeetingEvent(AnalyticsEntitiesContext db, CopilotChat copilotChat, User user)
