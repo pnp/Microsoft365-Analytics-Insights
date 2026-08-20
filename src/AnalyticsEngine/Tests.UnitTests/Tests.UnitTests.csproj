@@ -135,6 +135,7 @@
     <Compile Include="AppInsightsImportTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />
+    <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />

@@ -32,7 +32,8 @@ namespace App.ControlPanel.Controls
                         Copilot = chkCopilot.Checked,
                         SentEmails = chkSentEmails.Checked,
                         ImportPowerPlatform = chkPowerPlatform.Checked,
-                        GraphCopilotUsageReports = chkCopilotUsageReports.Checked
+                        GraphCopilotUsageReports = chkCopilotUsageReports.Checked,
+                        CopilotInteractionHistory = chkCopilotInteractionHistory.Checked
                     }
                 };
             }
@@ -56,6 +57,7 @@ namespace App.ControlPanel.Controls
             chkSentEmails.Checked = value.ImportTaskSettings.SentEmails;
             chkPowerPlatform.Checked = value.ImportTaskSettings.ImportPowerPlatform;
             chkCopilotUsageReports.Checked = value.ImportTaskSettings.GraphCopilotUsageReports;
+            chkCopilotInteractionHistory.Checked = value.ImportTaskSettings.CopilotInteractionHistory;
         }
 
 

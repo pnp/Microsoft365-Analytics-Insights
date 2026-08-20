@@ -11,6 +11,7 @@ using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.Teams;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
@@ -56,6 +57,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
         private const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
         private const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
+        private const string CopilotInteractionHistoryLastImportedKey = "CopilotInteractionHistoryLastImported";
 
         /// <summary>
         /// Runs a "non-fresh" Graph import section at most once per <paramref name="intervalHours"/>.
@@ -210,6 +212,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 else
                     _logger.LogInformation("Skipping sent emails import", graphUserGroupsCache);
+
+                if (settings.ImportJobSettings.CopilotInteractionHistory)
+                {
+                    // Cadence-gated like the other non-fresh Graph sections, but for a different reason: this
+                    // one costs a Graph call per in-scope user, so running it every cycle would be expensive
+                    // even for a modest pilot group. Defaults to daily.
+                    await RunGraphSectionIfDueAsync(CopilotInteractionHistoryLastImportedKey, _settings.CopilotInteractionHistoryIntervalHours, "Copilot interaction history import", async () =>
+                    {
+                        var interactionImporter = new CopilotInteractionHistoryImporter(
+                            _logger,
+                            _settings,
+                            new GraphAiInteractionSourceLoader(httpClient, _graphAppIndentityOAuthContext, _logger),
+                            InteractionCognitiveEnricherFactory.Create(_settings, _logger),
+                            new GraphPilotGroupMemberResolver(httpClient, _logger),
+                            userGroupsFilter);
+
+                        await interactionImporter.ImportAsync();
+                    });
+                }
+                else
+                    _logger.LogInformation("Skipping Copilot interaction history import", graphUserGroupsCache);
 
             }
         }

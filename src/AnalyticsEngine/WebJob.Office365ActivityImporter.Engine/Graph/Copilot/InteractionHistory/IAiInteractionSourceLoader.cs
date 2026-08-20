@@ -1,0 +1,76 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory
+{
+    /// <summary>
+    /// Source-agnostic loader for one user's Copilot interaction history, so the importer can be tested
+    /// against canned payloads with no HTTP and no tenant.
+    /// </summary>
+    public interface IAiInteractionSourceLoader
+    {
+        /// <summary>
+        /// Whether the runtime identity actually holds <c>AiEnterpriseInteraction.Read.All</c>.
+        /// </summary>
+        /// <remarks>
+        /// Worth its own pre-flight check rather than letting per-user calls fail: this permission is not
+        /// granted by the installer and needs separate admin consent, so "not consented yet" is the single
+        /// most likely reason for this import to do nothing. Without the check the symptom would be a 403 per
+        /// user - up to one per user in the pilot group, every cycle - instead of one clear warning.
+        /// </remarks>
+        Task<bool> HasInteractionReadAccessAsync();
+
+        /// <summary>
+        /// Load interactions for one user created strictly between <paramref name="fromUtc"/> and
+        /// <paramref name="toUtc"/>.
+        /// </summary>
+        /// <remarks>
+        /// Both bounds are required because Graph only supports <c>$filter</c> on <c>createdDateTime</c> as a
+        /// range - a single-sided filter is rejected.
+        /// </remarks>
+        Task<AiInteractionLoadResult> LoadInteractionsForUserAsync(Common.Entities.User user, DateTime fromUtc, DateTime toUtc);
+    }
+
+    /// <summary>Outcome of loading one user's interactions.</summary>
+    public class AiInteractionLoadResult
+    {
+        public static AiInteractionLoadResult Empty() => new AiInteractionLoadResult();
+
+        /// <summary>
+        /// Interactions returned. Transient - holds real prompt/response text, so must be projected via
+        /// <see cref="InteractionStatsExtractor"/> and dropped, never stored or logged.
+        /// </summary>
+        public IReadOnlyList<AiInteraction> Interactions { get; set; } = Array.Empty<AiInteraction>();
+
+        /// <summary>
+        /// True when Graph said this user has nothing to give us - no Copilot licence, no mailbox, or the
+        /// user no longer exists. Terminal for this user, so the caller applies a back-off rather than
+        /// counting it as a failure.
+        /// </summary>
+        public bool UserNotAvailable { get; set; }
+
+        /// <summary>
+        /// True when paging stopped at the safety cap rather than at the end of the data. The caller must
+        /// then advance the watermark only as far as the interactions it actually received, so the rest is
+        /// picked up next cycle instead of being skipped.
+        /// </summary>
+        public bool Truncated { get; set; }
+
+        /// <summary>
+        /// Set when the call failed for a reason that may resolve on a later run.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately a sanitised summary (status code, Graph error code, page number) rather than the
+        /// underlying exception message or response body. This value is persisted to
+        /// <c>copilot_interaction_user_watermarks.last_error</c> and logged, and the raw payload for this
+        /// endpoint contains the user's prompts and Copilot's answers.
+        /// </remarks>
+        public string Error { get; set; }
+
+        public bool Failed => !string.IsNullOrEmpty(Error);
+
+        /// <summary>True only when the full window was read successfully and completely.</summary>
+        public bool IsCompleteSuccess => !Failed && !UserNotAvailable && !Truncated;
+    }
+}

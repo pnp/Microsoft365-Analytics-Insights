@@ -84,6 +84,7 @@
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
+    <Compile Include="Entities\Copilot\CopilotInteractionHistory.cs" />
     <Compile Include="Entities\Email\EmailAddress.cs" />
     <Compile Include="Entities\Email\SentEmail.cs" />
     <Compile Include="Entities\Email\SentEmailRecipient.cs" />
@@ -346,6 +347,10 @@
     <Compile Include="Migrations\202608191533567_DeprecateTeamsAddons.Designer.cs">
       <DependentUpon>202608191533567_DeprecateTeamsAddons.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202608200600001_AddCopilotInteractionHistory.cs" />
+    <Compile Include="Migrations\202608200600001_AddCopilotInteractionHistory.Designer.cs">
+      <DependentUpon>202608200600001_AddCopilotInteractionHistory.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -522,6 +527,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608191533567_DeprecateTeamsAddons.resx">
       <DependentUpon>202608191533567_DeprecateTeamsAddons.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608200600001_AddCopilotInteractionHistory.resx">
+      <DependentUpon>202608200600001_AddCopilotInteractionHistory.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
