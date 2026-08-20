@@ -470,8 +470,8 @@ namespace Tests.UnitTests
             var members = await resolver.GetMemberUpnsAsync(filter);
 
             Assert.AreEqual(1, resolver.CallCount, "Scope must be resolved with a single group-side lookup.");
-            Assert.AreEqual(2, members.Count);
-            Assert.IsTrue(members.Contains("PILOT1@CONTOSO.COM"),
+            Assert.AreEqual(2, members.MemberUpns.Count);
+            Assert.IsTrue(members.MemberUpns.Contains("PILOT1@CONTOSO.COM"),
                 "Membership matching must be case-insensitive to line up with SQL Server's collation.");
         }
 
@@ -483,8 +483,50 @@ namespace Tests.UnitTests
                 AnalyticsLogger.ConsoleOnlyTracer());
 
             // No filter means no pilot group; it must never be read as "everyone".
-            var members = await resolver.GetMemberUpnsAsync(new UserGroupsFilterModel(string.Empty));
-            Assert.AreEqual(0, members.Count);
+            var resolution = await resolver.GetMemberUpnsAsync(new UserGroupsFilterModel(string.Empty));
+            Assert.AreEqual(0, resolution.MemberUpns.Count);
+            Assert.IsFalse(resolution.IsIncomplete, "An empty filter is a complete answer, not a failure.");
+        }
+
+        [TestMethod]
+        public async Task PilotGroupResolver_RefusesAMatchAllFilterWithoutCallingGraph()
+        {
+            // '*' matches every group. Expanding it would page the whole directory and every group's
+            // membership only to conclude "everyone" - millions of calls on a large tenant (issue #297).
+            // The resolver must refuse it outright rather than start enumerating. No HTTP handler is
+            // usable here, so any Graph call at all would throw rather than return.
+            var resolver = new GraphPilotGroupMemberResolver(
+                new ManualGraphCallClient(new System.Net.Http.HttpClientHandler(), AnalyticsLogger.ConsoleOnlyTracer()),
+                AnalyticsLogger.ConsoleOnlyTracer());
+
+            foreach (var matchAll in new[] { "*", "**", " * " })
+            {
+                var resolution = await resolver.GetMemberUpnsAsync(new UserGroupsFilterModel(matchAll));
+
+                Assert.AreEqual(0, resolution.MemberUpns.Count, $"'{matchAll}' must not resolve to a scope.");
+                Assert.IsTrue(resolution.IsIncomplete,
+                    $"'{matchAll}' must be reported as unusable, not as a legitimate empty pilot group.");
+                StringAssert.Contains(resolution.IncompleteReason, "every group",
+                    "The reason must tell the admin why their filter was refused.");
+            }
+        }
+
+        [TestMethod]
+        public void MatchesEverything_OnlyTrueForPurelyWildcardPatterns()
+        {
+            // The distinction that decides whether the importer enumerates the directory, so it is worth
+            // pinning down. A '*' anywhere else is a genuine narrowing and must still be honoured.
+            Assert.IsTrue(new UserGroupsFilterModel("*").MatchesEverything);
+            Assert.IsTrue(new UserGroupsFilterModel("**").MatchesEverything);
+            Assert.IsTrue(new UserGroupsFilterModel("Copilot Pilot;*").MatchesEverything,
+                "Patterns are OR'd, so one match-all pattern makes the whole filter match everything.");
+
+            Assert.IsFalse(new UserGroupsFilterModel("Copilot*").MatchesEverything);
+            Assert.IsFalse(new UserGroupsFilterModel("*Pilot").MatchesEverything);
+            Assert.IsFalse(new UserGroupsFilterModel("*Pilot*").MatchesEverything);
+            Assert.IsFalse(new UserGroupsFilterModel("Copilot Pilot").MatchesEverything);
+            Assert.IsFalse(new UserGroupsFilterModel(string.Empty).MatchesEverything,
+                "No filter is 'unscoped', which the importer handles separately - not 'matches everything'.");
         }
 
         #endregion
@@ -595,10 +637,13 @@ namespace Tests.UnitTests
 
             public int CallCount { get; private set; }
 
-            public Task<HashSet<string>> GetMemberUpnsAsync(UserGroupsFilterModel filter)
+            /// <summary>Set to make the fake report a truncated / failed scope resolution.</summary>
+            public string IncompleteReason { get; set; }
+
+            public Task<PilotGroupResolution> GetMemberUpnsAsync(UserGroupsFilterModel filter)
             {
                 CallCount++;
-                return Task.FromResult(_members);
+                return Task.FromResult(new PilotGroupResolution(_members, IncompleteReason));
             }
         }
 

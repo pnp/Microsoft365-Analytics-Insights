@@ -131,7 +131,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
                 if (runLog.UsersInScope == 0)
                 {
-                    if (_userGroupsFilter.Patterns.Count > 0)
+                    if (!string.IsNullOrEmpty(runLog.Error))
+                    {
+                        // Already reported as a failure by the scope resolver - don't follow it with a
+                        // reassuring "nothing to do", which is what made this case easy to miss.
+                    }
+                    else if (_userGroupsFilter.Patterns.Count > 0)
                     {
                         _logger.LogWarning(
                             $"No users matched the UserGroupsFilter ('{_settings.UserGroupsFilter}') for the Copilot " +
@@ -214,7 +219,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 : AppConfig.DefaultCopilotInteractionHistoryMaxUsersPerCycle;
 
             if (_userGroupsFilter.Patterns.Count > 0)
-                return await SelectDueUsersInGroupsAsync(runLog, now, cap);
+            {
+                // A filter of '*' matches every group, so it narrows nothing - but resolving it the group-first
+                // way would enumerate the entire directory and every group's membership just to arrive back at
+                // "everyone". Take the unnarrowed path instead, which reaches the same scope in one capped SQL
+                // query (issue #297).
+                if (_userGroupsFilter.MatchesEverything)
+                {
+                    _logger.LogWarning(
+                        $"Copilot interaction history: UserGroupsFilter ('{_settings.UserGroupsFilter}') matches every " +
+                        "group, so it is not narrowing anything. Treating this cycle as unscoped - every enabled user " +
+                        "is eligible, capped per cycle as usual. Name the pilot group(s) to actually narrow the import, " +
+                        "or clear the filter to make the intent explicit.");
+                }
+                else
+                {
+                    return await SelectDueUsersInGroupsAsync(runLog, now, cap);
+                }
+            }
 
             return await SelectDueUsersAcrossDirectoryAsync(runLog, now, cap);
         }
@@ -239,7 +261,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 return new List<UserImportState>();
             }
 
-            var memberUpns = await _pilotGroupResolver.GetMemberUpnsAsync(_userGroupsFilter);
+            var resolution = await _pilotGroupResolver.GetMemberUpnsAsync(_userGroupsFilter);
+
+            // An incomplete resolution is the import failing to do its job, not a quiet no-op. Recorded on
+            // the run log so it surfaces on the health page rather than only in a log line nobody reads
+            // (issue #297) - a pilot group sitting past the discovery cap used to look exactly like an
+            // idle, healthy import.
+            if (resolution.IsIncomplete)
+            {
+                var message = "Copilot interaction history: the pilot scope could not be resolved in full - "
+                    + resolution.IncompleteReason;
+                _logger.LogError(message);
+                runLog.Error = Truncate(message, 1000);
+            }
+
+            var memberUpns = resolution.MemberUpns;
             if (memberUpns.Count == 0)
             {
                 runLog.UsersInScope = 0;
