@@ -1905,8 +1905,7 @@ BEGIN
           event_id
         FROM dbo.copilot_chats AS c
           JOIN dbo.audit_events AS au ON c.event_id = au.id
-        WHERE au.time_stamp >= @StartDate
-          AND au.time_stamp < DATEADD(DAY, 1, @EndDate)
+        WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
       ) t
       PIVOT (
         COUNT(event_id)
@@ -1978,8 +1977,7 @@ BEGIN
         JOIN dbo.audit_events AS au ON c.event_id = au.id
         LEFT JOIN dbo.copilot_event_files AS f ON c.event_id = f.copilot_chat_id
         LEFT JOIN dbo.copilot_event_meetings AS m ON c.event_id = m.copilot_chat_id
-      WHERE au.time_stamp >= @StartDate
-        AND au.time_stamp < DATEADD(DAY, 1, @EndDate)
+      WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
     ),
     event_counts AS (
       SELECT
