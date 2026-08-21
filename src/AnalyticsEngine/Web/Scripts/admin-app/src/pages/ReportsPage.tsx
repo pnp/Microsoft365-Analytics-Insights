@@ -22,6 +22,7 @@ import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
+import WordCloud from '../components/charts/WordCloud';
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
 const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; label: string; blurb: string }[] = [
@@ -380,6 +381,8 @@ function ReportAreaView({
                   <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
                 ) : chart.type === 'bar' && chart.categories ? (
                   <CategoryBarChart categories={chart.categories} valueLabel={chart.valueLabel} />
+                ) : chart.type === 'wordcloud' && chart.categories ? (
+                  <WordCloud categories={chart.categories} valueLabel={chart.valueLabel} />
                 ) : (
                   <Text className={styles.muted}>No data for this period.</Text>
                 )}

@@ -30,9 +30,9 @@ export interface ReportCategory {
   value: number;
 }
 
-export type ReportChartType = 'timeseries' | 'bar';
+export type ReportChartType = 'timeseries' | 'bar' | 'wordcloud';
 
-/** A single chart: a weekly `timeseries` (series set) or a `bar` chart (categories set). */
+/** A single chart: a weekly `timeseries` (series set), or a `bar` / `wordcloud` (categories set). */
 export interface ReportChart {
   key: string;
   title: string;
