@@ -421,7 +421,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         failedReports.Add($"{reportName} (HTTP {(int)ex.StatusCode} {ex.StatusCode})");
                         _logger.LogError(ex, $"{reportName} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} " +
-                            "The other activity reports are unaffected and any data already downloaded has been saved. " +
+                            "The other activity reports are unaffected and keep whatever they downloaded; this report saved nothing at all. " +
                             "This phase will NOT be recorded as complete, so it retries on the next cycle. " +
                             "A 401/403 here almost always means the Reports.Read.All application permission is missing or not admin-consented.");
                     }
@@ -494,7 +494,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _logger.LogError($"Activity reports did NOT fully import - {failedReports.Count} of {importTasks.Count} report(s) failed: " +
                         string.Join(", ", failedReports.OrderBy(r => r)) + ". " +
-                        "Everything that did download has been saved. This phase has NOT been marked complete and will retry on the next cycle. " +
+                        "Reports that succeeded have been saved; each failed report saved nothing. This phase has NOT been marked complete and will retry on the next cycle - " +
+                        "note that until it succeeds the once-a-day throttle stays disarmed, so the phase re-runs every cycle and re-downloads the full window. " +
                         "If this repeats, check the runtime account has the Reports.Read.All application permission granted and admin-consented.");
                     return false;
                 }

@@ -233,9 +233,9 @@ namespace Tests.UnitTests
         {
             // A missed duplicate hits the unique index and fails the batch, so the safe fallback when we
             // cannot work out a window is the old unbounded behaviour.
-            Assert.AreEqual(DateTime.MinValue, CopilotInteractionHistoryImporter.DedupWindowStart(new DateTime[0]));
-            Assert.AreEqual(DateTime.MinValue, CopilotInteractionHistoryImporter.DedupWindowStart(null));
-            Assert.AreEqual(DateTime.MinValue, CopilotInteractionHistoryImporter.DedupWindowStart(new[] { default(DateTime) }));
+            Assert.AreEqual(CopilotInteractionHistoryImporter.UnboundedDedupWindowStart, CopilotInteractionHistoryImporter.DedupWindowStart(new DateTime[0]));
+            Assert.AreEqual(CopilotInteractionHistoryImporter.UnboundedDedupWindowStart, CopilotInteractionHistoryImporter.DedupWindowStart(null));
+            Assert.AreEqual(CopilotInteractionHistoryImporter.UnboundedDedupWindowStart, CopilotInteractionHistoryImporter.DedupWindowStart(new[] { default(DateTime) }));
         }
 
         /// <summary>
@@ -249,20 +249,43 @@ namespace Tests.UnitTests
         {
             var real = new DateTime(2026, 8, 20, 9, 0, 0, DateTimeKind.Utc);
 
-            Assert.AreEqual(DateTime.MinValue,
+            Assert.AreEqual(CopilotInteractionHistoryImporter.UnboundedDedupWindowStart,
                 CopilotInteractionHistoryImporter.DedupWindowStart(new[] { real, default(DateTime), real.AddHours(3) }),
                 "A single unusable timestamp must widen the window to everything, not be skipped.");
 
-            Assert.AreEqual(DateTime.MinValue,
+            Assert.AreEqual(CopilotInteractionHistoryImporter.UnboundedDedupWindowStart,
                 CopilotInteractionHistoryImporter.DedupWindowStart(new[] { default(DateTime), real }),
                 "Order must not matter.");
         }
 
+        /// <summary>
+        /// The fail-open sentinel must be a value SQL Server can accept as a parameter against
+        /// <c>created_utc</c>, which is a <c>datetime</c> (floor 1753-01-01). Returning
+        /// <see cref="DateTime.MinValue"/> risked a SqlDateTime overflow - the guard failing CLOSED by
+        /// throwing, in precisely the case it exists to handle.
+        /// </summary>
         [TestMethod]
-        public void DedupWindowStart_NearDateTimeMinValue_DoesNotThrow()
+        public void UnboundedDedupWindowStart_IsWithinSqlServerDatetimeRange()
+        {
+            var sentinel = CopilotInteractionHistoryImporter.UnboundedDedupWindowStart;
+
+            Assert.IsTrue(sentinel >= System.Data.SqlTypes.SqlDateTime.MinValue.Value,
+                "The sentinel must be >= SQL Server's datetime floor or it cannot be passed as a parameter.");
+            Assert.IsTrue(sentinel <= System.Data.SqlTypes.SqlDateTime.MaxValue.Value);
+            Assert.IsTrue(sentinel < new DateTime(2000, 1, 1),
+                "It must still be early enough to be an effective 'no lower bound'.");
+        }
+
+        [TestMethod]
+        public void DedupWindowStart_NearTheDatetimeFloor_DoesNotUnderflow()
         {
             var start = CopilotInteractionHistoryImporter.DedupWindowStart(new[] { DateTime.MinValue.AddDays(1) });
-            Assert.AreEqual(DateTime.MinValue, start);
+            Assert.AreEqual(CopilotInteractionHistoryImporter.UnboundedDedupWindowStart, start);
+
+            // A real timestamp just above the floor must not be pushed below it by the margin.
+            var justAboveFloor = CopilotInteractionHistoryImporter.UnboundedDedupWindowStart.AddDays(1);
+            Assert.AreEqual(CopilotInteractionHistoryImporter.UnboundedDedupWindowStart,
+                CopilotInteractionHistoryImporter.DedupWindowStart(new[] { justAboveFloor }));
         }
 
         [TestMethod]

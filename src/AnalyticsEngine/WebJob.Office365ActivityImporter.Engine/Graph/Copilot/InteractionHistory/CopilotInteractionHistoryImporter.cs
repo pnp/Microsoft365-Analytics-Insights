@@ -202,7 +202,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Copilot interaction history import failed: {ex.Message}");
-                runLog.Error = Truncate(ex.Message, 1000);
+                runLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
             }
 
             return await FinishRunAsync(runLog, sw);
@@ -844,6 +844,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         /// The timestamp-only core of <see cref="DedupWindowStart(List{UserLoadResult})"/>, separated so it
         /// can be unit tested without building loader results.
         /// </summary>
+        /// <summary>
+        /// The "no bound" sentinel for the de-duplication window.
+        ///
+        /// Deliberately NOT <see cref="DateTime.MinValue"/>. <c>copilot_interactions.created_utc</c> is a
+        /// SQL Server <c>datetime</c> (EF6 <c>c.DateTime()</c>), whose floor is 1753-01-01; passing
+        /// 0001-01-01 as a parameter against that column risks a <c>SqlDateTime</c> overflow. That would
+        /// turn this guard - whose entire purpose is to FAIL OPEN when the window cannot be computed - into
+        /// one that fails closed by throwing, in exactly the situation it exists for. No Copilot
+        /// interaction can predate 1753, so this is equivalent in meaning and safe as a parameter.
+        /// </summary>
+        internal static readonly DateTime UnboundedDedupWindowStart = new DateTime(1753, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
         internal static DateTime DedupWindowStart(IEnumerable<DateTime> createdUtcs)
         {
             var oldest = DateTime.MaxValue;
@@ -854,11 +866,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                     // A default timestamp means we cannot place that row in time. Skipping it would compute
                     // a window that EXCLUDES the stored row it duplicates - a missed duplicate, which hits
                     // the unique index and fails the batch. So any default makes the whole window fall
-                    // open. (Unreachable today: InteractionStatsExtractor drops interactions with no
-                    // createdDateTime before they get here. This guard is written to fail open so that
-                    // stays true if that ever changes.)
+                    // open. Reachable in practice: Graph returning "0001-01-01T00:00:00Z" deserialises to a
+                    // non-null DateTime that IS default, so the null check in InteractionStatsExtractor
+                    // does not cover this.
                     if (created == default(DateTime))
-                        return DateTime.MinValue;
+                        return UnboundedDedupWindowStart;
 
                     if (created < oldest)
                         oldest = created;
@@ -867,12 +879,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
             // No timestamps at all - fall back to reading everything rather than risking a missed duplicate.
             if (oldest == DateTime.MaxValue)
-                return DateTime.MinValue;
+                return UnboundedDedupWindowStart;
 
-            // Guard the subtraction: a bad timestamp near DateTime.MinValue would otherwise throw.
-            return oldest > DateTime.MinValue.AddDays(DedupLookbackMarginDays)
-                ? oldest.AddDays(-DedupLookbackMarginDays)
-                : DateTime.MinValue;
+            // Guard the subtraction, and never return a value below the datetime floor.
+            if (oldest <= UnboundedDedupWindowStart.AddDays(DedupLookbackMarginDays))
+                return UnboundedDedupWindowStart;
+
+            return oldest.AddDays(-DedupLookbackMarginDays);
         }
 
         private async Task<HashSet<string>> LoadExistingInteractionKeysAsync(AnalyticsEntitiesContext db, List<int> sessionIds, DateTime fromUtc)
