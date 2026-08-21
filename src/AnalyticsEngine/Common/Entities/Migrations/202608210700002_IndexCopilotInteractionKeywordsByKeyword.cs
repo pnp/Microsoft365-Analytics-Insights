@@ -45,9 +45,10 @@ namespace Common.Entities.Migrations
     /// existence check finally has a seekable path instead of scanning the whole link index once per
     /// candidate. The bulk sweep is honestly a smaller win - when EVERY keyword is a candidate, scanning
     /// the link index once is the right plan either way, so the read count is unchanged (11,281 vs 11,256)
-    /// and the ~1.8x time saving comes from the scan arriving already ordered by <c>keyword_id</c>. Both
-    /// are improvements and neither regresses, so the index is kept - but the headline number belongs to
-    /// the per-user purge, not the nightly sweep.
+    /// and the plan operator stays Hash Match on both sides. The ~1.8x time saving there is reproducible
+    /// but NOT explained by the index: a hash join takes no benefit from input ordering, so treat the bulk
+    /// figure as incidental rather than as the reason for this migration. Both are improvements and
+    /// neither regresses, so the index is kept - but the headline number belongs to the per-user purge.
     ///
     /// This migration changes only the SQL schema, not the EF entity model snapshot (its <c>.resx</c> Target
     /// is byte-identical to the previous migration's).
