@@ -245,7 +245,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "GROUP BY ISNULL(c.app_host, '(unknown)') ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
 
-            return new List<Task<ReportChart>>
+            var charts = new List<Task<ReportChart>>
             {
                 RunTimeSeriesAsync("copilot-interactions", "Copilot interactions per week",
                     "Total Microsoft 365 Copilot interactions each week.", "Interactions", "Interactions", interactions, from, weekSpine),
@@ -254,6 +254,110 @@ namespace Web.AnalyticsWeb.Controllers
                 RunCategoryAsync("copilot-hosts", "Interactions by app",
                     "Where Copilot is being used across the window (top apps).", "Interactions", hosts, from),
             };
+
+            // The prompt-insight charts are driven by Azure AI Language enrichment of the Copilot
+            // interaction-history import. Without a cognitive configuration those columns are never
+            // populated, so the charts would be three permanently empty panels - don't offer them at all.
+            if (IsCognitiveEnabled())
+                charts.AddRange(CopilotPromptInsightCharts(from, weekSpine));
+
+            return charts;
+        }
+
+        /// <summary>
+        /// True when the app has a usable Azure AI Language (cognitive) configuration. Never throws:
+        /// a report page must not fail because configuration could not be read, and the safe answer is
+        /// "don't show the cognitive charts".
+        /// </summary>
+        private static bool IsCognitiveEnabled()
+        {
+            try
+            {
+                return new AppConfig().IsValidCognitiveConfig;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Charts over the cognitive enrichment of Copilot prompt history: extracted key phrases,
+        /// sentiment and detected language. Only added when cognitive services are configured.
+        /// </summary>
+        /// <remarks>
+        /// These read <c>copilot_interactions</c> (the opt-in Graph AI interaction-history import), NOT
+        /// <c>copilot_chats</c> (the audit-log import that backs the rest of this tab). Both can be
+        /// enabled independently, so all three carry an explicit "no data" warning rather than rendering
+        /// an empty panel that looks broken.
+        ///
+        /// Scale note: at ten key phrases per scored prompt a million prompts is ~10M rows in
+        /// <c>copilot_interaction_keywords</c>, so the phrase query is a SQL-side TOP N aggregate and
+        /// never a client-side count. It is bounded by <c>created_utc</c> on the interaction, which is
+        /// also what <c>IX_copilot_interactions_dedup_window</c> leads on after the session id.
+        /// </remarks>
+        private static List<Task<ReportChart>> CopilotPromptInsightCharts(DateTime from, List<DateTime> weekSpine)
+        {
+            const string NoDataWarning =
+                "No cognitive data in this period. This needs the Copilot AI interaction-history import "
+                + "enabled with cognitive enrichment turned on, and at least one import cycle to have run.";
+
+            var phrases = BuildCopilotKeyPhrasesQuery();
+            var sentiment = BuildCopilotSentimentQuery();
+            var languages = BuildCopilotLanguagesQuery();
+
+            return new List<Task<ReportChart>>
+            {
+                RunCategoryAsync("copilot-key-phrases", "Most common prompt phrases",
+                    "Key phrases extracted from Copilot prompts by Azure AI Language, sized by how often they appear.",
+                    "Mentions", phrases, from, chartType: "wordcloud", emptyWarning: NoDataWarning),
+                RunTimeSeriesAsync("copilot-sentiment", "Prompt sentiment over time",
+                    "Average sentiment of Copilot prompts each week, from -1 (negative) to +1 (positive). Weeks with no scored prompts are left as gaps, not zero.",
+                    "Sentiment", "Average sentiment", sentiment, from, weekSpine, missingValue: null),
+                RunCategoryAsync("copilot-languages", "Prompt languages",
+                    "Languages detected in Copilot prompts across the window.",
+                    "Prompts", languages, from, emptyWarning: NoDataWarning),
+            };
+        }
+
+        /// <summary>Top extracted key phrases in the window. TOP N in SQL - the link table is large.</summary>
+        internal static string BuildCopilotKeyPhrasesQuery(int top = 40)
+        {
+            return
+                $"SELECT TOP {top} k.[name] AS Label, CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
+                "FROM dbo.copilot_interaction_keywords AS ck\r\n" +
+                "INNER JOIN dbo.keywords AS k ON k.id = ck.keyword_id\r\n" +
+                "INNER JOIN dbo.copilot_interactions AS i ON i.id = ck.interaction_id\r\n" +
+                "WHERE i.created_utc >= @from\r\n" +
+                "GROUP BY k.[name] ORDER BY Value DESC\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// Weekly mean prompt sentiment. Rows with no score are excluded rather than counted as zero -
+        /// zero is "neutral", which is a real and different answer from "not scored".
+        /// </summary>
+        internal static string BuildCopilotSentimentQuery()
+        {
+            var wb = WeekBucket("i.created_utc");
+            return
+                $"SELECT {wb} AS WeekStart, AVG(i.sentiment_score) AS Value\r\n" +
+                "FROM dbo.copilot_interactions AS i\r\n" +
+                "WHERE i.created_utc >= @from AND i.sentiment_score IS NOT NULL\r\n" +
+                $"GROUP BY {wb} ORDER BY WeekStart\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>Detected prompt languages in the window.</summary>
+        internal static string BuildCopilotLanguagesQuery(int top = 8)
+        {
+            return
+                $"SELECT TOP {top} l.[name] AS Label, CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
+                "FROM dbo.copilot_interactions AS i\r\n" +
+                "INNER JOIN dbo.languages AS l ON l.id = i.language_id\r\n" +
+                "WHERE i.created_utc >= @from AND i.language_id IS NOT NULL\r\n" +
+                "GROUP BY l.[name] ORDER BY Value DESC\r\n" +
+                "OPTION (RECOMPILE);";
         }
 
         internal static string BuildCopilotUsersQuery(DateTime from, DateTime? today = null)
@@ -512,9 +616,16 @@ namespace Web.AnalyticsWeb.Controllers
 
         #region Query runners
 
-        /// <summary>Runs a single-series weekly query and gap-fills missing weeks with zero.</summary>
+        /// <summary>
+        /// Runs a single-series weekly query and gap-fills missing weeks with <paramref name="missingValue"/>
+        /// (zero by default, since most of these charts count events and "no rows" really is "nothing
+        /// happened"). Pass null for averages, where a week with no rows means "not measured" rather than
+        /// zero - drawing an unscored week as 0 sentiment would read as "neutral", which is a different
+        /// and wrong answer.
+        /// </summary>
         private static async Task<ReportChart> RunTimeSeriesAsync(string key, string title, string description,
-            string valueLabel, string seriesName, string body, DateTime from, List<DateTime> weekSpine)
+            string valueLabel, string seriesName, string body, DateTime from, List<DateTime> weekSpine,
+            double? missingValue = 0)
         {
             var chart = new ReportChart
             {
@@ -531,7 +642,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var rows = await QueryWeeksAsync(body, from);
                 chart.Series = new List<ReportSeries>
                 {
-                    new ReportSeries { Name = seriesName, Points = FillWeeks(weekSpine, rows) },
+                    new ReportSeries { Name = seriesName, Points = FillWeeks(weekSpine, rows, missingValue) },
                 };
             }
             catch (Exception ex)
@@ -785,14 +896,14 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>Runs a categorical (bar) query - label + value rows, already ordered by the query.</summary>
         private static async Task<ReportChart> RunCategoryAsync(string key, string title, string description,
-            string valueLabel, string body, DateTime from)
+            string valueLabel, string body, DateTime from, string chartType = "bar", string emptyWarning = null)
         {
             var chart = new ReportChart
             {
                 Key = key,
                 Title = title,
                 Description = description,
-                Type = "bar",
+                Type = chartType,
                 ValueLabel = valueLabel,
                 Sql = DisplaySql(body, from),
             };
@@ -808,6 +919,11 @@ namespace Web.AnalyticsWeb.Controllers
                     chart.Categories = rows
                         .Select(r => new ReportCategory { Label = r.Label, Value = r.Value })
                         .ToList();
+
+                    // "Nothing came back" is ambiguous for the cognitive charts - the import may simply be
+                    // off - so let the caller explain it rather than leaving an empty panel.
+                    if (chart.Categories.Count == 0 && !string.IsNullOrEmpty(emptyWarning))
+                        chart.Warning = emptyWarning;
                 }
             }
             catch (Exception ex)
