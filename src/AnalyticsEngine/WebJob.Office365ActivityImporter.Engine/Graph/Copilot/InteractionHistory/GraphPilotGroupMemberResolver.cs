@@ -292,7 +292,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 }
                 catch (Exception ex)
                 {
-                    budget.Stop($"group discovery failed ({ex.GetType().Name}: {ex.Message}).");
+                    budget.Stop($"group discovery failed ({ex.GetType().Name}: {GraphHttpException.DescribeForStorage(ex)}).");
                     break;
                 }
 

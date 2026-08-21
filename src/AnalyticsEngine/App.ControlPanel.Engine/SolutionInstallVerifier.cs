@@ -717,7 +717,22 @@ namespace App.ControlPanel.Engine
 
             // 4 days should give us some data
             const int DAYS_BACK_CHECK = 3;
-            await teamsUserUsageLoader.PopulateLoadedReportPagesFromGraph(DAYS_BACK_CHECK);
+
+            // The daily loaders use strict paging (see AbstractDailyActivityLoader), so a Graph failure
+            // here throws rather than yielding an empty report. That is deliberate for the importer - a
+            // failed download must never be recorded as a successful empty day - but this is the INSTALL
+            // VERIFIER, whose whole job is to report problems rather than propagate them. Catch it and
+            // report, matching the Teams-report check above.
+            try
+            {
+                await teamsUserUsageLoader.PopulateLoadedReportPagesFromGraph(DAYS_BACK_CHECK);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"ERROR: Got error trying to read the Teams user usage report from Graph: '{ex.Message}'");
+                _logger.LogError("Important: ensure the runtime account has the Reports.Read.All application permission granted and admin-consented, and that this is a global-cloud tenant.");
+                return;
+            }
 
             bool? validEmailFound = null;
             foreach (var reportPage in teamsUserUsageLoader.LoadedReportPages.Values)

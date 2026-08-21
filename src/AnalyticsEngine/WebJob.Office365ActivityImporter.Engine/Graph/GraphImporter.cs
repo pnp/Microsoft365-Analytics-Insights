@@ -403,48 +403,75 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 _logger.LogInformation($"Reading all activity reports from {daysBackMax} days back...");
 
-                // Parallel-load all, each one with own DB context
+                // Parallel-load all, each one with own DB context.
+                //
+                // Each report is run through RunReportSafely so ONE failing report cannot discard the work
+                // of the others: whatever downloaded successfully is still saved. Failures are collected and
+                // decide whether this phase is allowed to stamp itself complete below.
                 var importTasks = new List<Task>();
+                var failedReports = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+                async Task RunReportSafely(string reportName, Func<Task> work)
+                {
+                    try
+                    {
+                        await work();
+                    }
+                    catch (GraphHttpException ex)
+                    {
+                        failedReports.Add($"{reportName} (HTTP {(int)ex.StatusCode} {ex.StatusCode})");
+                        _logger.LogError(ex, $"{reportName} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} " +
+                            "The other activity reports are unaffected and keep whatever they downloaded; this report saved nothing at all. " +
+                            "This phase will NOT be recorded as complete, so it retries on the next cycle. " +
+                            "A 401/403 here almost always means the Reports.Read.All application permission is missing or not admin-consented.");
+                    }
+                    catch (Exception ex)
+                    {
+                        failedReports.Add($"{reportName} ({ex.GetType().Name})");
+                        _logger.LogError(ex, $"{reportName} failed: {ex.Message}. The other activity reports are unaffected; " +
+                            "this phase will NOT be recorded as complete, so it retries on the next cycle.");
+                    }
+                }
 
                 var lookupIdCache = new ConcurrentLookupDbIdsCache();
 
                 // Daily imports
                 var teamsUserUsageLoader = new TeamsUserUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(teamsUserUsageLoader, daysBackMax, "Teams user activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("Teams user activity", () => LoadAndSaveDailyImportReport(teamsUserUsageLoader, daysBackMax, "Teams user activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var teamsUserDeviceLoader = new TeamsUserDeviceLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(teamsUserDeviceLoader, daysBackMax, "Teams user device", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("Teams user device", () => LoadAndSaveDailyImportReport(teamsUserDeviceLoader, daysBackMax, "Teams user device", _logger, lookupIdCache, lastImportedDate)));
 
                 var outlookLoader = new OutlookUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(outlookLoader, daysBackMax, "Outlook activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("Outlook activity", () => LoadAndSaveDailyImportReport(outlookLoader, daysBackMax, "Outlook activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var oneDriveUsageLoader = new OneDriveUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(oneDriveUsageLoader, daysBackMax, "OneDrive usage", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("OneDrive usage", () => LoadAndSaveDailyImportReport(oneDriveUsageLoader, daysBackMax, "OneDrive usage", _logger, lookupIdCache, lastImportedDate)));
 
                 var oneDriveUserActivityLoader = new OneDriveUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(oneDriveUserActivityLoader, daysBackMax, "OneDrive activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("OneDrive activity", () => LoadAndSaveDailyImportReport(oneDriveUserActivityLoader, daysBackMax, "OneDrive activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var sharePointUserActivityLoader = new SharePointUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(sharePointUserActivityLoader, daysBackMax, "SharePoint user activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("SharePoint user activity", () => LoadAndSaveDailyImportReport(sharePointUserActivityLoader, daysBackMax, "SharePoint user activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var yammerUserActivityLoader = new YammerUserUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(yammerUserActivityLoader, daysBackMax, "Yammer user activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("Yammer user activity", () => LoadAndSaveDailyImportReport(yammerUserActivityLoader, daysBackMax, "Yammer user activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var yammerGroupsActivityLoader = new YammerGroupUsageLoader(client, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(yammerGroupsActivityLoader, daysBackMax, "Yammer group activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("Yammer group activity", () => LoadAndSaveDailyImportReport(yammerGroupsActivityLoader, daysBackMax, "Yammer group activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var yammerDeviceActivityLoader = new YammerDeviceUsageLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(yammerDeviceActivityLoader, daysBackMax, "Yammer device activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("Yammer device activity", () => LoadAndSaveDailyImportReport(yammerDeviceActivityLoader, daysBackMax, "Yammer device activity", _logger, lookupIdCache, lastImportedDate)));
 
                 var userPlatActivityLoader = new AppPlatformUserActivityLoader(client, userGroupsCache, userGroupsFilterModel, _logger);
-                importTasks.Add(LoadAndSaveDailyImportReport(userPlatActivityLoader, daysBackMax, "Apps & platform activity", _logger, lookupIdCache, lastImportedDate));
+                importTasks.Add(RunReportSafely("Apps & platform activity", () => LoadAndSaveDailyImportReport(userPlatActivityLoader, daysBackMax, "Apps & platform activity", _logger, lookupIdCache, lastImportedDate)));
 
                 // Weekly imports
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     var sharePointSitesWeeklyUsageReportLoader = new SharePointSitesWeeklyUsageReportLoader(db, client, _logger, new GraphSPSiteIdToUrlCache(_graphClient, db, _logger));
 
-                    importTasks.Add(sharePointSitesWeeklyUsageReportLoader.LoadAndSaveLastWeeksReportsIfRefreshOnDay(System.DayOfWeek.Sunday));
+                    importTasks.Add(RunReportSafely("SharePoint sites weekly usage", () => sharePointSitesWeeklyUsageReportLoader.LoadAndSaveLastWeeksReportsIfRefreshOnDay(System.DayOfWeek.Sunday)));
                     await Task.WhenAll(importTasks);
                 }
 
@@ -458,7 +485,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
-                // Remember last import date so the next cycle within the throttle window is skipped.
+                // Remember last import date so the next cycle within the throttle window is skipped - but
+                // ONLY when every report actually completed. The timestamp is the proof that the phase
+                // finished, so stamping it after a failure is what used to make a broken import look
+                // healthy and idle for 24 hours (issue #285). Anything that downloaded successfully has
+                // already been saved above, so a retry next cycle is cheap and picks up only what is missing.
+                if (failedReports.Count > 0)
+                {
+                    _logger.LogError($"Activity reports did NOT fully import - {failedReports.Count} of {importTasks.Count} report(s) failed: " +
+                        string.Join(", ", failedReports.OrderBy(r => r)) + ". " +
+                        "Reports that succeeded have been saved; each failed report saved nothing. This phase has NOT been marked complete and will retry on the next cycle - " +
+                        "note that until it succeeds the once-a-day throttle stays disarmed, so the phase re-runs every cycle and re-downloads the full window. " +
+                        "If this repeats, check the runtime account has the Reports.Read.All application permission granted and admin-consented.");
+                    return false;
+                }
+
                 if (lastImportedStore != null)
                 {
                     await lastImportedStore.SaveDT();
