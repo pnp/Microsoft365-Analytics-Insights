@@ -312,7 +312,7 @@ namespace Web.AnalyticsWeb.Controllers
                     "Key phrases extracted from Copilot prompts by Azure AI Language, sized by how often they appear.",
                     "Mentions", phrases, from, chartType: "wordcloud", emptyWarning: NoDataWarning),
                 RunTimeSeriesAsync("copilot-sentiment", "Prompt sentiment over time",
-                    "Average sentiment of Copilot prompts each week, from -1 (negative) to +1 (positive). Weeks with no scored prompts are left as gaps, not zero.",
+                    "Average positive-sentiment confidence of Copilot prompts each week, from 0.0 (negative) through 0.5 (neutral) to 1.0 (positive). Weeks with no scored prompts are left as gaps, not zero.",
                     "Sentiment", "Average sentiment", sentiment, from, weekSpine, missingValue: null),
                 RunCategoryAsync("copilot-languages", "Prompt languages",
                     "Languages detected in Copilot prompts across the window.",
@@ -335,7 +335,9 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>
         /// Weekly mean prompt sentiment. Rows with no score are excluded rather than counted as zero -
-        /// zero is "neutral", which is a real and different answer from "not scored".
+        /// the score is a positive-sentiment CONFIDENCE (0.0-1.0, matching the sent-email import), so 0
+        /// means "confidently negative", not "not scored". Averaging NULLs in as zero would drag every
+        /// week towards negative in proportion to how much of the data was never enriched.
         /// </summary>
         internal static string BuildCopilotSentimentQuery()
         {
