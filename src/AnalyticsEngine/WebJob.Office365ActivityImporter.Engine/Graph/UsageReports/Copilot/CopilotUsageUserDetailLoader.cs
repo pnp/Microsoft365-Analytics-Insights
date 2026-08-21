@@ -99,7 +99,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 // Tolerated, not a failure - see CopilotUserCountReportLoader for the full reasoning. The
                 // report endpoint doesn't exist in this cloud, so there is nothing to retry; record why.
                 importLog.RowsRead = 0;
-                importLog.Error = Truncate($"Report not available: {ex.Message}", 1000);
+                importLog.Error = Truncate($"Report not available: {GraphHttpException.DescribeForStorage(ex)}", 1000);
                 await SaveImportLog(db, importLog);
 
                 _logger.LogWarning($"Copilot per-user report {request} is not available on this tenant: {ex.Message} " +
@@ -108,7 +108,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
             catch (Exception ex)
             {
-                importLog.Error = Truncate(ex.Message, 1000);
+                importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
                 await SaveImportLog(db, importLog);
                 throw;
             }
@@ -169,7 +169,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             {
                 // Persistence failures must reach the Health page too, and must be written on a FRESH context:
                 // the one that just failed a SaveChanges can be left with entities in a broken state.
-                importLog.Error = Truncate(ex.Message, 1000);
+                importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
                 await SaveImportLogOnNewContext(importLog);
                 throw;
             }

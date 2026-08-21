@@ -74,9 +74,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         ///
         /// The margin exists so the bound can never cause a MISS, which would be far worse than a slow read:
         /// a missed duplicate hits the unique index on (session_id, graph_interaction_id) and fails the
-        /// batch. Seven days is enormous relative to the real risk - the importer works forward from a
-        /// per-user watermark, so an incoming interaction is re-presented with the same timestamp it was
-        /// first seen with - and still bounds the read to a fixed window instead of "everything, forever".
+        /// batch.
+        ///
+        /// Note what the margin is NOT protecting against. The window is anchored to the BATCH's own oldest
+        /// timestamp, not to wall-clock, so the length of any importer outage is irrelevant - a stored row
+        /// that duplicates a batch row carries the same <c>createdDateTime</c> as that batch row, which is
+        /// by construction >= the batch minimum. What the margin actually absorbs is narrower: Graph
+        /// re-stating a timestamp slightly differently between reads, <c>datetime</c> rounding in SQL
+        /// Server (up to 3.33 ms), and clock/precision differences on the boundary. Seven days is far more
+        /// than any of those need, and still bounds the read to a fixed window instead of "everything,
+        /// forever" - so it is cheap insurance, not a load-bearing outage guard.
         /// </summary>
         internal const int DedupLookbackMarginDays = 7;
 
@@ -844,13 +851,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             {
                 foreach (var created in createdUtcs)
                 {
-                    if (created != default(DateTime) && created < oldest)
+                    // A default timestamp means we cannot place that row in time. Skipping it would compute
+                    // a window that EXCLUDES the stored row it duplicates - a missed duplicate, which hits
+                    // the unique index and fails the batch. So any default makes the whole window fall
+                    // open. (Unreachable today: InteractionStatsExtractor drops interactions with no
+                    // createdDateTime before they get here. This guard is written to fail open so that
+                    // stays true if that ever changes.)
+                    if (created == default(DateTime))
+                        return DateTime.MinValue;
+
+                    if (created < oldest)
                         oldest = created;
                 }
             }
 
-            // No usable timestamps (shouldn't happen - created_utc is required) - fall back to reading
-            // everything rather than risking a missed duplicate.
+            // No timestamps at all - fall back to reading everything rather than risking a missed duplicate.
             if (oldest == DateTime.MaxValue)
                 return DateTime.MinValue;
 

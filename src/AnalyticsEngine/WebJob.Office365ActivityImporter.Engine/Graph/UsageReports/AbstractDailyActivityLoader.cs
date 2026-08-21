@@ -198,10 +198,26 @@ SELECT CAST(CASE WHEN EXISTS (
         /// data with no HTTP, and so the date-skipping in <see cref="PopulateLoadedReportPagesFromGraph"/> can be
         /// verified without hitting Graph.
         /// </summary>
+        /// <remarks>
+        /// Uses STRICT paging. These reports have exactly the problem issue #285 described for the Copilot
+        /// reports: a 403 from a missing <c>Reports.Read.All</c> grant, or a 5xx mid-paging, used to return
+        /// the pages gathered so far without throwing - so a failed day was recorded as a successfully
+        /// loaded EMPTY day, and the whole activity-report phase then stamped itself as complete for 24
+        /// hours. A broken import looked healthy and idle.
+        ///
+        /// Throwing restores the contract the phase is already written around: see
+        /// <c>GraphImporter.GetAndSaveActivityReportsMultiThreaded</c>, which deletes the "last imported"
+        /// timestamp BEFORE loading and only re-saves it after every loader has completed, precisely so
+        /// that "if this phase fails after a partial save, the next cycle must re-import". The exception
+        /// propagates out of the <c>Task.WhenAll</c>, the timestamp is never re-saved, and the phase is
+        /// retried next cycle with the real HTTP status recorded in Application Insights.
+        ///
+        /// A genuinely empty day (Graph returns 200 with no rows) is unaffected and still loads as empty.
+        /// </remarks>
         protected virtual Task<List<TUserActivityUserDetail>> LoadReportPageForDateFromGraph(DateTime date)
         {
             var requestUrl = $"{ReportGraphURL}(date={date.ToString("yyyy-MM-dd")})?$format=application/json";
-            return _client.LoadAllPagesWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry);
+            return _client.LoadAllPagesWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry, throwOnHttpError: true);
         }
 
         /// <summary>

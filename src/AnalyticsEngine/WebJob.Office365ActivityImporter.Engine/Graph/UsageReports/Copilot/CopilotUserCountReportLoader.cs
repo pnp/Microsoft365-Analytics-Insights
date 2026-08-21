@@ -104,7 +104,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 // completed run for cadence purposes - but the reason is recorded on the import log so the
                 // Health page shows why the table is empty instead of implying the tenant has no licences.
                 importLog.RowsRead = 0;
-                importLog.Error = Truncate($"Report not available: {ex.Message}", 1000);
+                importLog.Error = Truncate($"Report not available: {GraphHttpException.DescribeForStorage(ex)}", 1000);
                 await SaveImportLog(db, importLog);
 
                 _logger.LogWarning($"Copilot aggregate report {request} is not available on this tenant: {ex.Message} " +
@@ -113,7 +113,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
             catch (Exception ex)
             {
-                importLog.Error = Truncate(ex.Message, 1000);
+                importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
                 await SaveImportLog(db, importLog);
                 throw;
             }
@@ -163,7 +163,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             {
                 // Persistence failures must reach the Health page too, and must be written on a FRESH context:
                 // the one that just failed a SaveChanges can be left with entities in a broken state.
-                importLog.Error = Truncate(ex.Message, 1000);
+                importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
                 using (var freshDb = new AnalyticsEntitiesContext())
                 {
                     await SaveImportLog(freshDb, importLog);

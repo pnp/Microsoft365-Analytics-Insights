@@ -51,6 +51,39 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public string GraphErrorCode { get; }
 
+        /// <summary>
+        /// The status and Graph error code with the URL deliberately omitted, for anywhere the text is
+        /// PERSISTED rather than logged.
+        ///
+        /// <see cref="Exception.Message"/> embeds the failing URL, which is the right call for a log line -
+        /// and <c>ManualGraphCallClient</c> has already logged it at error level anyway. But this type is
+        /// now thrown for every Graph call, and some request paths identify a person
+        /// (<c>/users/{upn}/messages</c> in the sent-email loader). Anything writing to a database column,
+        /// a job summary or another durable store should use this instead, so a user principal name does
+        /// not end up somewhere it was never meant to be retained.
+        /// </summary>
+        public string SummaryWithoutUrl
+        {
+            get
+            {
+                var status = $"{(int)StatusCode} ({StatusCode})";
+                return string.IsNullOrEmpty(GraphErrorCode)
+                    ? $"Graph returned {status}."
+                    : $"Graph returned {status} with error code '{GraphErrorCode}'.";
+            }
+        }
+
+        /// <summary>
+        /// The text to persist for an exception: the URL-free summary when it is a Graph HTTP failure,
+        /// otherwise the exception's own message. Use this anywhere the result is written to a database
+        /// column or other durable store rather than to a log.
+        /// </summary>
+        public static string DescribeForStorage(Exception ex)
+        {
+            if (ex == null) return null;
+            return ex is GraphHttpException graphEx ? graphEx.SummaryWithoutUrl : ex.Message;
+        }
+
         private static string BuildMessage(HttpStatusCode statusCode, string url, string responseBody)
         {
             var code = ExtractGraphErrorCode(responseBody);

@@ -4,10 +4,14 @@ namespace Common.Entities.Migrations
     using System.Data.Entity.Migrations;
 
     /// <summary>
-    /// Widens <c>IX_copilot_event_accessed_resources_dedup</c> from five key columns to seven, adding
+    /// Widens <c>IX_copilot_event_accessed_resources_dedup</c> from six key columns to eight, adding
     /// <c>action_id</c> and <c>list_item_unique_id_id</c> -&gt;
     /// <c>copilot_event_accessed_resources(copilot_chat_id, resource_id_id, resource_name_id,
     /// resource_site_url_id, resource_type_id, sensitivity_label_id, action_id, list_item_unique_id_id)</c>.
+    ///
+    /// (Two counts are in play and are easy to conflate: the merge's de-duplication <b>tuple</b> goes from
+    /// five resource columns to seven, and the <b>index</b> goes from six key columns to eight, because it
+    /// carries <c>copilot_chat_id</c> as its leading correlation key in addition to the tuple.)
     ///
     /// Why: issue #287. The Copilot merge (<c>common_upsert_copilot_agents.sql</c>) resolved accessed
     /// resources by grouping on the five-column resource tuple and then picking the two extra columns with
@@ -20,8 +24,9 @@ namespace Common.Entities.Migrations
     /// independently over the group, so the surviving row could pair an <c>action_id</c> from one source
     /// row with a <c>list_item_unique_id_id</c> from another - a combination that never occurred.</description></item>
     /// </list>
-    /// The merge now takes the whole seven-column tuple as the row identity, so this index has to carry the
-    /// same seven columns as KEY columns for the de-dup existence check to keep seeking it.
+    /// The merge now takes the whole seven-column tuple as the row identity, so this index has to carry all
+    /// seven of those columns as KEY columns alongside <c>copilot_chat_id</c> - eight in total - for the
+    /// de-dup existence check to keep seeking it.
     ///
     /// The previous justification for leaving them out - that <c>list_item_unique_id_id</c> would breach the
     /// 1700-byte index-key limit - was simply incorrect: both columns are <c>int</c> foreign keys, so this

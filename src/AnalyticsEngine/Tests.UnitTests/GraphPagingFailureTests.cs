@@ -1,3 +1,4 @@
+using Common.Entities.Config;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
@@ -8,9 +9,12 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
+using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
 namespace Tests.UnitTests
 {
@@ -234,6 +238,26 @@ namespace Tests.UnitTests
             Assert.AreEqual(DateTime.MinValue, CopilotInteractionHistoryImporter.DedupWindowStart(new[] { default(DateTime) }));
         }
 
+        /// <summary>
+        /// The dangerous case, and the one the original guard got wrong: a batch that mixes one unusable
+        /// timestamp with normal ones. Skipping the default would compute a window that EXCLUDES the stored
+        /// row it duplicates - a missed duplicate, a unique-index violation, and a failed batch. Any default
+        /// must therefore make the whole window fall open.
+        /// </summary>
+        [TestMethod]
+        public void DedupWindowStart_MixedDefaultAndRealTimestamps_FallsOpen()
+        {
+            var real = new DateTime(2026, 8, 20, 9, 0, 0, DateTimeKind.Utc);
+
+            Assert.AreEqual(DateTime.MinValue,
+                CopilotInteractionHistoryImporter.DedupWindowStart(new[] { real, default(DateTime), real.AddHours(3) }),
+                "A single unusable timestamp must widen the window to everything, not be skipped.");
+
+            Assert.AreEqual(DateTime.MinValue,
+                CopilotInteractionHistoryImporter.DedupWindowStart(new[] { default(DateTime), real }),
+                "Order must not matter.");
+        }
+
         [TestMethod]
         public void DedupWindowStart_NearDateTimeMinValue_DoesNotThrow()
         {
@@ -244,10 +268,71 @@ namespace Tests.UnitTests
         [TestMethod]
         public void DedupLookbackMargin_IsGenerousEnoughToBeSafe()
         {
-            // The margin exists purely so the bound can never cause a MISS. Shrinking it below a couple of
-            // days would start to matter for a tenant whose importer has been stopped over a weekend.
-            Assert.IsTrue(CopilotInteractionHistoryImporter.DedupLookbackMarginDays >= 2,
-                "A margin under two days risks missing a duplicate after a weekend outage.");
+            // The window is anchored to the BATCH's oldest timestamp, not to wall-clock, so outage length is
+            // irrelevant. The margin absorbs timestamp re-statement by Graph and SQL Server's datetime
+            // rounding (up to 3.33 ms) - milliseconds of real risk. Any value of a day or more is ample;
+            // this guards against someone reducing it to zero and removing the safety entirely.
+            Assert.IsTrue(CopilotInteractionHistoryImporter.DedupLookbackMarginDays >= 1,
+                "The margin must stay non-trivial: it is what absorbs timestamp re-statement and datetime rounding at the window boundary.");
+        }
+
+        #endregion
+
+        #region Issue #285 follow-up - the legacy daily activity reports had the same hole
+
+        /// <summary>
+        /// The daily usage-report loaders (SharePoint / Teams / OneDrive / Yammer / Exchange) had exactly
+        /// the bug #285 described for the Copilot reports: a 403 returned an empty day, which was recorded
+        /// as a successfully loaded empty day, after which the whole activity-report phase stamped itself
+        /// complete for 24 hours. They now use strict paging, so the failure propagates and the phase is
+        /// retried on the next cycle.
+        /// </summary>
+        [TestMethod]
+        public async Task DailyActivityLoader_ForbiddenFromGraph_Throws_InsteadOfRecordingAnEmptyDay()
+        {
+            using (var handler = new StubHandler(HttpStatusCode.Forbidden, Forbidden))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var loader = new OutlookUserActivityLoader(client, new NoUsersHaveGroupsUserGroupsCache(NullLogger.Instance),
+                    new UserGroupsFilterModel(string.Empty), NullLogger.Instance);
+
+                var ex = await Assert.ThrowsExceptionAsync<GraphHttpException>(
+                    () => loader.PopulateLoadedReportPagesFromGraph(1));
+
+                Assert.AreEqual(HttpStatusCode.Forbidden, ex.StatusCode);
+                Assert.AreEqual(0, loader.LoadedReportPages.Count,
+                    "A day that failed to download must NOT be recorded as a loaded (empty) day.");
+            }
+        }
+
+        #endregion
+
+        #region Issue #285 follow-up - what gets PERSISTED must not carry the URL
+
+        [TestMethod]
+        public void SummaryWithoutUrl_OmitsTheUrlButKeepsStatusAndErrorCode()
+        {
+            var ex = new GraphHttpException(HttpStatusCode.Forbidden,
+                "https://graph.microsoft.com/v1.0/users/someone@contoso.com/messages", Forbidden, null);
+
+            StringAssert.Contains(ex.Message, "someone@contoso.com", "The full message keeps the URL - it is written to logs, which already record it.");
+
+            var stored = ex.SummaryWithoutUrl;
+            Assert.IsFalse(stored.Contains("someone@contoso.com"), "The persisted summary must not carry a user principal name.");
+            Assert.IsFalse(stored.Contains("graph.microsoft.com"), "The persisted summary must not carry the URL at all.");
+            StringAssert.Contains(stored, "403");
+            StringAssert.Contains(stored, "Authorization_RequestDenied");
+        }
+
+        [TestMethod]
+        public void DescribeForStorage_FallsBackToTheMessageForOrdinaryExceptions()
+        {
+            Assert.AreEqual("boom", GraphHttpException.DescribeForStorage(new InvalidOperationException("boom")));
+            Assert.IsNull(GraphHttpException.DescribeForStorage(null));
+
+            var graphEx = new GraphHttpException(HttpStatusCode.InternalServerError, "https://graph.microsoft.com/x", ServerError, null);
+            Assert.AreEqual(graphEx.SummaryWithoutUrl, GraphHttpException.DescribeForStorage(graphEx),
+                "A Graph HTTP failure must be stored in its URL-free form.");
         }
 
         #endregion
