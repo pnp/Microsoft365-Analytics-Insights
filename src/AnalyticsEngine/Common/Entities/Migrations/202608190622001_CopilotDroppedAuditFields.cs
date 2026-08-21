@@ -58,12 +58,15 @@ namespace Common.Entities.Migrations
     ///     memory grant. Where ONLINE is unavailable each build briefly locks the table: run the upgrade
     ///     in a maintenance window with the importer stopped.
     ///
-    /// The de-duplication tuple used by the Copilot merge's accessed-resource anti-join is deliberately
-    /// NOT widened by action_id / list_item_unique_id_id, so the composite index added by
-    /// <see cref="CoverCopilotAccessedResourceDedup"/> still covers it exactly and the known-hot
-    /// insert_junction step keeps its seek. Verified by benchmark: with the same 1,000-event batch
-    /// against 1M chats / 3M junction rows, insert_junction measured 328 ms before and 314 ms after.
-    /// See common_upsert_copilot_agents.sql for the detail.
+    /// The de-duplication tuple used by the Copilot merge's accessed-resource anti-join was originally left
+    /// un-widened by action_id / list_item_unique_id_id, so that the composite index added by
+    /// <see cref="CoverCopilotAccessedResourceDedup"/> still covered it exactly. That decision was REVERSED
+    /// before release by <see cref="WidenCopilotAccessedResourceDedupIndex"/> (issue #287): treating the two
+    /// new columns as payload rather than identity dropped distinct actions (the same document Read AND
+    /// Written in one interaction collapsed to one row) and could fabricate action / list-item pairings via
+    /// two independent MIN()s. The merge now de-duplicates on the full tuple and that migration widens the
+    /// index to match, which measured as free on a small commit batch and ~10% slower on a large one.
+    /// See common_upsert_copilot_agents.sql and that migration's doc comment for the detail.
     ///
     /// This migration DOES change the EF entity model, so its .resx snapshot is freshly scaffolded (it is
     /// not a copy of the predecessor's). The manual upgrade script therefore has to stamp

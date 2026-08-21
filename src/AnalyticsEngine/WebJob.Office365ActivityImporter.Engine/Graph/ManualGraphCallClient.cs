@@ -54,7 +54,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
 
                     _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
-                    throw;
+                    throw new GraphHttpException(callResponse.StatusCode, url, callResponseBody, ex);
                 }
 
                 // Get call

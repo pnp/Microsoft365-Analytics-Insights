@@ -295,21 +295,32 @@ SET @t = SYSUTCDATETIME();
 
 -- Resolve lookup IDs once into a second temp table for the junction insert.
 --
--- The GROUP BY does the batch-level de-duplication that the junction insert used to do with SELECT
--- DISTINCT, and it does it on exactly the ORIGINAL five-column tuple. That keeps two things true at
--- once: the de-dup identity is unchanged (so the composite index from CoverCopilotAccessedResourceDedup
--- still covers the anti-join exactly), and action_id / list_item_unique_id_id ride along as payload
--- picked deterministically with MIN(). Doing it here rather than in the junction INSERT means the hot
--- insert_junction step no longer sorts at all - it just anti-joins an already-unique set.
-SELECT 
+-- DISTINCT over the WHOLE resolved tuple - including action_id and list_item_unique_id_id. This used to
+-- GROUP BY only the five resource columns and pick the two extra columns with independent MIN()s, which
+-- was wrong twice over (issue #287):
+--
+--   * It DROPPED actions. The same resource accessed twice in one interaction with different actions
+--     (Read then Write) collapsed to a single row keeping the lower id, discarding the other - which is
+--     exactly what persisting Action was added to stop (#262).
+--   * It FABRICATED pairings. MIN(raction.id) and MIN(rlistitem.id) are evaluated independently over the
+--     group, so the surviving row could pair an action taken from one source row with a list-item id
+--     taken from a different one - a combination that never occurred in the payload.
+--
+-- Taking the whole tuple as the identity means every surviving row is a combination that genuinely
+-- appeared, and distinct actions each get their own row. The de-dup identity below is widened to match,
+-- and IX_copilot_event_accessed_resources_dedup was widened with it (migration
+-- WidenCopilotAccessedResourceDedupIndex) so the existence check still seeks the exact tuple. Both extra
+-- columns are ints, so this adds 8 bytes to the index key - the earlier claim that list_item_unique_id_id
+-- would breach the 1700-byte index-key limit was simply wrong (it is an int FK, not a URL).
+SELECT DISTINCT
     par.event_id,
     rid.id AS resource_id_id,
     rname.id AS resource_name_id,
     rsiteurl.id AS resource_site_url_id,
     rtype.id AS resource_type_id,
     slabel.id AS sensitivity_label_id,
-    MIN(raction.id) AS action_id,
-    MIN(rlistitem.id) AS list_item_unique_id_id
+    raction.id AS action_id,
+    rlistitem.id AS list_item_unique_id_id
 INTO #resolved_accessed_resources
 FROM #parsed_accessed_resources par
 LEFT JOIN copilot_event_accessed_resource_ids rid 
@@ -325,8 +336,7 @@ LEFT JOIN sensitivity_labels slabel
 LEFT JOIN copilot_event_accessed_resource_actions raction
     ON raction.[name] = par.resource_action
 LEFT JOIN copilot_event_accessed_resource_ids rlistitem
-    ON rlistitem.resource_id = par.list_item_unique_id
-GROUP BY par.event_id, rid.id, rname.id, rsiteurl.id, rtype.id, slabel.id;
+    ON rlistitem.resource_id = par.list_item_unique_id;
 
 
 SET @rows = @@ROWCOUNT;
@@ -335,24 +345,27 @@ IF @dbg = 1 INSERT INTO dbo.copilot_merge_step_timings (batch_id, staging_table,
 SET @t = SYSUTCDATETIME();
 
 -- Process AccessedResources: Insert junction table records linking events to accessed resources.
--- Keyed NOT EXISTS on copilot_chat_id (seeks via IX_copilot_chat_id to just this chat's existing rows)
--- instead of EXCEPT-ing against the WHOLE junction table, which forced a full scan/sort of the entire
--- (millions-of-rows) table every batch. The NULL-safe INTERSECT compares the resolved tuple exactly like
--- EXCEPT did (NULLs equal).
+-- Keyed NOT EXISTS on copilot_chat_id (seeks via the composite dedup index to just this chat's existing
+-- rows) instead of EXCEPT-ing against the WHOLE junction table, which forced a full scan/sort of the
+-- entire (millions-of-rows) table every batch. The NULL-safe INTERSECT compares the resolved tuple
+-- exactly like EXCEPT did (NULLs equal).
 --
--- IMPORTANT - the de-dup tuple is deliberately UNCHANGED by the addition of action_id /
--- list_item_unique_id_id. It is the exact tuple covered by the composite key index
--- IX_copilot_event_accessed_resources_dedup (migration CoverCopilotAccessedResourceDedup), which is
--- what turns this existence check from an O(resolved x table) rescan into a seek. Widening the tuple
--- would leave that index only partially covering and regress the known-hot path (and the two extra
--- columns cannot be added to the key anyway: list_item_unique_id_id would push it past the 1700-byte
--- index-key limit for no benefit).
+-- The de-dup tuple is the FULL seven-column resolved tuple, action_id and list_item_unique_id_id
+-- included. They are part of the row's identity, not payload: the same document Read and then Written in
+-- one interaction is two distinct facts, and collapsing them threw one away (issue #287). Matching on
+-- the full tuple is also what stops a re-imported batch inserting a second copy of a row that only
+-- differs in the columns the old tuple ignored.
 --
--- The two new columns are payload, not identity. #resolved_accessed_resources is already unique per
--- (event, tuple) - the resolve step above GROUPs BY exactly this tuple and MIN()s the payload - so
--- this insert needs no DISTINCT at all and the row count is EXACTLY what it was before. In practice
--- Action is "Read" for every access and listItemUniqueId is a property of the resource itself, so
--- collapsing them onto one row loses nothing real.
+-- IX_copilot_event_accessed_resources_dedup carries all seven as KEY columns (widened from five by
+-- migration WidenCopilotAccessedResourceDedupIndex), so this remains an exact (chat_id, tuple) seek
+-- rather than the O(resolved x table) rescan it was before CoverCopilotAccessedResourceDedup. Keep the
+-- column list here and the index key in step.
+--
+-- A 6-key + INCLUDE(action_id, list_item_unique_id_id) index was measured as the alternative and
+-- REJECTED. It ties the composite key on a small commit batch, and has FEWER logical reads on a large
+-- one (10,904 against 63,883 at 20,000 resolved rows) - but it is 5.5x SLOWER in wall-clock (521 ms
+-- against 94 ms), because the extra columns are only residual predicates so the optimiser abandons the
+-- seek and hash-joins a full index scan instead. See the migration's doc comment for the full table.
 INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id, action_id, list_item_unique_id_id)
 SELECT r.event_id, r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id,
        r.action_id, r.list_item_unique_id_id
@@ -362,9 +375,9 @@ WHERE NOT EXISTS (
     FROM copilot_event_accessed_resources x
     WHERE x.copilot_chat_id = r.event_id
       AND EXISTS (
-          SELECT x.resource_id_id, x.resource_name_id, x.resource_site_url_id, x.resource_type_id, x.sensitivity_label_id
+          SELECT x.resource_id_id, x.resource_name_id, x.resource_site_url_id, x.resource_type_id, x.sensitivity_label_id, x.action_id, x.list_item_unique_id_id
           INTERSECT
-          SELECT r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id
+          SELECT r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id, r.action_id, r.list_item_unique_id_id
       )
 );
 
