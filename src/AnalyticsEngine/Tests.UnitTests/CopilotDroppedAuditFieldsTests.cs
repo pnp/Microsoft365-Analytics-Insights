@@ -471,13 +471,17 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Regression guard for the hot path: adding action_id / list_item_unique_id_id must NOT widen the
-        /// accessed-resource de-duplication tuple (that tuple is what IX_copilot_event_accessed_resources_dedup
-        /// covers). The same resource logged twice in one interaction with different actions must therefore
-        /// still collapse to a single junction row.
+        /// The accessed-resource de-duplication tuple must include action_id / list_item_unique_id_id.
+        /// The same resource logged twice in one interaction with DIFFERENT actions is two distinct facts
+        /// (Read, then Write), so it must produce two junction rows - collapsing them discarded the very
+        /// data #262 added the columns to keep, and the old independent MIN()s could also pair an action
+        /// from one source row with a list-item id from another. See issue #287.
+        ///
+        /// IX_copilot_event_accessed_resources_dedup covers all seven columns as KEY columns (migration
+        /// WidenCopilotAccessedResourceDedupIndex), so this stays a seek.
         /// </summary>
         [TestMethod]
-        public async Task Copilot_AccessedResourceDedup_IsNotWidenedByTheNewColumns()
+        public async Task Copilot_AccessedResourceDedup_KeepsDistinctActions()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -487,7 +491,7 @@ namespace Tests.UnitTests
                 await ClearAccessedResources(db);
                 await ClearDroppedFieldTables(db);
 
-                var commonEvent = await AddCommonEvent(db, "Dedup Tuple Unchanged");
+                var commonEvent = await AddCommonEvent(db, "Dedup Keeps Distinct Actions");
                 var manager = NewManager();
 
                 await manager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
@@ -499,6 +503,8 @@ namespace Tests.UnitTests
                         {
                             new AccessedResource { Id = "same-resource", Name = "Doc.docx", Type = "docx", Action = "Read" },
                             new AccessedResource { Id = "same-resource", Name = "Doc.docx", Type = "docx", Action = "Write" },
+                            // Exact duplicate of the first - must still collapse.
+                            new AccessedResource { Id = "same-resource", Name = "Doc.docx", Type = "docx", Action = "Read" },
                         },
                     },
                 }, commonEvent);
@@ -506,9 +512,13 @@ namespace Tests.UnitTests
 
                 var junction = await db.CopilotEventAccessedResources.Include(r => r.Action)
                     .Where(r => r.ChatId == commonEvent.Id).ToListAsync();
-                Assert.AreEqual(1, junction.Count,
-                    "The de-dup tuple must stay exactly the 5 columns covered by IX_copilot_event_accessed_resources_dedup.");
-                Assert.IsNotNull(junction[0].Action, "A deterministic non-NULL action should be kept for the collapsed row.");
+
+                Assert.AreEqual(2, junction.Count,
+                    "Read and Write on the same resource are distinct facts and must each keep a row; the exact duplicate must still collapse.");
+
+                var actions = junction.Select(r => r.Action?.Name).OrderBy(n => n).ToList();
+                CollectionAssert.AreEqual(new[] { "Read", "Write" }, actions,
+                    "Both actions must survive the de-duplication.");
             }
         }
 

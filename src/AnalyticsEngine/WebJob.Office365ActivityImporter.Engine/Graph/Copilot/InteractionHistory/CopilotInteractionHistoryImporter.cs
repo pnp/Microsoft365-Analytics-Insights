@@ -63,6 +63,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         private const int SqlInClauseChunkSize = 1000;
 
         /// <summary>
+        /// How far BEFORE the oldest interaction in the batch the de-duplication read reaches back.
+        ///
+        /// The de-dup only has to see rows a batch could actually collide with, and a batch's rows carry
+        /// their own <c>createdDateTime</c> - so there is no reason to read a thread's entire history. That
+        /// unbounded read was the cost that grew for the life of a thread: a persistent BizChat thread never
+        /// ends, so the same few minutes of new data got progressively more expensive to de-duplicate
+        /// against (measured at synthetic scale: 252,000 rows pulled into the HashSet for 50 long-lived
+        /// threads, against 72,000 for the same threads bounded to recent history).
+        ///
+        /// The margin exists so the bound can never cause a MISS, which would be far worse than a slow read:
+        /// a missed duplicate hits the unique index on (session_id, graph_interaction_id) and fails the
+        /// batch. Seven days is enormous relative to the real risk - the importer works forward from a
+        /// per-user watermark, so an incoming interaction is re-presented with the same timestamp it was
+        /// first seen with - and still bounds the read to a fixed window instead of "everything, forever".
+        /// </summary>
+        internal const int DedupLookbackMarginDays = 7;
+
+        /// <summary>
         /// How far before the stored watermark the next query window starts.
         /// </summary>
         /// <remarks>
@@ -481,7 +499,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             if (sessionIdByUserAndRef.Count == 0)
                 return;
 
-            var existing = await LoadExistingInteractionKeysAsync(db, sessionIdByUserAndRef.Values.Distinct().ToList());
+            var existing = await LoadExistingInteractionKeysAsync(db, sessionIdByUserAndRef.Values.Distinct().ToList(), DedupWindowStart(withData));
             if (existing.Count == 0)
                 return;
 
@@ -645,7 +663,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
             var lookups = await ResolveLookupsAsync(db, allStats);
             var sessionIds = await ResolveSessionsAsync(db, withData);
-            var existingKeys = await LoadExistingInteractionKeysAsync(db, sessionIds.Values.ToList());
+            var existingKeys = await LoadExistingInteractionKeysAsync(db, sessionIds.Values.ToList(), DedupWindowStart(withData));
 
             var newInteractions = new List<CopilotInteraction>();
             var keyPhrasesByInteraction = new Dictionary<CopilotInteraction, List<string>>();
@@ -806,7 +824,43 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         /// Existing (session, interaction) keys, so the overlap re-fetch doesn't produce duplicates. Batched
         /// rather than one query per interaction.
         /// </summary>
-        private async Task<HashSet<string>> LoadExistingInteractionKeysAsync(AnalyticsEntitiesContext db, List<int> sessionIds)
+        /// <summary>
+        /// Oldest interaction in the batch, less <see cref="DedupLookbackMarginDays"/>. Rows older than this
+        /// cannot collide with anything in the batch, so there is no point reading them.
+        /// </summary>
+        private static DateTime DedupWindowStart(List<UserLoadResult> withData)
+        {
+            return DedupWindowStart(withData.SelectMany(r => r.Stats).Select(s => s.CreatedUtc));
+        }
+
+        /// <summary>
+        /// The timestamp-only core of <see cref="DedupWindowStart(List{UserLoadResult})"/>, separated so it
+        /// can be unit tested without building loader results.
+        /// </summary>
+        internal static DateTime DedupWindowStart(IEnumerable<DateTime> createdUtcs)
+        {
+            var oldest = DateTime.MaxValue;
+            if (createdUtcs != null)
+            {
+                foreach (var created in createdUtcs)
+                {
+                    if (created != default(DateTime) && created < oldest)
+                        oldest = created;
+                }
+            }
+
+            // No usable timestamps (shouldn't happen - created_utc is required) - fall back to reading
+            // everything rather than risking a missed duplicate.
+            if (oldest == DateTime.MaxValue)
+                return DateTime.MinValue;
+
+            // Guard the subtraction: a bad timestamp near DateTime.MinValue would otherwise throw.
+            return oldest > DateTime.MinValue.AddDays(DedupLookbackMarginDays)
+                ? oldest.AddDays(-DedupLookbackMarginDays)
+                : DateTime.MinValue;
+        }
+
+        private async Task<HashSet<string>> LoadExistingInteractionKeysAsync(AnalyticsEntitiesContext db, List<int> sessionIds, DateTime fromUtc)
         {
             var keys = new HashSet<string>(StringComparer.Ordinal);
             if (sessionIds == null || sessionIds.Count == 0)
@@ -815,8 +869,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             var distinct = sessionIds.Distinct().ToList();
             foreach (var idChunk in ChunkIds(distinct))
             {
+                // Bounded by created_utc so a long-lived thread's whole history isn't re-read every cycle
+                // (issue #294). Seeks IX_copilot_interactions_dedup_window (session_id, created_utc)
+                // INCLUDE (graph_interaction_id), which serves the range predicate and the projection
+                // without touching the base table.
                 var rows = await db.CopilotInteractions
-                    .Where(i => idChunk.Contains(i.SessionId))
+                    .Where(i => idChunk.Contains(i.SessionId) && i.CreatedUtc >= fromUtc)
                     .Select(i => new { i.SessionId, i.GraphInteractionId })
                     .ToListAsync();
 

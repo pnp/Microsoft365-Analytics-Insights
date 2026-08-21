@@ -331,6 +331,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 return true;
             }
+            catch (GraphHttpException ex)
+            {
+                // Typed so the log names the actual HTTP status. A 403 here is nearly always a missing or
+                // ungranted Reports.Read.All application permission, and saying so beats "an error occurred".
+                var advice = ex.StatusCode == System.Net.HttpStatusCode.Forbidden || ex.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                    ? "Graph refused the call: grant the app registration the Reports.Read.All APPLICATION permission and admin-consent it. "
+                    : "Graph returned an error rather than a report. ";
+
+                _logger.LogError(ex, $"{reportDescription} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} {advice}" +
+                    "The report was NOT imported and has not been recorded as up to date; it will be retried on the next cycle. " +
+                    "The other Copilot reports and the remaining Graph imports are unaffected.");
+                return false;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"{reportDescription} failed: {ex.Message}. " +

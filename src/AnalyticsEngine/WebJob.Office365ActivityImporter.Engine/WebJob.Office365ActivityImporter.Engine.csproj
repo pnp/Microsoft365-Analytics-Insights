@@ -139,6 +139,7 @@
     <Compile Include="Graph\Email\SentEmailImporter.cs" />
     <Compile Include="Graph\Email\SentEmailMailboxSkipList.cs" />
     <Compile Include="Graph\Email\SentEmailSentimentScorer.cs" />
+    <Compile Include="Graph\GraphHttpException.cs" />
     <Compile Include="Graph\GraphResourceNotFoundException.cs" />
     <Compile Include="Graph\PageableGraphLoaderExtensions.cs" />
     <Compile Include="Graph\PageableGraphResponse.cs" />

@@ -96,6 +96,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                         "Microsoft has probably changed the report schema; the import was stopped rather than recording an empty snapshot.");
                 }
             }
+            catch (GraphResourceNotFoundException ex)
+            {
+                // 404 is a deliberately-tolerated outcome, not a failure: the report endpoint doesn't exist
+                // in this cloud (these reports are global-cloud only - not US Government, not 21Vianet), or
+                // Microsoft has retired this report version. Retrying achieves nothing, so this counts as a
+                // completed run for cadence purposes - but the reason is recorded on the import log so the
+                // Health page shows why the table is empty instead of implying the tenant has no licences.
+                importLog.RowsRead = 0;
+                importLog.Error = Truncate($"Report not available: {ex.Message}", 1000);
+                await SaveImportLog(db, importLog);
+
+                _logger.LogWarning($"Copilot aggregate report {request} is not available on this tenant: {ex.Message} " +
+                    "These reports exist only in the global cloud (not US Government or 21Vianet). No rows were imported.");
+                return 0;
+            }
             catch (Exception ex)
             {
                 importLog.Error = Truncate(ex.Message, 1000);
@@ -109,7 +124,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             if (parsed.Count == 0)
             {
                 _logger.LogWarning($"Copilot aggregate report {request} returned no rows. " +
-                    "That is expected on a tenant with no Microsoft 365 Copilot licences, and also happens outside the global cloud, where these reports aren't available.");
+                    "The report downloaded successfully and was genuinely empty, which is expected on a tenant with no Microsoft 365 Copilot licences.");
                 await SaveImportLog(db, importLog);
                 return 0;
             }
