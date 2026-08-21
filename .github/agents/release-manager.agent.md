@@ -98,7 +98,7 @@ The auto-generated "What's Changed" list is not acceptable as final notes. Prepa
 2. Confirm checks are green (see the `ready_for_review` gotcha above). **Ask before merging.**
 3. After merge, watch the **Release build** and locate the resulting `Stable build <n>` release.
 4. Verify all five standard ZIP assets are present and downloadable.
-5. For every migration in the release diff, verify the matching `<migrationid>.manual.sql` asset is present and byte-identical to the repository source; upload any missing scripts.
+5. For every migration in the release diff, verify the matching `<migrationid>.manual.sql` asset is present and byte-identical to the repository source; upload any missing scripts. **Expect them to be missing:** `ci.yml` uploads `**/*.zip` only, so manual scripts are never attached automatically. In the admin notes, state that they must be run in **migration-id order** and name the predecessor of the first — each hard-fails with `RAISERROR` severity 16 if its predecessor is not stamped in `__MigrationHistory`.
 6. Replace the generated release text with the admin notes (`gh release edit <tag> --notes-file ...`), then read the release back to confirm the update stuck.
 7. Close the issues the release brought into `main`, each with a comment naming the build number and summarising what shipped. Leave partially-addressed issues open with a comment stating precisely what remains and why.
 8. Offer to delete superseded draft prereleases. **Never publish a draft** without being asked — the `PUBLISH_RELEASES` gate is deliberate.
