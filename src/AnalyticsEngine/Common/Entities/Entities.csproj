@@ -358,6 +358,18 @@
     <Compile Include="Migrations\202608200600001_AddCopilotInteractionHistory.Designer.cs">
       <DependentUpon>202608200600001_AddCopilotInteractionHistory.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.cs" />
+    <Compile Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.Designer.cs">
+      <DependentUpon>202608210700001_WidenCopilotAccessedResourceDedupIndex.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs" />
+    <Compile Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.Designer.cs">
+      <DependentUpon>202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.cs" />
+    <Compile Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.Designer.cs">
+      <DependentUpon>202608210700003_IndexCopilotInteractionsDedupWindow.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -537,6 +549,15 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608200600001_AddCopilotInteractionHistory.resx">
       <DependentUpon>202608200600001_AddCopilotInteractionHistory.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.resx">
+      <DependentUpon>202608210700001_WidenCopilotAccessedResourceDedupIndex.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.resx">
+      <DependentUpon>202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.resx">
+      <DependentUpon>202608210700003_IndexCopilotInteractionsDedupWindow.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

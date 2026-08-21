@@ -94,6 +94,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                         "Microsoft has probably changed the report schema; the import was stopped rather than recording an empty snapshot.");
                 }
             }
+            catch (GraphResourceNotFoundException ex)
+            {
+                // Tolerated, not a failure - see CopilotUserCountReportLoader for the full reasoning. The
+                // report endpoint doesn't exist in this cloud, so there is nothing to retry; record why.
+                importLog.RowsRead = 0;
+                importLog.Error = Truncate($"Report not available: {ex.Message}", 1000);
+                await SaveImportLog(db, importLog);
+
+                _logger.LogWarning($"Copilot per-user report {request} is not available on this tenant: {ex.Message} " +
+                    "These reports exist only in the global cloud (not US Government or 21Vianet). No rows were imported.");
+                return 0;
+            }
             catch (Exception ex)
             {
                 importLog.Error = Truncate(ex.Message, 1000);
@@ -106,7 +118,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             if (parsed.Count == 0)
             {
-                _logger.LogWarning($"Copilot per-user report {request} returned no rows. Expected on a tenant with no Microsoft 365 Copilot licences.");
+                _logger.LogWarning($"Copilot per-user report {request} returned no rows. " +
+                    "The report downloaded successfully and was genuinely empty, which is expected on a tenant with no Microsoft 365 Copilot licences.");
                 await SaveImportLog(db, importLog);
                 return 0;
             }

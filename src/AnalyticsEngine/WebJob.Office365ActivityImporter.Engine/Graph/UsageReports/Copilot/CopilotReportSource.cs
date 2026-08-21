@@ -48,7 +48,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             if (request == null) throw new ArgumentNullException(nameof(request));
 
             _logger.LogInformation($"Loading Copilot report {request}...");
-            return await _client.LoadAllPagesWithThrottleRetries<JObject>(request.Url, _logger);
+
+            // Strict paging. These loaders treat "no rows" as a business outcome ("this tenant has no
+            // Copilot licences"), so a truncated download must never reach them looking like an empty
+            // report - see issue #285. A 404 is surfaced as GraphResourceNotFoundException and tolerated
+            // explicitly by the loaders (report not available in this cloud); everything else fails.
+            return await _client.LoadAllPagesWithThrottleRetries<JObject>(request.Url, _logger, throwOnNotFound: true, throwOnHttpError: true);
         }
     }
 }

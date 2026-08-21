@@ -45,9 +45,11 @@ namespace Tests.UnitTests
         // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup,
         // IndexUsageReportSnapshots and IndexReportDateQueries are later, unrelated schema-only index
         // migrations, AddCopilotUsageReports adds the Copilot usage-report tables,
-        // DeprecateTeamsAddons drops the Teams add-on tables when they are empty, and
-        // AddCopilotInteractionHistory adds the Copilot interaction-history tables.
-        private const string LatestId = "202608200600001_AddCopilotInteractionHistory";
+        // DeprecateTeamsAddons drops the Teams add-on tables when they are empty,
+        // AddCopilotInteractionHistory adds the Copilot interaction-history tables, and
+        // WidenCopilotAccessedResourceDedupIndex / IndexCopilotInteractionKeywordsByKeyword /
+        // IndexCopilotInteractionsDedupWindow are three further schema-only index migrations.
+        private const string LatestId = "202608210700003_IndexCopilotInteractionsDedupWindow";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

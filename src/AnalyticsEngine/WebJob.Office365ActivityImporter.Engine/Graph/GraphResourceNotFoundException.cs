@@ -1,5 +1,5 @@
-using Newtonsoft.Json.Linq;
 using System;
+using System.Net;
 using System.Net.Http;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -17,30 +17,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// Insights exception on every import cycle, forever, for a perfectly normal tenant state.
     /// </summary>
     /// <remarks>
-    /// Derives from <see cref="HttpRequestException"/> so pre-existing <c>catch (HttpRequestException)</c>
-    /// handlers keep working unchanged; callers that want to special-case a 404 catch this type first.
+    /// Derives from <see cref="GraphHttpException"/> (and so from <see cref="HttpRequestException"/>) so
+    /// pre-existing <c>catch (HttpRequestException)</c> handlers keep working unchanged; callers that want
+    /// to special-case a 404 catch this type first. <c>StatusCode</c>, <c>Url</c>, <c>ResponseBody</c> and
+    /// <c>GraphErrorCode</c> are all inherited.
     /// </remarks>
-    public class GraphResourceNotFoundException : HttpRequestException
+    public class GraphResourceNotFoundException : GraphHttpException
     {
         public GraphResourceNotFoundException(string url, string responseBody, Exception innerException)
-            : base(BuildMessage(url, responseBody), innerException)
+            : base(BuildMessage(url, responseBody), HttpStatusCode.NotFound, url, responseBody, innerException)
         {
-            Url = url;
-            ResponseBody = responseBody;
-            GraphErrorCode = ExtractGraphErrorCode(responseBody);
         }
-
-        /// <summary>The URL that returned the 404.</summary>
-        public string Url { get; }
-
-        /// <summary>The raw response body, kept for diagnostics.</summary>
-        public string ResponseBody { get; }
-
-        /// <summary>
-        /// Graph's machine-readable error code (e.g. <c>MailboxNotEnabledForRESTAPI</c> or
-        /// <c>Request_ResourceNotFound</c>), or null when the body isn't a parseable Graph error.
-        /// </summary>
-        public string GraphErrorCode { get; }
 
         private static string BuildMessage(string url, string responseBody)
         {
@@ -48,25 +35,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             return string.IsNullOrEmpty(code)
                 ? $"Graph returned 404 (Not Found) for {url}."
                 : $"Graph returned 404 (Not Found) for {url} with error code '{code}'.";
-        }
-
-        /// <summary>
-        /// Pulls <c>error.code</c> out of a standard Graph error payload. Never throws - a malformed or
-        /// non-JSON body simply yields null, because this is only used for logging and diagnostics.
-        /// </summary>
-        internal static string ExtractGraphErrorCode(string responseBody)
-        {
-            if (string.IsNullOrWhiteSpace(responseBody))
-                return null;
-
-            try
-            {
-                return JObject.Parse(responseBody)["error"]?["code"]?.ToString();
-            }
-            catch (Exception)
-            {
-                return null;
-            }
         }
     }
 }
