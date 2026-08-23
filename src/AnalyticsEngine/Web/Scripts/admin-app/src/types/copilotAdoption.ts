@@ -186,6 +186,15 @@ export interface UnlicensedPopulationSummary {
   truncated: boolean;
 }
 
+/** The average shape of engagement for a group of users - frequency, depth and breadth on one scale. */
+export interface AdoptionScoreProfile {
+  label: string;
+  users: number;
+  frequencyScore: number;
+  depthScore: number;
+  breadthScore: number;
+}
+
 /** How much of all Copilot activity one cohort of users accounts for. */
 export interface AdoptionConcentrationBand {
   label: string;
@@ -247,6 +256,7 @@ export interface CopilotAdoptionSummary {
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];
   weeklyVolumeTrend: ReportSeries[];
+  scoreProfiles: AdoptionScoreProfile[];
   concentration: AdoptionConcentrationBand[];
   combinedByDepartment: AdoptionCombinedSegmentRow[];
   topResourceTypes: ReportCategory[];

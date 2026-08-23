@@ -145,3 +145,15 @@ export function opportunitiesExportUrl(
   const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   return `${baseUrl()}/opportunities/export?${params}`;
 }
+
+/**
+ * URL of the full Excel workbook export.
+ *
+ * The whole report - every figure, table and chart on the page - in one .xlsx, built from the same
+ * cached analysis the screen is rendered from. Its purpose is the point-in-time snapshot: run it
+ * before an enablement programme starts and again afterwards, and the two files are directly
+ * comparable in a way a screenshot never is.
+ */
+export function workbookExportUrl(windowDays: number, seatLicenceTypeIds?: number[]): string {
+  return `${baseUrl()}/export/workbook?${scopeParams(windowDays, seatLicenceTypeIds)}`;
+}

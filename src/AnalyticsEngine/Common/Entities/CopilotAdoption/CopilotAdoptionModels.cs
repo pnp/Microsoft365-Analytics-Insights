@@ -945,6 +945,32 @@ namespace Common.Entities.CopilotAdoption
     #endregion
 
     /// <summary>
+    /// The average shape of engagement for a group of users: how much of their score comes from
+    /// frequency, from depth, and from breadth.
+    ///
+    /// Reported as a profile rather than a single number because two populations can average the
+    /// same score with completely different shapes - frequent-but-shallow and deep-but-narrow need
+    /// opposite programmes - and the overall score cannot tell them apart.
+    /// </summary>
+    public class AdoptionScoreProfile
+    {
+        [JsonProperty("label")]
+        public string Label { get; set; }
+
+        [JsonProperty("users")]
+        public int Users { get; set; }
+
+        [JsonProperty("frequencyScore")]
+        public double FrequencyScore { get; set; }
+
+        [JsonProperty("depthScore")]
+        public double DepthScore { get; set; }
+
+        [JsonProperty("breadthScore")]
+        public double BreadthScore { get; set; }
+    }
+
+    /// <summary>
     /// One recommended action and how many licensed users need it.
     ///
     /// Exists so the licensed-user list can stop repeating an identical paragraph on every row of a
@@ -1295,6 +1321,13 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>The kinds of tenant content Copilot grounded its answers in.</summary>
         [JsonProperty("topResourceTypes")]
         public List<AdoptionCategory> TopResourceTypes { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>
+        /// The shape of engagement for the average active user and for the Champions, so the gap
+        /// between "typical here" and "best here" is visible. See <see cref="AdoptionScoreProfile"/>.
+        /// </summary>
+        [JsonProperty("scoreProfiles")]
+        public List<AdoptionScoreProfile> ScoreProfiles { get; set; } = new List<AdoptionScoreProfile>();
 
         /// <summary>The agent estate: what exists, who uses it, and what should be retired.</summary>
         [JsonProperty("agents")]

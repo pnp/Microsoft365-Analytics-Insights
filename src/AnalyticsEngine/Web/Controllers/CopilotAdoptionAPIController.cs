@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -349,6 +350,81 @@ namespace Web.AnalyticsWeb.Controllers
             return CsvResponse(
                 CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.LicenceOpportunityColumns()),
                 CsvSerialiser.FileName("copilot-licence-opportunities", analysis.Summary.GeneratedUtc));
+        }
+
+        #endregion
+
+        #region Workbook export
+
+        /// <summary>
+        /// The whole report as an Excel workbook - every figure, table and chart, with the charts live
+        /// and bound to the cells rather than pasted in as pictures.
+        ///
+        /// Exists for the point-in-time snapshot. A screenshot of this page cannot be compared with
+        /// another screenshot six months later: the numbers cannot be subtracted and nobody can tell
+        /// what period or thresholds either was run with. The workbook records both, so two files taken
+        /// before and after an enablement programme are comparable and the comparison is checkable.
+        ///
+        /// Built from the same cached analysis that renders the page, so the two can never disagree.
+        /// </summary>
+        // GET: api/CopilotAdoption/export/workbook?windowDays=28
+        [HttpGet]
+        [Route("export/workbook")]
+        public async Task<HttpResponseMessage> ExportWorkbook(
+            int windowDays = 28,
+            string seatLicenceTypeIds = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+
+            byte[] bytes;
+            try
+            {
+                bytes = CopilotAdoptionWorkbook.Build(analysis);
+            }
+            catch (Exception ex)
+            {
+                // The workbook is assembled as OpenXML by hand, so a failure here is a defect in this
+                // application rather than anything the caller did. Log it with detail and return a
+                // deliberately plain message: the default Web API behaviour would put the exception
+                // and its stack trace in the response body, and this endpoint is reachable by every
+                // admin user.
+                try
+                {
+                    var config = new AppConfig();
+                    var logger = new AnalyticsLogger(
+                        config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
+                    logger.TrackException(ex);
+                    logger.LogError($"Failed to build the Copilot adoption workbook: {ex.Message}");
+                }
+                catch (Exception)
+                {
+                    // Telemetry must never be the reason a request fails differently. Swallowing here
+                    // is deliberate - the caller is already getting an error, and a logging failure on
+                    // top of it would replace a useful message with a confusing one.
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent(
+                        "The Copilot adoption workbook could not be generated. The failure has been logged; "
+                        + "the CSV exports on the Licensed users and Licence opportunities tabs are unaffected."),
+                };
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(bytes),
+            };
+
+            response.Content.Headers.ContentType =
+                new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+            {
+                FileName = CopilotAdoptionWorkbook.FileName(analysis.Summary),
+            };
+
+            return response;
         }
 
         #endregion

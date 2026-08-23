@@ -84,6 +84,20 @@ export default function IntensityScatter({
     developing: options.developingScore,
   };
 
+  // Quadrant thresholds are the medians of the plotted departments, not fixed values. A fixed line
+  // would be a judgement about what "frequent" means that this tool has no basis to make - whereas
+  // "busier than half your own departments" is defensible on any tenant, and is what an executive
+  // actually wants to know when deciding where to send an enablement team.
+  const medianOf = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  const xMedian = medianOf(points.map((p) => p.activeDaysPerUser));
+  const yMedian = medianOf(points.map((p) => p.actionsPerActiveDay));
+  const showQuadrants = points.length >= 4;
+
   return (
     <div className={styles.root}>
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" role="img" aria-label="Copilot usage frequency against intensity by department">
@@ -145,6 +159,69 @@ export default function IntensityScatter({
           Interactions per active day
         </text>
 
+        {showQuadrants && (
+          <g>
+            <line
+              x1={xOf(xMedian)}
+              x2={xOf(xMedian)}
+              y1={PAD.top}
+              y2={HEIGHT - PAD.bottom}
+              stroke={tokens.colorPaletteRedBorderActive}
+              strokeDasharray="4 4"
+              strokeOpacity={0.55}
+            />
+            <line
+              x1={PAD.left}
+              x2={WIDTH - PAD.right}
+              y1={yOf(yMedian)}
+              y2={yOf(yMedian)}
+              stroke={tokens.colorPaletteRedBorderActive}
+              strokeDasharray="4 4"
+              strokeOpacity={0.55}
+            />
+
+            <text x={xOf(xMedian) + 5} y={PAD.top - 20} fontSize={10} fill={tokens.colorNeutralForeground3}>
+              median frequency
+            </text>
+            <text x={PAD.left + 4} y={yOf(yMedian) - 5} fontSize={10} fill={tokens.colorNeutralForeground3}>
+              median intensity
+            </text>
+
+            <text x={PAD.left + 6} y={PAD.top + 12} fontSize={11} fontWeight={600} fill={tokens.colorNeutralForeground3}>
+              Deep but occasional
+            </text>
+            <text
+              x={WIDTH - PAD.right - 6}
+              y={PAD.top + 12}
+              textAnchor="end"
+              fontSize={11}
+              fontWeight={600}
+              fill={tokens.colorPaletteGreenForeground1}
+            >
+              Embedded
+            </text>
+            <text
+              x={PAD.left + 6}
+              y={HEIGHT - PAD.bottom - 8}
+              fontSize={11}
+              fontWeight={600}
+              fill={tokens.colorPaletteRedForeground1}
+            >
+              Barely started
+            </text>
+            <text
+              x={WIDTH - PAD.right - 6}
+              y={HEIGHT - PAD.bottom - 8}
+              textAnchor="end"
+              fontSize={11}
+              fontWeight={600}
+              fill={tokens.colorNeutralForeground3}
+            >
+              Frequent but shallow
+            </text>
+          </g>
+        )}
+
         {[...points]
           .sort((a, b) => b.licensedUsers - a.licensedUsers)
           .map((p) => (
@@ -180,9 +257,10 @@ export default function IntensityScatter({
 
       <Text size={200} className={styles.caption}>
         Bubble area is proportional to the number of seats the department holds; colour is the average
-        engagement score of its <em>active</em> users, using the same bands as the rest of the page. Only
-        users who were active at least once are averaged, so a department is not dragged towards the origin
-        by seats that were never used - those are counted in the reclaimable-seat figure instead.
+        engagement score of its <em>active</em> users, using the same bands as the rest of the page. The dashed
+        lines are your own medians, not fixed targets - each quadrant is "compared with your other
+        departments". Only users who were active at least once are averaged, so a department is not dragged
+        towards the origin by seats that were never used; those are counted in the reclaimable-seat figure.
       </Text>
     </div>
   );

@@ -682,6 +682,7 @@ namespace Common.Entities.CopilotAdoption
             summary.ActionPlan = BuildActionPlan(users);
             summary.Concentration = CopilotAdoptionScoring.Concentration(
                 users.Where(u => u.ActiveDays > 0).Select(u => u.Interactions));
+            summary.ScoreProfiles = BuildScoreProfiles(users);
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
             summary.IntensityByDepartment = BuildIntensity(users, u => u.Department, "(no department)");
@@ -732,6 +733,48 @@ namespace Common.Entities.CopilotAdoption
                     Value = users.Count(u => u.Band == band),
                 })
                 .ToList();
+        }
+
+        /// <summary>
+        /// The shape of engagement for the typical active user, next to the shape for the Champions.
+        ///
+        /// The comparison is what makes it useful: the gap between the two profiles says which of the
+        /// three behaviours an enablement programme should actually target here. A tenant whose
+        /// average user matches its Champions on frequency but not breadth has a completely different
+        /// problem from one where the gap is depth, and the overall score is identical in both cases.
+        ///
+        /// Averaged over active users only - an idle seat contributes zero to all three components,
+        /// which drags the whole profile towards the origin and says nothing about shape.
+        /// </summary>
+        private static List<AdoptionScoreProfile> BuildScoreProfiles(
+            IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            var profiles = new List<AdoptionScoreProfile>();
+
+            var active = users.Where(u => u.ActiveDays > 0 || u.Interactions > 0).ToList();
+            if (active.Count == 0) return profiles;
+
+            profiles.Add(Profile("Typical active user", active));
+
+            var champions = active.Where(u => u.Band == AdoptionBand.Champion).ToList();
+            if (champions.Count > 0)
+            {
+                profiles.Add(Profile("Your Champions", champions));
+            }
+
+            return profiles;
+        }
+
+        private static AdoptionScoreProfile Profile(string label, IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            return new AdoptionScoreProfile
+            {
+                Label = label,
+                Users = users.Count,
+                FrequencyScore = Math.Round(users.Average(u => u.FrequencyScore), 1, MidpointRounding.AwayFromZero),
+                DepthScore = Math.Round(users.Average(u => u.DepthScore), 1, MidpointRounding.AwayFromZero),
+                BreadthScore = Math.Round(users.Average(u => u.BreadthScore), 1, MidpointRounding.AwayFromZero),
+            };
         }
 
         /// <summary>

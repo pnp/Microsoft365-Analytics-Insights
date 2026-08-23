@@ -5,10 +5,12 @@ import {
   Title3,
   Body1,
   Text,
+  Button,
   Card,
   Select,
   Tab,
   TabList,
+  Tooltip,
   MessageBar,
   MessageBarBody,
   Accordion,
@@ -17,11 +19,13 @@ import {
   AccordionPanel,
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
+import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import {
   fetchAdoptionAvailability,
   fetchAdoptionFilters,
   fetchAdoptionSql,
   fetchAdoptionSummary,
+  workbookExportUrl,
 } from '../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
@@ -34,6 +38,9 @@ import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import DonutChart from '../components/charts/DonutChart';
 import TreemapChart from '../components/charts/TreemapChart';
+import StackedAreaChart from '../components/charts/StackedAreaChart';
+import GaugeRing from '../components/charts/GaugeRing';
+import RadarChart from '../components/charts/RadarChart';
 import AdoptionFunnel from '../components/copilotAdoption/AdoptionFunnel';
 import LicensedUsersPanel from '../components/copilotAdoption/LicensedUsersPanel';
 import OpportunitiesPanel from '../components/copilotAdoption/OpportunitiesPanel';
@@ -105,6 +112,13 @@ const useStyles = makeStyles({
   },
   cardBody: {
     marginTop: '10px',
+  },
+  gauges: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '28px',
+    justifyContent: 'space-around',
+    alignItems: 'flex-start',
   },
   method: {
     display: 'flex',
@@ -247,6 +261,21 @@ export default function CopilotAdoptionPage() {
               </option>
             ))}
           </Select>
+          {availability?.available && (
+            <Tooltip
+              relationship="description"
+              content="The whole report - every figure, table and chart - as an Excel workbook with live, editable charts. Run it before and after an enablement programme to compare like for like."
+            >
+              <Button
+                appearance="primary"
+                icon={<ArrowDownload16Regular />}
+                as="a"
+                href={workbookExportUrl(windowDays)}
+              >
+                Excel report
+              </Button>
+            </Tooltip>
+          )}
         </div>
       </div>
 
@@ -384,6 +413,50 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
   return (
     <>
       <KpiGrid items={kpis} />
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Where you stand
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              The two rates that decide whether the seats are earning their keep, against the scale this tool
+              judges them on.
+            </Text>
+          </div>
+          <InfoTip
+            title="Where you stand"
+            content={{
+              what: 'Adoption rate is the share of licensed users who touched Copilot at all. Habit rate is the share for whom it is a routine part of the working week.',
+              how: `The coloured arc is the judgement scale, not a smooth gradient - a continuous ramp would imply the difference between 41% and 43% means something, and it does not. Below 40% needs attention, 40-70% is progressing, above 70% is healthy. Habit is measured at an engagement score of ${o.establishedScore} or more.`,
+              source:
+                'The gap between the two gauges is the finding. Adoption at 100% with a habit rate near zero means everyone opened it once - which is exactly the situation a renewal conversation needs to surface, and which a single adoption figure conceals.',
+            }}
+          />
+        </div>
+        <div className={`${styles.cardBody} ${styles.gauges}`}>
+          <GaugeRing
+            value={summary.adoptionRatePct}
+            label="Adoption rate"
+            sublabel={`${formatCount(summary.activeUsers)} of ${formatCount(
+              summary.licensedUsers,
+            )} licensed users touched Copilot`}
+          />
+          <GaugeRing
+            value={summary.habitRatePct}
+            label="Habit rate"
+            sublabel={`${formatCount(summary.habitualUsers)} have made it part of the working week`}
+          />
+          {summary.coworkDetected && (
+            <GaugeRing
+              value={summary.coworkAdoptionPct}
+              label="Cowork adoption"
+              sublabel={`${formatCount(summary.coworkUsers)} licensed users have used Cowork`}
+            />
+          )}
+        </div>
+      </Card>
 
       <Card>
         <div className={styles.cardHead}>
@@ -536,6 +609,41 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
         </div>
       </Card>
 
+      {summary.scoreProfiles.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                The shape of adoption
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Where your typical user differs from your best ones - and therefore what an enablement
+                programme should actually target.
+              </Text>
+            </div>
+            <InfoTip
+              title="The shape of adoption"
+              content={{
+                what: 'The three components of the engagement score, averaged for the typical active user and for your Champions, plotted on one 0-100 scale.',
+                how: 'Averaged over active users only - an idle seat scores zero on all three, which drags the whole profile inwards and says nothing about shape. Both series use the identical scale, so the two outlines are directly comparable.',
+                source:
+                  'The gap between the two outlines is the finding, not their size. If your average user matches your Champions on frequency but not breadth, more training on how often to use Copilot is wasted effort - they already use it often enough, they just use it in one place. The overall score is identical whichever of the three is missing.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <RadarChart
+              axes={['Frequency', 'Depth', 'Breadth']}
+              series={summary.scoreProfiles.map((p, i) => ({
+                name: `${p.label} (${formatCount(p.users)})`,
+                colour: i === 0 ? '#0f6cbd' : '#107c10',
+                values: [p.frequencyScore, p.depthScore, p.breadthScore],
+              }))}
+            />
+          </div>
+        </Card>
+      )}
+
       {summary.weeklyTrend.length > 0 && (
         <Card>
           <div className={styles.cardHead}>
@@ -591,6 +699,34 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
           </div>
           <div className={styles.cardBody}>
             <TimeSeriesChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
+          </div>
+        </Card>
+      )}
+
+      {summary.weeklyVolumeTrend.length > 1 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Who is doing the Copilot work
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                The same weekly volume as composition rather than comparison - total height is all the Copilot
+                activity in the organisation, and the bands are who is producing it.
+              </Text>
+            </div>
+            <InfoTip
+              title="Who is doing the Copilot work"
+              content={{
+                what: 'Weekly Copilot interactions stacked, so the total and its make-up are readable at once.',
+                how: 'Drawn from the same series as the volume chart above. Weeks with no data for a band are treated as zero rather than interpolated - inventing activity that did not happen is worse than a visible dip.',
+                source:
+                  'Worth stating the trade-off: only the bottom band sits on a flat baseline, so only it can be read precisely. That is acceptable when the message is the mix, which is why the plain line chart above is kept rather than replaced. A rising unlicensed band against a flat licensed one is the clearest possible case for reallocating seats.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <StackedAreaChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
           </div>
         </Card>
       )}
