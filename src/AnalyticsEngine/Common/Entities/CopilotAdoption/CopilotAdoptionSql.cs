@@ -588,6 +588,10 @@ namespace Common.Entities.CopilotAdoption
                 "JOIN dbo.copilot_agents AS ag ON ag.id = c.agent_id\r\n" +
                 "LEFT JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
                 "WHERE au.time_stamp >= @historyFrom\r\n" +
+                // Redundant against the inner join to copilot_agents, but it lets the optimiser
+                // eliminate the (usually large) majority of Copilot interactions that carry no agent
+                // before it does any joining, rather than discovering it during the join.
+                "  AND c.agent_id IS NOT NULL\r\n" +
                 "GROUP BY ag.id, ag.name, ag.agent_id, ag.is_custom_agent\r\n" +
                 "ORDER BY Interactions DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -600,14 +604,15 @@ namespace Common.Entities.CopilotAdoption
         public static string AgentUsageByDepartmentSql()
         {
             return
-                "SELECT TOP (@top) ISNULL(NULLIF(LTRIM(RTRIM(u.department)), ''), '(no department)') AS Label,\r\n" +
+                "SELECT TOP (@top) ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)') AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "" + AuditJoin + "\r\n" +
                 "JOIN dbo.users AS u ON u.id = au.user_id\r\n" +
+                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
                 "WHERE au.time_stamp >= @from\r\n" +
                 "  AND c.agent_id IS NOT NULL\r\n" +
-                "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(u.department)), ''), '(no department)')\r\n" +
+                "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -626,7 +631,7 @@ namespace Common.Entities.CopilotAdoption
             return
                 "SELECT TOP (@maxRows)\r\n" +
                 "       au.user_id AS UserId,\r\n" +
-                "       ISNULL(NULLIF(LTRIM(RTRIM(u.department)), ''), '') AS Department,\r\n" +
+                "       ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '') AS Department,\r\n" +
                 "       COUNT_BIG(*) AS Interactions,\r\n" +
                 "       COUNT(DISTINCT CAST(au.time_stamp AS date)) AS ActiveDays,\r\n" +
                 "       COUNT(DISTINCT ISNULL(c.app_host, '(unknown)')) AS AppsUsed,\r\n" +
@@ -635,6 +640,7 @@ namespace Common.Entities.CopilotAdoption
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "" + AuditJoin + "\r\n" +
                 "LEFT JOIN dbo.users AS u ON u.id = au.user_id\r\n" +
+                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
                 "WHERE au.time_stamp >= @from\r\n" +
                 "  AND au.user_id IS NOT NULL\r\n" +
                 "  AND NOT EXISTS (\r\n" +
@@ -642,7 +648,7 @@ namespace Common.Entities.CopilotAdoption
                 "      WHERE ul.user_id = au.user_id\r\n" +
                 $"        AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "  )\r\n" +
-                "GROUP BY au.user_id, ISNULL(NULLIF(LTRIM(RTRIM(u.department)), ''), '')\r\n" +
+                "GROUP BY au.user_id, ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '')\r\n" +
                 "ORDER BY Interactions DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }

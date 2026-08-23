@@ -532,6 +532,144 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void AgentAndUnlicensedQueries_ResolveDepartmentsThroughTheLookupTable()
+        {
+            // These two queries shipped referencing a non-existent `u.department` column. `dbo.users`
+            // has `department_id`, an FK to `dbo.user_departments`. Both failed at bind time, and
+            // because every query is individually guarded the failure degraded to a warning - so an
+            // entire population (unlicensed users) and a whole chart silently went missing rather than
+            // the page breaking. Neither builder had any test at all, which is why it shipped.
+            using (var db = ScratchDatabase.Create("CopilotAdoptDepartments"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Finance'), (2, N'Καλημέρα κόσμε');
+
+                      INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+
+                      INSERT INTO dbo.users (id, user_name, account_enabled, department_id) VALUES
+                          (1, N'seat@contoso.com', 1, 1),
+                          (2, N'greek@contoso.com', 1, 2),
+                          (3, N'nodept@contoso.com', 1, NULL);
+
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id, is_custom_agent)
+                          VALUES (1, N'Contoso Expenses Agent', N'Contoso.Expenses', 1);");
+
+                // Licensed user in Finance: two agent interactions on different days, plus one without.
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "Teams", agentId: 1);
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 3, appHost: "Word", agentId: 1);
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 3, appHost: "Teams");
+
+                // Unlicensed, in the Greek-named department: one agent interaction.
+                SeedCopilotInteraction(db, userId: 2, daysAgo: 1, appHost: "Copilot Chat", agentId: 1);
+
+                // Unlicensed, with no department at all - the fallback path.
+                SeedCopilotInteraction(db, userId: 3, daysAgo: 1, appHost: "Copilot Chat");
+
+                var from = DateTime.UtcNow.Date.AddDays(-28);
+
+                var byDepartment = Query<CopilotAdoptionService.CategoryQueryRow>(
+                    db,
+                    CopilotAdoptionSql.AgentUsageByDepartmentSql(),
+                    new SqlParameter("@from", from),
+                    new SqlParameter("@top", 10));
+
+                Assert.AreEqual(2, byDepartment.Count,
+                    "Only agent-attributed interactions count, and only two departments produced any.");
+                Assert.AreEqual(2d, byDepartment.Single(r => r.Label == "Finance").Value,
+                    "Finance ran two agent interactions; its third interaction carried no agent.");
+                Assert.AreEqual(1d, byDepartment.Single(r => r.Label == "Καλημέρα κόσμε").Value,
+                    "A non-Latin department name must survive the join and the grouping.");
+
+                var unlicensed = Query<UnlicensedUsageQueryRow>(
+                    db,
+                    CopilotAdoptionSql.UnlicensedUsageRowsSql(new[] { 1 }),
+                    new SqlParameter("@from", from),
+                    new SqlParameter("@maxRows", 1000));
+
+                Assert.AreEqual(2, unlicensed.Count, "The seat holder must be excluded.");
+
+                var greek = unlicensed.Single(r => r.UserId == 2);
+                Assert.AreEqual("Καλημέρα κόσμε", greek.Department,
+                    "The Department column must map to the property, resolved through user_departments.");
+                Assert.AreEqual(1, greek.Interactions);
+                Assert.AreEqual(1, greek.ActiveDays);
+                Assert.AreEqual(1, greek.AgentsUsed);
+
+                var noDepartment = unlicensed.Single(r => r.UserId == 3);
+                Assert.AreEqual(string.Empty, noDepartment.Department,
+                    "A user with no department must fall back to blank rather than NULL or an error.");
+                Assert.AreEqual(0, noDepartment.AgentsUsed);
+
+                var agents = Query<AgentUsageQueryRow>(
+                    db,
+                    CopilotAdoptionSql.AgentUsageSql(new[] { 1 }),
+                    new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-120)),
+                    new SqlParameter("@maxRows", 500));
+
+                Assert.AreEqual(1, agents.Count);
+                Assert.AreEqual("Contoso Expenses Agent", agents[0].Name);
+                Assert.AreEqual(3, agents[0].Interactions, "Three interactions carried this agent.");
+                Assert.AreEqual(2, agents[0].Users, "Two distinct people used it.");
+                Assert.AreEqual(1, agents[0].LicensedUsers, "Only one of them holds a seat.");
+                Assert.IsTrue(agents[0].IsCustomAgent);
+
+                var unlicensedApps = Query<CopilotAdoptionService.CategoryQueryRow>(
+                    db,
+                    CopilotAdoptionSql.UnlicensedUsageByAppSql(new[] { 1 }),
+                    new SqlParameter("@from", from),
+                    new SqlParameter("@top", 10));
+
+                Assert.AreEqual(1, unlicensedApps.Count, "Both unlicensed users were in Copilot Chat.");
+                Assert.AreEqual("Copilot Chat", unlicensedApps[0].Label);
+                Assert.AreEqual(2d, unlicensedApps[0].Value);
+            }
+        }
+
+        [TestMethod]
+        public void TopResourceTypes_RunsAgainstTheRealAccessedResourceSchema()
+        {
+            // The other builder that had no test. It joins the largest Copilot table through two
+            // further hops, so a wrong column name is equally invisible until a customer sees it.
+            using (var db = ScratchDatabase.Create("CopilotAdoptResources"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotResourceTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'a@contoso.com', 1);
+                      INSERT INTO dbo.copilot_event_accessed_resource_types (id, name)
+                          VALUES (1, N'docx'), (2, N'TeamsMeeting');");
+
+                var first = SeedCopilotInteractionReturningId(db, userId: 1, daysAgo: 2, appHost: "Word");
+                var second = SeedCopilotInteractionReturningId(db, userId: 1, daysAgo: 3, appHost: "Teams");
+
+                db.Execute(
+                    $@"INSERT INTO dbo.copilot_event_accessed_resources (copilot_chat_id, resource_type_id) VALUES
+                           ('{first}', 1), ('{first}', 1), ('{second}', 2), ('{second}', NULL);");
+
+                var rows = Query<CopilotAdoptionService.CategoryQueryRow>(
+                    db,
+                    CopilotAdoptionSql.TopResourceTypesSql(),
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@top", 10));
+
+                Assert.AreEqual(3, rows.Count, "docx, TeamsMeeting and the unknown fallback.");
+                Assert.AreEqual(2d, rows.Single(r => r.Label == "docx").Value,
+                    "One interaction referenced two documents - this counts references, not interactions.");
+                Assert.AreEqual(1d, rows.Single(r => r.Label == "TeamsMeeting").Value);
+                Assert.AreEqual(1d, rows.Single(r => r.Label == "(unknown)").Value,
+                    "A resource with no type must fall back rather than being dropped.");
+            }
+        }
+
         #endregion
 
         #region Fixture
@@ -688,7 +826,30 @@ namespace Tests.UnitTests
         }
 
         /// <summary>One Copilot interaction: an audit event plus its copilot_chats row.</summary>
+        /// <summary>
+        /// The accessed-resource tables, needed only by <see cref="CopilotAdoptionSql.TopResourceTypesSql"/>.
+        /// Kept out of <see cref="CreateCopilotTables"/> because most fixtures do not need them.
+        /// </summary>
+        private static void CreateCopilotResourceTables(ScratchDatabase db)
+        {
+            db.Execute(
+                @"CREATE TABLE dbo.copilot_event_accessed_resource_types (
+                      id int NOT NULL PRIMARY KEY, name nvarchar(200) NULL);
+
+                  CREATE TABLE dbo.copilot_event_accessed_resources (
+                      id int IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                      copilot_chat_id uniqueidentifier NOT NULL,
+                      resource_type_id int NULL);");
+        }
+
         private static void SeedCopilotInteraction(
+            ScratchDatabase db, int userId, int daysAgo, string appHost, int? agentId = null)
+        {
+            SeedCopilotInteractionReturningId(db, userId, daysAgo, appHost, agentId);
+        }
+
+        /// <summary>Seeds one interaction and returns its id, so accessed resources can be attached.</summary>
+        private static Guid SeedCopilotInteractionReturningId(
             ScratchDatabase db, int userId, int daysAgo, string appHost, int? agentId = null)
         {
             var id = Guid.NewGuid();
@@ -699,6 +860,8 @@ namespace Tests.UnitTests
                        VALUES ('{id}', '{when:yyyy-MM-dd HH:mm:ss}', {userId});
                    INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id)
                        VALUES ('{id}', N'{appHost}', {(agentId.HasValue ? agentId.Value.ToString() : "NULL")});");
+
+            return id;
         }
 
         #endregion
