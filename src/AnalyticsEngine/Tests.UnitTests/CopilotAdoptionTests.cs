@@ -1190,6 +1190,252 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region Agent inventory
+
+        [TestMethod]
+        public void ANewAgentIsNotRetired_HoweverFewPeopleUseIt()
+        {
+            // The exemption that stops an agent programme being strangled in its first month. A
+            // brand-new agent with one user has not failed, it has not started.
+            Assert.AreEqual(
+                AgentHealth.New,
+                CopilotAdoptionScoring.AgentHealthFor(daysSinceFirstUse: 5, daysSinceLastUse: 1, users: 1));
+
+            // The same agent a few months later, still with one user, is a genuine review candidate.
+            Assert.AreEqual(
+                AgentHealth.Review,
+                CopilotAdoptionScoring.AgentHealthFor(daysSinceFirstUse: 120, daysSinceLastUse: 1, users: 1));
+        }
+
+        [TestMethod]
+        public void AgentVerdicts_FollowInactivityThenAdoption()
+        {
+            var o = CopilotAdoptionOptions.Default;
+
+            Assert.AreEqual(
+                AgentHealth.Retire,
+                CopilotAdoptionScoring.AgentHealthFor(200, o.AgentRetireInactiveDays, 50),
+                "Long-dormant agents are retire candidates however popular they once were.");
+
+            Assert.AreEqual(
+                AgentHealth.Review,
+                CopilotAdoptionScoring.AgentHealthFor(200, o.AgentReviewInactiveDays, 50),
+                "Going quiet is a review, not yet a retirement.");
+
+            Assert.AreEqual(
+                AgentHealth.Keep,
+                CopilotAdoptionScoring.AgentHealthFor(200, 1, o.AgentMinUsers),
+                "Current and genuinely adopted.");
+
+            Assert.AreEqual(
+                AgentHealth.Review,
+                CopilotAdoptionScoring.AgentHealthFor(200, 1, o.AgentMinUsers - 1),
+                "Current but below the adoption floor - usually the author testing it.");
+        }
+
+        [TestMethod]
+        public void AnAgentWithNoRecordedUse_IsRetiredRatherThanCrashing()
+        {
+            Assert.AreEqual(AgentHealth.Retire, CopilotAdoptionScoring.AgentHealthFor(null, null, 0));
+            Assert.AreEqual(AgentHealth.New, CopilotAdoptionScoring.AgentHealthFor(3, null, 0));
+        }
+
+        [TestMethod]
+        public void EveryAgentVerdict_ExplainsItself()
+        {
+            // Same rule as the rest of the tool: an assertion the reader cannot check is not evidence.
+            var scored = CopilotAdoptionScoring.ScoreAgent(
+                new AgentUsageQueryRow
+                {
+                    AgentId = 1,
+                    Name = "Contoso Expenses Agent",
+                    Interactions = 40,
+                    Users = 8,
+                    AppsUsed = 2,
+                    FirstUsedUtc = Now.AddDays(-200),
+                    LastUsedUtc = Now.AddDays(-1),
+                },
+                Now);
+
+            Assert.AreEqual(AgentHealth.Keep, scored.Health);
+            Assert.AreEqual("Keep", scored.HealthName);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(scored.HealthReason));
+            Assert.AreEqual(5, scored.InteractionsPerUser, 0.01);
+            Assert.AreEqual(1, scored.DaysSinceLastUse);
+        }
+
+        [TestMethod]
+        public void MostPopularAndMostVersatile_AnswerDifferentQuestions()
+        {
+            // An agent one person runs constantly is not the most widely useful one, and an agent used
+            // everywhere by a few people is doing a broader job than a high-volume single-surface one.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-28);
+            analysis.Agents.AddRange(new[]
+            {
+                Agent("Heavy single-surface agent", users: 2, interactions: 5000, appsUsed: 1),
+                Agent("Widely used agent", users: 40, interactions: 400, appsUsed: 2),
+                Agent("Everywhere agent", users: 6, interactions: 120, appsUsed: 5),
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("Widely used agent", analysis.Summary.Agents.MostPopularAgent);
+            Assert.AreEqual("Everywhere agent", analysis.Summary.Agents.MostVersatileAgent);
+        }
+
+        [TestMethod]
+        public void AgentUsers_AreNotDoubleCountedAcrossAgents()
+        {
+            // Summing users across agents would count anyone using two agents twice, which is how an
+            // agent programme ends up reporting more users than the tenant has people.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-28);
+
+            var multiAgentUser = ScoredUser("power@contoso.com", 80, AdoptionBand.Champion);
+            multiAgentUser.AgentsUsed = 3;
+            analysis.LicensedUsers.Add(multiAgentUser);
+            analysis.LicensedUsers.Add(ScoredUser("none@contoso.com", 10, AdoptionBand.Trialling));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            analysis.Agents.AddRange(new[]
+            {
+                Agent("A", users: 1, interactions: 10, appsUsed: 1),
+                Agent("B", users: 1, interactions: 10, appsUsed: 1),
+                Agent("C", users: 1, interactions: 10, appsUsed: 1),
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(1, analysis.Summary.Agents.AgentUsers,
+                "One person using three agents is one agent user, not three.");
+            Assert.AreEqual(1, analysis.Summary.Agents.LicensedAgentUsers);
+        }
+
+        #endregion
+
+        #region Usage concentration
+
+        [TestMethod]
+        public void Concentration_ExposesUsageCarriedByAFewPeople()
+        {
+            // Two tenants with identical adoption rates and identical totals; only the distribution
+            // differs. The adoption percentage cannot tell them apart, which is the whole point.
+            var even = CopilotAdoptionScoring.Concentration(Enumerable.Repeat(10L, 100));
+            var skewed = CopilotAdoptionScoring.Concentration(
+                Enumerable.Repeat(91L, 10).Concat(Enumerable.Repeat(1L, 90)));
+
+            var evenTop = even.Single(b => b.Label == "Top 10%");
+            var skewedTop = skewed.Single(b => b.Label == "Top 10%");
+
+            Assert.AreEqual(10, evenTop.SharePct, 0.5, "Evenly spread usage puts ~10% of activity in the top 10%.");
+            Assert.IsTrue(skewedTop.SharePct > 85,
+                $"A tenant carried by its top decile must show it - got {skewedTop.SharePct}%.");
+        }
+
+        [TestMethod]
+        public void Concentration_AccountsForEveryActiveUserExactlyOnce()
+        {
+            // Rounding percentile boundaries is the obvious way to lose or duplicate a user.
+            foreach (var count in new[] { 1, 2, 3, 7, 13, 99, 100, 101, 1000 })
+            {
+                var bands = CopilotAdoptionScoring.Concentration(
+                    Enumerable.Range(1, count).Select(i => (long)i));
+
+                Assert.AreEqual(count, bands.Sum(b => b.Users),
+                    $"Every one of the {count} active users must land in exactly one cohort.");
+                Assert.AreEqual(100, bands.Sum(b => b.SharePct), 0.2);
+            }
+        }
+
+        [TestMethod]
+        public void Concentration_IgnoresIdleSeats()
+        {
+            // Including them would put every idle seat in the bottom cohort at zero and give every
+            // tenant on earth the same chart.
+            var bands = CopilotAdoptionScoring.Concentration(new long[] { 100, 50, 0, 0, 0, 0 });
+            Assert.AreEqual(2, bands.Sum(b => b.Users));
+        }
+
+        [TestMethod]
+        public void Concentration_HandlesAnEmptyPopulation()
+        {
+            Assert.AreEqual(0, CopilotAdoptionScoring.Concentration(new long[0]).Count);
+            Assert.AreEqual(0, CopilotAdoptionScoring.Concentration(null).Count);
+        }
+
+        #endregion
+
+        #region Unlicensed population and the combined view
+
+        [TestMethod]
+        public void UnlicensedUsers_AreBucketedByTheSameHabitRulesAsLicensedOnes()
+        {
+            // The two strips are meant to be read against each other, which only works if they mean
+            // the same thing.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.Add(ActiveUser("seat@contoso.com", activeDays: 20, interactions: 100));
+            analysis.Summary.LicensedUsers = 1;
+            analysis.UnlicensedUsers.AddRange(new[]
+            {
+                Unlicensed("chat1@contoso.com", department: "Legal", activeDays: 20, interactions: 200),
+                Unlicensed("chat2@contoso.com", department: "Legal", activeDays: 2, interactions: 4),
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var unlicensed = analysis.Summary.Unlicensed;
+            Assert.AreEqual(2, unlicensed.ActiveUsers);
+            Assert.AreEqual(204, unlicensed.Interactions);
+            CollectionAssert.AreEqual(
+                CopilotAdoptionScoring.AllHabitBuckets.ToArray(),
+                unlicensed.HabitBuckets.Select(b => b.Label).ToArray());
+            Assert.AreEqual(1, unlicensed.HabitBuckets.Single(b => b.Label == "Daily").Users);
+            Assert.AreEqual(1, unlicensed.HabitBuckets.Single(b => b.Label == "Infrequent").Users);
+        }
+
+        [TestMethod]
+        public void CombinedView_ShowsIdleSeatsNextToHeavyUnlicensedUse()
+        {
+            // The seat-allocation case: a department whose seats sit idle while its unlicensed people
+            // use Copilot heavily. Neither single-population view can show this.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ScoredUser($"idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "Legal")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Unlicensed($"chat{i}@contoso.com", "Legal", activeDays: 15, interactions: 280)));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var legal = analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Legal");
+            Assert.AreEqual(6, legal.LicensedUsers);
+            Assert.AreEqual(0, legal.LicensedActiveUsers);
+            Assert.AreEqual(0, legal.InteractionsPerLicensedUser);
+            Assert.AreEqual(6, legal.UnlicensedActiveUsers);
+            Assert.IsTrue(legal.InteractionsPerUnlicensedUser > 0,
+                "The unlicensed side of a department with entirely idle seats is the finding.");
+        }
+
+        [TestMethod]
+        public void CombinedView_DropsDepartmentsTooSmallToRead()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"big{i}@contoso.com", 10, 50), "Engineering")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+            analysis.UnlicensedUsers.Add(Unlicensed("lone@contoso.com", "Facilities", activeDays: 20, interactions: 500));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var segments = analysis.Summary.CombinedByDepartment.Select(r => r.Segment).ToList();
+            CollectionAssert.Contains(segments, "Engineering");
+            CollectionAssert.DoesNotContain(segments, "Facilities",
+                "One unlicensed user is not a department-level finding.");
+        }
+
+        #endregion
+
         #region Controller parameter handling
 
         [TestMethod]
@@ -1282,6 +1528,38 @@ namespace Tests.UnitTests
         {
             row.Department = department;
             return row;
+        }
+
+        /// <summary>An agent for the estate roll-up tests, active as of "now".</summary>
+        private static AgentUsageRow Agent(string name, int users, long interactions, int appsUsed)
+        {
+            return new AgentUsageRow
+            {
+                AgentId = name.GetHashCode(),
+                Name = name,
+                Users = users,
+                LicensedUsers = users,
+                Interactions = interactions,
+                AppsUsed = appsUsed,
+                FirstUsedUtc = Now.AddDays(-200),
+                LastUsedUtc = Now.AddDays(-1),
+                Health = AgentHealth.Keep,
+                HealthName = "Keep",
+            };
+        }
+
+        /// <summary>One unlicensed Copilot Chat user.</summary>
+        private static UnlicensedUsageQueryRow Unlicensed(string upn, string department, int activeDays, long interactions)
+        {
+            return new UnlicensedUsageQueryRow
+            {
+                UserId = upn.GetHashCode(),
+                Department = department,
+                ActiveDays = activeDays,
+                Interactions = interactions,
+                AppsUsed = 1,
+                LastInteractionUtc = Now.AddDays(-1),
+            };
         }
 
         /// <summary>First word of an action label, which is how the exported sentence always opens.</summary>

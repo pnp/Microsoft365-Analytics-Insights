@@ -40,6 +40,9 @@ import OpportunitiesPanel from '../components/copilotAdoption/OpportunitiesPanel
 import HabitStrip from '../components/copilotAdoption/HabitStrip';
 import IntensityScatter from '../components/copilotAdoption/IntensityScatter';
 import ActionPlan from '../components/copilotAdoption/ActionPlan';
+import AgentsPanel from '../components/copilotAdoption/AgentsPanel';
+import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
+import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/copilotAdoption/InfoTip';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/copilotAdoption/KpiGrid';
@@ -52,7 +55,7 @@ const WINDOW_OPTIONS = [
   { value: 180, label: 'Last 180 days' },
 ];
 
-type AdoptionTab = 'overview' | 'licensed' | 'opportunities' | 'method';
+type AdoptionTab = 'overview' | 'licensed' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
 const useStyles = makeStyles({
   header: {
@@ -284,6 +287,8 @@ export default function CopilotAdoptionPage() {
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
               <Tab value="overview">Overview</Tab>
               <Tab value="licensed">Licensed users</Tab>
+              <Tab value="unlicensed">Unlicensed usage</Tab>
+              <Tab value="agents">Agents</Tab>
               <Tab value="opportunities">Licence opportunities</Tab>
               <Tab value="method">How this is calculated</Tab>
             </TabList>
@@ -325,6 +330,25 @@ export default function CopilotAdoptionPage() {
                   filterOptions={filterOptions}
                   actionPlan={summary.actionPlan}
                   options={summary.options}
+                />
+              )}
+
+              {tab === 'unlicensed' && (
+                <UnlicensedPanel
+                  unlicensed={summary.unlicensed}
+                  options={summary.options}
+                  windowDays={windowDays}
+                  sql={sql}
+                />
+              )}
+
+              {tab === 'agents' && (
+                <AgentsPanel
+                  estate={summary.agents}
+                  agents={summary.agents.agents}
+                  options={summary.options}
+                  windowDays={windowDays}
+                  sql={sql}
                 />
               )}
 
@@ -539,6 +563,119 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
           </div>
           <div className={styles.cardBody}>
             <TimeSeriesChart series={summary.weeklyTrend} valueLabel="Users" />
+          </div>
+        </Card>
+      )}
+
+      {summary.weeklyVolumeTrend.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Weekly Copilot volume
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Interactions rather than people, licensed against unlicensed. Headcount can flatten while
+                volume keeps climbing, and that is a different story.
+              </Text>
+            </div>
+            <InfoTip
+              title="Weekly Copilot volume"
+              content={{
+                what: 'Total Copilot interactions each week, split by whether the person holds a Copilot seat.',
+                how: 'Counts interactions, not people. Drawn separately from the active-user chart on purpose: a few hundred users and tens of thousands of interactions share no sensible axis, and plotting them together flattens the user line onto zero.',
+                source:
+                  'Both series come from one pass over the Copilot audit log. The unlicensed line is the volume Microsoft\u2019s own reporting cannot see.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <TimeSeriesChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
+          </div>
+        </Card>
+      )}
+
+      {summary.concentration.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                How concentrated usage is
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Share of all Copilot activity by cohort of active licensed users, heaviest first.
+              </Text>
+            </div>
+            <InfoTip
+              title="How concentrated usage is"
+              content={{
+                what: 'Active licensed users ranked by interaction count and cut into cohorts, showing what share of all activity each accounts for.',
+                how: 'Only users who were active at least once are ranked - including idle seats would put every one of them in the bottom cohort at zero and give every tenant the same chart. Percentile cohorts rather than fixed counts, so the shape is comparable between a 50-seat tenant and a 50,000-seat one.',
+                source:
+                  'This is the figure an adoption percentage hides. "40% adoption spread evenly" and "40% adoption where a tenth of them do most of it" are the same percentage and completely different situations - the second collapses when those people change team.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <ConcentrationBar bands={summary.concentration} />
+          </div>
+        </Card>
+      )}
+
+      {summary.combinedByDepartment.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Licensed and unlicensed, side by side
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                A department with idle seats and heavy unlicensed use is a seat-allocation problem, not an
+                adoption problem - and it can usually be fixed at no cost.
+              </Text>
+            </div>
+            <InfoTip
+              title="Licensed and unlicensed, side by side"
+              content={{
+                what: 'For each department: how much its Copilot seats are used, and how much Copilot the people without seats are doing anyway.',
+                how: `Both "interactions per user" columns are normalised to a ${o.habitBucketNormalisationDays}-day month. The licensed one divides by all seats held, including idle ones - that is deliberate, because an idle seat is exactly what the comparison is meant to surface. The unlicensed one divides by people who were actually active, since there is no such thing as an idle non-licence. Departments with fewer than ${o.minSeatsPerSegment} of either population are omitted.`,
+                source:
+                  'The shading marks the outliers in each column. Look for a department where the right-hand number beats the left-hand one.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <CombinedSegmentTable rows={summary.combinedByDepartment} />
+          </div>
+        </Card>
+      )}
+
+      {summary.topResourceTypes.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                What Copilot is working on
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                The kinds of tenant content Copilot grounded its answers in.
+              </Text>
+            </div>
+            <div className={styles.cardTools}>
+              <InfoTip
+                title="What Copilot is working on"
+                content={{
+                  what: 'The types of organisational content (documents, meetings, chats and so on) that Copilot actually referenced when answering.',
+                  how: `Counted from the resources recorded against each Copilot interaction in the audit log, top ${o.topSegments} types. One interaction can reference several resources, so this counts references rather than interactions.`,
+                  source:
+                    'The clearest available evidence that Copilot is doing work on your own data rather than answering generic questions any free chatbot could. A population whose Copilot use never touches tenant content is getting little that a seat pays for.',
+                }}
+              />
+              {sql?.resourceTypes && <SqlPopover sql={sql.resourceTypes} title="SQL behind this chart" />}
+            </div>
+          </div>
+          <div className={styles.cardBody}>
+            <CategoryBarChart categories={summary.topResourceTypes} valueLabel="References" />
           </div>
         </Card>
       )}
@@ -798,8 +935,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
         </AccordionItem>
 
         <AccordionItem value="opportunity">
-          <AccordionHeader>How licence candidates are ranked</AccordionHeader>
-          <AccordionPanel>
+          <AccordionHeader>How licence candidates are ranked</AccordionHeader>          <AccordionPanel>
             <div className={styles.method}>
               <Text>
                 Unlicensed users are scored out of 100 on four weighted signals, with the weighting set so that
@@ -847,9 +983,51 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           </AccordionPanel>
         </AccordionItem>
 
-        <AccordionItem value="sources">
-          <AccordionHeader>Where the data comes from</AccordionHeader>
+        <AccordionItem value="agents">
+          <AccordionHeader>How agents and unlicensed use are measured</AccordionHeader>
           <AccordionPanel>
+            <div className={styles.method}>
+              <Text>
+                <strong>Agents.</strong> An agent appears here only once it has been invoked - the Copilot
+                audit log records agents that were <em>used</em>, not agents that exist, so an agent that was
+                built and never run is invisible to this tool and to everyone else. Agent figures are counted
+                across the whole tenant, licensed and unlicensed: an agent's worth to the organisation does
+                not depend on the licence status of the people using it.
+              </Text>
+              <Text>
+                <strong>Agent verdicts.</strong> Retire at {o.agentRetireInactiveDays}+ days without use;
+                Review between {o.agentReviewInactiveDays} and {o.agentRetireInactiveDays} days, or while
+                still current but used by fewer than {o.agentMinUsers} people; Keep when used within{' '}
+                {o.agentReviewInactiveDays} days by at least {o.agentMinUsers} people. Any agent first seen
+                within the last {o.agentNewDays} days is marked <em>New</em> and exempted from review
+                entirely - a brand-new agent with two users has not failed, it has not started, and retiring
+                it on that evidence is how an agent programme gets strangled in its first month.
+              </Text>
+              <Text>
+                The inventory deliberately covers the full {o.historyDays}-day history rather than the
+                selected period. An agent nobody has touched for six months is exactly what an inventory
+                review is looking for, and it would be invisible in a 28-day window.
+              </Text>
+              <Text>
+                <strong>Unlicensed Copilot Chat</strong> is reported as a population in its own right, using
+                identical habit rules to the licensed side so the two distributions can be read against each
+                other. Its figures come from a separate query to the licence-candidate ranking: that one is
+                capped and sorted by score, so its rows are a biased sample and must never be used to
+                describe the shape of a population.
+              </Text>
+              <Text>
+                <strong>Usage concentration</strong> ranks active licensed users by interaction count and
+                cuts them into percentile cohorts. Only active users are ranked - including idle seats would
+                place every one of them in the bottom cohort at zero and give every tenant an identical
+                chart. Percentiles rather than fixed counts, so a 50-seat tenant and a 50,000-seat one are
+                directly comparable.
+              </Text>
+            </div>
+          </AccordionPanel>
+        </AccordionItem>
+
+        <AccordionItem value="sources">
+          <AccordionHeader>Where the data comes from</AccordionHeader>          <AccordionPanel>
             <div className={styles.method}>
               <Text>
                 <strong>Copilot audit log:</strong>{' '}

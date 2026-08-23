@@ -80,6 +80,11 @@ export interface CopilotAdoptionOptions {
   habitFrequentMinDays: number;
   habitDailyMinDays: number;
 
+  agentReviewInactiveDays: number;
+  agentRetireInactiveDays: number;
+  agentNewDays: number;
+  agentMinUsers: number;
+
   opportunityUnlicensedCopilotWeight: number;
   opportunityCollaborationWeight: number;
   opportunityEmailWeight: number;
@@ -93,6 +98,8 @@ export interface CopilotAdoptionOptions {
   usageReportLagDays: number;
   topSegments: number;
   minSeatsPerSegment: number;
+  maxAgents: number;
+  maxUnlicensedUsersScored: number;
 }
 
 /** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
@@ -120,6 +127,84 @@ export interface AdoptionActionSummary {
   description: string;
   users: number;
   sharePct: number;
+}
+
+/** What to do about an agent. Numeric values match the C# AgentHealth enum, worst first. */
+export enum AgentHealth {
+  Retire = 0,
+  Review = 1,
+  New = 2,
+  Keep = 3,
+}
+
+/** One Copilot agent with the figures an inventory review needs, and the verdict on it. */
+export interface AgentUsageRow {
+  agentId: number;
+  name: string;
+  agentKey: string | null;
+  isCustomAgent: boolean;
+  interactions: number;
+  users: number;
+  licensedUsers: number;
+  activeDays: number;
+  appsUsed: number;
+  interactionsPerUser: number;
+  firstUsedUtc: string | null;
+  lastUsedUtc: string | null;
+  daysSinceLastUse: number | null;
+  health: AgentHealth;
+  healthName: string;
+  healthReason: string;
+}
+
+/** The agent estate at a glance. */
+export interface AgentEstateSummary {
+  activeAgents: number;
+  knownAgents: number;
+  customAgents: number;
+  agentUsers: number;
+  licensedAgentUsers: number;
+  agentInteractions: number;
+  interactionsPerAgentUser: number;
+  mostPopularAgent: string | null;
+  mostVersatileAgent: string | null;
+  healthBreakdown: ReportCategory[];
+  usageByDepartment: ReportCategory[];
+  usageByAgent: ReportCategory[];
+  agents: AgentUsageRow[];
+}
+
+/** Unlicensed Copilot Chat as a population in its own right. */
+export interface UnlicensedPopulationSummary {
+  activeUsers: number;
+  interactions: number;
+  interactionsPerUserPerMonth: number;
+  agentUsers: number;
+  habitBuckets: AdoptionHabitBucket[];
+  usageByApp: ReportCategory[];
+  usageByDepartment: ReportCategory[];
+  truncated: boolean;
+}
+
+/** How much of all Copilot activity one cohort of users accounts for. */
+export interface AdoptionConcentrationBand {
+  label: string;
+  users: number;
+  interactions: number;
+  sharePct: number;
+  interactionsPerUser: number;
+}
+
+/** Licensed and unlicensed Copilot use for one department, side by side. */
+export interface AdoptionCombinedSegmentRow {
+  segment: string;
+  licensedUsers: number;
+  licensedActiveUsers: number;
+  interactionsPerLicensedUser: number;
+  licensedAgentUserPct: number;
+  unlicensedActiveUsers: number;
+  interactionsPerUnlicensedUser: number;
+  unlicensedAgentUserPct: number;
 }
 
 /** The executive view. */
@@ -161,6 +246,12 @@ export interface CopilotAdoptionSummary {
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];
+  weeklyVolumeTrend: ReportSeries[];
+  concentration: AdoptionConcentrationBand[];
+  combinedByDepartment: AdoptionCombinedSegmentRow[];
+  topResourceTypes: ReportCategory[];
+  agents: AgentEstateSummary;
+  unlicensed: UnlicensedPopulationSummary;
 
   options: CopilotAdoptionOptions;
   warnings: string[];

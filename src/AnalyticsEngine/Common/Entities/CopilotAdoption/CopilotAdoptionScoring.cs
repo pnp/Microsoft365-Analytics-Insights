@@ -232,6 +232,23 @@ namespace Common.Entities.CopilotAdoption
         #region Habit-formation buckets
 
         /// <summary>
+        /// Restates a per-window figure as a per-month one.
+        ///
+        /// The reporting period is adjustable, so any rate quoted "per user" silently changes meaning
+        /// when the reader changes the period drop-down unless it is normalised. Used for active days
+        /// and for interaction volumes alike - it is a linear rescale, not a days-specific rule.
+        /// </summary>
+        public static double NormaliseToMonth(
+            double valueInWindow,
+            int windowDays,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var days = Math.Max(1, windowDays);
+            return valueInWindow * o.HabitBucketNormalisationDays / (double)days;
+        }
+
+        /// <summary>
         /// Active days in the window, restated as active days per month.
         ///
         /// Without this, "11+ active days" would mean a near-daily user over a 28-day window and a
@@ -243,9 +260,7 @@ namespace Common.Entities.CopilotAdoption
             int windowDays,
             CopilotAdoptionOptions options = null)
         {
-            var o = options ?? CopilotAdoptionOptions.Default;
-            var days = Math.Max(1, windowDays);
-            return activeDays * o.HabitBucketNormalisationDays / (double)days;
+            return NormaliseToMonth(activeDays, windowDays, options);
         }
 
         /// <summary>
@@ -480,6 +495,214 @@ namespace Common.Entities.CopilotAdoption
         }
 
         #endregion
+
+        #endregion
+
+        #region Agent inventory
+
+        /// <summary>
+        /// The verdict on an agent: keep it, review it, retire it - or leave it alone because it is
+        /// too new to judge.
+        ///
+        /// The "New" exemption is the important one. A brand-new agent with two users is not failing,
+        /// it has not started, and an inventory review that retires it on that evidence is how an agent
+        /// programme gets strangled in its first month.
+        /// </summary>
+        public static AgentUsageRow ScoreAgent(
+            AgentUsageQueryRow row,
+            DateTime nowUtc,
+            CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            var daysSinceLastUse = row.LastUsedUtc.HasValue
+                ? (int?)Math.Max(0, (int)(nowUtc.Date - row.LastUsedUtc.Value.Date).TotalDays)
+                : null;
+
+            var daysSinceFirstUse = row.FirstUsedUtc.HasValue
+                ? (int?)Math.Max(0, (int)(nowUtc.Date - row.FirstUsedUtc.Value.Date).TotalDays)
+                : null;
+
+            var scored = new AgentUsageRow
+            {
+                AgentId = row.AgentId,
+                Name = row.Name,
+                AgentKey = row.AgentKey,
+                IsCustomAgent = row.IsCustomAgent,
+                Interactions = row.Interactions,
+                Users = row.Users,
+                LicensedUsers = row.LicensedUsers,
+                ActiveDays = row.ActiveDays,
+                AppsUsed = row.AppsUsed,
+                InteractionsPerUser = row.Users <= 0
+                    ? 0
+                    : Round(row.Interactions / (double)row.Users, 1),
+                FirstUsedUtc = row.FirstUsedUtc,
+                LastUsedUtc = row.LastUsedUtc,
+                DaysSinceLastUse = daysSinceLastUse,
+            };
+
+            scored.Health = AgentHealthFor(daysSinceFirstUse, daysSinceLastUse, row.Users, o);
+            scored.HealthName = AgentHealthDisplayName(scored.Health);
+            scored.HealthReason = AgentHealthReason(scored, o);
+            return scored;
+        }
+
+        /// <summary>The health rule on its own, so it can be tested without building a row.</summary>
+        public static AgentHealth AgentHealthFor(
+            int? daysSinceFirstUse,
+            int? daysSinceLastUse,
+            int users,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            // Never used at all, or no dates recorded: nothing to judge it on but its age.
+            if (!daysSinceLastUse.HasValue)
+            {
+                return daysSinceFirstUse.HasValue && daysSinceFirstUse.Value <= o.AgentNewDays
+                    ? AgentHealth.New
+                    : AgentHealth.Retire;
+            }
+
+            // Checked before the inactivity rules on purpose - see the remarks above.
+            if (daysSinceFirstUse.HasValue && daysSinceFirstUse.Value <= o.AgentNewDays)
+            {
+                return AgentHealth.New;
+            }
+
+            if (daysSinceLastUse.Value >= o.AgentRetireInactiveDays) return AgentHealth.Retire;
+            if (daysSinceLastUse.Value >= o.AgentReviewInactiveDays) return AgentHealth.Review;
+
+            // Current, but used by so few people that it is likely still its author testing it.
+            return users < o.AgentMinUsers ? AgentHealth.Review : AgentHealth.Keep;
+        }
+
+        public static string AgentHealthDisplayName(AgentHealth health)
+        {
+            switch (health)
+            {
+                case AgentHealth.Keep: return "Keep";
+                case AgentHealth.New: return "New";
+                case AgentHealth.Review: return "Review";
+                case AgentHealth.Retire: return "Retire";
+                default: return health.ToString();
+            }
+        }
+
+        /// <summary>All health states, worst first, so a breakdown always shows every bucket.</summary>
+        public static IReadOnlyList<AgentHealth> AllAgentHealthStates { get; } = new[]
+        {
+            AgentHealth.Retire, AgentHealth.Review, AgentHealth.New, AgentHealth.Keep,
+        };
+
+        /// <summary>Why this agent got this verdict - the same explain-yourself rule the rest of the tool follows.</summary>
+        public static string AgentHealthReason(AgentUsageRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            switch (row.Health)
+            {
+                case AgentHealth.New:
+                    return $"First seen within the last {o.AgentNewDays} days. Too new to judge - give it "
+                         + "time to gain adoption before reviewing it.";
+
+                case AgentHealth.Retire:
+                    return row.DaysSinceLastUse.HasValue
+                        ? $"Not used for {row.DaysSinceLastUse.Value} days ({o.AgentRetireInactiveDays}+ is the "
+                          + "retirement line). Confirm with its owner, then remove it."
+                        : "No recorded use at all. Confirm with its owner, then remove it.";
+
+                case AgentHealth.Review:
+                    if (row.DaysSinceLastUse.HasValue && row.DaysSinceLastUse.Value >= o.AgentReviewInactiveDays)
+                    {
+                        return $"Going quiet - last used {row.DaysSinceLastUse.Value} days ago. Worth asking "
+                             + "whether it is still needed before it drifts into the retire pile.";
+                    }
+                    return $"Still in use, but only by {row.Users} "
+                         + (row.Users == 1 ? "person" : "people")
+                         + $" - below the {o.AgentMinUsers} needed to call it adopted. Often this is the author "
+                         + "testing it, or an agent that was never announced to the people it was built for.";
+
+                case AgentHealth.Keep:
+                    return $"Used within the last {o.AgentReviewInactiveDays} days by {row.Users} people. "
+                         + "Genuinely adopted - keep supporting it.";
+
+                default: return string.Empty;
+            }
+        }
+
+        #endregion
+
+        #region Usage concentration
+
+        /// <summary>
+        /// The cohorts the usage distribution is cut into, heaviest first. Percentile boundaries rather
+        /// than fixed counts, so the shape is comparable between a 50-seat tenant and a 50,000-seat one.
+        /// </summary>
+        public static IReadOnlyList<Tuple<string, double>> ConcentrationCohorts { get; } =
+            new[]
+            {
+                Tuple.Create("Top 10%", 0.10),
+                Tuple.Create("Next 15%", 0.15),
+                Tuple.Create("Next 25%", 0.25),
+                Tuple.Create("Bottom 50%", 0.50),
+            };
+
+        /// <summary>
+        /// How concentrated Copilot usage is across the people who actually use it.
+        ///
+        /// Copilot usage is almost always a power law, and "40% adoption spread evenly" and "40%
+        /// adoption where a tenth of them do most of it" are completely different situations that
+        /// produce the same adoption percentage. The first is a programme working; the second is a
+        /// programme propped up by a handful of enthusiasts, and it will collapse when they move team.
+        ///
+        /// Only active users are ranked. Including idle seats would put every one of them in the bottom
+        /// cohort at zero and turn every tenant's chart into the same shape.
+        /// </summary>
+        public static List<AdoptionConcentrationBand> Concentration(IEnumerable<long> interactionsPerActiveUser)
+        {
+            var ranked = (interactionsPerActiveUser ?? Enumerable.Empty<long>())
+                .Where(i => i > 0)
+                .OrderByDescending(i => i)
+                .ToList();
+
+            var bands = new List<AdoptionConcentrationBand>();
+            if (ranked.Count == 0) return bands;
+
+            var total = ranked.Sum();
+            var taken = 0;
+
+            for (var i = 0; i < ConcentrationCohorts.Count; i++)
+            {
+                var cohort = ConcentrationCohorts[i];
+
+                // The last cohort takes whatever is left, so rounding can never lose or duplicate a user.
+                var size = i == ConcentrationCohorts.Count - 1
+                    ? ranked.Count - taken
+                    : Math.Min(ranked.Count - taken, (int)Math.Round(ranked.Count * cohort.Item2, MidpointRounding.AwayFromZero));
+
+                if (size <= 0) continue;
+
+                var slice = ranked.Skip(taken).Take(size).ToList();
+                var sliceTotal = slice.Sum();
+
+                bands.Add(new AdoptionConcentrationBand
+                {
+                    Label = cohort.Item1,
+                    Users = size,
+                    Interactions = sliceTotal,
+                    SharePct = Percentage(sliceTotal, total),
+                    InteractionsPerUser = Round(sliceTotal / (double)size, 1),
+                });
+
+                taken += size;
+            }
+
+            return bands;
+        }
 
         #endregion
 

@@ -105,6 +105,45 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Agent inventory tuning
+
+        /// <summary>
+        /// How recently an agent must have been used to count as current. Below this it is "Keep";
+        /// beyond it the agent starts attracting review.
+        /// </summary>
+        [JsonProperty("agentReviewInactiveDays")]
+        public int AgentReviewInactiveDays { get; set; } = 30;
+
+        /// <summary>Days of inactivity after which an agent is proposed for retirement.</summary>
+        [JsonProperty("agentRetireInactiveDays")]
+        public int AgentRetireInactiveDays { get; set; } = 90;
+
+        /// <summary>
+        /// An agent first seen within this many days is reported as New and exempted from review. A
+        /// brand-new agent with three users is not failing, it has not started - and retiring it on
+        /// that evidence is how an agent programme gets strangled in its first month.
+        /// </summary>
+        [JsonProperty("agentNewDays")]
+        public int AgentNewDays { get; set; } = 30;
+
+        /// <summary>
+        /// Distinct users an agent needs before its usage is treated as adoption rather than as its
+        /// author testing it. Matches the "minimum 3 users" convention used in Microsoft's own agent
+        /// reporting.
+        /// </summary>
+        [JsonProperty("agentMinUsers")]
+        public int AgentMinUsers { get; set; } = 3;
+
+        /// <summary>How many agents the inventory query returns.</summary>
+        [JsonProperty("maxAgents")]
+        public int MaxAgents { get; set; } = 500;
+
+        /// <summary>How many unlicensed Copilot users are pulled in to describe that population.</summary>
+        [JsonProperty("maxUnlicensedUsersScored")]
+        public int MaxUnlicensedUsersScored { get; set; } = 50000;
+
+        #endregion
+
         #region Licence-opportunity tuning
 
         /// <summary>
@@ -624,6 +663,287 @@ namespace Common.Entities.CopilotAdoption
         public double? Value { get; set; }
     }
 
+    #region Agents
+
+    /// <summary>What to do about an agent, worst first. Numeric values are stable for the UI.</summary>
+    public enum AgentHealth
+    {
+        /// <summary>Dormant long enough that it is almost certainly abandoned.</summary>
+        Retire = 0,
+
+        /// <summary>Either going quiet, or being used by too few people to call it adopted.</summary>
+        Review = 1,
+
+        /// <summary>Too recently introduced to judge - deliberately exempt from review.</summary>
+        New = 2,
+
+        /// <summary>Current and genuinely adopted.</summary>
+        Keep = 3,
+    }
+
+    /// <summary>Raw per-agent usage straight from the audit log.</summary>
+    public class AgentUsageQueryRow
+    {
+        public int AgentId { get; set; }
+        public string Name { get; set; }
+        public string AgentKey { get; set; }
+        public bool IsCustomAgent { get; set; }
+        public long Interactions { get; set; }
+        public int Users { get; set; }
+        public int LicensedUsers { get; set; }
+        public int ActiveDays { get; set; }
+        public int AppsUsed { get; set; }
+        public DateTime? FirstUsedUtc { get; set; }
+        public DateTime? LastUsedUtc { get; set; }
+    }
+
+    /// <summary>
+    /// One Copilot agent with the figures an inventory review needs, plus the verdict on it.
+    ///
+    /// Agents are counted across the whole tenant, licensed and unlicensed: an agent's worth to the
+    /// organisation does not depend on the licence status of the people using it. The licensed share
+    /// is carried separately so the two populations can still be told apart.
+    /// </summary>
+    public class AgentUsageRow
+    {
+        [JsonProperty("agentId")]
+        public int AgentId { get; set; }
+
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        /// <summary>The agent's identifier from the audit payload, e.g. a first-party Copilot agent id.</summary>
+        [JsonProperty("agentKey")]
+        public string AgentKey { get; set; }
+
+        /// <summary>True for a customer-built agent, false for one Microsoft ships.</summary>
+        [JsonProperty("isCustomAgent")]
+        public bool IsCustomAgent { get; set; }
+
+        [JsonProperty("interactions")]
+        public long Interactions { get; set; }
+
+        [JsonProperty("users")]
+        public int Users { get; set; }
+
+        [JsonProperty("licensedUsers")]
+        public int LicensedUsers { get; set; }
+
+        [JsonProperty("activeDays")]
+        public int ActiveDays { get; set; }
+
+        /// <summary>
+        /// Distinct Copilot surfaces the agent was invoked from - its versatility. An agent that only
+        /// ever runs in one host is doing a narrower job than its interaction count suggests.
+        /// </summary>
+        [JsonProperty("appsUsed")]
+        public int AppsUsed { get; set; }
+
+        [JsonProperty("interactionsPerUser")]
+        public double InteractionsPerUser { get; set; }
+
+        [JsonProperty("firstUsedUtc")]
+        public DateTime? FirstUsedUtc { get; set; }
+
+        [JsonProperty("lastUsedUtc")]
+        public DateTime? LastUsedUtc { get; set; }
+
+        [JsonProperty("daysSinceLastUse")]
+        public int? DaysSinceLastUse { get; set; }
+
+        [JsonProperty("health")]
+        public AgentHealth Health { get; set; }
+
+        [JsonProperty("healthName")]
+        public string HealthName { get; set; }
+
+        /// <summary>Why this agent got this verdict, in plain English.</summary>
+        [JsonProperty("healthReason")]
+        public string HealthReason { get; set; }
+    }
+
+    /// <summary>The agent estate at a glance.</summary>
+    public class AgentEstateSummary
+    {
+        /// <summary>Agents used at least once inside the reporting period.</summary>
+        [JsonProperty("activeAgents")]
+        public int ActiveAgents { get; set; }
+
+        /// <summary>Agents seen in the longer history window, whether or not they were used in the period.</summary>
+        [JsonProperty("knownAgents")]
+        public int KnownAgents { get; set; }
+
+        [JsonProperty("customAgents")]
+        public int CustomAgents { get; set; }
+
+        /// <summary>Distinct people who used any agent in the period.</summary>
+        [JsonProperty("agentUsers")]
+        public int AgentUsers { get; set; }
+
+        [JsonProperty("licensedAgentUsers")]
+        public int LicensedAgentUsers { get; set; }
+
+        [JsonProperty("agentInteractions")]
+        public long AgentInteractions { get; set; }
+
+        [JsonProperty("interactionsPerAgentUser")]
+        public double InteractionsPerAgentUser { get; set; }
+
+        /// <summary>The agent the most people use - the one whose retirement would be felt.</summary>
+        [JsonProperty("mostPopularAgent")]
+        public string MostPopularAgent { get; set; }
+
+        /// <summary>The agent used across the most Copilot surfaces.</summary>
+        [JsonProperty("mostVersatileAgent")]
+        public string MostVersatileAgent { get; set; }
+
+        /// <summary>Counts by <see cref="AgentHealth"/>, so the size of an inventory clean-up is visible.</summary>
+        [JsonProperty("healthBreakdown")]
+        public List<AdoptionCategory> HealthBreakdown { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>Agent interactions by department.</summary>
+        [JsonProperty("usageByDepartment")]
+        public List<AdoptionCategory> UsageByDepartment { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>Interactions per agent, for the inventory treemap.</summary>
+        [JsonProperty("usageByAgent")]
+        public List<AdoptionCategory> UsageByAgent { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>
+        /// The agents themselves. Returned inline rather than behind a paged endpoint because the
+        /// inventory is capped at a few hundred rows - an agent estate is nothing like the size of a
+        /// user population, and a second round trip would buy nothing.
+        /// </summary>
+        [JsonProperty("agents")]
+        public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
+    }
+
+    #endregion
+
+    #region Unlicensed population
+
+    /// <summary>Raw per-user usage for someone with no Copilot seat.</summary>
+    public class UnlicensedUsageQueryRow
+    {
+        public int UserId { get; set; }
+        public string Department { get; set; }
+        public long Interactions { get; set; }
+        public int ActiveDays { get; set; }
+        public int AppsUsed { get; set; }
+        public int AgentsUsed { get; set; }
+        public DateTime? LastInteractionUtc { get; set; }
+    }
+
+    /// <summary>
+    /// Unlicensed Copilot Chat treated as a population in its own right, not merely as a pool of
+    /// licence candidates.
+    ///
+    /// Worth reporting separately because it is the one Copilot population Microsoft's own tooling
+    /// cannot see at all, and because its shape answers a different question: not "who should get a
+    /// seat" but "how much Copilot is this organisation already doing without paying for it".
+    /// </summary>
+    public class UnlicensedPopulationSummary
+    {
+        [JsonProperty("activeUsers")]
+        public int ActiveUsers { get; set; }
+
+        [JsonProperty("interactions")]
+        public long Interactions { get; set; }
+
+        /// <summary>Mean interactions per active unlicensed user, normalised to a month.</summary>
+        [JsonProperty("interactionsPerUserPerMonth")]
+        public double InteractionsPerUserPerMonth { get; set; }
+
+        [JsonProperty("agentUsers")]
+        public int AgentUsers { get; set; }
+
+        /// <summary>The same habit buckets the licensed population uses, so the two are comparable.</summary>
+        [JsonProperty("habitBuckets")]
+        public List<AdoptionHabitBucket> HabitBuckets { get; set; } = new List<AdoptionHabitBucket>();
+
+        [JsonProperty("usageByApp")]
+        public List<AdoptionCategory> UsageByApp { get; set; } = new List<AdoptionCategory>();
+
+        [JsonProperty("usageByDepartment")]
+        public List<AdoptionCategory> UsageByDepartment { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>True when the row cap was hit, so the figures are a floor rather than a total.</summary>
+        [JsonProperty("truncated")]
+        public bool Truncated { get; set; }
+    }
+
+    #endregion
+
+    #region Concentration and combined leaderboard
+
+    /// <summary>
+    /// One slice of the usage distribution: how much of all Copilot activity a given cohort of users
+    /// accounts for.
+    ///
+    /// Copilot usage is almost always a power law, and the difference between "40% adoption spread
+    /// evenly" and "40% adoption where a tenth of them do most of it" is the difference between a
+    /// programme that is working and one propped up by a handful of enthusiasts. An adoption
+    /// percentage cannot distinguish those two; this can.
+    /// </summary>
+    public class AdoptionConcentrationBand
+    {
+        /// <summary>Cohort name, e.g. "Top 10%".</summary>
+        [JsonProperty("label")]
+        public string Label { get; set; }
+
+        [JsonProperty("users")]
+        public int Users { get; set; }
+
+        [JsonProperty("interactions")]
+        public long Interactions { get; set; }
+
+        /// <summary>This cohort's share of all interactions by active licensed users.</summary>
+        [JsonProperty("sharePct")]
+        public double SharePct { get; set; }
+
+        [JsonProperty("interactionsPerUser")]
+        public double InteractionsPerUser { get; set; }
+    }
+
+    /// <summary>
+    /// Licensed and unlicensed Copilot use for one department, side by side.
+    ///
+    /// The comparison is the point: a department with idle seats <i>and</i> heavy unlicensed Chat use
+    /// is not an adoption problem, it is a seat-allocation problem, and no single-population view
+    /// makes that visible.
+    /// </summary>
+    public class AdoptionCombinedSegmentRow
+    {
+        [JsonProperty("segment")]
+        public string Segment { get; set; }
+
+        [JsonProperty("licensedUsers")]
+        public int LicensedUsers { get; set; }
+
+        [JsonProperty("licensedActiveUsers")]
+        public int LicensedActiveUsers { get; set; }
+
+        /// <summary>Interactions per licensed seat, normalised to a month - including idle seats.</summary>
+        [JsonProperty("interactionsPerLicensedUser")]
+        public double InteractionsPerLicensedUser { get; set; }
+
+        /// <summary>Share of licensed users who used at least one agent.</summary>
+        [JsonProperty("licensedAgentUserPct")]
+        public double LicensedAgentUserPct { get; set; }
+
+        [JsonProperty("unlicensedActiveUsers")]
+        public int UnlicensedActiveUsers { get; set; }
+
+        /// <summary>Interactions per active unlicensed user, normalised to a month.</summary>
+        [JsonProperty("interactionsPerUnlicensedUser")]
+        public double InteractionsPerUnlicensedUser { get; set; }
+
+        [JsonProperty("unlicensedAgentUserPct")]
+        public double UnlicensedAgentUserPct { get; set; }
+    }
+
+    #endregion
+
     /// <summary>
     /// One recommended action and how many licensed users need it.
     ///
@@ -960,9 +1280,40 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("opportunityByDepartment")]
         public List<AdoptionCategory> OpportunityByDepartment { get; set; } = new List<AdoptionCategory>();
 
+        /// <summary>
+        /// How concentrated Copilot usage is across the people who use it. See
+        /// <see cref="AdoptionConcentrationBand"/> - this is what tells a broad programme apart from
+        /// one carried by a handful of enthusiasts.
+        /// </summary>
+        [JsonProperty("concentration")]
+        public List<AdoptionConcentrationBand> Concentration { get; set; } = new List<AdoptionConcentrationBand>();
+
+        /// <summary>Licensed and unlicensed Copilot use per department, side by side.</summary>
+        [JsonProperty("combinedByDepartment")]
+        public List<AdoptionCombinedSegmentRow> CombinedByDepartment { get; set; } = new List<AdoptionCombinedSegmentRow>();
+
+        /// <summary>The kinds of tenant content Copilot grounded its answers in.</summary>
+        [JsonProperty("topResourceTypes")]
+        public List<AdoptionCategory> TopResourceTypes { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>The agent estate: what exists, who uses it, and what should be retired.</summary>
+        [JsonProperty("agents")]
+        public AgentEstateSummary Agents { get; set; } = new AgentEstateSummary();
+
+        /// <summary>Unlicensed Copilot Chat as a population in its own right.</summary>
+        [JsonProperty("unlicensed")]
+        public UnlicensedPopulationSummary Unlicensed { get; set; } = new UnlicensedPopulationSummary();
+
         /// <summary>Weekly active licensed users, so a trend is visible rather than a single snapshot.</summary>
         [JsonProperty("weeklyTrend")]
         public List<AdoptionSeries> WeeklyTrend { get; set; } = new List<AdoptionSeries>();
+
+        /// <summary>
+        /// Weekly interaction volume, licensed against unlicensed. Kept apart from
+        /// <see cref="WeeklyTrend"/> because headcounts and volumes share no sensible axis.
+        /// </summary>
+        [JsonProperty("weeklyVolumeTrend")]
+        public List<AdoptionSeries> WeeklyVolumeTrend { get; set; } = new List<AdoptionSeries>();
 
         #endregion
 
