@@ -73,8 +73,7 @@ namespace Common.Entities.CopilotAdoption
         /// scored by the same rules, and this is what lets a reader confirm that rather than assume
         /// it - the tuning is adjustable, so "adoption went up" could otherwise mean "the bar moved".
         /// </summary>
-        private static void WriteReportSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
-        {
+        private static void WriteReportSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)        {
             var sheet = workbook.AddSheet("Report");
             sheet.SetColumnWidths(42, 34, 60);
 

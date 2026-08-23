@@ -24,12 +24,38 @@ export type GaugeBand = { upTo: number; colour: string; label: string };
  * The default judgement scale for an adoption-style percentage. Deliberately not a smooth gradient:
  * a continuous ramp implies the difference between 41% and 43% means something, and it does not.
  * Three bands say what the number actually is - a problem, a work in progress, or fine.
+ *
+ * Exported because the same boundaries decide the gauge's colour, the tone of the matching KPI card,
+ * and the prose that explains the scale. Those three must agree or the page contradicts itself, and
+ * a shared constant is the only thing that makes that automatic.
  */
 export const ADOPTION_BANDS: GaugeBand[] = [
   { upTo: 40, colour: '#d13438', label: 'Needs attention' },
   { upTo: 70, colour: '#c19c00', label: 'Progressing' },
   { upTo: 100, colour: '#107c10', label: 'Healthy' },
 ];
+
+/** The KPI tone matching a value on a band scale, so a card and its gauge can never disagree. */
+export function bandTone(value: number, bands: GaugeBand[] = ADOPTION_BANDS): 'critical' | 'warning' | 'good' {
+  const index = bands.findIndex((b) => value <= b.upTo);
+  const resolved = index < 0 ? bands.length - 1 : index;
+  if (resolved === 0) return 'critical';
+  return resolved === bands.length - 1 ? 'good' : 'warning';
+}
+
+/** The scale in words, for an explanation that cannot drift from the colours it describes. */
+export function describeBands(bands: GaugeBand[] = ADOPTION_BANDS): string {
+  return bands
+    .map((band, i) => {
+      const from = i === 0 ? 0 : bands[i - 1].upTo;
+      return i === 0
+        ? `below ${band.upTo}% ${band.label.toLowerCase()}`
+        : i === bands.length - 1
+          ? `above ${from}% is ${band.label.toLowerCase()}`
+          : `${from}-${band.upTo}% is ${band.label.toLowerCase()}`;
+    })
+    .join(', ');
+}
 
 /**
  * A 240-degree arc gauge for a single 0-100 percentage.

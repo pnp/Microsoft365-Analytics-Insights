@@ -45,6 +45,7 @@ export interface AdoptionDataSources {
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
   copilotUsageReportDate: string | null;
+  copilotUsageReportPeriodDays: number;
   m365UsageReportDate: string | null;
   copilotUsageReportObfuscated: boolean;
 }
@@ -99,6 +100,8 @@ export interface CopilotAdoptionOptions {
   usageReportLagDays: number;
   topSegments: number;
   minSeatsPerSegment: number;
+  maxLicensedUsersScored: number;
+  maxOpportunityCandidates: number;
   maxAgents: number;
   maxUnlicensedUsersScored: number;
 }

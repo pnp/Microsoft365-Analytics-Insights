@@ -39,7 +39,7 @@ import CategoryBarChart from '../components/charts/CategoryBarChart';
 import DonutChart from '../components/charts/DonutChart';
 import TreemapChart from '../components/charts/TreemapChart';
 import StackedAreaChart from '../components/charts/StackedAreaChart';
-import GaugeRing from '../components/charts/GaugeRing';
+import GaugeRing, { bandTone, describeBands } from '../components/charts/GaugeRing';
 import RadarChart from '../components/charts/RadarChart';
 import AdoptionFunnel from '../components/copilotAdoption/AdoptionFunnel';
 import LicensedUsersPanel from '../components/copilotAdoption/LicensedUsersPanel';
@@ -409,6 +409,11 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
   // warning when it bites - but the donut must still add up to what it is drawing, so the centre is
   // the sum of the slices rather than the licence count.
   const analysedUsers = summary.scoredUsers;
+  const bandThresholds = {
+    champion: o.championScore,
+    established: o.establishedScore,
+    developing: o.developingScore,
+  };
 
   return (
     <>
@@ -429,7 +434,7 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
             title="Where you stand"
             content={{
               what: 'Adoption rate is the share of licensed users who touched Copilot at all. Habit rate is the share for whom it is a routine part of the working week.',
-              how: `The coloured arc is the judgement scale, not a smooth gradient - a continuous ramp would imply the difference between 41% and 43% means something, and it does not. Below 40% needs attention, 40-70% is progressing, above 70% is healthy. Habit is measured at an engagement score of ${o.establishedScore} or more.`,
+              how: `The coloured arc is the judgement scale, not a smooth gradient - a continuous ramp would imply the difference between 41% and 43% means something, and it does not. On this scale ${describeBands()}. Habit is measured at an engagement score of ${o.establishedScore} or more.`,
               source:
                 'The gap between the two gauges is the finding. Adoption at 100% with a habit rate near zero means everyone opened it once - which is exactly the situation a renewal conversation needs to surface, and which a single adoption figure conceals.',
             }}
@@ -869,7 +874,7 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
           />
         </div>
         <div className={styles.cardBody}>
-          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel="Department" />
+          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel="Department" bands={bandThresholds} />
         </div>
       </Card>
 
@@ -882,7 +887,7 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
             The same measures as the department table, for organisations that run enablement regionally.
           </Text>
           <div className={styles.cardBody}>
-            <SegmentTable rows={summary.adoptionByCountry} segmentLabel="Country" />
+            <SegmentTable rows={summary.adoptionByCountry} segmentLabel="Country" bands={bandThresholds} />
           </div>
         </Card>
       )}
@@ -1274,7 +1279,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       label: 'Adoption rate',
       value: formatPct(summary.adoptionRatePct),
       hint: `${formatCount(summary.activeUsers)} of ${formatCount(summary.scoredUsers)} used Copilot in this period`,
-      tone: summary.adoptionRatePct >= 70 ? 'good' : summary.adoptionRatePct >= 40 ? 'warning' : 'critical',
+      tone: bandTone(summary.adoptionRatePct),
       info: {
         what: 'The share of analysed licensed users who used Copilot at least once in the selected period.',
         how: `A deliberately low bar, and the weakest number on this page: one interaction in ${o.windowDays} days counts the same as fifty. It is here because it is the figure everyone else quotes, so it needs to be visible and comparable - but "habitual users" below is the one to act on.`,

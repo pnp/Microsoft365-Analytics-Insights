@@ -1,6 +1,7 @@
 import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
+import { ADOPTION_BANDS } from '../charts/GaugeRing';
 import { formatCount, formatPct } from './KpiGrid';
 
 /**
@@ -127,6 +128,18 @@ export function ScoreBar({ score, colour }: { score: number; colour?: string }) 
 }
 
 /**
+ * Colour for an adoption *rate* (a percentage of people), as opposed to an engagement *score*.
+ *
+ * These are different measures and must not share a threshold set: 50 on the engagement scale means
+ * "habit formed", whereas 50% adoption means half the seats are idle. Rates use the same three-band
+ * judgement scale as the headline gauges, so a department bar and the gauge above it agree.
+ */
+export function rateColour(ratePct: number): string {
+  const band = ADOPTION_BANDS.find((b) => ratePct <= b.upTo) ?? ADOPTION_BANDS[ADOPTION_BANDS.length - 1];
+  return band.colour;
+}
+
+/**
  * Score-to-colour, using the same thresholds as the engagement bands so the two never disagree.
  *
  * The thresholds are passed in wherever the caller has the options the analysis actually ran with -
@@ -154,7 +167,16 @@ export function scoreColour(
  * six hundred are the same percentage and completely different decisions, and a chart that shows
  * only the rate invites the wrong one.
  */
-export function SegmentTable({ rows, segmentLabel }: { rows: AdoptionSegmentRow[]; segmentLabel: string }) {
+export function SegmentTable({
+  rows,
+  segmentLabel,
+  bands,
+}: {
+  rows: AdoptionSegmentRow[];
+  segmentLabel: string;
+  /** The tuned band thresholds, so this table colours by the same rules as the rest of the page. */
+  bands?: { champion: number; established: number; developing: number };
+}) {
   const styles = useStyles();
 
   if (rows.length === 0) {
@@ -193,7 +215,10 @@ export function SegmentTable({ rows, segmentLabel }: { rows: AdoptionSegmentRow[
                     className={styles.scoreBar}
                     style={{
                       width: `${Math.max(0, Math.min(100, row.adoptionRatePct))}%`,
-                      backgroundColor: scoreColour(row.adoptionRatePct),
+                      // An adoption RATE, not an engagement score - so it is coloured on the
+                      // adoption band scale used by the gauges, not on the engagement bands. The two
+                      // are different measures and sharing one threshold set would be a category error.
+                      backgroundColor: rateColour(row.adoptionRatePct),
                     }}
                   />
                 </div>
@@ -203,7 +228,7 @@ export function SegmentTable({ rows, segmentLabel }: { rows: AdoptionSegmentRow[
               </div>
             </td>
             <td className={styles.td}>
-              <ScoreBar score={row.averageAdoptionScore} />
+              <ScoreBar score={row.averageAdoptionScore} colour={scoreColour(row.averageAdoptionScore, bands)} />
             </td>
           </tr>
         ))}
