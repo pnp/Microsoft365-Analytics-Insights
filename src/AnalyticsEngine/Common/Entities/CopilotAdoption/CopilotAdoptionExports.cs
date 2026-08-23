@@ -206,7 +206,8 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicensedUserAdoptionRow>("Microsoft report last activity", r => r.ReportLastActivityUtc),
                 new CsvColumn<LicensedUserAdoptionRow>("Signal source", r => r.SignalSource),
 
-                new CsvColumn<LicensedUserAdoptionRow>("Recommended action", r => r.RecommendedAction),
+                new CsvColumn<LicensedUserAdoptionRow>("Recommended action", r => r.RecommendedActionLabel),
+                new CsvColumn<LicensedUserAdoptionRow>("Recommended action detail", r => r.RecommendedAction),
             };
         }
 

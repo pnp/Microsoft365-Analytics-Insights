@@ -16,6 +16,16 @@ const BAND_COLOUR: Record<AdoptionBand, string> = {
   [AdoptionBand.Champion]: '#107c10',
 };
 
+/** Band colours in the enum's own order, for charts that colour by band. */
+export const BAND_COLOUR_LIST = [
+  BAND_COLOUR[AdoptionBand.NeverUsed],
+  BAND_COLOUR[AdoptionBand.Dormant],
+  BAND_COLOUR[AdoptionBand.Trialling],
+  BAND_COLOUR[AdoptionBand.Developing],
+  BAND_COLOUR[AdoptionBand.Established],
+  BAND_COLOUR[AdoptionBand.Champion],
+];
+
 const useStyles = makeStyles({
   badge: {
     color: tokens.colorNeutralForegroundOnBrand,
@@ -116,11 +126,23 @@ export function ScoreBar({ score, colour }: { score: number; colour?: string }) 
   );
 }
 
-/** Score-to-colour, using the same thresholds as the engagement bands so the two never disagree. */
-export function scoreColour(score: number): string {
-  if (score >= 75) return BAND_COLOUR[AdoptionBand.Champion];
-  if (score >= 50) return BAND_COLOUR[AdoptionBand.Established];
-  if (score >= 25) return BAND_COLOUR[AdoptionBand.Developing];
+/**
+ * Score-to-colour, using the same thresholds as the engagement bands so the two never disagree.
+ *
+ * The thresholds are passed in wherever the caller has the options the analysis actually ran with -
+ * a deployment that tunes the bands must not be shown a chart coloured by the shipped defaults.
+ */
+export function scoreColour(
+  score: number,
+  bands?: { champion: number; established: number; developing: number },
+): string {
+  const champion = bands?.champion ?? 75;
+  const established = bands?.established ?? 50;
+  const developing = bands?.developing ?? 25;
+
+  if (score >= champion) return BAND_COLOUR[AdoptionBand.Champion];
+  if (score >= established) return BAND_COLOUR[AdoptionBand.Established];
+  if (score >= developing) return BAND_COLOUR[AdoptionBand.Developing];
   if (score > 0) return BAND_COLOUR[AdoptionBand.Trialling];
   return BAND_COLOUR[AdoptionBand.NeverUsed];
 }

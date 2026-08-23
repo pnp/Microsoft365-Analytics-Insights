@@ -74,8 +74,52 @@ export interface CopilotAdoptionOptions {
   championScore: number;
   establishedScore: number;
   developingScore: number;
+
+  habitBucketNormalisationDays: number;
+  habitModerateMinDays: number;
+  habitFrequentMinDays: number;
+  habitDailyMinDays: number;
+
+  opportunityUnlicensedCopilotWeight: number;
+  opportunityCollaborationWeight: number;
+  opportunityEmailWeight: number;
+  opportunityDocumentWeight: number;
+  opportunityCopilotTarget: number;
+  opportunityCollaborationTarget: number;
+  opportunityEmailTarget: number;
+  opportunityDocumentTarget: number;
   opportunityRecommendScore: number;
+
+  usageReportLagDays: number;
+  topSegments: number;
   minSeatsPerSegment: number;
+}
+
+/** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
+export interface AdoptionHabitBucket {
+  label: string;
+  rangeLabel: string;
+  users: number;
+  sharePct: number;
+}
+
+/** A department plotted as frequency (active days a month) against intensity (actions per active day). */
+export interface AdoptionIntensityPoint {
+  segment: string;
+  licensedUsers: number;
+  activeUsers: number;
+  activeDaysPerUser: number;
+  actionsPerActiveDay: number;
+  activeUserAverageScore: number;
+}
+
+/** One recommended action and how many licensed users need it. */
+export interface AdoptionActionSummary {
+  code: string;
+  label: string;
+  description: string;
+  users: number;
+  sharePct: number;
 }
 
 /** The executive view. */
@@ -109,6 +153,9 @@ export interface CopilotAdoptionSummary {
 
   funnel: ReportCategory[];
   bandBreakdown: ReportCategory[];
+  habitBuckets: AdoptionHabitBucket[];
+  intensityByDepartment: AdoptionIntensityPoint[];
+  actionPlan: AdoptionActionSummary[];
   adoptionByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
   usageByApp: ReportCategory[];
@@ -157,6 +204,8 @@ export interface LicensedUserAdoptionRow {
   bandName: string;
   signalSource: string;
   recommendedAction: string;
+  recommendedActionCode: string;
+  recommendedActionLabel: string;
 }
 
 /** An unlicensed user ranked as a candidate for a Copilot seat. */

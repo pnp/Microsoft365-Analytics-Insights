@@ -940,6 +940,256 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region Explainability: the options must survive serialisation
+
+        [TestMethod]
+        public void EveryTuningValue_IsSerialisedInCamelCase()
+        {
+            // The UI states the formula behind every figure using the options the API returns. Without
+            // an explicit camelCase JsonProperty the client reads `undefined` for every threshold and
+            // the entire "How this is calculated" tab renders as "NaN% of the score" - which is exactly
+            // the regression this test exists to stop happening again.
+            var json = Newtonsoft.Json.Linq.JObject.Parse(
+                Newtonsoft.Json.JsonConvert.SerializeObject(CopilotAdoptionOptions.Default));
+
+            var propertyNames = json.Properties().Select(p => p.Name).ToList();
+
+            Assert.AreEqual(
+                typeof(CopilotAdoptionOptions).GetProperties().Length - 1,
+                propertyNames.Count,
+                "Every tuning property except the static Default must be serialised.");
+
+            foreach (var name in propertyNames)
+            {
+                Assert.IsTrue(
+                    char.IsLower(name[0]),
+                    $"'{name}' is serialised in PascalCase; the client reads camelCase and would show NaN.");
+            }
+
+            // Spot-check the values the methodology tab quotes directly.
+            Assert.AreEqual(0.5, (double)json["frequencyWeight"]);
+            Assert.AreEqual(75, (double)json["championScore"]);
+            Assert.AreEqual(50, (double)json["opportunityRecommendScore"]);
+            Assert.AreEqual(35, (double)json["opportunityUnlicensedCopilotWeight"]);
+            Assert.AreEqual(28, (int)json["habitBucketNormalisationDays"]);
+        }
+
+        #endregion
+
+        #region Habit buckets
+
+        [TestMethod]
+        public void HabitBuckets_MeanTheSameThingWhicheverPeriodIsSelected()
+        {
+            // 12 active days is a near-daily habit over 28 days and an occasional one over 90. Without
+            // normalisation the same tile would silently change meaning when the reader changed the
+            // period drop-down - the sort of thing nobody notices until a decision has been made on it.
+            var over28 = CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(12, 28);
+            var over90 = CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(12, 90);
+
+            Assert.AreEqual(12, over28, 0.01);
+            Assert.AreEqual(3.73, over90, 0.01);
+            Assert.AreEqual("Frequent", CopilotAdoptionScoring.HabitBucketFor(over28));
+            Assert.AreEqual("Infrequent", CopilotAdoptionScoring.HabitBucketFor(over90));
+        }
+
+        [TestMethod]
+        public void AUserWithNoActivity_IsNotCalledInfrequent()
+        {
+            // They are a reclaimable seat, which is a much more expensive problem. Folding them into
+            // "infrequent" would hide it inside a bucket that looks like light-but-real usage.
+            Assert.IsNull(CopilotAdoptionScoring.HabitBucketFor(0));
+            Assert.AreEqual("Infrequent", CopilotAdoptionScoring.HabitBucketFor(1));
+
+            // One interaction in a 180-day window normalises to well under a day. It must still land in
+            // a bucket rather than vanishing, because it is real activity.
+            Assert.AreEqual(
+                "Infrequent",
+                CopilotAdoptionScoring.HabitBucketFor(CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(1, 180)));
+        }
+
+        [TestMethod]
+        public void BucketBoundaries_MatchTheirPrintedCaptions()
+        {
+            // The tiles are captioned "1-5 / 6-10 / 11-19 / 20+ active days a month". Because the
+            // normalised figure is fractional, it is rounded to whole days first - otherwise a user on
+            // 5.6 days would be filed under a caption that visibly excludes them.
+            Assert.AreEqual("Infrequent", CopilotAdoptionScoring.HabitBucketFor(5.4));
+            Assert.AreEqual("Moderate", CopilotAdoptionScoring.HabitBucketFor(5.6));
+            Assert.AreEqual("Moderate", CopilotAdoptionScoring.HabitBucketFor(10.4));
+            Assert.AreEqual("Frequent", CopilotAdoptionScoring.HabitBucketFor(10.6));
+            Assert.AreEqual("Frequent", CopilotAdoptionScoring.HabitBucketFor(19.4));
+            Assert.AreEqual("Daily", CopilotAdoptionScoring.HabitBucketFor(19.6));
+
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Infrequent"), "1-5");
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Moderate"), "6-10");
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Frequent"), "11-19");
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Daily"), "20+");
+        }
+
+        [TestMethod]
+        public void HabitBucketShares_AreOfActiveUsersAndSumTo100()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(new[]
+            {
+                ActiveUser("daily@contoso.com", activeDays: 20, interactions: 200),
+                ActiveUser("frequent@contoso.com", activeDays: 12, interactions: 60),
+                ActiveUser("moderate@contoso.com", activeDays: 7, interactions: 21),
+                ActiveUser("rare@contoso.com", activeDays: 2, interactions: 3),
+                ScoredUser("never@contoso.com", 0, AdoptionBand.NeverUsed),
+            });
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var buckets = analysis.Summary.HabitBuckets;
+            CollectionAssert.AreEqual(
+                CopilotAdoptionScoring.AllHabitBuckets.ToArray(),
+                buckets.Select(b => b.Label).ToArray(),
+                "Every bucket must appear, including the empty ones - an empty 'Daily' tile is the finding.");
+
+            Assert.AreEqual(4, buckets.Sum(b => b.Users), "The never-used seat must not be bucketed.");
+            Assert.AreEqual(100, buckets.Sum(b => b.SharePct), 0.11);
+            Assert.AreEqual(1, buckets.Single(b => b.Label == "Daily").Users);
+            Assert.AreEqual(25, buckets.Single(b => b.Label == "Daily").SharePct, 0.01);
+        }
+
+        #endregion
+
+        #region Enablement plan
+
+        [TestMethod]
+        public void EveryLicensedUser_GetsExactlyOneAction()
+        {
+            // The plan is only usable as a plan if the counts add up to the whole population - an admin
+            // reads it as "these are all the jobs, and this is how big each one is".
+            var analysis = SampleAnalysis();
+            foreach (var user in analysis.LicensedUsers)
+            {
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(
+                analysis.Summary.LicensedUsers,
+                analysis.Summary.ActionPlan.Sum(a => a.Users),
+                "Every licensed user must be counted in exactly one action group.");
+            Assert.IsTrue(analysis.Summary.ActionPlan.All(a => a.Users > 0), "Empty action groups are padding.");
+            Assert.IsTrue(
+                analysis.Summary.ActionPlan.All(a => !string.IsNullOrWhiteSpace(a.Description)),
+                "Each action must explain itself once, since the per-row prose was removed.");
+        }
+
+        [TestMethod]
+        public void TheActionTagAndTheExportedProse_NeverDisagree()
+        {
+            // The screen shows a two-word tag and the CSV carries the full sentence. If those two are
+            // derived independently they will drift, and a department lead will act on prose that
+            // contradicts the tag someone else filtered on.
+            var cases = new[]
+            {
+                CopilotAdoptionScoring.Score(UsageRow(0, 0, 0, null), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(2, 1, 1, Now.AddDays(-1)), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(30, 6, 1, Now), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(100, 20, 1, Now), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(100, 20, 4, Now), WindowStart, Now, auditAvailable: true),
+            };
+
+            // The middle case must be the one that used to disagree: an Established user whose habit is
+            // confined to a single surface is tagged "Broaden", so the sentence has to say Broaden too.
+            Assert.IsTrue(
+                cases.Any(c => c.RecommendedActionCode == CopilotAdoptionScoring.AdoptionActionCodes.Broaden),
+                "This test is only meaningful if it covers the broaden case.");
+
+            foreach (var scored in cases)
+            {
+                Assert.IsFalse(string.IsNullOrWhiteSpace(scored.RecommendedActionCode), $"{scored.Band} has no action code.");
+                Assert.AreEqual(
+                    CopilotAdoptionScoring.ActionLabel(scored.RecommendedActionCode),
+                    scored.RecommendedActionLabel);
+                StringAssert.StartsWith(
+                    scored.RecommendedAction,
+                    FirstWord(scored.RecommendedActionLabel),
+                    $"The '{scored.RecommendedActionLabel}' tag must match the sentence exported for band {scored.Band}.");
+            }
+        }
+
+        #endregion
+
+        #region Frequency vs intensity
+
+        [TestMethod]
+        public void IntensityPlot_SeparatesFrequentButShallowFromDeepButOccasional()
+        {
+            // The whole point of the chart: these two departments have identical adoption rates and
+            // identical average scores would still hide which intervention each of them needs.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"shallow{i}@contoso.com", activeDays: 20, interactions: 20), "Support")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"deep{i}@contoso.com", activeDays: 4, interactions: 80), "Legal")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var support = analysis.Summary.IntensityByDepartment.Single(p => p.Segment == "Support");
+            var legal = analysis.Summary.IntensityByDepartment.Single(p => p.Segment == "Legal");
+
+            Assert.IsTrue(support.ActiveDaysPerUser > legal.ActiveDaysPerUser, "Support opens Copilot far more often.");
+            Assert.IsTrue(legal.ActionsPerActiveDay > support.ActionsPerActiveDay, "Legal does far more each time.");
+            Assert.AreEqual(1, support.ActionsPerActiveDay, 0.01);
+            Assert.AreEqual(20, legal.ActionsPerActiveDay, 0.01);
+        }
+
+        [TestMethod]
+        public void IntensityBubbleColour_AveragesTheSamePopulationAsItsAxes()
+        {
+            // The bubble is coloured by engagement, and both its axes describe active users only. If
+            // the colour averaged the whole department it would contradict the chart's own caption and
+            // double-count the unused seats that the reclaim figures already report.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ActiveUser($"active{i}@contoso.com", activeDays: 10, interactions: 50), "Finance")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ScoredUser($"idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "Finance")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var finance = analysis.Summary.IntensityByDepartment.Single();
+            Assert.AreEqual(50, finance.ActiveUserAverageScore, 0.01,
+                "Averaged over the three active users, not diluted to 25 by the three unused seats.");
+
+            // The department table deliberately keeps the whole-population average - the two answer
+            // different questions and both are labelled as such.
+            Assert.AreEqual(25, analysis.Summary.AdoptionByDepartment.Single().AverageAdoptionScore, 0.01);
+        }
+
+        [TestMethod]
+        public void IntensityPlot_IgnoresUnusedSeatsSoDepartmentsAreNotDraggedToTheOrigin()
+        {
+            // Unused seats are already counted (and acted on) as reclaimable. Averaging them in here
+            // would make every department look mediocre and hide the real spread between them.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ActiveUser($"active{i}@contoso.com", activeDays: 10, interactions: 50), "Finance")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ScoredUser($"idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "Finance")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var finance = analysis.Summary.IntensityByDepartment.Single();
+            Assert.AreEqual(6, finance.LicensedUsers, "The bubble is still sized by all the seats held.");
+            Assert.AreEqual(3, finance.ActiveUsers);
+            Assert.AreEqual(10, finance.ActiveDaysPerUser, 0.01, "Averaged over the active users only.");
+            Assert.AreEqual(5, finance.ActionsPerActiveDay, 0.01);
+        }
+
+        #endregion
+
         #region Controller parameter handling
 
         [TestMethod]
@@ -1016,6 +1266,28 @@ namespace Tests.UnitTests
             var row = ScoredUser(upn, score, score >= 50 ? AdoptionBand.Established : score > 0 ? AdoptionBand.Trialling : AdoptionBand.NeverUsed);
             row.Department = department;
             return row;
+        }
+
+        /// <summary>A user with real activity, for the habit-bucket and intensity tests.</summary>
+        private static LicensedUserAdoptionRow ActiveUser(string upn, int activeDays, long interactions)
+        {
+            var row = ScoredUser(upn, 50, AdoptionBand.Established);
+            row.ActiveDays = activeDays;
+            row.Interactions = interactions;
+            row.AppsUsed = 2;
+            return row;
+        }
+
+        private static LicensedUserAdoptionRow Departmentalise(LicensedUserAdoptionRow row, string department)
+        {
+            row.Department = department;
+            return row;
+        }
+
+        /// <summary>First word of an action label, which is how the exported sentence always opens.</summary>
+        private static string FirstWord(string label)
+        {
+            return string.IsNullOrEmpty(label) ? label : label.Split(' ')[0];
         }
 
         /// <summary>Six licensed users spread across the bands, for the summary assembly tests.</summary>

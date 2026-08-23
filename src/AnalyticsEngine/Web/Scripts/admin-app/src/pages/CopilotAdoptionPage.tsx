@@ -32,11 +32,17 @@ import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
+import DonutChart from '../components/charts/DonutChart';
+import TreemapChart from '../components/charts/TreemapChart';
 import AdoptionFunnel from '../components/copilotAdoption/AdoptionFunnel';
 import LicensedUsersPanel from '../components/copilotAdoption/LicensedUsersPanel';
 import OpportunitiesPanel from '../components/copilotAdoption/OpportunitiesPanel';
-import { SegmentTable } from '../components/copilotAdoption/adoptionShared';
-import { KpiGrid, formatCount, formatDate, formatPct } from '../components/copilotAdoption/KpiGrid';
+import HabitStrip from '../components/copilotAdoption/HabitStrip';
+import IntensityScatter from '../components/copilotAdoption/IntensityScatter';
+import ActionPlan from '../components/copilotAdoption/ActionPlan';
+import InfoTip from '../components/copilotAdoption/InfoTip';
+import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
+import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/copilotAdoption/KpiGrid';
 import type { KpiDefinition } from '../components/copilotAdoption/KpiGrid';
 
 const WINDOW_OPTIONS = [
@@ -85,6 +91,12 @@ const useStyles = makeStyles({
     justifyContent: 'space-between',
     gap: '12px',
   },
+  cardTools: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    flexShrink: 0,
+  },
   muted: {
     color: tokens.colorNeutralForeground3,
   },
@@ -97,6 +109,16 @@ const useStyles = makeStyles({
     gap: '8px',
     color: tokens.colorNeutralForeground2,
     maxWidth: '860px',
+  },
+  formula: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: '12px',
+    lineHeight: '18px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusSmall,
+    padding: '10px 12px',
+    whiteSpace: 'pre-wrap',
+    color: tokens.colorNeutralForeground1,
   },
   skuTable: {
     width: '100%',
@@ -298,11 +320,20 @@ export default function CopilotAdoptionPage() {
               )}
 
               {tab === 'licensed' && (
-                <LicensedUsersPanel windowDays={windowDays} filterOptions={filterOptions} />
+                <LicensedUsersPanel
+                  windowDays={windowDays}
+                  filterOptions={filterOptions}
+                  actionPlan={summary.actionPlan}
+                  options={summary.options}
+                />
               )}
 
               {tab === 'opportunities' && (
-                <OpportunitiesPanel windowDays={windowDays} filterOptions={filterOptions} />
+                <OpportunitiesPanel
+                  windowDays={windowDays}
+                  filterOptions={filterOptions}
+                  options={summary.options}
+                />
               )}
 
               {tab === 'method' && <MethodTab summary={summary} />}
@@ -318,6 +349,13 @@ export default function CopilotAdoptionPage() {
 function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: Record<string, string> | null }) {
   const styles = useStyles();
   const kpis = buildKpis(summary);
+  const o = summary.options;
+
+  // The band slices and the action plan are built from the users actually scored, which is capped by
+  // MaxLicensedUsersScored. That cap is far above any real Copilot deployment and raises an explicit
+  // warning when it bites - but the donut must still add up to what it is drawing, so the centre is
+  // the sum of the slices rather than the licence count.
+  const analysedUsers = summary.bandBreakdown.reduce((sum, b) => sum + b.value, 0);
 
   return (
     <>
@@ -333,23 +371,83 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
               Every stage is a subset of the one above it. The biggest drop is where the effort should go.
             </Text>
           </div>
-          {sql?.licensedUsers && <SqlPopover sql={sql.licensedUsers} title="SQL behind these figures" />}
+          <div className={styles.cardTools}>
+            <InfoTip
+              title="Adoption funnel"
+              content={{
+                what: 'The licensed population narrowed one stage at a time, so the single biggest loss of value is visible rather than averaged away.',
+                how: `Licensed = holders of a Copilot seat SKU. Ever used = any Copilot activity in the last ${o.historyDays} days. Active this period = at least one interaction inside the selected period. Habitual = engagement of ${o.establishedScore} or more. Champions = ${o.championScore} or more. The percentage on the right is the conversion from the stage above, not from the top - a 90% that follows a 40% is still a healthy step.`,
+                source:
+                  'Licensed counts come from the imported licence assignments; every activity stage comes from the Copilot audit log, falling back to Microsoft\u2019s per-user usage report where the audit import is unavailable.',
+              }}
+            />
+            {sql?.licensedUsers && <SqlPopover sql={sql.licensedUsers} title="SQL behind these figures" />}
+          </div>
         </div>
         <div className={styles.cardBody}>
           <AdoptionFunnel stages={summary.funnel} />
         </div>
       </Card>
 
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Habit formation
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Of the licensed users who used Copilot at all, how many days a month do they actually open it?
+            </Text>
+          </div>
+          <InfoTip
+            title="Habit formation"
+            content={{
+              what: 'Active licensed users split by how often they use Copilot, with no weighting applied at all - just distinct active days.',
+              how: `Active days in the selected period are restated as days per ${o.habitBucketNormalisationDays}-day month, then rounded to whole days, so the tiles mean the same thing whichever period is chosen and the captions describe the comparison exactly. Infrequent is 1-${
+                o.habitModerateMinDays - 1
+              }, Moderate ${o.habitModerateMinDays}-${o.habitFrequentMinDays - 1}, Frequent ${
+                o.habitFrequentMinDays
+              }-${o.habitDailyMinDays - 1}, Daily ${o.habitDailyMinDays}+.`,
+              formula: `daysPerMonth = round(activeDays x ${o.habitBucketNormalisationDays} / ${o.windowDays})`,
+              source:
+                'Percentages are of active users, not of all seats. Seats with no activity at all are counted in "reclaimable seats" instead - calling someone who never opened Copilot "infrequent" would hide the more expensive problem.',
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <HabitStrip buckets={summary.habitBuckets} />
+        </div>
+      </Card>
+
       <div className={styles.twoUp}>
         <Card>
-          <Text weight="semibold" size={400}>
-            Engagement distribution
-          </Text>
-          <Text size={200} block className={styles.muted}>
-            Licensed users by engagement band. "Never used" and "Dormant" together are the reclaimable seats.
-          </Text>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Engagement mix
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Every licensed user in exactly one band. "Never used" and "Dormant" together are the
+                reclaimable seats.
+              </Text>
+            </div>
+            <InfoTip
+              title="Engagement mix"
+              content={{
+                what: 'The whole licensed population split into six mutually exclusive engagement bands.',
+                how: `Champion ${o.championScore}+, Established ${o.establishedScore}+, Developing ${o.developingScore}+, Trialling below that. Anyone with no activity in the period is not scored: they are Dormant if they used Copilot at some point in the last ${o.historyDays} days, Never used otherwise.`,
+                source:
+                  'The two zero-activity bands are separated because they need opposite responses - one needs a conversation about what went wrong, the other needs onboarding or the seat taken back.',
+              }}
+            />
+          </div>
           <div className={styles.cardBody}>
-            <CategoryBarChart categories={summary.bandBreakdown} valueLabel="Users" />
+            <DonutChart
+              categories={summary.bandBreakdown}
+              colours={BAND_COLOUR_LIST}
+              centreValue={formatCount(analysedUsers)}
+              centreLabel="licensed users"
+            />
           </div>
         </Card>
 
@@ -363,11 +461,22 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
                 Interactions by app across licensed users. Often the fastest way to spot an unused surface.
               </Text>
             </div>
-            {sql?.usageByApp && <SqlPopover sql={sql.usageByApp} title="SQL behind this chart" />}
+            <div className={styles.cardTools}>
+              <InfoTip
+                title="Where Copilot is used"
+                content={{
+                  what: 'Total Copilot interactions in the period by the app they happened in, sized by area.',
+                  how: `Every interaction in the Copilot audit log for a licensed user is attributed to the app that produced it, and the top ${o.topSegments} are shown. This counts interactions, not people, so one very heavy user can dominate a surface - read it alongside the breadth component of the engagement score, which counts surfaces per person.`,
+                  source:
+                    'Needs the Copilot audit import. Microsoft\u2019s own usage report does not break usage down this way.',
+                }}
+              />
+              {sql?.usageByApp && <SqlPopover sql={sql.usageByApp} title="SQL behind this chart" />}
+            </div>
           </div>
           <div className={styles.cardBody}>
             {summary.usageByApp.length > 0 ? (
-              <CategoryBarChart categories={summary.usageByApp} valueLabel="Interactions" />
+              <TreemapChart categories={summary.usageByApp} valueLabel="interactions" />
             ) : (
               <Text className={styles.muted}>
                 No per-app breakdown is available. This needs the Copilot audit import.
@@ -376,6 +485,32 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
           </div>
         </Card>
       </div>
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Enablement plan
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Every licensed user needs exactly one of these next steps. This is the size of each job.
+            </Text>
+          </div>
+          <InfoTip
+            title="Enablement plan"
+            content={{
+              what: 'The per-user recommended actions, aggregated. Each action is stated once with the number of people who need it.',
+              how: `Derived from the engagement band, and for the middle bands from the breadth score as well - a user with a genuine habit confined to one Copilot surface needs broadening rather than more coaching. The full per-user list, filterable and exportable, is on the "Licensed users" tab.`,
+              source: `Ordered by size. Every user gets exactly one action, so the counts sum to the ${formatCount(
+                analysedUsers,
+              )} licensed users this analysis scored. If that is fewer than the licence count, a warning at the top of the page says so.`,
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <ActionPlan actions={summary.actionPlan} />
+        </div>
+      </Card>
 
       {summary.weeklyTrend.length > 0 && (
         <Card>
@@ -389,7 +524,18 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
                 {summary.coworkDetected && ' The second line tracks Microsoft 365 Copilot Cowork adoption.'}
               </Text>
             </div>
-            {sql?.weeklyTrend && <SqlPopover sql={sql.weeklyTrend} title="SQL behind this chart" />}
+            <div className={styles.cardTools}>
+              <InfoTip
+                title="Weekly active licensed users"
+                content={{
+                  what: 'Distinct licensed users with at least one Copilot interaction in each calendar week.',
+                  how: 'Weeks start on a Monday and are counted in UTC. A user active on three days of a week counts once for that week. Weeks with no data are drawn as zero rather than skipped, so a gap in the import is visible instead of being smoothed over by the line.',
+                  source:
+                    'Six months of history regardless of the period selected above, because a trend is the one thing the period drop-down cannot show. Needs the Copilot audit import.',
+                }}
+              />
+              {sql?.weeklyTrend && <SqlPopover sql={sql.weeklyTrend} title="SQL behind this chart" />}
+            </div>
           </div>
           <div className={styles.cardBody}>
             <TimeSeriesChart series={summary.weeklyTrend} valueLabel="Users" />
@@ -397,14 +543,58 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
         </Card>
       )}
 
+      {summary.intensityByDepartment.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Usage frequency and intensity
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Two departments on the same adoption rate can sit in opposite corners of this chart, and need
+                opposite interventions.
+              </Text>
+            </div>
+            <InfoTip
+              title="Usage frequency and intensity"
+              content={{
+                what: 'Each department plotted by how often its users open Copilot (horizontal) against how much they do each time (vertical), with the bubble sized by seats held and coloured by average engagement.',
+                how: `Only users who were active at least once are averaged, so unused seats do not drag a department towards the origin - they are counted in the reclaim figures instead. Active days are normalised to a ${o.habitBucketNormalisationDays}-day month so the axis does not change meaning with the period. Departments with fewer than ${o.minSeatsPerSegment} seats are omitted.`,
+                formula:
+                  `x = mean(activeDays of active users) x ${o.habitBucketNormalisationDays} / ${o.windowDays}\n` +
+                  'y = sum(interactions of active users) / sum(activeDays of active users)',
+                source:
+                  'Bottom-right is frequent but shallow - those users need richer scenarios. Top-left is deep but occasional - those users need a reason to come back tomorrow.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <IntensityScatter points={summary.intensityByDepartment} options={o} />
+          </div>
+        </Card>
+      )}
+
       <Card>
-        <Text weight="semibold" size={400}>
-          Adoption by department
-        </Text>
-        <Text size={200} block className={styles.muted}>
-          Lowest adoption first - the running order for an enablement plan. Departments with fewer than{' '}
-          {summary.options.minSeatsPerSegment} seats are omitted because the percentage would not be meaningful.
-        </Text>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Adoption by department
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Lowest adoption first - the running order for an enablement plan. Departments with fewer than{' '}
+              {o.minSeatsPerSegment} seats are omitted because the percentage would not be meaningful.
+            </Text>
+          </div>
+          <InfoTip
+            title="Adoption by department"
+            content={{
+              what: 'Copilot adoption for each department, worst first, with the raw seat counts alongside the percentage.',
+              how: `Department comes from the imported user metadata; users with none are grouped as "(no department)". A department needs at least ${o.minSeatsPerSegment} seats to appear - a two-seat department with one active user is a 50% data point that means nothing and would sit at the top of the list.`,
+              source:
+                'The counts are shown next to the rate deliberately: 0% across six seats and 0% across six hundred are the same percentage and completely different decisions.',
+            }}
+          />
+        </div>
         <div className={styles.cardBody}>
           <SegmentTable rows={summary.adoptionByDepartment} segmentLabel="Department" />
         </div>
@@ -416,7 +606,7 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
             Adoption by country
           </Text>
           <Text size={200} block className={styles.muted}>
-            For organisations that run enablement regionally.
+            The same measures as the department table, for organisations that run enablement regionally.
           </Text>
           <div className={styles.cardBody}>
             <SegmentTable rows={summary.adoptionByCountry} segmentLabel="Country" />
@@ -436,7 +626,20 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
                 table above: a department with unused seats and strong candidates can often be rebalanced at no cost.
               </Text>
             </div>
-            {sql?.licenceOpportunities && <SqlPopover sql={sql.licenceOpportunities} title="SQL behind this chart" />}
+            <div className={styles.cardTools}>
+              <InfoTip
+                title="Where the unmet demand is"
+                content={{
+                  what: `How many unlicensed users in each department scored ${o.opportunityRecommendScore} or above on the business-case score - i.e. how many people there have a strong case for a seat they do not have.`,
+                  how: 'Only recommended candidates are counted, not every unlicensed user. Disabled accounts are excluded. The full ranked list with each person\u2019s justification is on the "Licence opportunities" tab.',
+                  source:
+                    'Read against the department adoption table: a department that appears in both has seats going unused and people who would use them, which is a reassignment rather than a purchase.',
+                }}
+              />
+              {sql?.licenceOpportunities && (
+                <SqlPopover sql={sql.licenceOpportunities} title="SQL behind this chart" />
+              )}
+            </div>
           </div>
           <div className={styles.cardBody}>
             <CategoryBarChart categories={summary.opportunityByDepartment} valueLabel="Candidates" />
@@ -457,6 +660,9 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
 function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
   const o = summary.options;
+  const weights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
+  const weightSum = weights.reduce((total, w) => total + w, 0);
+  const frequencyTargetDays = Math.round(o.windowDays * (o.workingDaysPerWeek / 7) * o.frequencyTargetRatio);
 
   return (
     <Card>
@@ -471,27 +677,121 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 it produce the same "active user" count and need opposite responses.
               </Text>
               <Text>
-                <strong>Frequency ({formatPct(o.frequencyWeight * 100)} of the score).</strong> Days used in the
-                period, against a target of {formatPct(o.frequencyTargetRatio * 100)} of the available working
-                days (assuming {o.workingDaysPerWeek} working days a week). Working days rather than calendar days
-                - otherwise a genuinely daily user would top out at about 71%.
+                <strong>Frequency ({formatPct(weightSharePct(o.frequencyWeight, weights))} of the score).</strong>{' '}
+                How many distinct days they used Copilot, against a target of{' '}
+                {formatPct(o.frequencyTargetRatio * 100)} of the working days available in the period
+                (assuming {o.workingDaysPerWeek} working days a week). Over a {o.windowDays}-day period that
+                target is <strong>{frequencyTargetDays} active days</strong>. Working days rather than calendar
+                days: measured against calendar days, someone who used Copilot every single working day would
+                cap out at about 71% and look like a partial adopter.
               </Text>
               <Text>
-                <strong>Depth ({formatPct(o.depthWeight * 100)}).</strong> Interactions per active day, against a
-                target of {o.depthTargetInteractionsPerActiveDay} per day. Separates "opened it once that day" from
-                "worked with it that day".
+                <strong>Depth ({formatPct(weightSharePct(o.depthWeight, weights))}).</strong> Interactions per
+                active day, against a target of {o.depthTargetInteractionsPerActiveDay} per day. This is what
+                separates "opened it once that day" from "worked with it that day", and it is measured per{' '}
+                <em>active</em> day so that someone who uses Copilot intensively twice a week is not penalised
+                twice for the same low frequency.
               </Text>
               <Text>
-                <strong>Breadth ({formatPct(o.breadthWeight * 100)}).</strong> How many Copilot surfaces (Teams,
-                Word, Outlook, Copilot Chat and so on) they use, against a target of {o.breadthTargetApps}. Users
-                who only ever use one surface are the cheapest group to move.
+                <strong>Breadth ({formatPct(weightSharePct(o.breadthWeight, weights))}).</strong> How many
+                distinct Copilot surfaces (Teams, Word, Outlook, Copilot Chat and so on) they use, against a
+                target of {o.breadthTargetApps}. Users who only ever use one surface are the cheapest group to
+                move, because they have already accepted Copilot - they simply have not been shown where else
+                it works.
               </Text>
               <Text>
-                <strong>Bands.</strong> Champion at {o.championScore}+, Established at {o.establishedScore}+,
-                Developing at {o.developingScore}+, Trialling below that. Users with no activity in the period are
-                split into <em>Dormant</em> (used Copilot within the last {o.historyDays} days but not in this
-                period) and <em>Never used</em> - the distinction matters, because one needs a conversation and the
-                other needs onboarding or the seat back.
+                Each component is a ratio capped at 1 before it is weighted, so nothing above target buys extra
+                credit and no single component can carry a user on its own. The weighted sum is divided by the
+                total of the three weights, which is what keeps the result on a 0-100 scale whatever the
+                weights are set to:
+              </Text>
+              <div className={styles.formula}>
+                {`frequency = min(1, activeDays / expectedActiveDays)\n` +
+                  `depth     = min(1, (interactions / activeDays) / ${o.depthTargetInteractionsPerActiveDay})\n` +
+                  `breadth   = min(1, appsUsed / ${o.breadthTargetApps})\n\n` +
+                  `score = (frequency x ${o.frequencyWeight} + depth x ${o.depthWeight} + breadth x ${o.breadthWeight})\n` +
+                  `        / ${weightSum} x 100`}
+              </div>
+              <Text>
+                <strong>Worked example.</strong> Over a {o.windowDays}-day period the frequency target is{' '}
+                {frequencyTargetDays} active days. A user active on half of those, averaging{' '}
+                {o.depthTargetInteractionsPerActiveDay} interactions on each of those days, in a single app,
+                scores{' '}
+                {Math.round(
+                  ((0.5 * o.frequencyWeight + 1 * o.depthWeight + (1 / o.breadthTargetApps) * o.breadthWeight) /
+                    (weightSum || 1)) *
+                    100,
+                )}{' '}
+                - deep but narrow and intermittent, which is why the recommended action for that profile is to
+                broaden rather than to train.
+              </Text>
+            </div>
+          </AccordionPanel>
+        </AccordionItem>
+
+        <AccordionItem value="bands">
+          <AccordionHeader>What the engagement bands and habit buckets mean</AccordionHeader>
+          <AccordionPanel>
+            <div className={styles.method}>
+              <Text>
+                <strong>Bands</strong> turn the score into a decision. Champion at {o.championScore} and above,
+                Established at {o.establishedScore}+, Developing at {o.developingScore}+, and Trialling below
+                that. <strong>Established and above is what "habitual users" counts</strong> - the point at which
+                Copilot is a routine part of the working week rather than something the person has tried.
+              </Text>
+              <Text>
+                Users with <em>no</em> activity in the period are never scored at all, because a score of zero
+                would put two completely different problems in the same bucket. They are split into{' '}
+                <em>Dormant</em> (used Copilot at some point in the last {o.historyDays} days, but not once in
+                this period) and <em>Never used</em> (no Copilot activity anywhere in that history). The
+                distinction decides the action: a dormant user tried Copilot and stopped, and needs a
+                conversation about what went wrong before the seat is taken away; a never-used seat has produced
+                nothing at all and needs either onboarding or reassignment. Together they are the{' '}
+                <strong>reclaimable seats</strong> figure.
+              </Text>
+              <Text>
+                <strong>Habit buckets</strong> answer the same question with no weighting in it, which is what
+                makes them useful to a sceptical reader: how many days a month does this person actually open
+                Copilot? Infrequent is 1-{o.habitModerateMinDays - 1} days, Moderate {o.habitModerateMinDays}-
+                {o.habitFrequentMinDays - 1}, Frequent {o.habitFrequentMinDays}-{o.habitDailyMinDays - 1}, and
+                Daily {o.habitDailyMinDays}+ - essentially every working day.
+              </Text>
+              <Text>
+                Because the reporting period is adjustable, active days are restated as days per{' '}
+                {o.habitBucketNormalisationDays}-day month, and rounded to whole days, before bucketing.
+                Without the normalisation, "11+ active days" would mean a near-daily user over a 28-day period
+                and a once-a-fortnight user over a 180-day one, and the tile would silently change meaning when
+                the period was changed. The rounding is what lets the tile captions describe the comparison
+                exactly rather than approximately:
+              </Text>
+              <div className={styles.formula}>
+                {`daysPerMonth = round(activeDays x ${o.habitBucketNormalisationDays} / ${o.windowDays})`}
+              </div>
+              <Text>
+                The habit percentages are a share of <em>active</em> users, not of all seats. Someone who never
+                opened Copilot is not an infrequent user - they are a reclaimable seat, and merging the two would
+                hide the more expensive of the two problems.
+              </Text>
+            </div>
+          </AccordionPanel>
+        </AccordionItem>
+
+        <AccordionItem value="actions">
+          <AccordionHeader>How the recommended action is chosen</AccordionHeader>
+          <AccordionPanel>
+            <div className={styles.method}>
+              <Text>
+                Every licensed user gets exactly one recommended action, so the counts on the enablement plan
+                add up to the whole licensed population. The action follows from the band, and for the middle
+                bands from the breadth score as well - a user with a genuine habit confined to one Copilot
+                surface needs broadening, not more coaching.
+              </Text>
+              <ActionPlan actions={summary.actionPlan} />
+              <Text className={styles.muted}>
+                On screen each user carries a two-word tag and the meaning is stated once, above - the same
+                sentence repeated down every row of a band is noise, not evidence. The CSV export keeps the full
+                sentence on every row, because a spreadsheet gets sorted and filtered and cannot rely on a
+                legend being nearby.
               </Text>
             </div>
           </AccordionPanel>
@@ -503,18 +803,41 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
             <div className={styles.method}>
               <Text>
                 Unlicensed users are scored out of 100 on four weighted signals, with the weighting set so that
-                evidence beats inference.
+                evidence beats inference. Anyone reaching {o.opportunityRecommendScore} is counted as a
+                recommended candidate.
               </Text>
               <Text>
-                <strong>Already using Copilot Chat without a licence</strong> carries the most weight. It is the
-                only signal that proves demand for Copilot itself rather than inferring it from general activity,
-                and it is invisible in Microsoft's own reports, which cover licensed users only.
+                <strong>
+                  Already using Copilot Chat without a licence ({o.opportunityUnlicensedCopilotWeight} points).
+                </strong>{' '}
+                The heaviest signal by a wide margin. It is the only one that proves demand for Copilot itself
+                rather than inferring it from general activity, and it is invisible in Microsoft's own reports,
+                which cover licensed users only.
               </Text>
               <Text>
-                <strong>Teams collaboration</strong>, <strong>email volume</strong> and{' '}
-                <strong>document work</strong> make up the rest. They identify heavy knowledge workers who would
-                benefit but have never had the chance to try it. Anyone scoring{' '}
-                {o.opportunityRecommendScore} or above is marked as recommended.
+                <strong>Teams collaboration ({o.opportunityCollaborationWeight})</strong>,{' '}
+                <strong>email volume ({o.opportunityEmailWeight})</strong> and{' '}
+                <strong>document work ({o.opportunityDocumentWeight})</strong> make up the rest. They identify
+                heavy knowledge workers who would benefit but have never had the chance to try it.
+              </Text>
+              <div className={styles.formula}>
+                {`copilot   = min(1, unlicensedCopilotInteractions / ${o.opportunityCopilotTarget})\n` +
+                  `collab    = min(1, (teamsMessages + teamsMeetings) / ${o.opportunityCollaborationTarget})\n` +
+                  `email     = min(1, (emailsSent + emailsRead) / ${o.opportunityEmailTarget})\n` +
+                  `documents = min(1, filesViewedOrEdited / ${o.opportunityDocumentTarget})\n\n` +
+                  `score = copilot x ${o.opportunityUnlicensedCopilotWeight} + collab x ${o.opportunityCollaborationWeight}` +
+                  ` + email x ${o.opportunityEmailWeight} + documents x ${o.opportunityDocumentWeight}`}
+              </div>
+              <Text>
+                Each signal is capped at its target before weighting, which matters: without the cap a single
+                extremely noisy mailbox would clear the threshold on email alone. As the weights stand, a user
+                with no unlicensed Copilot use has to be heavy across{' '}
+                {o.opportunityCollaborationWeight + o.opportunityEmailWeight + o.opportunityDocumentWeight >=
+                o.opportunityRecommendScore
+                  ? 'more than one'
+                  : 'every'}{' '}
+                Microsoft 365 workload to be recommended, whereas proven Copilot use plus one heavy workload
+                gets there on its own.
               </Text>
               <Text>
                 Disabled accounts are excluded from the candidate list. They are, however, kept in the licensed
@@ -601,12 +924,22 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
  * how many are wasted, and what the unmet demand is.
  */
 function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
+  const o = summary.options;
+  const seatSkus = summary.seatLicenceTypes.filter((l) => l.isCopilotSeat);
+  const scoreWeights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
+
   const items: KpiDefinition[] = [
     {
       key: 'licensed',
       label: 'Copilot licences',
       value: formatCount(summary.licensedUsers),
-      hint: `${summary.seatLicenceTypes.filter((l) => l.isCopilotSeat).length} seat SKU(s) counted`,
+      hint: `${seatSkus.length} seat SKU(s) counted`,
+      info: {
+        what: 'People holding at least one licence that this tool classified as a Microsoft 365 Copilot seat. It is the denominator for every percentage on this page.',
+        how: 'Counted from the imported licence assignments, de-duplicated per user - someone holding two Copilot SKUs counts once. Microsoft ships Copilot-branded SKUs that are not a Copilot seat (Copilot Studio, Copilot for Sales), so the classification is listed in full, with the ones that were excluded, under "How this is calculated".',
+        source:
+          'Needs the user metadata import. It is a licence-assignment count, not a purchase count, so unassigned seats you are paying for do not appear here.',
+      },
     },
     {
       key: 'adoption',
@@ -614,6 +947,14 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       value: formatPct(summary.adoptionRatePct),
       hint: `${formatCount(summary.activeUsers)} used Copilot in this period`,
       tone: summary.adoptionRatePct >= 70 ? 'good' : summary.adoptionRatePct >= 40 ? 'warning' : 'critical',
+      info: {
+        what: 'The share of licensed users who used Copilot at least once in the selected period.',
+        how: `A deliberately low bar, and the weakest number on this page: one interaction in ${o.windowDays} days counts the same as fifty. It is here because it is the figure everyone else quotes, so it needs to be visible and comparable - but "habitual users" below is the one to act on.`,
+        formula: `${formatCount(summary.activeUsers)} active / ${formatCount(
+          summary.licensedUsers,
+        )} licensed = ${formatPct(summary.adoptionRatePct)}`,
+        source: `Activity comes from the Copilot audit log for the ${o.windowDays}-day period, falling back to Microsoft\u2019s per-user usage report where the audit import is unavailable.`,
+      },
     },
     {
       key: 'habit',
@@ -621,6 +962,15 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       value: formatPct(summary.habitRatePct),
       hint: `${formatCount(summary.habitualUsers)} have made Copilot part of the working week`,
       tone: summary.habitRatePct >= 50 ? 'good' : summary.habitRatePct >= 25 ? 'warning' : 'critical',
+      info: {
+        what: 'Licensed users for whom Copilot is a routine part of the working week, rather than something they have merely touched.',
+        how: `A user is habitual when their engagement score reaches ${o.establishedScore} out of 100 - the Established and Champion bands. Reaching that needs sustained use across most weeks, more than a single interaction per day, and normally more than one Copilot surface; no one component can get there alone.`,
+        formula: `${formatCount(summary.habitualUsers)} users scoring >= ${o.establishedScore} / ${formatCount(
+          summary.licensedUsers,
+        )} licensed = ${formatPct(summary.habitRatePct)}`,
+        source:
+          'This is the figure that tracks realised value. Adoption rate can sit at 100% while this sits near zero, which is exactly the situation a renewal conversation needs to surface.',
+      },
     },
     {
       key: 'reclaim',
@@ -628,12 +978,34 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       value: formatCount(summary.reclaimableSeats),
       hint: `${formatCount(summary.neverUsedUsers)} never used, ${formatCount(summary.dormantUsers)} dormant`,
       tone: summary.reclaimableSeats > 0 ? 'critical' : 'good',
+      info: {
+        what: 'Seats held by someone who did nothing with Copilot in the entire period. The directly actionable cost figure on this page.',
+        how: `Split in two because they need opposite responses. "Never used" means no Copilot activity anywhere in the last ${o.historyDays} days - that seat has produced nothing and needs onboarding or reassignment. "Dormant" means they used it before the period but not inside it - that is someone who tried it and stopped, and needs a conversation before the seat is taken away.`,
+        formula: `${formatCount(summary.neverUsedUsers)} never used + ${formatCount(
+          summary.dormantUsers,
+        )} dormant = ${formatCount(summary.reclaimableSeats)}`,
+        source:
+          'Disabled accounts still holding a seat are included and are the clearest reclaim of all - filter for them on the "Licensed users" tab.',
+      },
     },
     {
       key: 'score',
       label: 'Average engagement',
       value: Math.round(summary.averageAdoptionScore),
       hint: `Median ${Math.round(summary.medianAdoptionScore)} of 100`,
+      info: {
+        what: 'The mean engagement score across all licensed users, including everyone scoring zero.',
+        how: `Each user's score out of 100 combines frequency (${formatPct(
+          weightSharePct(o.frequencyWeight, scoreWeights),
+        )}), depth (${formatPct(weightSharePct(o.depthWeight, scoreWeights))}) and breadth (${formatPct(
+          weightSharePct(o.breadthWeight, scoreWeights),
+        )}). Unused seats are included in the average on purpose - excluding them would make a tenant with half its seats idle look identical to one with none.`,
+        formula: `mean = ${Math.round(summary.averageAdoptionScore)}, median = ${Math.round(
+          summary.medianAdoptionScore,
+        )}`,
+        source:
+          'The median is shown next to the mean because a handful of Champions pull the mean up. When the mean is well above the median, the population is a small group of heavy users plus a long tail - a different problem from uniformly light use.',
+      },
     },
   ];
 
@@ -648,6 +1020,12 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
         summary.coworkInteractions,
       )} interactions`,
       tone: 'opportunity',
+      info: {
+        what: 'Licensed users who used Microsoft 365 Copilot Cowork in the period, as a share of all licensed users.',
+        how: 'Cowork interactions are identified from the agents recorded against each Copilot interaction in the audit log. A user counts once no matter how many Cowork interactions they had.',
+        source:
+          'This card only appears when Cowork activity was actually detected. On a tenant that has not enabled it, showing "0%" would read as a failure rather than as "not applicable here".',
+      },
     });
   }
 
@@ -658,6 +1036,12 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       value: formatCount(summary.unlicensedActiveUsers),
       hint: 'Proven demand - already using Copilot Chat with no seat',
       tone: 'opportunity',
+      info: {
+        what: 'People with no Microsoft 365 Copilot seat who nevertheless used Copilot in the period - in practice, Copilot Chat, which is available without a seat.',
+        how: 'Counted from the Copilot audit log for every user who holds none of the SKUs classified as a Copilot seat. It is a count of distinct people, not of interactions.',
+        source:
+          'This is invisible in Microsoft\u2019s own Copilot usage reports, which cover licensed users only. It is the strongest evidence of unmet demand available, because these people chose to use Copilot with no prompting and no seat.',
+      },
     });
   }
 
@@ -667,6 +1051,13 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
     value: formatCount(summary.recommendedForLicence),
     hint: 'Heavy Microsoft 365 users with a strong business case',
     tone: 'opportunity',
+    info: {
+      what: `Unlicensed users whose business-case score reached ${o.opportunityRecommendScore} out of 100.`,
+      how: `Four weighted signals: already using Copilot Chat without a seat (${o.opportunityUnlicensedCopilotWeight} points, the heaviest because it is evidence rather than inference), Teams collaboration (${o.opportunityCollaborationWeight}), email volume (${o.opportunityEmailWeight}) and document work (${o.opportunityDocumentWeight}). Each is a capped ratio against its own target, so no single workload can carry someone over the threshold alone.`,
+      formula: `recommended when score >= ${o.opportunityRecommendScore}`,
+      source:
+        'Disabled accounts are excluded. The Microsoft 365 activity signals come from the latest usage-report snapshot, which is a Microsoft-defined window rather than the period selected above - see the "Licence opportunities" tab for each candidate\u2019s justification.',
+    },
   });
 
   return items;

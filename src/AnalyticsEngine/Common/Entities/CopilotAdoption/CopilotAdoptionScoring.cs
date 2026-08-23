@@ -159,6 +159,8 @@ namespace Common.Entities.CopilotAdoption
                 SignalSource = useReport ? SignalSourceUsageReport : SignalSourceAudit,
             };
 
+            scored.RecommendedActionCode = RecommendedActionCode(scored);
+            scored.RecommendedActionLabel = ActionLabel(scored.RecommendedActionCode);
             scored.RecommendedAction = RecommendedAction(scored, o);
             return scored;
         }
@@ -227,9 +229,85 @@ namespace Common.Entities.CopilotAdoption
             return band == AdoptionBand.Established || band == AdoptionBand.Champion;
         }
 
+        #region Habit-formation buckets
+
+        /// <summary>
+        /// Active days in the window, restated as active days per month.
+        ///
+        /// Without this, "11+ active days" would mean a near-daily user over a 28-day window and a
+        /// once-a-fortnight user over a 180-day one, and the same tile would silently change meaning
+        /// when the reader changed the period drop-down.
+        /// </summary>
+        public static double NormalisedActiveDaysPerMonth(
+            double activeDays,
+            int windowDays,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var days = Math.Max(1, windowDays);
+            return activeDays * o.HabitBucketNormalisationDays / (double)days;
+        }
+
+        /// <summary>
+        /// Habit bucket for a normalised active-days-per-month figure.
+        ///
+        /// The normalised value is fractional (12 days in a 90-day window is 3.73 days a month), so it
+        /// is rounded to whole days before bucketing - otherwise the tile captions ("1-5 active days a
+        /// month") would not exactly describe the comparison being made, and a user on 5.6 days would
+        /// sit in a bucket whose label excludes them. Any activity at all rounds up to at least one
+        /// day, so a single interaction in a 180-day window is Infrequent rather than unbucketed.
+        ///
+        /// Zero maps to null: a user with no activity is not "infrequent", they are in the reclaim
+        /// pile, and merging the two hides the more expensive problem.
+        /// </summary>
+        public static string HabitBucketFor(double normalisedActiveDays, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (normalisedActiveDays <= 0) return null;
+
+            var days = Math.Max(1, (int)Math.Round(normalisedActiveDays, MidpointRounding.AwayFromZero));
+
+            if (days >= o.HabitDailyMinDays) return "Daily";
+            if (days >= o.HabitFrequentMinDays) return "Frequent";
+            if (days >= o.HabitModerateMinDays) return "Moderate";
+            return "Infrequent";
+        }
+
+        /// <summary>Bucket names, least engaged first, so a habit strip always shows every bucket.</summary>
+        public static IReadOnlyList<string> AllHabitBuckets { get; } = new[]
+        {
+            "Infrequent", "Moderate", "Frequent", "Daily",
+        };
+
+        /// <summary>The bucket's day range in plain English, e.g. "6-10 active days a month".</summary>
+        public static string HabitBucketRangeLabel(string bucket, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var moderate = (int)Math.Round(o.HabitModerateMinDays, MidpointRounding.AwayFromZero);
+            var frequent = (int)Math.Round(o.HabitFrequentMinDays, MidpointRounding.AwayFromZero);
+            var daily = (int)Math.Round(o.HabitDailyMinDays, MidpointRounding.AwayFromZero);
+
+            switch (bucket)
+            {
+                case "Infrequent": return $"1-{Math.Max(1, moderate - 1)} active days a month";
+                case "Moderate": return $"{moderate}-{Math.Max(moderate, frequent - 1)} active days a month";
+                case "Frequent": return $"{frequent}-{Math.Max(frequent, daily - 1)} active days a month";
+                case "Daily": return $"{daily}+ active days a month";
+                default: return string.Empty;
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// The single next step for this user, in plain English. Exported in the CSV so the list can be
         /// handed to a department lead and acted on without further interpretation.
+        ///
+        /// On screen the prose is shown once per action group rather than once per row - see
+        /// <see cref="RecommendedActionCode"/> and <see cref="ActionDescription"/>. In a CSV, where a
+        /// reader takes one row at a time and may sort or filter it arbitrarily, the full sentence on
+        /// every row is worth the repetition.
         /// </summary>
         public static string RecommendedAction(LicensedUserAdoptionRow row, CopilotAdoptionOptions options = null)
         {
@@ -261,7 +339,7 @@ namespace Common.Entities.CopilotAdoption
 
                 case AdoptionBand.Established:
                     return row.BreadthScore < 50
-                        ? $"Sustain and broaden - solid regular use in {AppsPhrase(row.AppsUsed)}; "
+                        ? $"Broaden - solid regular use, but confined to {AppsPhrase(row.AppsUsed)}; "
                           + "showing them one more surface is the cheapest remaining gain."
                         : "Sustain - Copilot is part of their working week. No action needed.";
 
@@ -279,6 +357,129 @@ namespace Common.Entities.CopilotAdoption
                     return string.Empty;
             }
         }
+
+        #region Recommended-action catalogue
+
+        /// <summary>
+        /// The stable action codes. Deliberately a small closed set: an admin planning an enablement
+        /// programme needs to be able to say "these 76 people need coaching", which only works if the
+        /// action is a value they can group and count by rather than a sentence.
+        /// </summary>
+        public static class AdoptionActionCodes
+        {
+            public const string Reclaim = "reclaim";
+            public const string Reengage = "reengage";
+            public const string Coach = "coach";
+            public const string Broaden = "broaden";
+            public const string Grow = "grow";
+            public const string Sustain = "sustain";
+            public const string Advocate = "advocate";
+        }
+
+        /// <summary>All action codes in the order they should be worked through - cheapest saving first.</summary>
+        public static IReadOnlyList<string> AllActionCodes { get; } = new[]
+        {
+            AdoptionActionCodes.Reclaim,
+            AdoptionActionCodes.Reengage,
+            AdoptionActionCodes.Coach,
+            AdoptionActionCodes.Broaden,
+            AdoptionActionCodes.Grow,
+            AdoptionActionCodes.Sustain,
+            AdoptionActionCodes.Advocate,
+        };
+
+        /// <summary>
+        /// Which action this user needs, as a code. Shares its branching with
+        /// <see cref="RecommendedAction"/> so the tag on screen can never disagree with the sentence in
+        /// the CSV.
+        /// </summary>
+        public static string RecommendedActionCode(LicensedUserAdoptionRow row)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+
+            switch (row.Band)
+            {
+                case AdoptionBand.NeverUsed: return AdoptionActionCodes.Reclaim;
+                case AdoptionBand.Dormant: return AdoptionActionCodes.Reengage;
+                case AdoptionBand.Trialling: return AdoptionActionCodes.Coach;
+                case AdoptionBand.Developing:
+                    return row.BreadthScore < 34 ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Grow;
+                case AdoptionBand.Established:
+                    return row.BreadthScore < 50 ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Sustain;
+                case AdoptionBand.Champion:
+                    return AdoptionActionCodes.Advocate;
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>Short display label for an action code.</summary>
+        public static string ActionLabel(string code)
+        {
+            switch (code)
+            {
+                case AdoptionActionCodes.Reclaim: return "Reclaim or onboard";
+                case AdoptionActionCodes.Reengage: return "Re-engage";
+                case AdoptionActionCodes.Coach: return "Coach";
+                case AdoptionActionCodes.Broaden: return "Broaden";
+                case AdoptionActionCodes.Grow: return "Grow";
+                case AdoptionActionCodes.Sustain: return "Sustain";
+                case AdoptionActionCodes.Advocate: return "Recruit as advocate";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// What the action means and why these users qualify for it - stated once per action rather
+        /// than repeated on every row that shares it.
+        /// </summary>
+        public static string ActionDescription(string code, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            switch (code)
+            {
+                case AdoptionActionCodes.Reclaim:
+                    return $"No Copilot activity at all in the last {o.HistoryDays} days. Confirm the seat is "
+                         + "still needed before renewal; if it is, this person has never been onboarded and "
+                         + "the seat has produced nothing so far.";
+
+                case AdoptionActionCodes.Reengage:
+                    return "Used Copilot before this period but not once inside it. Someone who tried it and "
+                         + "stopped is a different problem from someone who never started - ask what stopped, "
+                         + "offer a refresher, or reassign the seat.";
+
+                case AdoptionActionCodes.Coach:
+                    return $"Occasional use only (engagement below {o.DevelopingScore}). The cheapest move is "
+                         + "one repeatable habit in the app they already live in, rather than a general "
+                         + "Copilot training session.";
+
+                case AdoptionActionCodes.Broaden:
+                    return "Real, regular use - but almost entirely in a single Copilot surface. Introducing "
+                         + "one more surface (Outlook summaries, Teams meeting recaps) is the cheapest "
+                         + "remaining gain for these users, because they have already accepted Copilot and "
+                         + "simply have not been shown where else it works.";
+
+                case AdoptionActionCodes.Grow:
+                    return $"Engagement between {o.DevelopingScore} and {o.EstablishedScore} across more than "
+                         + "one surface. A short scenario-based session aimed at their actual job is what "
+                         + "moves this group to daily use.";
+
+                case AdoptionActionCodes.Sustain:
+                    return $"Engagement at or above {o.EstablishedScore} across multiple surfaces - Copilot is "
+                         + "part of their working week. No action needed; these are the seats that are paying "
+                         + "for themselves.";
+
+                case AdoptionActionCodes.Advocate:
+                    return $"Engagement at or above {o.ChampionScore} - among your deepest users. Ask them to "
+                         + "run a peer session for their own department, which converts better than centrally "
+                         + "run training. If their breadth score is low they are still worth showing one more "
+                         + "surface.";
+
+                default: return string.Empty;
+            }
+        }
+
+        #endregion
 
         #endregion
 

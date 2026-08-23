@@ -11,18 +11,26 @@ import {
   MessageBar,
   MessageBarBody,
   Tooltip,
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchLicensedUsers, licensedUsersExportUrl } from '../../api/copilotAdoptionApi';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type {
+  AdoptionActionSummary,
   AdoptionFilterOptions,
+  CopilotAdoptionOptions,
   LicensedUserFilters,
   LicensedUserPage,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { BandBadge, ScoreBar, useAdoptionTableStyles } from './adoptionShared';
-import { formatCount, formatDate } from './KpiGrid';
+import { BandBadge, ScoreBar, scoreColour, useAdoptionTableStyles } from './adoptionShared';
+import { formatCount, formatDate, formatPct, weightSharePct } from './KpiGrid';
+import InfoTip from './InfoTip';
+import ActionPlan, { ActionBadge } from './ActionPlan';
 
 const PAGE_SIZE = 50;
 
@@ -71,9 +79,13 @@ const useStyles = makeStyles({
     marginTop: '12px',
     flexWrap: 'wrap',
   },
-  action: {
-    maxWidth: '340px',
-    color: tokens.colorNeutralForeground2,
+  thWithInfo: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
+  },
+  legend: {
+    marginBottom: '8px',
   },
   upn: {
     display: 'flex',
@@ -105,11 +117,17 @@ const DEFAULT_FILTERS: LicensedUserFilters = {
 export default function LicensedUsersPanel({
   windowDays,
   filterOptions,
+  actionPlan,
+  options,
   seatLicenceTypeIds,
   initialBands,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
+  /** The action catalogue, used for the legend that replaced the repeated per-row prose column. */
+  actionPlan: AdoptionActionSummary[];
+  /** The thresholds actually used, so the column explanations quote real numbers rather than prose. */
+  options: CopilotAdoptionOptions;
   seatLicenceTypeIds?: number[];
   initialBands?: AdoptionBand[];
 }) {
@@ -159,6 +177,21 @@ export default function LicensedUsersPanel({
   );
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+
+  const scoreWeights = [options.frequencyWeight, options.depthWeight, options.breadthWeight];
+  const weightSum = scoreWeights.reduce((total, w) => total + w, 0);
+  const bands = {
+    champion: options.championScore,
+    established: options.establishedScore,
+    developing: options.developingScore,
+  };
+
+  // Only the actions that actually appear in the rows on screen. Showing all seven when the filter
+  // has narrowed the list to one band would be padding, not explanation.
+  const visibleActions = useMemo(() => {
+    const present = new Set((data?.rows ?? []).map((r) => r.recommendedActionCode));
+    return actionPlan.filter((a) => present.has(a.code));
+  }, [data, actionPlan]);
 
   return (
     <Card>
@@ -268,20 +301,96 @@ export default function LicensedUsersPanel({
       )}
 
       {!loading && data && data.rows.length > 0 && (
-        <div className={styles.tableWrap}>
+        <>
+          {visibleActions.length > 0 && (
+            <Accordion collapsible className={styles.legend}>
+              <AccordionItem value="actions">
+                <AccordionHeader>What these actions mean</AccordionHeader>
+                <AccordionPanel>
+                  <ActionPlan actions={visibleActions} showCounts={false} />
+                </AccordionPanel>
+              </AccordionItem>
+            </Accordion>
+          )}
+
+          <div className={styles.tableWrap}>
           <table className={table.table}>
             <thead>
               <tr>
                 <th className={table.th}>User</th>
                 <th className={table.th}>Department</th>
-                <th className={table.th}>Engagement</th>
-                <th className={table.th}>Band</th>
+                <th className={table.th}>
+                  <span className={styles.thWithInfo}>
+                    Engagement
+                    <InfoTip
+                      title="Engagement score"
+                      content={{
+                        what: 'How embedded Copilot is in this person\u2019s working week, from 0 to 100. Not "did they use it" - two people who each used it once score the same on that, and need the same response, which is rarely useful.',
+                        how: `Three components: frequency (${formatPct(
+                          weightSharePct(options.frequencyWeight, scoreWeights),
+                        )}) against a target of ${formatPct(
+                          options.frequencyTargetRatio * 100,
+                        )} of available working days, depth (${formatPct(
+                          weightSharePct(options.depthWeight, scoreWeights),
+                        )}) against ${options.depthTargetInteractionsPerActiveDay} interactions per active day, and breadth (${formatPct(
+                          weightSharePct(options.breadthWeight, scoreWeights),
+                        )}) against ${options.breadthTargetApps} Copilot surfaces. Each component is capped at 100% before weighting, so nothing above target buys extra credit.`,
+                        formula:
+                          'freq = min(1, activeDays / expectedActiveDays)\n' +
+                          'depth = min(1, interactions / activeDays / depthTarget)\n' +
+                          'breadth = min(1, appsUsed / breadthTarget)\n' +
+                          `score = (freq*${options.frequencyWeight} + depth*${options.depthWeight} + breadth*${options.breadthWeight})\n` +
+                          `        / ${weightSum} x 100`,
+                        source: 'Hover the bar on any row for that user\u2019s three component scores.',
+                      }}
+                    />
+                  </span>
+                </th>
+                <th className={table.th}>
+                  <span className={styles.thWithInfo}>
+                    Band
+                    <InfoTip
+                      title="Engagement band"
+                      content={{
+                        what: 'The engagement score turned into a label, so a list of numbers becomes a list of decisions.',
+                        how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used.`,
+                        source:
+                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is what "reclaimable seats" counts.',
+                      }}
+                    />
+                  </span>
+                </th>
                 <th className={`${table.th} ${table.thNumeric}`}>Interactions</th>
-                <th className={`${table.th} ${table.thNumeric}`}>Active days</th>
+                <th className={`${table.th} ${table.thNumeric}`}>
+                  <span className={styles.thWithInfo}>
+                    Active days
+                    <InfoTip
+                      title="Active days"
+                      content={{
+                        what: 'Distinct days this person had at least one Copilot interaction, against the number needed to score full marks for frequency.',
+                        how: `The target is ${formatPct(options.frequencyTargetRatio * 100)} of the working days in the period, assuming ${options.workingDaysPerWeek} working days a week. Working days rather than calendar days - against calendar days even a genuinely daily user would cap out around 71% and look like a partial adopter.`,
+                        formula: `expectedActiveDays = ${options.windowDays} days x (${options.workingDaysPerWeek}/7) x ${options.frequencyTargetRatio}`,
+                      }}
+                    />
+                  </span>
+                </th>
                 <th className={`${table.th} ${table.thNumeric}`}>Apps</th>
                 <th className={table.th}>Cowork</th>
                 <th className={table.th}>Last used</th>
-                <th className={table.th}>Recommended action</th>
+                <th className={table.th}>
+                  <span className={styles.thWithInfo}>
+                    Action
+                    <InfoTip
+                      title="Recommended action"
+                      content={{
+                        what: 'The single next step for this person, as a tag. What each tag means is stated once under "What these actions mean" above the table - it is the same sentence for everyone who carries the tag, so repeating it on every row would be noise.',
+                        how: 'Derived from the band, and for the middle bands from the breadth score as well: someone with a real habit confined to one Copilot surface needs broadening rather than more coaching.',
+                        source:
+                          'The CSV export carries both the tag and the full sentence on every row, because a spreadsheet gets sorted and filtered and cannot rely on a legend.',
+                      }}
+                    />
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -308,7 +417,7 @@ export default function LicensedUsersPanel({
                       } days needed for full marks.`}
                     >
                       <div>
-                        <ScoreBar score={row.adoptionScore} />
+                        <ScoreBar score={row.adoptionScore} colour={scoreColour(row.adoptionScore, bands)} />
                       </div>
                     </Tooltip>
                   </td>
@@ -332,15 +441,18 @@ export default function LicensedUsersPanel({
                     )}
                   </td>
                   <td className={table.td}>
-                    <Text size={200} className={styles.action}>
-                      {row.recommendedAction}
-                    </Text>
+                    <Tooltip relationship="description" content={row.recommendedAction}>
+                      <div>
+                        <ActionBadge code={row.recommendedActionCode} label={row.recommendedActionLabel} />
+                      </div>
+                    </Tooltip>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+        </>
       )}
 
       {!loading && data && data.total > 0 && (

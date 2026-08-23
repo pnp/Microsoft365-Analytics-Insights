@@ -487,8 +487,11 @@ namespace Common.Entities.CopilotAdoption
 
             summary.Funnel = BuildFunnel(summary, users);
             summary.BandBreakdown = BuildBandBreakdown(users);
+            summary.HabitBuckets = BuildHabitBuckets(users);
+            summary.ActionPlan = BuildActionPlan(users);
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
+            summary.IntensityByDepartment = BuildIntensity(users, u => u.Department, "(no department)");
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
             summary.RecommendedForLicence = opportunities.Count(o => o.Recommended);
@@ -531,6 +534,122 @@ namespace Common.Entities.CopilotAdoption
                     Label = CopilotAdoptionScoring.BandDisplayName(band),
                     Value = users.Count(u => u.Band == band),
                 })
+                .ToList();
+        }
+
+        /// <summary>
+        /// The habit strip: active licensed users bucketed by how many days a month they actually open
+        /// Copilot.
+        ///
+        /// Reported as a share of <i>active</i> users rather than of all seats, because the question it
+        /// answers is "of the people who use it, how many have a habit?" - mixing in the never-used
+        /// seats would answer a question the reclaim figures already answer better.
+        /// </summary>
+        private List<AdoptionHabitBucket> BuildHabitBuckets(IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            var bucketed = users
+                .Select(u => CopilotAdoptionScoring.HabitBucketFor(
+                    CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(u.ActiveDays, _options.WindowDays, _options),
+                    _options))
+                .Where(b => b != null)
+                .ToList();
+
+            return CopilotAdoptionScoring.AllHabitBuckets
+                .Select(bucket =>
+                {
+                    var count = bucketed.Count(b => b == bucket);
+                    return new AdoptionHabitBucket
+                    {
+                        Label = bucket,
+                        RangeLabel = CopilotAdoptionScoring.HabitBucketRangeLabel(bucket, _options),
+                        Users = count,
+                        SharePct = CopilotAdoptionScoring.Percentage(count, bucketed.Count),
+                    };
+                })
+                .ToList();
+        }
+
+        /// <summary>
+        /// How many licensed users need each recommended action, biggest job first.
+        ///
+        /// This is the same information the per-user list carries, aggregated - and it is the form an
+        /// admin can actually plan from. It also lets the list itself stop repeating an identical
+        /// paragraph on every row of a band.
+        ///
+        /// The shares are of the users actually scored, which is normally every licensed user but is
+        /// capped by <see cref="CopilotAdoptionOptions.MaxLicensedUsersScored"/>. When that cap bites
+        /// the analysis already carries an explicit warning, so the denominator is stated rather than
+        /// silently different from the licence count.
+        /// </summary>
+        private List<AdoptionActionSummary> BuildActionPlan(IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            return CopilotAdoptionScoring.AllActionCodes
+                .Select(code =>
+                {
+                    var count = users.Count(u => u.RecommendedActionCode == code);
+                    return new AdoptionActionSummary
+                    {
+                        Code = code,
+                        Label = CopilotAdoptionScoring.ActionLabel(code),
+                        // Passed the real options, not the defaults: the descriptions quote thresholds,
+                        // and a tuned deployment must not be shown the shipped numbers.
+                        Description = CopilotAdoptionScoring.ActionDescription(code, _options),
+                        Users = count,
+                        SharePct = CopilotAdoptionScoring.Percentage(count, users.Count),
+                    };
+                })
+                .Where(a => a.Users > 0)
+                .OrderByDescending(a => a.Users)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Frequency vs intensity per segment: how many days a month its active users open Copilot,
+        /// against how many interactions they run on each of those days.
+        ///
+        /// Two departments on the same adoption percentage sit in completely different places on this
+        /// plot, and the intervention differs accordingly - a high-frequency/low-intensity department
+        /// needs richer scenarios, a low-frequency/high-intensity one needs a reason to come back
+        /// tomorrow. Only active users are averaged, so the never-used seats (already counted in the
+        /// reclaim figures) do not drag every department towards the origin.
+        /// </summary>
+        private List<AdoptionIntensityPoint> BuildIntensity(
+            IEnumerable<LicensedUserAdoptionRow> users,
+            Func<LicensedUserAdoptionRow, string> selector,
+            string emptyLabel)
+        {
+            return users
+                .GroupBy(u => string.IsNullOrWhiteSpace(selector(u)) ? emptyLabel : selector(u).Trim())
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
+                .Select(g =>
+                {
+                    var active = g.Where(u => u.ActiveDays > 0).ToList();
+                    return new AdoptionIntensityPoint
+                    {
+                        Segment = g.Key,
+                        LicensedUsers = g.Count(),
+                        ActiveUsers = active.Count,
+                        ActiveDaysPerUser = active.Count == 0
+                            ? 0
+                            : Math.Round(
+                                CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(
+                                    active.Average(u => u.ActiveDays), _options.WindowDays, _options),
+                                1,
+                                MidpointRounding.AwayFromZero),
+                        ActionsPerActiveDay = active.Count == 0
+                            ? 0
+                            : Math.Round(
+                                active.Sum(u => (double)u.Interactions) / Math.Max(1, active.Sum(u => u.ActiveDays)),
+                                1,
+                                MidpointRounding.AwayFromZero),
+                        ActiveUserAverageScore = active.Count == 0
+                            ? 0
+                            : Math.Round(active.Average(u => u.AdoptionScore), 1, MidpointRounding.AwayFromZero),
+                    };
+                })
+                .Where(p => p.ActiveUsers > 0)
+                .OrderByDescending(p => p.LicensedUsers)
+                .Take(_options.TopSegments)
                 .ToList();
         }
 

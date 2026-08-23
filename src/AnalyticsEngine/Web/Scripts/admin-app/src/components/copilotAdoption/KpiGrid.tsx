@@ -1,5 +1,7 @@
 import { makeStyles, tokens, Text, Card } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
+import InfoTip from './InfoTip';
+import type { InfoTipContent } from './InfoTip';
 
 /**
  * Visual weight of a headline figure. This is judgement, not decoration: on a page that is used to
@@ -21,6 +23,12 @@ const useStyles = makeStyles({
     padding: '14px 16px',
     borderLeftWidth: '4px',
     borderLeftStyle: 'solid',
+  },
+  head: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '4px',
   },
   label: {
     color: tokens.colorNeutralForeground3,
@@ -52,9 +60,15 @@ export type KpiDefinition = {
   value: ReactNode;
   hint?: string;
   tone?: KpiTone;
+  /**
+   * What the figure means and exactly how it was calculated. Required rather than optional: a
+   * headline number on this page without a stated definition is an assertion nobody can check, and
+   * this page exists to be checked.
+   */
+  info: InfoTipContent;
 };
 
-/** A responsive row of headline figures. */
+/** A responsive row of headline figures, each carrying its own definition. */
 export function KpiGrid({ items }: { items: KpiDefinition[] }) {
   const styles = useStyles();
 
@@ -66,9 +80,12 @@ export function KpiGrid({ items }: { items: KpiDefinition[] }) {
           className={styles.card}
           style={{ borderLeftColor: TONE_COLOUR[item.tone ?? 'neutral'] }}
         >
-          <Text size={200} className={styles.label}>
-            {item.label}
-          </Text>
+          <div className={styles.head}>
+            <Text size={200} className={styles.label}>
+              {item.label}
+            </Text>
+            <InfoTip title={item.label} content={item.info} />
+          </div>
           <span className={styles.value}>{item.value}</span>
           {item.hint && (
             <Text size={200} className={styles.hint}>
@@ -101,4 +118,17 @@ export function formatDate(iso: string | null | undefined): string {
     year: 'numeric',
     timeZone: 'UTC',
   });
+}
+
+/**
+ * A component weight as its share of the engagement score, in percent.
+ *
+ * The backend divides the weighted sum by the total of the three weights, so quoting a raw weight as
+ * a percentage is only correct while they happen to add up to 1. They are configurable, so the UI
+ * has to normalise them the same way the scoring does - otherwise a tuned deployment would be shown
+ * three components adding up to something other than 100%.
+ */
+export function weightSharePct(weight: number, weights: number[]): number {
+  const sum = weights.reduce((total, w) => total + w, 0);
+  return sum <= 0 ? 0 : (weight / sum) * 100;
 }

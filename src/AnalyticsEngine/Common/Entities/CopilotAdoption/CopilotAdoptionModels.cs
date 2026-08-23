@@ -17,6 +17,7 @@ namespace Common.Entities.CopilotAdoption
     public class CopilotAdoptionOptions
     {
         /// <summary>Length of the reporting window in days. 28 matches Microsoft's own D28 usage reports.</summary>
+        [JsonProperty("windowDays")]
         public int WindowDays { get; set; } = 28;
 
         /// <summary>
@@ -28,6 +29,7 @@ namespace Common.Entities.CopilotAdoption
         /// reads: on a large tenant an unbounded lifetime scan of the audit history is the difference
         /// between a report that returns and one that times out.
         /// </summary>
+        [JsonProperty("historyDays")]
         public int HistoryDays { get; set; } = 365;
 
         /// <summary>
@@ -35,6 +37,7 @@ namespace Common.Entities.CopilotAdoption
         /// engaged user could realistically be active. Scoring against calendar days would cap even a
         /// daily user at ~71%, which is not a number anyone should have to explain to a CFO.
         /// </summary>
+        [JsonProperty("workingDaysPerWeek")]
         public double WorkingDaysPerWeek { get; set; } = 5;
 
         /// <summary>
@@ -42,31 +45,65 @@ namespace Common.Entities.CopilotAdoption
         /// 0.6 = active on ~3 days in a typical 5-day week, which is a genuine habit rather than
         /// perfection.
         /// </summary>
+        [JsonProperty("frequencyTargetRatio")]
         public double FrequencyTargetRatio { get; set; } = 0.6;
 
         /// <summary>Interactions per active day that score full marks for depth of use.</summary>
+        [JsonProperty("depthTargetInteractionsPerActiveDay")]
         public double DepthTargetInteractionsPerActiveDay { get; set; } = 5;
 
         /// <summary>Distinct Copilot surfaces (Teams, Word, Outlook, Chat...) that score full marks for breadth.</summary>
+        [JsonProperty("breadthTargetApps")]
         public double BreadthTargetApps { get; set; } = 3;
 
         /// <summary>Weight of the frequency component in the engagement score. The three weights should sum to 1.</summary>
+        [JsonProperty("frequencyWeight")]
         public double FrequencyWeight { get; set; } = 0.5;
 
         /// <summary>Weight of the depth component in the engagement score.</summary>
+        [JsonProperty("depthWeight")]
         public double DepthWeight { get; set; } = 0.3;
 
         /// <summary>Weight of the breadth component in the engagement score.</summary>
+        [JsonProperty("breadthWeight")]
         public double BreadthWeight { get; set; } = 0.2;
 
         /// <summary>Score at or above which a user is a <see cref="AdoptionBand.Champion"/>.</summary>
+        [JsonProperty("championScore")]
         public double ChampionScore { get; set; } = 75;
 
         /// <summary>Score at or above which a user is <see cref="AdoptionBand.Established"/> (the "habit formed" line).</summary>
+        [JsonProperty("establishedScore")]
         public double EstablishedScore { get; set; } = 50;
 
         /// <summary>Score at or above which a user is <see cref="AdoptionBand.Developing"/>.</summary>
+        [JsonProperty("developingScore")]
         public double DevelopingScore { get; set; } = 25;
+
+        #region Habit-formation buckets
+
+        /// <summary>
+        /// Window length that the active-day habit buckets below are expressed in. Active days are
+        /// normalised to this length before bucketing (a user active on 40 days of a 90-day window
+        /// counts as 40 x 28/90 = 12.4 days a month), so the buckets mean the same thing whichever
+        /// reporting period is selected. 28 days matches Microsoft's own usage-report month.
+        /// </summary>
+        [JsonProperty("habitBucketNormalisationDays")]
+        public int HabitBucketNormalisationDays { get; set; } = 28;
+
+        /// <summary>Normalised active days per month at or above which use is "Moderate" (below this it is "Infrequent").</summary>
+        [JsonProperty("habitModerateMinDays")]
+        public double HabitModerateMinDays { get; set; } = 6;
+
+        /// <summary>Normalised active days per month at or above which use is "Frequent".</summary>
+        [JsonProperty("habitFrequentMinDays")]
+        public double HabitFrequentMinDays { get; set; } = 11;
+
+        /// <summary>Normalised active days per month at or above which use is "Daily" - i.e. essentially every working day.</summary>
+        [JsonProperty("habitDailyMinDays")]
+        public double HabitDailyMinDays { get; set; } = 20;
+
+        #endregion
 
         #region Licence-opportunity tuning
 
@@ -75,33 +112,42 @@ namespace Common.Entities.CopilotAdoption
         /// The heaviest weight by design: it is the only signal that is evidence of demand for Copilot
         /// specifically, rather than an inference from general Microsoft 365 activity.
         /// </summary>
+        [JsonProperty("opportunityUnlicensedCopilotWeight")]
         public double OpportunityUnlicensedCopilotWeight { get; set; } = 35;
 
         /// <summary>Weight of Teams collaboration volume (messages, meetings, calls).</summary>
+        [JsonProperty("opportunityCollaborationWeight")]
         public double OpportunityCollaborationWeight { get; set; } = 25;
 
         /// <summary>Weight of email volume (sent + read).</summary>
+        [JsonProperty("opportunityEmailWeight")]
         public double OpportunityEmailWeight { get; set; } = 20;
 
         /// <summary>Weight of document work (SharePoint / OneDrive files viewed or edited).</summary>
+        [JsonProperty("opportunityDocumentWeight")]
         public double OpportunityDocumentWeight { get; set; } = 20;
 
         /// <summary>Unlicensed Copilot interactions in the window that score full marks for that component.</summary>
+        [JsonProperty("opportunityCopilotTarget")]
         public double OpportunityCopilotTarget { get; set; } = 20;
 
         /// <summary>Teams messages + meetings on the latest daily snapshot that score full marks.</summary>
+        [JsonProperty("opportunityCollaborationTarget")]
         public double OpportunityCollaborationTarget { get; set; } = 60;
 
         /// <summary>Emails sent + read on the latest daily snapshot that score full marks.</summary>
+        [JsonProperty("opportunityEmailTarget")]
         public double OpportunityEmailTarget { get; set; } = 80;
 
         /// <summary>Files viewed or edited on the latest daily snapshot that score full marks.</summary>
+        [JsonProperty("opportunityDocumentTarget")]
         public double OpportunityDocumentTarget { get; set; } = 40;
 
         /// <summary>
         /// Opportunity score at or above which an unlicensed user is counted as a recommended licence
         /// candidate in the headline figures.
         /// </summary>
+        [JsonProperty("opportunityRecommendScore")]
         public double OpportunityRecommendScore { get; set; } = 50;
 
         #endregion
@@ -114,9 +160,11 @@ namespace Common.Entities.CopilotAdoption
         /// very large customer is far below this; if it is ever hit the result carries an explicit
         /// warning rather than silently truncating a licence-spend report.
         /// </summary>
+        [JsonProperty("maxLicensedUsersScored")]
         public int MaxLicensedUsersScored { get; set; } = 50000;
 
         /// <summary>How many unlicensed candidates the database ranks and returns for the opportunity list.</summary>
+        [JsonProperty("maxOpportunityCandidates")]
         public int MaxOpportunityCandidates { get; set; } = 5000;
 
         /// <summary>
@@ -124,9 +172,11 @@ namespace Common.Entities.CopilotAdoption
         /// report date for a short while after it appears, so snapshots newer than this are ignored.
         /// Mirrors the Reports area's <c>UsageReportLagDays</c>.
         /// </summary>
+        [JsonProperty("usageReportLagDays")]
         public int UsageReportLagDays { get; set; } = 3;
 
         /// <summary>Number of segments (departments, countries...) returned in the breakdown charts.</summary>
+        [JsonProperty("topSegments")]
         public int TopSegments { get; set; } = 10;
 
         /// <summary>
@@ -134,6 +184,7 @@ namespace Common.Entities.CopilotAdoption
         /// department with two seats and one active user is a 50% data point that means nothing, and
         /// putting it in front of an executive invites the wrong decision.
         /// </summary>
+        [JsonProperty("minSeatsPerSegment")]
         public int MinSeatsPerSegment { get; set; } = 5;
 
         public static CopilotAdoptionOptions Default => new CopilotAdoptionOptions();
@@ -406,6 +457,22 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("recommendedAction")]
         public string RecommendedAction { get; set; }
+
+        /// <summary>
+        /// The action as a short, stable code (<c>reclaim</c>, <c>reengage</c>, <c>coach</c>,
+        /// <c>broaden</c>, <c>grow</c>, <c>sustain</c>, <c>advocate</c>).
+        ///
+        /// Split out from <see cref="RecommendedAction"/> so the UI can show a two-word tag per row and
+        /// state the full explanation once, rather than repeating the identical paragraph down every
+        /// row of a band. The prose stays in the CSV, where a department lead reads one row at a time
+        /// and the repetition costs nothing.
+        /// </summary>
+        [JsonProperty("recommendedActionCode")]
+        public string RecommendedActionCode { get; set; }
+
+        /// <summary>Short display label for <see cref="RecommendedActionCode"/>, e.g. "Re-engage".</summary>
+        [JsonProperty("recommendedActionLabel")]
+        public string RecommendedActionLabel { get; set; }
     }
 
     /// <summary>
@@ -555,6 +622,100 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("value")]
         public double? Value { get; set; }
+    }
+
+    /// <summary>
+    /// One recommended action and how many licensed users need it.
+    ///
+    /// Exists so the licensed-user list can stop repeating an identical paragraph on every row of a
+    /// band. The explanation is stated once, with a count next to it, which is both less noise and
+    /// more information: "coach 76 people" is a plan, "coach this person" x 76 is a wall of text.
+    /// </summary>
+    public class AdoptionActionSummary
+    {
+        /// <summary>Stable code: reclaim, reengage, coach, broaden, grow, sustain, advocate.</summary>
+        [JsonProperty("code")]
+        public string Code { get; set; }
+
+        /// <summary>Short display label, e.g. "Re-engage".</summary>
+        [JsonProperty("label")]
+        public string Label { get; set; }
+
+        /// <summary>Why these users are in this group and what the action involves.</summary>
+        [JsonProperty("description")]
+        public string Description { get; set; }
+
+        [JsonProperty("users")]
+        public int Users { get; set; }
+
+        [JsonProperty("sharePct")]
+        public double SharePct { get; set; }
+    }
+
+    /// <summary>
+    /// One habit-formation bucket: how many licensed users are active on that many days a month, and
+    /// what share of the licensed population that is.
+    ///
+    /// Separate from the engagement bands on purpose. A band folds frequency, depth and breadth into
+    /// one judgement; this is the single raw question "how many days a month do they actually open
+    /// it?", which is the number a sceptical reader trusts because there is no weighting in it.
+    /// </summary>
+    public class AdoptionHabitBucket
+    {
+        /// <summary>Bucket name: Infrequent, Moderate, Frequent or Daily.</summary>
+        [JsonProperty("label")]
+        public string Label { get; set; }
+
+        /// <summary>Plain-English range, e.g. "6-10 active days a month".</summary>
+        [JsonProperty("rangeLabel")]
+        public string RangeLabel { get; set; }
+
+        [JsonProperty("users")]
+        public int Users { get; set; }
+
+        /// <summary>Share of active licensed users in this bucket. Percentages across the buckets sum to 100.</summary>
+        [JsonProperty("sharePct")]
+        public double SharePct { get; set; }
+    }
+
+    /// <summary>
+    /// A department plotted on the two axes that actually separate "used it" from "relies on it":
+    /// how many days a month its users are active (frequency), and how many interactions they run on
+    /// each of those days (intensity).
+    ///
+    /// A single adoption percentage cannot tell a department of daily-but-shallow users apart from a
+    /// department of occasional-but-deep ones, and those two need opposite interventions.
+    /// </summary>
+    public class AdoptionIntensityPoint
+    {
+        [JsonProperty("segment")]
+        public string Segment { get; set; }
+
+        /// <summary>Licensed seats in the department - the bubble size, so a large slow department outranks a tiny one.</summary>
+        [JsonProperty("licensedUsers")]
+        public int LicensedUsers { get; set; }
+
+        [JsonProperty("activeUsers")]
+        public int ActiveUsers { get; set; }
+
+        /// <summary>Mean active days per active user, normalised to a month.</summary>
+        [JsonProperty("activeDaysPerUser")]
+        public double ActiveDaysPerUser { get; set; }
+
+        /// <summary>Mean interactions per active day.</summary>
+        [JsonProperty("actionsPerActiveDay")]
+        public double ActionsPerActiveDay { get; set; }
+
+        /// <summary>
+        /// Mean engagement score across this segment's <i>active</i> users only, matching the two axes.
+        ///
+        /// Deliberately not the whole-department average that the "adoption by department" table shows:
+        /// every other dimension of this plot describes the people who actually use Copilot, so colouring
+        /// the bubble by an average that includes never-used seats would make the chart contradict its
+        /// own caption - and would double-count a problem the reclaim figures already report.
+        /// </summary>
+        [JsonProperty("activeUserAverageScore")]
+        public double ActiveUserAverageScore { get; set; }
     }
 
     /// <summary>A named line in a weekly chart. Same JSON shape as the Reports area's <c>ReportSeries</c>.</summary>
@@ -764,6 +925,24 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>How many licensed users fall in each <see cref="AdoptionBand"/>.</summary>
         [JsonProperty("bandBreakdown")]
         public List<AdoptionCategory> BandBreakdown { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>
+        /// Active licensed users bucketed by how many days a month they actually use Copilot. The
+        /// unweighted counterpart to the engagement bands - see <see cref="AdoptionHabitBucket"/>.
+        /// </summary>
+        [JsonProperty("habitBuckets")]
+        public List<AdoptionHabitBucket> HabitBuckets { get; set; } = new List<AdoptionHabitBucket>();
+
+        /// <summary>Departments plotted as frequency vs intensity, so shallow-daily and deep-occasional are distinguishable.</summary>
+        [JsonProperty("intensityByDepartment")]
+        public List<AdoptionIntensityPoint> IntensityByDepartment { get; set; } = new List<AdoptionIntensityPoint>();
+
+        /// <summary>
+        /// How many licensed users need each recommended action. Turns a column that repeats the same
+        /// sentence hundreds of times into the thing an admin actually wants: the size of each job.
+        /// </summary>
+        [JsonProperty("actionPlan")]
+        public List<AdoptionActionSummary> ActionPlan { get; set; } = new List<AdoptionActionSummary>();
 
         /// <summary>Adoption by department, worst first - i.e. where enablement effort should go.</summary>
         [JsonProperty("adoptionByDepartment")]
