@@ -408,7 +408,7 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
   // MaxLicensedUsersScored. That cap is far above any real Copilot deployment and raises an explicit
   // warning when it bites - but the donut must still add up to what it is drawing, so the centre is
   // the sum of the slices rather than the licence count.
-  const analysedUsers = summary.bandBreakdown.reduce((sum, b) => sum + b.value, 0);
+  const analysedUsers = summary.scoredUsers;
 
   return (
     <>
@@ -440,8 +440,8 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
             value={summary.adoptionRatePct}
             label="Adoption rate"
             sublabel={`${formatCount(summary.activeUsers)} of ${formatCount(
-              summary.licensedUsers,
-            )} licensed users touched Copilot`}
+              summary.scoredUsers,
+            )} analysed users touched Copilot`}
           />
           <GaugeRing
             value={summary.habitRatePct}
@@ -1140,9 +1140,12 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 it on that evidence is how an agent programme gets strangled in its first month.
               </Text>
               <Text>
-                The inventory deliberately covers the full {o.historyDays}-day history rather than the
-                selected period. An agent nobody has touched for six months is exactly what an inventory
-                review is looking for, and it would be invisible in a 28-day window.
+                The inventory deliberately covers a shorter history than the rest of the analysis -{' '}
+                {summary.agents.historyDays} days rather than {o.historyDays}. It only has to reach past the{' '}
+                {o.agentRetireInactiveDays}-day retirement line to reach the right verdict, and on a large tenant
+                reading a full year of audit history to learn nothing extra is genuinely expensive. It is still
+                far longer than the reporting period, because an agent nobody has touched for months is exactly
+                what an inventory review is looking for.
               </Text>
               <Text>
                 <strong>Unlicensed Copilot Chat</strong> is reported as a population in its own right, using
@@ -1242,12 +1245,23 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
   const seatSkus = summary.seatLicenceTypes.filter((l) => l.isCopilotSeat);
   const scoreWeights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
 
+  // Identical unless the detail query hit its row cap. When they differ, every rate below describes
+  // the scored subset, and saying so is the difference between a caveat and a wrong number.
+  const capped = summary.scoredUsers > 0 && summary.scoredUsers < summary.licensedUsers;
+  const denominatorNote = capped
+    ? ` Rates are of the ${formatCount(summary.scoredUsers)} users this analysis could score, not all ${formatCount(
+        summary.licensedUsers,
+      )} seats - see the warning at the top of the page.`
+    : '';
+
   const items: KpiDefinition[] = [
     {
       key: 'licensed',
       label: 'Copilot licences',
       value: formatCount(summary.licensedUsers),
-      hint: `${seatSkus.length} seat SKU(s) counted`,
+      hint: capped
+        ? `${formatCount(summary.scoredUsers)} of them analysed - ${seatSkus.length} seat SKU(s) counted`
+        : `${seatSkus.length} seat SKU(s) counted`,
       info: {
         what: 'People holding at least one licence that this tool classified as a Microsoft 365 Copilot seat. It is the denominator for every percentage on this page.',
         how: 'Counted from the imported licence assignments, de-duplicated per user - someone holding two Copilot SKUs counts once. Microsoft ships Copilot-branded SKUs that are not a Copilot seat (Copilot Studio, Copilot for Sales), so the classification is listed in full, with the ones that were excluded, under "How this is calculated".',
@@ -1259,15 +1273,15 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       key: 'adoption',
       label: 'Adoption rate',
       value: formatPct(summary.adoptionRatePct),
-      hint: `${formatCount(summary.activeUsers)} used Copilot in this period`,
+      hint: `${formatCount(summary.activeUsers)} of ${formatCount(summary.scoredUsers)} used Copilot in this period`,
       tone: summary.adoptionRatePct >= 70 ? 'good' : summary.adoptionRatePct >= 40 ? 'warning' : 'critical',
       info: {
-        what: 'The share of licensed users who used Copilot at least once in the selected period.',
+        what: 'The share of analysed licensed users who used Copilot at least once in the selected period.',
         how: `A deliberately low bar, and the weakest number on this page: one interaction in ${o.windowDays} days counts the same as fifty. It is here because it is the figure everyone else quotes, so it needs to be visible and comparable - but "habitual users" below is the one to act on.`,
         formula: `${formatCount(summary.activeUsers)} active / ${formatCount(
-          summary.licensedUsers,
-        )} licensed = ${formatPct(summary.adoptionRatePct)}`,
-        source: `Activity comes from the Copilot audit log for the ${o.windowDays}-day period, falling back to Microsoft\u2019s per-user usage report where the audit import is unavailable.`,
+          summary.scoredUsers,
+        )} analysed = ${formatPct(summary.adoptionRatePct)}`,
+        source: `Activity comes from the Copilot audit log for the ${o.windowDays}-day period, falling back to Microsoft\u2019s per-user usage report where the audit import is unavailable.${denominatorNote}`,
       },
     },
     {
@@ -1280,10 +1294,9 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
         what: 'Licensed users for whom Copilot is a routine part of the working week, rather than something they have merely touched.',
         how: `A user is habitual when their engagement score reaches ${o.establishedScore} out of 100 - the Established and Champion bands. Reaching that needs sustained use across most weeks, more than a single interaction per day, and normally more than one Copilot surface; no one component can get there alone.`,
         formula: `${formatCount(summary.habitualUsers)} users scoring >= ${o.establishedScore} / ${formatCount(
-          summary.licensedUsers,
-        )} licensed = ${formatPct(summary.habitRatePct)}`,
-        source:
-          'This is the figure that tracks realised value. Adoption rate can sit at 100% while this sits near zero, which is exactly the situation a renewal conversation needs to surface.',
+          summary.scoredUsers,
+        )} analysed = ${formatPct(summary.habitRatePct)}`,
+        source: `This is the figure that tracks realised value. Adoption rate can sit at 100% while this sits near zero, which is exactly the situation a renewal conversation needs to surface.${denominatorNote}`,
       },
     },
     {

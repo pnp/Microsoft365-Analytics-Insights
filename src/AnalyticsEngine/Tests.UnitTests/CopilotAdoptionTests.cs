@@ -938,6 +938,51 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, CopilotAdoptionScoring.Percentage(5, 0));
         }
 
+        [TestMethod]
+        public void RatesDivideByTheUsersActuallyAnalysed_NotTheSeatCount()
+        {
+            // The failure this guards against is arithmetic, not cosmetic. If the detail query hits its
+            // row cap and the rates still divide by the seat count, a 200,000-seat tenant scored 50,000
+            // deep can never report adoption above 25% however healthy it really is - and the funnel
+            // opens with a 75% drop that is purely an artefact of how many rows were read.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 10).Select(i => ScoredUser($"u{i}@contoso.com", 80, AdoptionBand.Champion)));
+
+            // Ten users analysed, but the tenant holds forty seats.
+            analysis.Summary.LicensedUsers = 40;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            Assert.AreEqual(40, summary.LicensedUsers, "The true seat count must be preserved.");
+            Assert.AreEqual(10, summary.ScoredUsers);
+            Assert.AreEqual(100, summary.AdoptionRatePct,
+                "All ten analysed users are active, so adoption is 100% of what was measured - not 25%.");
+            Assert.AreEqual(100, summary.HabitRatePct);
+
+            Assert.AreEqual(10, summary.Funnel.First().Value,
+                "The funnel must open at the analysed population, or stage one to stage two shows a fake collapse.");
+
+            Assert.IsTrue(
+                summary.Warnings.Any(w => w.Contains("40") && w.Contains("10")),
+                "A capped analysis must say so, naming both the seat count and the analysed count.");
+        }
+
+        [TestMethod]
+        public void WhenEveryLicensedUserIsAnalysed_TheDenominatorsAreIdentical()
+        {
+            // The normal case must be untouched by the fix above.
+            var analysis = SampleAnalysis();
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(analysis.Summary.LicensedUsers, analysis.Summary.ScoredUsers);
+            Assert.AreEqual(50, analysis.Summary.AdoptionRatePct);
+            Assert.IsFalse(
+                analysis.Summary.Warnings.Any(w => w.Contains("could be analysed")),
+                "An uncapped analysis must not carry a truncation warning.");
+        }
+
         #endregion
 
         #region Explainability: the options must survive serialisation

@@ -86,6 +86,10 @@ namespace Common.Entities.CopilotAdoption
                 "Take a snapshot before an enablement programme and another afterwards; the two files are directly comparable.");
             AddMeta(sheet, "Period covered", $"{summary.WindowDays} days",
                 "All 'this period' figures use this window.");
+            AddMeta(sheet, "Users analysed", summary.ScoredUsers,
+                summary.ScoredUsers < summary.LicensedUsers
+                    ? $"Of {summary.LicensedUsers:N0} seats. Rates in this workbook are of the analysed users only."
+                    : "Every licensed user was analysed.");
             AddMeta(sheet, "From (UTC)", summary.FromUtc, string.Empty);
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
             AddMeta(sheet, "History window", $"{summary.Options.HistoryDays} days",
@@ -165,7 +169,12 @@ namespace Common.Entities.CopilotAdoption
             var first = sheet.CurrentRow + 1;
 
             AddMeta(sheet, "Copilot licences", summary.LicensedUsers,
-                "Users holding at least one licence classified as a Microsoft 365 Copilot seat. The denominator for every percentage here.");
+                "Users holding at least one licence classified as a Microsoft 365 Copilot seat. The true seat count.");
+            AddMeta(sheet, "Users analysed", summary.ScoredUsers,
+                summary.ScoredUsers < summary.LicensedUsers
+                    ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
+                      + "and must not be quoted as a tenant-wide figure."
+                    : "Every licensed user was analysed, so the rates below are tenant-wide.");
             AddMeta(sheet, "Active this period", summary.ActiveUsers,
                 "Used Copilot at least once. A deliberately low bar - one interaction counts the same as fifty.");
             AddMeta(sheet, "Habitual users", summary.HabitualUsers,
@@ -180,8 +189,8 @@ namespace Common.Entities.CopilotAdoption
             var last = sheet.CurrentRow;
 
             sheet.AddBlankRow();
-            AddMeta(sheet, "Adoption rate %", summary.AdoptionRatePct, "Active users as a share of licensed users.");
-            AddMeta(sheet, "Habit rate %", summary.HabitRatePct, "Habitual users as a share of licensed users.");
+            AddMeta(sheet, "Adoption rate %", summary.AdoptionRatePct, "Active users as a share of the users analysed.");
+            AddMeta(sheet, "Habit rate %", summary.HabitRatePct, "Habitual users as a share of the users analysed.");
             AddMeta(sheet, "Average engagement", summary.AverageAdoptionScore, "Mean score out of 100, including seats scoring zero.");
             AddMeta(sheet, "Median engagement", summary.MedianAdoptionScore,
                 "Reported next to the mean because a few Champions pull the mean up; a large gap means a long tail of light users.");
@@ -627,10 +636,12 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddTitle("Copilot agent estate");
             sheet.AddRow(XlsxCell.Wrapped(
-                $"Covers the last {summary.Options.HistoryDays} days rather than the reporting period: an agent "
-                + "nobody has touched for six months is exactly what an inventory review is looking for, and would "
-                + "be invisible in a short window. An agent only appears once it has been invoked - the audit log "
-                + "records agents that were used, not agents that exist."));
+                $"Covers the last {estate.HistoryDays} days rather than the reporting period: an agent nobody "
+                + "has touched for months is exactly what an inventory review is looking for, and would be "
+                + "invisible in a short window. That window is deliberately shorter than the analysis history - "
+                + $"it only has to reach past the {summary.Options.AgentRetireInactiveDays}-day retirement line. "
+                + "An agent only appears once it has been invoked: the audit log records agents that were used, "
+                + "not agents that exist."));
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow("Measure", "Value");

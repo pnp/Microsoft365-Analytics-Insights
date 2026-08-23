@@ -97,6 +97,15 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
           const conversion = previous === null || previous === 0 ? 100 : (stage.value / previous) * 100;
           const sharePct = (stage.value / top) * 100;
 
+          // The narrowest point decides whether the labels fit. A stage holding a handful of users is
+          // only a few pixels wide, and white text centred on it lands on the page background where
+          // it is invisible - so once the shape is too narrow, the labels move outside it and switch
+          // to the foreground colour. Measured against the narrow end, not the wide one, because the
+          // text is centred vertically and would otherwise straddle the taper.
+          const narrowest = Math.min(halfTop, halfBottom) * 2;
+          const labelsFitInside = narrowest >= 150;
+          const labelX = labelsFitInside ? centre : centre + halfTop + 12;
+
           return (
             <g key={stage.label}>
               <polygon
@@ -122,23 +131,23 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
               </text>
 
               <text
-                x={centre}
+                x={labelX}
                 y={y + STAGE_H / 2 - 2}
-                textAnchor="middle"
+                textAnchor={labelsFitInside ? 'middle' : 'start'}
                 fontSize={20}
                 fontWeight={600}
-                fill="#ffffff"
+                fill={labelsFitInside ? '#ffffff' : tokens.colorNeutralForeground1}
                 style={{ pointerEvents: 'none' }}
               >
                 {formatCount(stage.value)}
               </text>
               <text
-                x={centre}
+                x={labelX}
                 y={y + STAGE_H / 2 + 18}
-                textAnchor="middle"
+                textAnchor={labelsFitInside ? 'middle' : 'start'}
                 fontSize={12}
-                fill="#ffffff"
-                fillOpacity={0.85}
+                fill={labelsFitInside ? '#ffffff' : tokens.colorNeutralForeground3}
+                fillOpacity={labelsFitInside ? 0.85 : 1}
                 style={{ pointerEvents: 'none' }}
               >
                 {formatPct(sharePct)} of licensed

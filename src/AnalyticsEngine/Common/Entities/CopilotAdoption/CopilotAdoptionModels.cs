@@ -134,6 +134,24 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("agentMinUsers")]
         public int AgentMinUsers { get; set; } = 3;
 
+        /// <summary>
+        /// How far back the agent inventory looks.
+        ///
+        /// Deliberately much shorter than <see cref="HistoryDays"/>. The inventory only needs enough
+        /// history to reach past <see cref="AgentRetireInactiveDays"/> - an agent quiet for longer than
+        /// that is already a retire candidate, and seeing exactly how much longer changes nothing. The
+        /// only other date-sensitive rule is the <see cref="AgentNewDays"/> exemption, which looks
+        /// forwards from first use, so an older agent being reported as "first seen at the window edge"
+        /// cannot wrongly mark it New.
+        ///
+        /// The cost of getting this wrong is significant: the query aggregates <c>copilot_chats</c>
+        /// joined to <c>audit_events</c>, and on a 200,000-user tenant a year of that history is
+        /// several times the volume of the reporting window. 120 days keeps the retire verdict correct
+        /// while reading roughly a third of what a full year would.
+        /// </summary>
+        [JsonProperty("agentHistoryDays")]
+        public int AgentHistoryDays { get; set; } = 120;
+
         /// <summary>How many agents the inventory query returns.</summary>
         [JsonProperty("maxAgents")]
         public int MaxAgents { get; set; } = 500;
@@ -765,6 +783,14 @@ namespace Common.Entities.CopilotAdoption
     /// <summary>The agent estate at a glance.</summary>
     public class AgentEstateSummary
     {
+        /// <summary>
+        /// How many days of history the inventory actually read, so the UI and the workbook can state
+        /// it rather than recomputing the rule. Shorter than the analysis history window by design -
+        /// see <see cref="CopilotAdoptionOptions.AgentHistoryDays"/>.
+        /// </summary>
+        [JsonProperty("historyDays")]
+        public int HistoryDays { get; set; }
+
         /// <summary>Agents used at least once inside the reporting period.</summary>
         [JsonProperty("activeAgents")]
         public int ActiveAgents { get; set; }
@@ -1181,9 +1207,26 @@ namespace Common.Entities.CopilotAdoption
 
         #region Headline figures
 
-        /// <summary>Users holding at least one Microsoft 365 Copilot seat.</summary>
+        /// <summary>
+        /// Users holding at least one Microsoft 365 Copilot seat. The true seat count, never capped.
+        /// </summary>
         [JsonProperty("licensedUsers")]
         public int LicensedUsers { get; set; }
+
+        /// <summary>
+        /// Licensed users this analysis actually scored, and the denominator of every rate below.
+        ///
+        /// Normally identical to <see cref="LicensedUsers"/>. It is lower only when the detail query
+        /// hit <see cref="CopilotAdoptionOptions.MaxLicensedUsersScored"/>, and in that case every
+        /// percentage here describes the scored subset rather than the whole tenant.
+        ///
+        /// Kept as its own field rather than dividing by the seat count, because doing the latter is
+        /// arithmetically wrong the moment the cap bites: a 200,000-seat tenant scored 50,000 users
+        /// deep can never report an adoption rate above 25%, however healthy adoption actually is, and
+        /// the funnel would open with a 75% drop that is pure measurement artefact.
+        /// </summary>
+        [JsonProperty("scoredUsers")]
+        public int ScoredUsers { get; set; }
 
         /// <summary>Licensed users with at least one Copilot interaction inside the window.</summary>
         [JsonProperty("activeUsers")]

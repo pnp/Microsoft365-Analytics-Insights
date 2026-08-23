@@ -59,49 +59,52 @@ export default function GaugeRing({
   const radius = size / 2;
   const stroke = Math.max(12, size * 0.1);
   const r = radius - stroke / 2 - 2;
+  // The band scale sits just inside the main arc, concentric with it. Drawing it at the same radius
+  // and nudging it with a transform - which is what this used to do - shifts it off the arc centre,
+  // so the colour boundaries no longer line up with the value they are supposed to mark.
+  const bandRadius = r - stroke / 2 - 4;
 
   // A 240-degree sweep starting bottom-left. The open bottom is what makes it read as a gauge
   // rather than as a pie with a bite taken out of it.
   const START = 150;
   const SWEEP = 240;
 
-  const pointOnArc = (pct: number) => {
+  const pointOnArc = (pct: number, atRadius: number) => {
     const angle = ((START + (pct / 100) * SWEEP) * Math.PI) / 180;
-    return { x: radius + r * Math.cos(angle), y: radius + r * Math.sin(angle) };
+    return { x: radius + atRadius * Math.cos(angle), y: radius + atRadius * Math.sin(angle) };
   };
 
-  const arcPath = (fromPct: number, toPct: number) => {
-    const from = pointOnArc(fromPct);
-    const to = pointOnArc(toPct);
+  const arcPath = (fromPct: number, toPct: number, atRadius: number) => {
+    const from = pointOnArc(fromPct, atRadius);
+    const to = pointOnArc(toPct, atRadius);
     const large = ((toPct - fromPct) / 100) * SWEEP > 180 ? 1 : 0;
-    return `M ${from.x} ${from.y} A ${r} ${r} 0 ${large} 1 ${to.x} ${to.y}`;
+    return `M ${from.x} ${from.y} A ${atRadius} ${atRadius} 0 ${large} 1 ${to.x} ${to.y}`;
   };
 
   const activeBand = bands.find((b) => clamped <= b.upTo) ?? bands[bands.length - 1];
-  const needle = pointOnArc(clamped);
+  const needle = pointOnArc(clamped, r);
 
   return (
     <div className={styles.root}>
       <svg width={size} height={size * 0.82} viewBox={`0 0 ${size} ${size * 0.82}`} className={styles.svg} role="img" aria-label={`${label}: ${clamped}%`}>
-        <path d={arcPath(0, 100)} fill="none" stroke={tokens.colorNeutralBackground3} strokeWidth={stroke} strokeLinecap="round" />
+        <path d={arcPath(0, 100, r)} fill="none" stroke={tokens.colorNeutralBackground3} strokeWidth={stroke} strokeLinecap="round" />
 
         {bands.map((band, i) => {
           const from = i === 0 ? 0 : bands[i - 1].upTo;
           return (
             <path
               key={band.label}
-              d={arcPath(from, band.upTo)}
+              d={arcPath(from, band.upTo, bandRadius)}
               fill="none"
               stroke={band.colour}
               strokeWidth={4}
-              strokeOpacity={0.35}
-              transform={`translate(0 ${stroke / 2 + 5})`}
+              strokeOpacity={0.45}
             />
           );
         })}
 
         <path
-          d={arcPath(0, Math.max(0.6, clamped))}
+          d={arcPath(0, Math.max(0.6, clamped), r)}
           fill="none"
           stroke={activeBand.colour}
           strokeWidth={stroke}

@@ -1,6 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { AdoptionIntensityPoint, CopilotAdoptionOptions } from '../../types/copilotAdoption';
-import { formatValue, niceTicks } from '../charts/chartCommon';
+import { formatValue } from '../charts/chartCommon';
 import { scoreColour } from './adoptionShared';
 
 const useStyles = makeStyles({
@@ -24,15 +24,6 @@ const WIDTH = 720;
 const HEIGHT = 340;
 const PAD = { top: 34, right: 40, bottom: 44, left: 56 };
 const MAX_RADIUS = 24;
-
-/**
- * Headroom added to each axis before the ticks are chosen.
- *
- * Without it the largest bubble is centred exactly on the axis maximum, so its top half and the
- * label above it fall outside the viewBox and are clipped away - silently hiding the department the
- * reader most needs to see.
- */
-const AXIS_HEADROOM = 1.2;
 
 /**
  * Departments plotted as frequency (how many days a month they open Copilot) against intensity
@@ -63,15 +54,38 @@ export default function IntensityScatter({
     );
   }
 
-  const xTicks = niceTicks(Math.max(...points.map((p) => p.activeDaysPerUser), 1) * AXIS_HEADROOM, 4);
-  const yTicks = niceTicks(Math.max(...points.map((p) => p.actionsPerActiveDay), 1) * AXIS_HEADROOM, 4);
+  // Axes are fitted to the data rather than anchored at zero. These are positions for comparison,
+  // not magnitudes, so forcing a zero origin wastes most of the plot: a tenant whose departments all
+  // sit between 4 and 7 active days gets every bubble squashed into one corner, which is exactly the
+  // shape this chart exists to spread out. The padding keeps points off the axis lines.
+  const fitAxis = (values: number[], maxRadiusUnits: number) => {
+    const lo = Math.min(...values);
+    const hi = Math.max(...values);
+    const span = hi - lo;
+    // A single point, or several identical ones, has no span to fit - fall back to a window around
+    // the value so it lands mid-plot instead of on a degenerate axis.
+    const pad = span > 0 ? span * 0.35 + maxRadiusUnits : Math.max(1, Math.abs(hi) * 0.5);
+    return { min: Math.max(0, lo - pad), max: hi + pad };
+  };
+
+  const xAxis = fitAxis(points.map((p) => p.activeDaysPerUser), 0.5);
+  const yAxis = fitAxis(points.map((p) => p.actionsPerActiveDay), 0.5);
   const maxSeats = Math.max(...points.map((p) => p.licensedUsers), 1);
 
   const plotW = WIDTH - PAD.left - PAD.right;
   const plotH = HEIGHT - PAD.top - PAD.bottom;
 
-  const xOf = (v: number) => PAD.left + (v / xTicks.max) * plotW;
-  const yOf = (v: number) => PAD.top + plotH - (v / yTicks.max) * plotH;
+  const xOf = (v: number) => PAD.left + ((v - xAxis.min) / (xAxis.max - xAxis.min || 1)) * plotW;
+  const yOf = (v: number) => PAD.top + plotH - ((v - yAxis.min) / (yAxis.max - yAxis.min || 1)) * plotH;
+
+  const axisTicks = (axis: { min: number; max: number }) => {
+    const step = (axis.max - axis.min) / 4;
+    return Array.from({ length: 5 }, (_, i) => axis.min + step * i);
+  };
+
+  const xTickValues = axisTicks(xAxis);
+  const yTickValues = axisTicks(yAxis);
+
   // Area-proportional: the radius is the square root of the seat share with no constant added, so a
   // department with four times the seats is drawn at four times the area. Adding a fixed minimum
   // radius to every bubble - the usual shortcut - would visually inflate the smallest departments
@@ -84,10 +98,6 @@ export default function IntensityScatter({
     developing: options.developingScore,
   };
 
-  // Quadrant thresholds are the medians of the plotted departments, not fixed values. A fixed line
-  // would be a judgement about what "frequent" means that this tool has no basis to make - whereas
-  // "busier than half your own departments" is defensible on any tenant, and is what an executive
-  // actually wants to know when deciding where to send an enablement team.
   const medianOf = (values: number[]) => {
     const sorted = [...values].sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
@@ -98,10 +108,29 @@ export default function IntensityScatter({
   const yMedian = medianOf(points.map((p) => p.actionsPerActiveDay));
   const showQuadrants = points.length >= 4;
 
+  // Labels are placed one at a time, largest bubble first, and any that cannot find a free slot is
+  // dropped. Overlapping department names are worse than missing ones: an unreadable pile of text in
+  // the middle of the plot obscures the bubbles as well as itself, and every name is still on the
+  // hover tooltip. Largest-first means the departments that matter most keep their labels.
+  const placed: { x: number; y: number; w: number; h: number }[] = [];
+  const LABEL_H = 13;
+
+  const tryPlace = (x: number, y: number, w: number) => {
+    const box = { x: x - w / 2, y: y - LABEL_H, w, h: LABEL_H };
+    const clashes = placed.some(
+      (p) => box.x < p.x + p.w && box.x + box.w > p.x && box.y < p.y + p.h && box.y + box.h > p.y,
+    );
+    if (clashes) return false;
+    placed.push(box);
+    return true;
+  };
+
+  const ordered = [...points].sort((a, b) => b.licensedUsers - a.licensedUsers);
+
   return (
     <div className={styles.root}>
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" role="img" aria-label="Copilot usage frequency against intensity by department">
-        {yTicks.ticks.map((t) => (
+        {yTickValues.map((t) => (
           <g key={`y${t}`}>
             <line
               x1={PAD.left}
@@ -112,12 +141,12 @@ export default function IntensityScatter({
               strokeDasharray="3 3"
             />
             <text x={PAD.left - 8} y={yOf(t) + 4} textAnchor="end" fontSize={11} fill={tokens.colorNeutralForeground3}>
-              {formatValue(t)}
+              {formatValue(Math.round(t * 10) / 10)}
             </text>
           </g>
         ))}
 
-        {xTicks.ticks.map((t) => (
+        {xTickValues.map((t) => (
           <text
             key={`x${t}`}
             x={xOf(t)}
@@ -222,14 +251,23 @@ export default function IntensityScatter({
           </g>
         )}
 
-        {[...points]
-          .sort((a, b) => b.licensedUsers - a.licensedUsers)
-          .map((p) => (
+        {ordered.map((p) => {
+          const cx = xOf(p.activeDaysPerUser);
+          const cy = yOf(p.actionsPerActiveDay);
+          const r = rOf(p.licensedUsers);
+
+          // Roughly 6px per character at this font size - close enough to reserve a sensible box
+          // without measuring text, which would need a DOM round trip on every render.
+          const labelW = p.segment.length * 6;
+          const above = tryPlace(cx, cy - r - 5, labelW);
+          const below = above ? false : tryPlace(cx, cy + r + 16, labelW);
+
+          return (
             <g key={p.segment}>
               <circle
-                cx={xOf(p.activeDaysPerUser)}
-                cy={yOf(p.actionsPerActiveDay)}
-                r={rOf(p.licensedUsers)}
+                cx={cx}
+                cy={cy}
+                r={r}
                 fill={scoreColour(p.activeUserAverageScore, bands)}
                 fillOpacity={0.55}
                 stroke={scoreColour(p.activeUserAverageScore, bands)}
@@ -241,18 +279,22 @@ export default function IntensityScatter({
                     `Average engagement of its active users ${formatValue(p.activeUserAverageScore)}.`}
                 </title>
               </circle>
-              <text
-                x={xOf(p.activeDaysPerUser)}
-                y={yOf(p.actionsPerActiveDay) - rOf(p.licensedUsers) - 5}
-                textAnchor="middle"
-                fontSize={11}
-                fill={tokens.colorNeutralForeground2}
-                style={{ pointerEvents: 'none' }}
-              >
-                {p.segment}
-              </text>
+
+              {(above || below) && (
+                <text
+                  x={cx}
+                  y={above ? cy - r - 5 : cy + r + 16}
+                  textAnchor="middle"
+                  fontSize={11}
+                  fill={tokens.colorNeutralForeground2}
+                  style={{ pointerEvents: 'none' }}
+                >
+                  {p.segment}
+                </text>
+              )}
             </g>
-          ))}
+          );
+        })}
       </svg>
 
       <Text size={200} className={styles.caption}>

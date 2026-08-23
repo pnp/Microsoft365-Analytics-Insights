@@ -182,7 +182,7 @@ export default function AgentsPanel({
               content={{
                 what: 'What to do about each agent that has been seen in the history window: keep it, review it, retire it, or leave it alone because it is too new to judge.',
                 how: `Retire = not used for ${options.agentRetireInactiveDays} days or more. Review = last used between ${options.agentReviewInactiveDays} and ${options.agentRetireInactiveDays} days ago, or still current but used by fewer than ${options.agentMinUsers} people. New = first seen within the last ${options.agentNewDays} days, which exempts it from review entirely. Keep = used within ${options.agentReviewInactiveDays} days by at least ${options.agentMinUsers} people.`,
-                source: `The "New" exemption is deliberate: a brand-new agent with two users has not failed, it has not started. Agents are counted over the full ${options.historyDays}-day history rather than the reporting period, because an agent nobody has touched for six months is exactly what this is looking for.`,
+                source: `The "New" exemption is deliberate: a brand-new agent with two users has not failed, it has not started. Agents are counted over ${estate.historyDays} days rather than the reporting period, because an agent nobody has touched for months is exactly what this is looking for. That window is deliberately shorter than the analysis history: it only needs to reach past the ${options.agentRetireInactiveDays}-day retirement line, and reading a full year of audit history to learn nothing extra is expensive on a large tenant.`,
               }}
             />
           </div>
@@ -265,7 +265,7 @@ export default function AgentsPanel({
               Agent inventory
             </Text>
             <Text size={200} block className={styles.muted}>
-              Every agent seen in the last {options.historyDays} days, busiest first.
+              Every agent seen in the last {estate.historyDays} days, busiest first.
             </Text>
           </div>
           <div className={styles.cardTools}>
@@ -438,7 +438,7 @@ function buildAgentKpis(
       value: formatCount(estate.activeAgents),
       hint: `${formatCount(estate.knownAgents)} known, ${formatCount(estate.customAgents)} custom-built`,
       info: {
-        what: `Agents used at least once in the last ${windowDays} days. "Known" counts every agent seen anywhere in the ${o.historyDays}-day history, used recently or not.`,
+        what: `Agents used at least once in the last ${windowDays} days. "Known" counts every agent seen anywhere in the ${estate.historyDays}-day inventory window, used recently or not.`,
         how: 'An agent only appears once it has been invoked - the Copilot audit log records agents that were used, not agents that exist. An agent built but never run is invisible here, and to everyone else too.',
         source: 'Custom means an agent your organisation built, rather than one Microsoft ships.',
       },

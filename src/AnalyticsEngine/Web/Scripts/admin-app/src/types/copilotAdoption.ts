@@ -84,6 +84,7 @@ export interface CopilotAdoptionOptions {
   agentRetireInactiveDays: number;
   agentNewDays: number;
   agentMinUsers: number;
+  agentHistoryDays: number;
 
   opportunityUnlicensedCopilotWeight: number;
   opportunityCollaborationWeight: number;
@@ -159,6 +160,7 @@ export interface AgentUsageRow {
 
 /** The agent estate at a glance. */
 export interface AgentEstateSummary {
+  historyDays: number;
   activeAgents: number;
   knownAgents: number;
   customAgents: number;
@@ -226,6 +228,7 @@ export interface CopilotAdoptionSummary {
   seatLicenceTypes: LicenceTypeClassification[];
 
   licensedUsers: number;
+  scoredUsers: number;
   activeUsers: number;
   neverUsedUsers: number;
   dormantUsers: number;

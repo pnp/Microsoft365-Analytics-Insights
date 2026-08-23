@@ -241,10 +241,18 @@ namespace Common.Entities.CopilotAdoption
         {
             var summary = analysis.Summary;
 
+            // The inventory reads its own, much shorter history than the rest of the analysis - see
+            // CopilotAdoptionOptions.AgentHistoryDays. Never shorter than the reporting window, or an
+            // agent used inside the period could be missing from its own inventory.
+            var agentHistoryStart = nowUtc.Date.AddDays(
+                -Math.Max(_options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays)));
+
+            summary.Agents.HistoryDays = (int)Math.Round((nowUtc.Date - agentHistoryStart).TotalDays);
+
             var sql = CopilotAdoptionSql.AgentUsageSql(seatIds);
             var parameters = new Dictionary<string, object>
             {
-                { "@historyFrom", historyStart },
+                { "@historyFrom", agentHistoryStart },
                 { "@maxRows", _options.MaxAgents },
             };
             analysis.Sql["agents"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
@@ -655,6 +663,23 @@ namespace Common.Entities.CopilotAdoption
                 summary.LicensedUsers = users.Count;
             }
 
+            // Every rate below divides by the users actually scored, NOT by the seat count. Those are
+            // the same number unless the detail query hit its row cap - and when it does, dividing by
+            // the seat count is arithmetically wrong rather than merely approximate: a 200,000-seat
+            // tenant scored 50,000 deep could never report adoption above 25%, however healthy it
+            // really was, and the funnel would open with a 75% drop that is pure measurement artefact.
+            summary.ScoredUsers = users.Count;
+            var denominator = summary.ScoredUsers;
+
+            if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
+            {
+                summary.Warnings.Add(
+                    $"This tenant holds {summary.LicensedUsers:N0} Copilot seats, but only {summary.ScoredUsers:N0} "
+                    + "users could be analysed in one pass. Every rate and breakdown below describes those "
+                    + $"{summary.ScoredUsers:N0} users, not the whole tenant - they are not tenant-wide figures "
+                    + "and must not be quoted as such.");
+            }
+
             summary.ActiveUsers = users.Count(u => u.Band > AdoptionBand.Dormant);
             summary.NeverUsedUsers = users.Count(u => u.Band == AdoptionBand.NeverUsed);
             summary.DormantUsers = users.Count(u => u.Band == AdoptionBand.Dormant);
@@ -662,8 +687,8 @@ namespace Common.Entities.CopilotAdoption
             summary.ReclaimableSeats = summary.NeverUsedUsers + summary.DormantUsers;
             summary.TotalInteractions = users.Sum(u => u.Interactions);
 
-            summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, summary.LicensedUsers);
-            summary.HabitRatePct = CopilotAdoptionScoring.Percentage(summary.HabitualUsers, summary.LicensedUsers);
+            summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, denominator);
+            summary.HabitRatePct = CopilotAdoptionScoring.Percentage(summary.HabitualUsers, denominator);
             summary.AverageAdoptionScore = users.Count == 0
                 ? 0
                 : Math.Round(users.Average(u => u.AdoptionScore), 1, MidpointRounding.AwayFromZero);
@@ -671,7 +696,7 @@ namespace Common.Entities.CopilotAdoption
 
             summary.CoworkUsers = users.Count(u => u.UsedCowork);
             summary.CoworkInteractions = users.Sum(u => u.CoworkInteractions);
-            summary.CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(summary.CoworkUsers, summary.LicensedUsers);
+            summary.CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(summary.CoworkUsers, denominator);
             // Only claim a Cowork adoption rate when Cowork was actually seen. On a tenant that has not
             // been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
             summary.CoworkDetected = summary.CoworkInteractions > 0;
@@ -705,6 +730,11 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>
         /// The adoption funnel: every stage is a subset of the one before it, so the biggest drop-off
         /// is visible at a glance and points straight at the intervention that is needed.
+        ///
+        /// The first stage is the scored population rather than the seat count. They are the same
+        /// unless the detail query hit its row cap, and if it did, opening the funnel with the seat
+        /// count would draw a huge drop between stage one and stage two that is entirely an artefact
+        /// of how many users were read - the most misleading thing this chart could possibly say.
         /// </summary>
         private static List<AdoptionCategory> BuildFunnel(
             CopilotAdoptionSummary summary,
@@ -715,7 +745,7 @@ namespace Common.Entities.CopilotAdoption
 
             return new List<AdoptionCategory>
             {
-                new AdoptionCategory { Label = "Licensed", Value = summary.LicensedUsers },
+                new AdoptionCategory { Label = "Licensed", Value = summary.ScoredUsers },
                 new AdoptionCategory { Label = "Ever used Copilot", Value = everUsed },
                 new AdoptionCategory { Label = "Active this period", Value = summary.ActiveUsers },
                 new AdoptionCategory { Label = "Habitual users", Value = summary.HabitualUsers },
@@ -1048,6 +1078,8 @@ namespace Common.Entities.CopilotAdoption
                 .Select(g =>
                 {
                     var active = g.Where(u => u.ActiveDays > 0).ToList();
+                    var activeDayTotal = active.Sum(u => u.ActiveDays);
+
                     return new AdoptionIntensityPoint
                     {
                         Segment = g.Key,
@@ -1056,14 +1088,14 @@ namespace Common.Entities.CopilotAdoption
                         ActiveDaysPerUser = active.Count == 0
                             ? 0
                             : Math.Round(
-                                CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(
-                                    active.Average(u => u.ActiveDays), _options.WindowDays, _options),
+                                CopilotAdoptionScoring.NormaliseToMonth(
+                                    activeDayTotal / (double)active.Count, _options.WindowDays, _options),
                                 1,
                                 MidpointRounding.AwayFromZero),
                         ActionsPerActiveDay = active.Count == 0
                             ? 0
                             : Math.Round(
-                                active.Sum(u => (double)u.Interactions) / Math.Max(1, active.Sum(u => u.ActiveDays)),
+                                active.Sum(u => (double)u.Interactions) / Math.Max(1, activeDayTotal),
                                 1,
                                 MidpointRounding.AwayFromZero),
                         ActiveUserAverageScore = active.Count == 0

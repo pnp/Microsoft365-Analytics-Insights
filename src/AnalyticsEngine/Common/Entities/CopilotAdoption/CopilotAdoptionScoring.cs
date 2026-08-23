@@ -686,7 +686,10 @@ namespace Common.Entities.CopilotAdoption
 
                 if (size <= 0) continue;
 
-                var slice = ranked.Skip(taken).Take(size).ToList();
+                // GetRange rather than Skip().Take(): Skip walks the list from the start every time,
+                // which at 200k active users would re-traverse the collection once per cohort for no
+                // reason. GetRange copies the slice directly.
+                var slice = ranked.GetRange(taken, size);
                 var sliceTotal = slice.Sum();
 
                 bands.Add(new AdoptionConcentrationBand

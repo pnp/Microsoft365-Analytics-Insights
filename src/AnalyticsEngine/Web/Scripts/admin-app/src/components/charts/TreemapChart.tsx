@@ -4,8 +4,34 @@ import { formatValue, seriesColor } from './chartCommon';
 
 const useStyles = makeStyles({
   root: {
+    position: 'relative',
     width: '100%',
-    paddingTop: '4px',
+    marginTop: '4px',
+  },
+  tile: {
+    position: 'absolute',
+    borderRadius: tokens.borderRadiusSmall,
+    overflow: 'hidden',
+    padding: '6px 8px',
+    boxSizing: 'border-box',
+    color: '#ffffff',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1px',
+  },
+  label: {
+    fontSize: '13px',
+    fontWeight: tokens.fontWeightSemibold,
+    lineHeight: '16px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  value: {
+    fontSize: '12px',
+    lineHeight: '15px',
+    opacity: 0.9,
+    fontVariantNumeric: 'tabular-nums',
   },
   empty: {
     color: tokens.colorNeutralForeground3,
@@ -102,10 +128,17 @@ function squarify(values: { label: string; value: number; index: number }[], wid
 /**
  * A treemap for "where is this actually happening" breakdowns.
  *
- * Preferred over a bar chart when the categories are parts of one total and the distribution is
- * very uneven: a top surface with ten times the traffic of the next one is immediately obvious as
- * an area, whereas as a bar it just means every other bar is too short to read. The bar chart
- * remains the better choice when the reader needs to compare similar values precisely.
+ * Preferred over a bar chart when the categories are parts of one total and the distribution is very
+ * uneven: a top surface with ten times the traffic of the next is immediately obvious as an area,
+ * whereas as a bar it just means every other bar is too short to read. The bar chart remains the
+ * better choice when the reader needs to compare similar values precisely.
+ *
+ * Rendered as positioned HTML rather than SVG. The layout is computed in a fixed coordinate space
+ * and the tiles are placed in percentages, so the browser resolves them against the real container
+ * size. An SVG version has to choose between letterboxing and `preserveAspectRatio="none"`, and the
+ * latter scales the coordinate system unevenly - which stretches the glyphs horizontally and makes
+ * every label look subtly wrong. HTML text is laid out after its box is sized, so it is always drawn
+ * at its true aspect ratio, and it gets ellipsis and hit-testing for free.
  */
 export default function TreemapChart({
   categories,
@@ -123,77 +156,50 @@ export default function TreemapChart({
     return <div className={styles.empty}>No data for this period.</div>;
   }
 
-  // Laid out in a fixed 1000-wide viewBox and scaled by the SVG, so the tiles are correct at any
-  // container width without needing a resize observer.
-  const vbWidth = 1000;
-  const vbHeight = Math.round((height / 320) * 1000);
-
   const sorted = [...data].sort((a, b) => b.value - a.value);
   const total = sorted.reduce((s, c) => s + c.value, 0);
+
+  // Laid out in a fixed coordinate space, then expressed as percentages. The ratio used here decides
+  // how the squarifier splits, not whether the result fits, so keeping it fixed makes the tiling
+  // stable across resizes rather than reflowing every tile on every pixel of width change.
+  const LAYOUT_W = 1000;
+  const LAYOUT_H = 600;
+
   const rects = squarify(
     sorted.map((c, index) => ({ label: c.label, value: c.value, index })),
-    vbWidth,
-    vbHeight,
+    LAYOUT_W,
+    LAYOUT_H,
   );
 
   return (
-    <div className={styles.root}>
-      <svg
-        viewBox={`0 0 ${vbWidth} ${vbHeight}`}
-        width="100%"
-        height={height}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={`${valueLabel} by category`}
-      >
-        {rects.map((r) => {
-          const share = (r.value / total) * 100;
-          // Text is drawn in viewBox units that are then stretched non-uniformly, so anything
-          // narrower than this becomes unreadable - better to show a bare tile with a tooltip.
-          const showLabel = r.w > 90 && r.h > 46;
+    <div className={styles.root} style={{ height: `${height}px` }} role="img" aria-label={`${valueLabel} by category`}>
+      {rects.map((r) => {
+        const share = (r.value / total) * 100;
+        const heightPx = (r.h / LAYOUT_H) * height;
 
-          return (
-            <g key={r.label}>
-              <rect
-                x={r.x}
-                y={r.y}
-                width={Math.max(0, r.w - 2)}
-                height={Math.max(0, r.h - 2)}
-                fill={seriesColor(r.index)}
-                rx={3}
-              >
-                <title>{`${r.label}: ${formatValue(r.value)} ${valueLabel} (${
-                  Math.round(share * 10) / 10
-                }%)`}</title>
-              </rect>
-              {showLabel && (
-                <>
-                  <text
-                    x={r.x + 10}
-                    y={r.y + 26}
-                    fill="#ffffff"
-                    fontSize={22}
-                    fontWeight={600}
-                    style={{ pointerEvents: 'none' }}
-                  >
-                    {r.label}
-                  </text>
-                  <text
-                    x={r.x + 10}
-                    y={r.y + 50}
-                    fill="#ffffff"
-                    fontSize={19}
-                    opacity={0.85}
-                    style={{ pointerEvents: 'none' }}
-                  >
-                    {formatValue(r.value)}
-                  </text>
-                </>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+        return (
+          <div
+            key={r.label}
+            className={styles.tile}
+            style={{
+              left: `${(r.x / LAYOUT_W) * 100}%`,
+              top: `${(r.y / LAYOUT_H) * 100}%`,
+              // The tiles tile exactly, so each is inset by a hairline to let the page background
+              // through as a separator. Done inline rather than with a border because Griffel
+              // rejects the border shorthands, and per-side longhands here would be four rules.
+              width: `calc(${(r.w / LAYOUT_W) * 100}% - 3px)`,
+              height: `calc(${(r.h / LAYOUT_H) * 100}% - 3px)`,
+              backgroundColor: seriesColor(r.index),
+            }}
+            title={`${r.label}: ${formatValue(r.value)} ${valueLabel} (${Math.round(share * 10) / 10}%)`}
+          >
+            <span className={styles.label}>{r.label}</span>
+            {/* Only show the value when the tile is tall enough for a second line. A clipped
+                half-height number is worse than none, and the tooltip always carries it. */}
+            {heightPx >= 40 && <span className={styles.value}>{formatValue(r.value)}</span>}
+          </div>
+        );
+      })}
     </div>
   );
 }
