@@ -289,6 +289,38 @@ namespace Tests.UnitTests
             Assert.AreEqual("copilot-adoption-28d-2026-08-23.xlsx", CopilotAdoptionWorkbook.FileName(summary));
         }
 
+        [TestMethod]
+        public void Workbook_BandPercentagesUseTheAnalysedDenominator()
+        {
+            // The bands partition the SCORED population. Dividing them by the seat count made the
+            // column sum to well under 100% on a capped tenant, and contradicted both the workbook's
+            // own funnel and the doughnut on screen. The uncapped fixture cannot catch this, because
+            // the two denominators are equal - so this test caps it deliberately.
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count * 4;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var scored = analysis.Summary.ScoredUsers;
+            Assert.IsTrue(scored < analysis.Summary.LicensedUsers, "The fixture must actually be capped.");
+
+            var expected = analysis.Summary.BandBreakdown
+                .Select(b => Math.Round(b.Value / (double)scored * 100d, 1, MidpointRounding.AwayFromZero))
+                .Where(v => v > 0)
+                .ToList();
+
+            var text = SheetText(CopilotAdoptionWorkbook.Build(analysis));
+
+            StringAssert.Contains(text, "% of analysed",
+                "The column must say which denominator it used once it differs from the seat count.");
+
+            foreach (var pct in expected)
+            {
+                StringAssert.Contains(text, pct.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    $"Band share {pct}% (of the analysed population) is missing from the workbook.");
+            }
+        }
+
         #endregion
 
         #region Writer primitives

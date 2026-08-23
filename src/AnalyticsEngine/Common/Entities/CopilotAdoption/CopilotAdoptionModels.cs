@@ -706,7 +706,13 @@ namespace Common.Entities.CopilotAdoption
         public string Name { get; set; }
         public string AgentKey { get; set; }
         public bool IsCustomAgent { get; set; }
+
+        /// <summary>Interactions across the whole inventory history window.</summary>
         public long Interactions { get; set; }
+
+        /// <summary>Interactions inside the selected reporting period only.</summary>
+        public long WindowInteractions { get; set; }
+
         public int Users { get; set; }
         public int LicensedUsers { get; set; }
         public int ActiveDays { get; set; }
@@ -740,6 +746,14 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("interactions")]
         public long Interactions { get; set; }
+
+        /// <summary>
+        /// Interactions inside the selected reporting period, as opposed to across the whole inventory
+        /// history. Carried separately because the two answer different questions, and dividing one by
+        /// the other's denominator inflates the result by the ratio of the two windows.
+        /// </summary>
+        [JsonProperty("windowInteractions")]
+        public long WindowInteractions { get; set; }
 
         [JsonProperty("users")]
         public int Users { get; set; }

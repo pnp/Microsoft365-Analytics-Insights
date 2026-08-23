@@ -610,15 +610,31 @@ namespace Tests.UnitTests
                 var agents = Query<AgentUsageQueryRow>(
                     db,
                     CopilotAdoptionSql.AgentUsageSql(new[] { 1 }),
+                    new SqlParameter("@from", from),
                     new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-120)),
                     new SqlParameter("@maxRows", 500));
 
                 Assert.AreEqual(1, agents.Count);
                 Assert.AreEqual("Contoso Expenses Agent", agents[0].Name);
                 Assert.AreEqual(3, agents[0].Interactions, "Three interactions carried this agent.");
+                Assert.AreEqual(3, agents[0].WindowInteractions,
+                    "All three fall inside the reporting window here, so the two scopes agree.");
                 Assert.AreEqual(2, agents[0].Users, "Two distinct people used it.");
                 Assert.AreEqual(1, agents[0].LicensedUsers, "Only one of them holds a seat.");
                 Assert.IsTrue(agents[0].IsCustomAgent);
+
+                // The scopes must genuinely differ when the history reaches further back than the
+                // window - that separation is what stops the per-user KPI being inflated.
+                var narrow = Query<AgentUsageQueryRow>(
+                    db,
+                    CopilotAdoptionSql.AgentUsageSql(new[] { 1 }),
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-2)),
+                    new SqlParameter("@historyFrom", DateTime.UtcNow.Date.AddDays(-120)),
+                    new SqlParameter("@maxRows", 500));
+
+                Assert.AreEqual(3, narrow[0].Interactions, "History is unchanged by a narrower window.");
+                Assert.AreEqual(2, narrow[0].WindowInteractions,
+                    "Only the interactions inside the two-day window count towards the period figure.");
 
                 var unlicensedApps = Query<CopilotAdoptionService.CategoryQueryRow>(
                     db,

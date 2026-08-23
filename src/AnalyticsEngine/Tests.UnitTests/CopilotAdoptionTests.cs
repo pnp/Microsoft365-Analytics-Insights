@@ -983,6 +983,60 @@ namespace Tests.UnitTests
                 "An uncapped analysis must not carry a truncation warning.");
         }
 
+        [TestMethod]
+        public void AgentInteractionsPerUser_UsesTheSameWindowForBothSidesOfTheRatio()
+        {
+            // The inventory reads a long history so a dormant agent is still visible, but the agent-user
+            // count is scoped to the reporting period. Summing the history-wide interaction total and
+            // dividing it by that user count inflated a headline KPI by the ratio of the two windows -
+            // roughly four times at the default settings.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-28);
+
+            var user = ScoredUser("power@contoso.com", 80, AdoptionBand.Champion);
+            user.AgentsUsed = 1;
+            analysis.LicensedUsers.Add(user);
+            analysis.Summary.LicensedUsers = 1;
+
+            var agent = Agent("Contoso Expenses Agent", users: 1, interactions: 1000, appsUsed: 1);
+            agent.WindowInteractions = 40;
+            analysis.Agents.Add(agent);
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(40, analysis.Summary.Agents.AgentInteractions,
+                "The headline interaction count must be the in-period figure, not the whole history.");
+            Assert.AreEqual(40, analysis.Summary.Agents.InteractionsPerAgentUser, 0.01,
+                "Numerator and denominator must share the reporting window.");
+        }
+
+        [TestMethod]
+        public void ConcentrationAndSegments_CountAUserWithPromptsButNoDayBreakdown()
+        {
+            // Microsoft's usage report can supply a prompt count with no per-day breakdown. Scoring
+            // treats that as active; several downstream views tested active days alone and silently
+            // dropped those users, so the headline and the breakdowns disagreed about the population.
+            var analysis = new CopilotAdoptionAnalysis();
+            var reportOnly = ScoredUser("reportonly@contoso.com", 40, AdoptionBand.Developing);
+            reportOnly.Interactions = 30;
+            reportOnly.ActiveDays = 0;
+            reportOnly.Department = "Finance";
+
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Departmentalise(ActiveUser($"u{i}@contoso.com", 10, 50), "Finance")));
+            analysis.LicensedUsers.Add(reportOnly);
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(6, analysis.Summary.Concentration.Sum(b => b.Users),
+                "A user with prompts but no day breakdown is active, and must be ranked.");
+
+            var finance = analysis.Summary.IntensityByDepartment.Single();
+            Assert.AreEqual(6, finance.ActiveUsers,
+                "The intensity view must count the same active population as the headline figures.");
+        }
+
         #endregion
 
         #region Explainability: the options must survive serialisation
@@ -1580,11 +1634,12 @@ namespace Tests.UnitTests
         {
             return new AgentUsageRow
             {
-                AgentId = name.GetHashCode(),
+                AgentId = Math.Abs(name.GetHashCode()),
                 Name = name,
                 Users = users,
                 LicensedUsers = users,
                 Interactions = interactions,
+                WindowInteractions = interactions,
                 AppsUsed = appsUsed,
                 FirstUsedUtc = Now.AddDays(-200),
                 LastUsedUtc = Now.AddDays(-1),

@@ -279,11 +279,14 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddBlankRow();
 
             // --- Bands -----------------------------------------------------------------------
-            sheet.AddHeaderRow("Engagement band", "Users", "% of licensed", string.Empty);
+            // Bands partition the SCORED population, so that is their denominator - not the seat count.
+            // Dividing by LicensedUsers made the column sum to less than 100% on a capped tenant and
+            // contradicted both the funnel two sheets earlier and the donut on screen.
+            sheet.AddHeaderRow("Engagement band", "Users", "% of analysed", string.Empty);
             var bandFirst = sheet.CurrentRow + 1;
             foreach (var band in summary.BandBreakdown)
             {
-                sheet.AddRow(band.Label, band.Value, Percentage(band.Value, summary.LicensedUsers), string.Empty);
+                sheet.AddRow(band.Label, band.Value, Percentage(band.Value, summary.ScoredUsers), string.Empty);
             }
             var bandLast = sheet.CurrentRow;
 

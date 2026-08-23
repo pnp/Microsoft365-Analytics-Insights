@@ -120,6 +120,18 @@ namespace Common.Entities.CopilotAdoption
             var seatIds = CopilotLicenceClassifier.ResolveSeatLicenceTypeIds(licenceTypes, seatLicenceTypeIdOverride);
             summary.DataSources.UserMetadataAvailable = true;
 
+            // When an explicit override is supplied, the classification shown to the admin has to reflect
+            // what was ACTUALLY counted. Leaving the automatic verdict in place meant the methodology page
+            // and the workbook asserted that a SKU was excluded while every figure on the page included it.
+            if (seatLicenceTypeIdOverride != null)
+            {
+                var effective = new HashSet<int>(seatIds);
+                foreach (var licence in summary.SeatLicenceTypes)
+                {
+                    licence.IsCopilotSeat = effective.Contains(licence.Id);
+                }
+            }
+
             if (seatIds.Count == 0)
             {
                 summary.Warnings.Add(
@@ -213,7 +225,7 @@ namespace Common.Entities.CopilotAdoption
             // Chat use is the one Copilot population that is invisible in Microsoft's usage reports.
             if (summary.DataSources.AuditAvailable)
             {
-                await BuildAgentEstateAsync(analysis, seatIds, windowStart, historyStart, nowUtc, cancellationToken);
+                await BuildAgentEstateAsync(analysis, seatIds, windowStart, nowUtc, cancellationToken);
                 await BuildUnlicensedPopulationAsync(analysis, seatIds, windowStart, cancellationToken);
                 await BuildResourceTypesAsync(analysis, windowStart, cancellationToken);
             }
@@ -235,7 +247,6 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionAnalysis analysis,
             List<int> seatIds,
             DateTime windowStart,
-            DateTime historyStart,
             DateTime nowUtc,
             CancellationToken cancellationToken)
         {
@@ -252,6 +263,7 @@ namespace Common.Entities.CopilotAdoption
             var sql = CopilotAdoptionSql.AgentUsageSql(seatIds);
             var parameters = new Dictionary<string, object>
             {
+                { "@from", windowStart },
                 { "@historyFrom", agentHistoryStart },
                 { "@maxRows", _options.MaxAgents },
             };
@@ -706,7 +718,7 @@ namespace Common.Entities.CopilotAdoption
             summary.HabitBuckets = BuildHabitBuckets(users.Select(u => (double)u.ActiveDays));
             summary.ActionPlan = BuildActionPlan(users);
             summary.Concentration = CopilotAdoptionScoring.Concentration(
-                users.Where(u => u.ActiveDays > 0).Select(u => u.Interactions));
+                users.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
             summary.ScoreProfiles = BuildScoreProfiles(users);
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
@@ -781,7 +793,7 @@ namespace Common.Entities.CopilotAdoption
         {
             var profiles = new List<AdoptionScoreProfile>();
 
-            var active = users.Where(u => u.ActiveDays > 0 || u.Interactions > 0).ToList();
+            var active = users.Where(CopilotAdoptionScoring.IsActive).ToList();
             if (active.Count == 0) return profiles;
 
             profiles.Add(Profile("Typical active user", active));
@@ -828,7 +840,9 @@ namespace Common.Entities.CopilotAdoption
                 .ToList();
 
             estate.ActiveAgents = activeInWindow.Count;
-            estate.AgentInteractions = activeInWindow.Sum(a => a.Interactions);
+            // Window-scoped, to match the window-scoped user count it is divided by. Using the
+            // history-wide interaction total here inflated the KPI by the ratio of the two windows.
+            estate.AgentInteractions = activeInWindow.Sum(a => a.WindowInteractions);
 
             // Agent users cannot be summed across agents without double-counting anyone who uses two,
             // so the figure comes from the per-user rows instead: licensed users carry AgentsUsed, and
@@ -960,7 +974,7 @@ namespace Common.Entities.CopilotAdoption
                 {
                     Segment = segment,
                     LicensedUsers = seats.Count,
-                    LicensedActiveUsers = seats.Count(u => u.ActiveDays > 0),
+                    LicensedActiveUsers = seats.Count(CopilotAdoptionScoring.IsActive),
                     // Per seat held, not per active seat: this column exists to be compared with the
                     // unlicensed one, and an idle seat is the whole point of the comparison.
                     InteractionsPerLicensedUser = PerUserPerMonth(seats.Sum(u => (double)u.Interactions), seats.Count),
@@ -1077,7 +1091,7 @@ namespace Common.Entities.CopilotAdoption
                 .Where(g => g.Count() >= _options.MinSeatsPerSegment)
                 .Select(g =>
                 {
-                    var active = g.Where(u => u.ActiveDays > 0).ToList();
+                    var active = g.Where(CopilotAdoptionScoring.IsActive).ToList();
                     var activeDayTotal = active.Sum(u => u.ActiveDays);
 
                     return new AdoptionIntensityPoint

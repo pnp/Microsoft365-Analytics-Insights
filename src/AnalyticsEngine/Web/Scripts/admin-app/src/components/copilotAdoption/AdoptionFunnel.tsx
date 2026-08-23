@@ -94,7 +94,9 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
             : Math.min(halfTop, Math.max(4, halfTop * 0.82));
 
           const lost = previous === null ? 0 : previous - stage.value;
-          const conversion = previous === null || previous === 0 ? 100 : (stage.value / previous) * 100;
+          // A zero-to-zero step is not a 100% conversion, it is an absence of anything to convert.
+          // Reporting it as 100% gave a tenant with no usage a funnel of apparently perfect steps.
+          const conversion = previous === null || previous === 0 ? null : (stage.value / previous) * 100;
           const sharePct = (stage.value / top) * 100;
 
           // The narrowest point decides whether the labels fit. A stage holding a handful of users is
@@ -169,9 +171,9 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
                     y={y + STAGE_H / 2 - 3}
                     fontSize={15}
                     fontWeight={600}
-                    fill={tokens.colorNeutralForeground1}
+                    fill={conversion === null ? tokens.colorNeutralForeground3 : tokens.colorNeutralForeground1}
                   >
-                    {formatPct(conversion)}
+                    {conversion === null ? '\u2014' : formatPct(conversion)}
                   </text>
                   {lost > 0 && (
                     <text

@@ -220,6 +220,20 @@ namespace Common.Entities.CopilotAdoption
         };
 
         /// <summary>
+        /// Whether this user did anything with Copilot in the window.
+        ///
+        /// One predicate, used by every headcount. Scoring treats interactions OR active days as
+        /// activity, because Microsoft's usage report can supply a prompt count with no per-day
+        /// breakdown - so testing active days alone silently dropped those users from the
+        /// concentration, department and intensity views while the headline still counted them.
+        /// </summary>
+        public static bool IsActive(LicensedUserAdoptionRow row)
+        {
+            if (row == null) return false;
+            return row.Interactions > 0 || row.ActiveDays > 0;
+        }
+
+        /// <summary>
         /// True when the user has made Copilot part of their working week. Used for the "habit rate"
         /// headline, which is the figure that actually correlates with realised value - "has used it at
         /// least once" is easy to hit and tells an executive nothing.
@@ -531,6 +545,7 @@ namespace Common.Entities.CopilotAdoption
                 AgentKey = row.AgentKey,
                 IsCustomAgent = row.IsCustomAgent,
                 Interactions = row.Interactions,
+                WindowInteractions = row.WindowInteractions,
                 Users = row.Users,
                 LicensedUsers = row.LicensedUsers,
                 ActiveDays = row.ActiveDays,

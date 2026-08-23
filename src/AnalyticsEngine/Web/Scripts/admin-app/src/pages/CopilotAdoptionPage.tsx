@@ -409,6 +409,11 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
   // warning when it bites - but the donut must still add up to what it is drawing, so the centre is
   // the sum of the slices rather than the licence count.
   const analysedUsers = summary.scoredUsers;
+  // The scored population and the seat count are identical on all but the very largest tenants.
+  // Only introduce the word "analysed" when they actually differ - otherwise it is an internal row
+  // cap leaking into the UI as a business term, and it makes a simple number look qualified.
+  const capped = summary.scoredUsers > 0 && summary.scoredUsers < summary.licensedUsers;
+  const populationWord = capped ? 'analysed' : 'licensed';
   const bandThresholds = {
     champion: o.championScore,
     established: o.establishedScore,
@@ -446,7 +451,7 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
             label="Adoption rate"
             sublabel={`${formatCount(summary.activeUsers)} of ${formatCount(
               summary.scoredUsers,
-            )} analysed users touched Copilot`}
+            )} ${populationWord} users touched Copilot`}
           />
           <GaugeRing
             value={summary.habitRatePct}
@@ -1281,11 +1286,11 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       hint: `${formatCount(summary.activeUsers)} of ${formatCount(summary.scoredUsers)} used Copilot in this period`,
       tone: bandTone(summary.adoptionRatePct),
       info: {
-        what: 'The share of analysed licensed users who used Copilot at least once in the selected period.',
+        what: 'The share of licensed users who used Copilot at least once in the selected period.',
         how: `A deliberately low bar, and the weakest number on this page: one interaction in ${o.windowDays} days counts the same as fifty. It is here because it is the figure everyone else quotes, so it needs to be visible and comparable - but "habitual users" below is the one to act on.`,
         formula: `${formatCount(summary.activeUsers)} active / ${formatCount(
           summary.scoredUsers,
-        )} analysed = ${formatPct(summary.adoptionRatePct)}`,
+        )} ${capped ? "analysed" : "licensed"} = ${formatPct(summary.adoptionRatePct)}`,
         source: `Activity comes from the Copilot audit log for the ${o.windowDays}-day period, falling back to Microsoft\u2019s per-user usage report where the audit import is unavailable.${denominatorNote}`,
       },
     },
@@ -1300,7 +1305,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
         how: `A user is habitual when their engagement score reaches ${o.establishedScore} out of 100 - the Established and Champion bands. Reaching that needs sustained use across most weeks, more than a single interaction per day, and normally more than one Copilot surface; no one component can get there alone.`,
         formula: `${formatCount(summary.habitualUsers)} users scoring >= ${o.establishedScore} / ${formatCount(
           summary.scoredUsers,
-        )} analysed = ${formatPct(summary.habitRatePct)}`,
+        )} ${capped ? "analysed" : "licensed"} = ${formatPct(summary.habitRatePct)}`,
         source: `This is the figure that tracks realised value. Adoption rate can sit at 100% while this sits near zero, which is exactly the situation a renewal conversation needs to surface.${denominatorNote}`,
       },
     },

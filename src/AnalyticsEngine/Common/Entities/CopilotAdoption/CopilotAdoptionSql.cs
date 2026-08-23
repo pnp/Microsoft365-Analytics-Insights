@@ -577,6 +577,11 @@ namespace Common.Entities.CopilotAdoption
                 "       ag.agent_id AS AgentKey,\r\n" +
                 "       CAST(ISNULL(ag.is_custom_agent, 0) AS bit) AS IsCustomAgent,\r\n" +
                 "       COUNT_BIG(*) AS Interactions,\r\n" +
+                // Window-scoped as well as history-scoped. The inventory needs the long view to spot a
+                // dormant agent, but the headline "interactions per agent user" divides by a user count
+                // that is scoped to the reporting period - mixing the two inflates that KPI by the ratio
+                // of the windows (roughly 4x at the defaults).
+                "       COUNT_BIG(CASE WHEN au.time_stamp >= @from THEN 1 END) AS WindowInteractions,\r\n" +
                 "       COUNT(DISTINCT au.user_id) AS Users,\r\n" +
                 "       COUNT(DISTINCT seats.user_id) AS LicensedUsers,\r\n" +
                 "       COUNT(DISTINCT CAST(au.time_stamp AS date)) AS ActiveDays,\r\n" +
