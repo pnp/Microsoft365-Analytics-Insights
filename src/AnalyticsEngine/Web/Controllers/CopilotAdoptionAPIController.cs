@@ -219,6 +219,7 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             string search = null,
             string bands = null,
+            string actions = null,
             string department = null,
             string country = null,
             bool coworkOnly = false,
@@ -234,7 +235,7 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc);
+                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var matched = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query);
 
@@ -260,6 +261,7 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             string search = null,
             string bands = null,
+            string actions = null,
             string department = null,
             string country = null,
             bool coworkOnly = false,
@@ -273,7 +275,7 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc);
+                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var rows = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query).Take(MaxCsvRows).ToList();
 
@@ -583,15 +585,46 @@ namespace Web.AnalyticsWeb.Controllers
             return result.Distinct().ToList();
         }
 
+        /// <summary>
+        /// Parses a comma-separated list of recommended-action codes down to the known catalogue.
+        ///
+        /// Unknown tokens are dropped rather than passed through: an unrecognised code would filter
+        /// the list to nothing and look like "there is no one in this group", which is the most
+        /// misleading possible failure for a page whose job is to size an enablement programme.
+        /// </summary>
+        internal static List<string> ParseActions(string commaSeparated)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrWhiteSpace(commaSeparated))
+            {
+                return result;
+            }
+
+            foreach (var part in commaSeparated.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var token = part.Trim();
+                var known = CopilotAdoptionScoring.AllActionCodes
+                    .FirstOrDefault(c => string.Equals(c, token, StringComparison.OrdinalIgnoreCase));
+
+                if (known != null && !result.Contains(known))
+                {
+                    result.Add(known);
+                }
+            }
+
+            return result;
+        }
+
         private static LicensedUserQuery BuildLicensedUserQuery(
             string search, string bands, string department, string country,
             bool coworkOnly, bool disabledOnly, double? minScore, double? maxScore,
-            string sortBy, bool sortDesc)
+            string sortBy, bool sortDesc, string actions = null)
         {
             return new LicensedUserQuery
             {
                 Search = search,
                 Bands = ParseBands(bands),
+                Actions = ParseActions(actions),
                 Department = department,
                 Country = country,
                 CoworkOnly = coworkOnly,

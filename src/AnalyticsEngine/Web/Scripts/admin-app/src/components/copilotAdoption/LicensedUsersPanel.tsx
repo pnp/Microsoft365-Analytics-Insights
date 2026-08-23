@@ -99,6 +99,7 @@ const useStyles = makeStyles({
 const DEFAULT_FILTERS: LicensedUserFilters = {
   search: '',
   bands: [],
+  actions: [],
   department: '',
   country: '',
   coworkOnly: false,
@@ -121,6 +122,7 @@ export default function LicensedUsersPanel({
   options,
   seatLicenceTypeIds,
   initialBands,
+  initialAction,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
@@ -130,6 +132,12 @@ export default function LicensedUsersPanel({
   options: CopilotAdoptionOptions;
   seatLicenceTypeIds?: number[];
   initialBands?: AdoptionBand[];
+  /**
+   * Pre-applies a recommended-action filter. Set when the user arrives here by clicking a row of
+   * the enablement plan on the overview, so the list they land on is exactly the group of people
+   * that plan counted - not a similar-looking one they then have to reconstruct by hand.
+   */
+  initialAction?: string;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -137,6 +145,7 @@ export default function LicensedUsersPanel({
   const [filters, setFilters] = useState<LicensedUserFilters>({
     ...DEFAULT_FILTERS,
     bands: initialBands ?? [],
+    actions: initialAction ? [initialAction] : [],
   });
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
@@ -221,6 +230,19 @@ export default function LicensedUsersPanel({
           {(filterOptions?.bands ?? []).map((b) => (
             <option key={b.value} value={b.value}>
               {b.name}
+            </option>
+          ))}
+        </Select>
+
+        <Select
+          value={filters.actions.length === 1 ? filters.actions[0] : ''}
+          aria-label="Filter by recommended action"
+          onChange={(_e, d) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
+        >
+          <option value="">All recommended actions</option>
+          {actionPlan.map((a) => (
+            <option key={a.code} value={a.code}>
+              {a.label} ({a.users.toLocaleString()})
             </option>
           ))}
         </Select>

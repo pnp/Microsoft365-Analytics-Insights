@@ -54,6 +54,28 @@ const useStyles = makeStyles({
     padding: '20px 0',
     textAlign: 'center',
   },
+  clickable: {
+    cursor: 'pointer',
+    borderRadius: tokens.borderRadiusMedium,
+    paddingTop: '6px',
+    paddingBottom: '6px',
+    paddingLeft: '6px',
+    paddingRight: '6px',
+    marginLeft: '-6px',
+    marginRight: '-6px',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: tokens.colorStrokeFocus2,
+    },
+  },
+  drill: {
+    color: tokens.colorBrandForegroundLink,
+    whiteSpace: 'nowrap',
+  },
 });
 
 /** The action badge used in the user list, so the tag and the plan always use one palette. */
@@ -78,9 +100,16 @@ export function ActionBadge({ code, label }: { code: string; label: string }) {
 export default function ActionPlan({
   actions,
   showCounts = true,
+  onSelect,
 }: {
   actions: AdoptionActionSummary[];
   showCounts?: boolean;
+  /**
+   * Drill-through. Without it the plan states "76 people need coaching" and then leaves the reader
+   * to rebuild that exact group by hand from the filters on another tab - which is both tedious and
+   * a chance to get a different 76.
+   */
+  onSelect?: (code: string) => void;
 }) {
   const styles = useStyles();
 
@@ -90,22 +119,53 @@ export default function ActionPlan({
 
   return (
     <div className={styles.list}>
-      {actions.map((a) => (
-        <div key={a.code} className={showCounts ? styles.row : styles.rowNoCount}>
-          <ActionBadge code={a.code} label={a.label} />
-          {showCounts && (
-            <Text size={300} weight="semibold" className={styles.count}>
-              {formatCount(a.users)}{' '}
-              <Text size={200} className={styles.share}>
-                ({formatPct(a.sharePct)})
+      {actions.map((a) => {
+        const rowClass = `${showCounts ? styles.row : styles.rowNoCount}${
+          onSelect ? ` ${styles.clickable}` : ''
+        }`;
+
+        return (
+          <div
+            key={a.code}
+            className={rowClass}
+            role={onSelect ? 'button' : undefined}
+            tabIndex={onSelect ? 0 : undefined}
+            title={onSelect ? `Show the ${formatCount(a.users)} people who need this` : undefined}
+            onClick={onSelect ? () => onSelect(a.code) : undefined}
+            onKeyDown={
+              onSelect
+                ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onSelect(a.code);
+                    }
+                  }
+                : undefined
+            }
+          >
+            <ActionBadge code={a.code} label={a.label} />
+            {showCounts && (
+              <Text size={300} weight="semibold" className={styles.count}>
+                {formatCount(a.users)}{' '}
+                <Text size={200} className={styles.share}>
+                  ({formatPct(a.sharePct)})
+                </Text>
               </Text>
+            )}
+            <Text size={200} className={styles.description}>
+              {a.description}
+              {onSelect && (
+                <>
+                  {' '}
+                  <Text size={200} className={styles.drill}>
+                    Show these people &rsaquo;
+                  </Text>
+                </>
+              )}
             </Text>
-          )}
-          <Text size={200} className={styles.description}>
-            {a.description}
-          </Text>
-        </div>
-      ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

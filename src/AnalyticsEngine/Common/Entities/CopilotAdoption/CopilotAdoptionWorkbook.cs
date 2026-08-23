@@ -275,7 +275,7 @@ namespace Common.Entities.CopilotAdoption
             var sheet = workbook.AddSheet("Engagement");
             sheet.SetColumnWidths(26, 14, 16, 34);
 
-            sheet.AddTitle("Engagement bands and habit formation");
+            sheet.AddTitle("Engagement bands and usage frequency");
             sheet.AddBlankRow();
 
             // --- Bands -----------------------------------------------------------------------
@@ -301,16 +301,20 @@ namespace Common.Entities.CopilotAdoption
             bandChart.AddSeries("Users", sheet.RangeReference(bandFirst, 2, bandLast, 2));
             sheet.AddChart(bandChart);
 
-            // --- Habit buckets ---------------------------------------------------------------
+            // --- Unweighted usage frequency ---------------------------------------------------
             if (summary.HabitBuckets.Count > 0)
             {
                 sheet.AddBlankRow();
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "Habit buckets count ACTIVE users only, and restate active days per "
+                    "How often people open Copilot. This is UNWEIGHTED - distinct active days only - and is "
+                    + "deliberately a different measure from 'habitual users' above, which is the weighted "
+                    + "engagement score. Read the two together: a large Daily figure with a low habit rate means "
+                    + "people open Copilot constantly and do very little with it. Counts ACTIVE users only, and "
+                    + "restates active days per "
                     + summary.Options.HabitBucketNormalisationDays
                     + "-day month so they mean the same thing whichever period was selected. A seat that was never "
                     + "used is not 'infrequent' - it is in the reclaimable-seat figure."));
-                sheet.AddHeaderRow("Habit bucket", "Users", "% of active", "Range");
+                sheet.AddHeaderRow("Usage frequency", "Users", "% of active", "Range");
 
                 var habitFirst = sheet.CurrentRow + 1;
                 foreach (var bucket in summary.HabitBuckets)
@@ -322,7 +326,7 @@ namespace Common.Entities.CopilotAdoption
                 var habitChart = new XlsxChart
                 {
                     Type = XlsxChartType.Column,
-                    Title = "Habit formation",
+                    Title = "How often people open Copilot",
                     CategoryRange = sheet.RangeReference(habitFirst, 1, habitLast, 1),
                     AnchorCell = "F20",
                     ShowDataLabels = true,
@@ -756,7 +760,7 @@ namespace Common.Entities.CopilotAdoption
             if (unlicensed.HabitBuckets.Count > 0)
             {
                 sheet.AddBlankRow();
-                sheet.AddHeaderRow("Habit bucket", "Users", "% of active", "Range");
+                sheet.AddHeaderRow("Usage frequency", "Users", "% of active", "Range");
 
                 var first = sheet.CurrentRow + 1;
                 foreach (var bucket in unlicensed.HabitBuckets)
@@ -768,7 +772,7 @@ namespace Common.Entities.CopilotAdoption
                 var chart = new XlsxChart
                 {
                     Type = XlsxChartType.Column,
-                    Title = "Habit formation without a licence",
+                    Title = "How often unlicensed users open Copilot",
                     CategoryRange = sheet.RangeReference(first, 1, last, 1),
                     AnchorCell = "G3",
                     ShowDataLabels = true,
@@ -981,10 +985,13 @@ namespace Common.Entities.CopilotAdoption
                 + "adoption rate can sit at 100% while this sits near zero, which is exactly what a renewal "
                 + "conversation needs to surface.");
 
-            AddMethod(sheet, "Habit buckets",
+            AddMethod(sheet, "How often people open Copilot",
                 $"Active days restated per {o.HabitBucketNormalisationDays}-day month and rounded to whole days, so "
                 + "the buckets mean the same thing whichever period was selected:\n"
                 + $"daysPerMonth = round(activeDays x {o.HabitBucketNormalisationDays} / {o.WindowDays})\n"
+                + "This is UNWEIGHTED frequency and is deliberately NOT the same measure as 'habitual users' above, "
+                + "which is the weighted engagement score. The two are meant to be compared: a large Daily figure "
+                + "with a low habit rate means people open Copilot constantly and do very little with it.\n"
                 + "Percentages are of ACTIVE users. A seat that was never used is not 'infrequent' - it is a "
                 + "reclaimable seat, and merging the two hides the more expensive problem.");
 

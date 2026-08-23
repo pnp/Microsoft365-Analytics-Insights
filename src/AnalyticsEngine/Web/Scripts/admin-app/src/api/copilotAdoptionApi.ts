@@ -38,6 +38,7 @@ function scopeParams(windowDays: number, seatLicenceTypeIds?: number[]): URLSear
 function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUserFilters): URLSearchParams {
   if (filters.search.trim()) params.set('search', filters.search.trim());
   if (filters.bands.length > 0) params.set('bands', filters.bands.join(','));
+  if (filters.actions.length > 0) params.set('actions', filters.actions.join(','));
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
   if (filters.coworkOnly) params.set('coworkOnly', 'true');

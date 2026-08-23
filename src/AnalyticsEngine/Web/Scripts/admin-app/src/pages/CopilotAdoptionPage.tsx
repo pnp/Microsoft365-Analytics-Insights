@@ -95,6 +95,20 @@ const useStyles = makeStyles({
     gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
     gap: '16px',
   },
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '12px',
+    marginTop: '12px',
+    paddingBottom: '6px',
+    borderBottomWidth: '2px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorBrandStroke1,
+  },
+  sectionIndex: {
+    color: tokens.colorBrandForeground1,
+    fontVariantNumeric: 'tabular-nums',
+  },
   cardHead: {
     display: 'flex',
     alignItems: 'flex-start',
@@ -170,6 +184,10 @@ export default function CopilotAdoptionPage() {
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
   const [tab, setTab] = useState<AdoptionTab>('overview');
+  // Set when the user drills through from the enablement plan, so the licensed-user list they land
+  // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
+  // themselves - otherwise a filter they never asked for reappears every time they come back.
+  const [drillAction, setDrillAction] = useState<string | undefined>(undefined);
 
   const [summary, setSummary] = useState<CopilotAdoptionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -233,7 +251,15 @@ export default function CopilotAdoptionPage() {
     };
   }, [availability, windowDays]);
 
-  const onTabSelect: SelectTabEventHandler = (_e, data) => setTab(data.value as AdoptionTab);
+  const onTabSelect: SelectTabEventHandler = (_e, data) => {
+    setDrillAction(undefined);
+    setTab(data.value as AdoptionTab);
+  };
+
+  const drillToAction = (code: string) => {
+    setDrillAction(code);
+    setTab('licensed');
+  };
 
   return (
     <div>
@@ -349,16 +375,21 @@ export default function CopilotAdoptionPage() {
                 </MessageBar>
               )}
 
-              {tab === 'overview' && (
-                <OverviewTab summary={summary} sql={sql} />
-              )}
+              {tab === 'overview' &&
+                (summary.licensedUsers === 0 ? (
+                  <FirstRunState summary={summary} />
+                ) : (
+                  <OverviewTab summary={summary} sql={sql} onDrillToAction={drillToAction} />
+                ))}
 
               {tab === 'licensed' && (
                 <LicensedUsersPanel
+                  key={drillAction ?? 'all'}
                   windowDays={windowDays}
                   filterOptions={filterOptions}
                   actionPlan={summary.actionPlan}
                   options={summary.options}
+                  initialAction={drillAction}
                 />
               )}
 
@@ -398,8 +429,75 @@ export default function CopilotAdoptionPage() {
   );
 }
 
+/**
+ * What the overview shows when there is nothing to show.
+ *
+ * The undesigned version of this state is seventeen cards each saying "no data", which reads as a
+ * broken page rather than an unfinished import - and gives the reader no idea which of several
+ * quite different causes applies. Zero licensed users is nearly always one of three things, so say
+ * which three and what to do about each.
+ */
+function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
+  const styles = useStyles();
+
+  return (
+    <Card>
+      <div className={styles.cardHead}>
+        <div>
+          <Text weight="semibold" size={500}>
+            No Copilot seats found
+          </Text>
+          <Text size={300} block className={styles.muted}>
+            The analysis ran and completed - it found no users holding a Microsoft 365 Copilot licence, so
+            there is nothing to report on yet.
+          </Text>
+        </div>
+      </div>
+      <div className={styles.cardBody}>
+        <Text size={300} block style={{ marginBottom: '10px' }}>
+          This is almost always one of the following. They are listed in the order they are worth checking.
+        </Text>
+        <ol style={{ margin: 0, paddingInlineStart: '20px', lineHeight: 1.7 }}>
+          <li>
+            <strong>Licence data has not been imported yet.</strong> Copilot seats come from the user-licence
+            import, which runs on its own schedule. On a new installation the first full import can take
+            several hours. Check the Health page for when the licence import last succeeded.
+          </li>
+          <li>
+            <strong>No Copilot SKU is marked as a Copilot seat.</strong> Seat detection matches the licence
+            names imported from your tenant. If your organisation holds a SKU this build does not recognise,
+            mark it as a Copilot licence in the licence-type settings and re-run this page.
+          </li>
+          <li>
+            <strong>The tenant genuinely holds no Copilot licences.</strong> In that case the{' '}
+            <em>Licence opportunities</em> tab is the useful one: it ranks unlicensed users by how strong a
+            business case each of them would have for a seat, using their existing Microsoft 365 activity.
+          </li>
+        </ol>
+        {summary.unlicensed?.activeUsers > 0 && (
+          <MessageBar intent="info" style={{ marginTop: '14px' }}>
+            <MessageBarBody>
+              Copilot activity was found for {formatCount(summary.unlicensed.activeUsers)} users who do not
+              appear to hold a seat. That combination usually means the licence import is incomplete rather
+              than that Copilot is unlicensed - see point 1 above.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 /** The executive view: headline figures, the funnel, and where the gaps are. */
-function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: Record<string, string> | null }) {
+function OverviewTab({
+  summary,
+  sql,
+  onDrillToAction,
+}: {
+  summary: CopilotAdoptionSummary;
+  sql: Record<string, string> | null;
+  onDrillToAction?: (code: string) => void;
+}) {
   const styles = useStyles();
   const kpis = buildKpis(summary);
   const o = summary.options;
@@ -423,6 +521,15 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
   return (
     <>
       <KpiGrid items={kpis} />
+
+      <div className={styles.sectionHead}>
+        <Text weight="semibold" size={500}>
+          <span className={styles.sectionIndex}>1.</span> Where you stand
+        </Text>
+        <Text size={200} className={styles.muted}>
+          The headline position: how many seats are earning their keep, and where the drop-off is.
+        </Text>
+      </div>
 
       <Card>
         <div className={styles.cardHead}>
@@ -496,18 +603,123 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
         </div>
       </Card>
 
+      <div className={styles.sectionHead}>
+        <Text weight="semibold" size={500}>
+          <span className={styles.sectionIndex}>2.</span> What to do next
+        </Text>
+        <Text size={200} className={styles.muted}>
+          The work this creates, how big each job is, and which departments to start with.
+        </Text>
+      </div>
+
       <Card>
         <div className={styles.cardHead}>
           <div>
             <Text weight="semibold" size={400}>
-              Habit formation
+              Enablement plan
             </Text>
             <Text size={200} block className={styles.muted}>
-              Of the licensed users who used Copilot at all, how many days a month do they actually open it?
+              Every licensed user needs exactly one of these next steps. This is the size of each job -
+              click any row for the list of people in it.
             </Text>
           </div>
           <InfoTip
-            title="Habit formation"
+            title="Enablement plan"
+            content={{
+              what: 'The per-user recommended actions, aggregated. Each action is stated once with the number of people who need it.',
+              how: `Derived from the engagement band, and for the middle bands from the breadth score as well - a user with a genuine habit confined to one Copilot surface needs broadening rather than more coaching. Clicking a row opens the "Licensed users" tab filtered to exactly the people counted here, which is also what its CSV export will contain.`,
+              source: `Ordered by size. Every user gets exactly one action, so the counts sum to the ${formatCount(
+                analysedUsers,
+              )} licensed users this analysis scored. If that is fewer than the licence count, a warning at the top of the page says so.`,
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} />
+        </div>
+      </Card>
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Adoption by department
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Lowest adoption first - the running order for an enablement plan. Departments with fewer than{' '}
+              {o.minSeatsPerSegment} seats are omitted because the percentage would not be meaningful.
+            </Text>
+          </div>
+          <InfoTip
+            title="Adoption by department"
+            content={{
+              what: 'Copilot adoption for each department, worst first, with the raw seat counts alongside the percentage.',
+              how: `Department comes from the imported user metadata; users with none are grouped as "(no department)". A department needs at least ${o.minSeatsPerSegment} seats to appear - a two-seat department with one active user is a 50% data point that means nothing and would sit at the top of the list.`,
+              source:
+                'The counts are shown next to the rate deliberately: 0% across six seats and 0% across six hundred are the same percentage and completely different decisions.',
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel="Department" bands={bandThresholds} />
+        </div>
+      </Card>
+
+      {summary.opportunityByDepartment.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Where the unmet demand is
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Departments with the most recommended licence candidates. Pair this with the department adoption
+                table above: a department with unused seats and strong candidates can often be rebalanced at no cost.
+              </Text>
+            </div>
+            <div className={styles.cardTools}>
+              <InfoTip
+                title="Where the unmet demand is"
+                content={{
+                  what: `How many unlicensed users in each department scored ${o.opportunityRecommendScore} or above on the business-case score - i.e. how many people there have a strong case for a seat they do not have.`,
+                  how: 'Only recommended candidates are counted, not every unlicensed user. Disabled accounts are excluded. The full ranked list with each person\u2019s justification is on the "Licence opportunities" tab.',
+                  source:
+                    'Read against the department adoption table: a department that appears in both has seats going unused and people who would use them, which is a reassignment rather than a purchase.',
+                }}
+              />
+              {sql?.licenceOpportunities && (
+                <SqlPopover sql={sql.licenceOpportunities} title="SQL behind this chart" />
+              )}
+            </div>
+          </div>
+          <div className={styles.cardBody}>
+            <CategoryBarChart categories={summary.opportunityByDepartment} valueLabel="Candidates" />
+          </div>
+        </Card>
+      )}
+
+      <div className={styles.sectionHead}>
+        <Text weight="semibold" size={500}>
+          <span className={styles.sectionIndex}>3.</span> How Copilot is being used
+        </Text>
+        <Text size={200} className={styles.muted}>
+          The evidence behind those recommendations: how often, how deeply, in which apps, and by whom.
+        </Text>
+      </div>
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              How often people open Copilot
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Of the licensed users who used Copilot at all, how many days a month do they actually open it?
+              Raw days only - no scoring, no weighting.
+            </Text>
+          </div>
+          <InfoTip
+            title="How often people open Copilot"
             content={{
               what: 'Active licensed users split by how often they use Copilot, with no weighting applied at all - just distinct active days.',
               how: `Active days in the selected period are restated as days per ${o.habitBucketNormalisationDays}-day month, then rounded to whole days, so the tiles mean the same thing whichever period is chosen and the captions describe the comparison exactly. Infrequent is 1-${
@@ -517,7 +729,7 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
               }-${o.habitDailyMinDays - 1}, Daily ${o.habitDailyMinDays}+.`,
               formula: `daysPerMonth = round(activeDays x ${o.habitBucketNormalisationDays} / ${o.windowDays})`,
               source:
-                'Percentages are of active users, not of all seats. Seats with no activity at all are counted in "reclaimable seats" instead - calling someone who never opened Copilot "infrequent" would hide the more expensive problem.',
+                'This is deliberately not the same measure as the "habit rate" at the top of the page. That one is the weighted engagement score, which also accounts for how much someone does each time and how many Copilot surfaces they use. This card is the unweighted frequency alone, so the two can be read against each other: a large "Daily" tile with a low habit rate means people open Copilot constantly but do very little with it. Percentages are of active users, not of all seats - calling someone who never opened Copilot "infrequent" would hide the more expensive problem.',
             }}
           />
         </div>
@@ -593,32 +805,6 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
         </Card>
       </div>
 
-      <Card>
-        <div className={styles.cardHead}>
-          <div>
-            <Text weight="semibold" size={400}>
-              Enablement plan
-            </Text>
-            <Text size={200} block className={styles.muted}>
-              Every licensed user needs exactly one of these next steps. This is the size of each job.
-            </Text>
-          </div>
-          <InfoTip
-            title="Enablement plan"
-            content={{
-              what: 'The per-user recommended actions, aggregated. Each action is stated once with the number of people who need it.',
-              how: `Derived from the engagement band, and for the middle bands from the breadth score as well - a user with a genuine habit confined to one Copilot surface needs broadening rather than more coaching. The full per-user list, filterable and exportable, is on the "Licensed users" tab.`,
-              source: `Ordered by size. Every user gets exactly one action, so the counts sum to the ${formatCount(
-                analysedUsers,
-              )} licensed users this analysis scored. If that is fewer than the licence count, a warning at the top of the page says so.`,
-            }}
-          />
-        </div>
-        <div className={styles.cardBody}>
-          <ActionPlan actions={summary.actionPlan} />
-        </div>
-      </Card>
-
       {summary.scoreProfiles.length > 0 && (
         <Card>
           <div className={styles.cardHead}>
@@ -653,6 +839,131 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
           </div>
         </Card>
       )}
+
+      {summary.intensityByDepartment.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Usage frequency and intensity
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Two departments on the same adoption rate can sit in opposite corners of this chart, and need
+                opposite interventions.
+              </Text>
+            </div>
+            <InfoTip
+              title="Usage frequency and intensity"
+              content={{
+                what: 'Each department plotted by how often its users open Copilot (horizontal) against how much they do each time (vertical), with the bubble sized by seats held and coloured by average engagement.',
+                how: `Only users who were active at least once are averaged, so unused seats do not drag a department towards the origin - they are counted in the reclaim figures instead. Active days are normalised to a ${o.habitBucketNormalisationDays}-day month so the axis does not change meaning with the period. Departments with fewer than ${o.minSeatsPerSegment} seats are omitted.`,
+                formula:
+                  `x = mean(activeDays of active users) x ${o.habitBucketNormalisationDays} / ${o.windowDays}\n` +
+                  'y = sum(interactions of active users) / sum(activeDays of active users)',
+                source:
+                  'Bottom-right is frequent but shallow - those users need richer scenarios. Top-left is deep but occasional - those users need a reason to come back tomorrow.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <IntensityScatter points={summary.intensityByDepartment} options={o} />
+          </div>
+        </Card>
+      )}
+
+      {summary.concentration.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                How concentrated usage is
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Share of all Copilot activity by cohort of active licensed users, heaviest first.
+              </Text>
+            </div>
+            <InfoTip
+              title="How concentrated usage is"
+              content={{
+                what: 'Active licensed users ranked by interaction count and cut into cohorts, showing what share of all activity each accounts for.',
+                how: 'Only users who were active at least once are ranked - including idle seats would put every one of them in the bottom cohort at zero and give every tenant the same chart. Percentile cohorts rather than fixed counts, so the shape is comparable between a 50-seat tenant and a 50,000-seat one.',
+                source:
+                  'This is the figure an adoption percentage hides. "40% adoption spread evenly" and "40% adoption where a tenth of them do most of it" are the same percentage and completely different situations - the second collapses when those people change team.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <ConcentrationBar bands={summary.concentration} />
+          </div>
+        </Card>
+      )}
+
+      {summary.weeklyVolumeTrend.length > 1 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Who is doing the Copilot work
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                The same weekly volume as composition rather than comparison - total height is all the Copilot
+                activity in the organisation, and the bands are who is producing it.
+              </Text>
+            </div>
+            <InfoTip
+              title="Who is doing the Copilot work"
+              content={{
+                what: 'Weekly Copilot interactions stacked, so the total and its make-up are readable at once.',
+                how: 'Drawn from the same series as the volume chart above. Weeks with no data for a band are treated as zero rather than interpolated - inventing activity that did not happen is worse than a visible dip.',
+                source:
+                  'Worth stating the trade-off: only the bottom band sits on a flat baseline, so only it can be read precisely. That is acceptable when the message is the mix, which is why the plain line chart above is kept rather than replaced. A rising unlicensed band against a flat licensed one is the clearest possible case for reallocating seats.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <StackedAreaChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
+          </div>
+        </Card>
+      )}
+
+      {summary.topResourceTypes.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                What Copilot is working on
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                The kinds of tenant content Copilot grounded its answers in.
+              </Text>
+            </div>
+            <div className={styles.cardTools}>
+              <InfoTip
+                title="What Copilot is working on"
+                content={{
+                  what: 'The types of organisational content (documents, meetings, chats and so on) that Copilot actually referenced when answering.',
+                  how: `Counted from the resources recorded against each Copilot interaction in the audit log, top ${o.topSegments} types. One interaction can reference several resources, so this counts references rather than interactions.`,
+                  source:
+                    'The clearest available evidence that Copilot is doing work on your own data rather than answering generic questions any free chatbot could. A population whose Copilot use never touches tenant content is getting little that a seat pays for.',
+                }}
+              />
+              {sql?.resourceTypes && <SqlPopover sql={sql.resourceTypes} title="SQL behind this chart" />}
+            </div>
+          </div>
+          <div className={styles.cardBody}>
+            <CategoryBarChart categories={summary.topResourceTypes} valueLabel="References" />
+          </div>
+        </Card>
+      )}
+
+      <div className={styles.sectionHead}>
+        <Text weight="semibold" size={500}>
+          <span className={styles.sectionIndex}>4.</span> Trend and wider reach
+        </Text>
+        <Text size={200} className={styles.muted}>
+          Whether it is moving in the right direction, and what is happening beyond the licensed population.
+        </Text>
+      </div>
 
       {summary.weeklyTrend.length > 0 && (
         <Card>
@@ -713,61 +1024,6 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
         </Card>
       )}
 
-      {summary.weeklyVolumeTrend.length > 1 && (
-        <Card>
-          <div className={styles.cardHead}>
-            <div>
-              <Text weight="semibold" size={400}>
-                Who is doing the Copilot work
-              </Text>
-              <Text size={200} block className={styles.muted}>
-                The same weekly volume as composition rather than comparison - total height is all the Copilot
-                activity in the organisation, and the bands are who is producing it.
-              </Text>
-            </div>
-            <InfoTip
-              title="Who is doing the Copilot work"
-              content={{
-                what: 'Weekly Copilot interactions stacked, so the total and its make-up are readable at once.',
-                how: 'Drawn from the same series as the volume chart above. Weeks with no data for a band are treated as zero rather than interpolated - inventing activity that did not happen is worse than a visible dip.',
-                source:
-                  'Worth stating the trade-off: only the bottom band sits on a flat baseline, so only it can be read precisely. That is acceptable when the message is the mix, which is why the plain line chart above is kept rather than replaced. A rising unlicensed band against a flat licensed one is the clearest possible case for reallocating seats.',
-              }}
-            />
-          </div>
-          <div className={styles.cardBody}>
-            <StackedAreaChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
-          </div>
-        </Card>
-      )}
-
-      {summary.concentration.length > 0 && (
-        <Card>
-          <div className={styles.cardHead}>
-            <div>
-              <Text weight="semibold" size={400}>
-                How concentrated usage is
-              </Text>
-              <Text size={200} block className={styles.muted}>
-                Share of all Copilot activity by cohort of active licensed users, heaviest first.
-              </Text>
-            </div>
-            <InfoTip
-              title="How concentrated usage is"
-              content={{
-                what: 'Active licensed users ranked by interaction count and cut into cohorts, showing what share of all activity each accounts for.',
-                how: 'Only users who were active at least once are ranked - including idle seats would put every one of them in the bottom cohort at zero and give every tenant the same chart. Percentile cohorts rather than fixed counts, so the shape is comparable between a 50-seat tenant and a 50,000-seat one.',
-                source:
-                  'This is the figure an adoption percentage hides. "40% adoption spread evenly" and "40% adoption where a tenth of them do most of it" are the same percentage and completely different situations - the second collapses when those people change team.',
-              }}
-            />
-          </div>
-          <div className={styles.cardBody}>
-            <ConcentrationBar bands={summary.concentration} />
-          </div>
-        </Card>
-      )}
-
       {summary.combinedByDepartment.length > 0 && (
         <Card>
           <div className={styles.cardHead}>
@@ -796,93 +1052,6 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
         </Card>
       )}
 
-      {summary.topResourceTypes.length > 0 && (
-        <Card>
-          <div className={styles.cardHead}>
-            <div>
-              <Text weight="semibold" size={400}>
-                What Copilot is working on
-              </Text>
-              <Text size={200} block className={styles.muted}>
-                The kinds of tenant content Copilot grounded its answers in.
-              </Text>
-            </div>
-            <div className={styles.cardTools}>
-              <InfoTip
-                title="What Copilot is working on"
-                content={{
-                  what: 'The types of organisational content (documents, meetings, chats and so on) that Copilot actually referenced when answering.',
-                  how: `Counted from the resources recorded against each Copilot interaction in the audit log, top ${o.topSegments} types. One interaction can reference several resources, so this counts references rather than interactions.`,
-                  source:
-                    'The clearest available evidence that Copilot is doing work on your own data rather than answering generic questions any free chatbot could. A population whose Copilot use never touches tenant content is getting little that a seat pays for.',
-                }}
-              />
-              {sql?.resourceTypes && <SqlPopover sql={sql.resourceTypes} title="SQL behind this chart" />}
-            </div>
-          </div>
-          <div className={styles.cardBody}>
-            <CategoryBarChart categories={summary.topResourceTypes} valueLabel="References" />
-          </div>
-        </Card>
-      )}
-
-      {summary.intensityByDepartment.length > 0 && (
-        <Card>
-          <div className={styles.cardHead}>
-            <div>
-              <Text weight="semibold" size={400}>
-                Usage frequency and intensity
-              </Text>
-              <Text size={200} block className={styles.muted}>
-                Two departments on the same adoption rate can sit in opposite corners of this chart, and need
-                opposite interventions.
-              </Text>
-            </div>
-            <InfoTip
-              title="Usage frequency and intensity"
-              content={{
-                what: 'Each department plotted by how often its users open Copilot (horizontal) against how much they do each time (vertical), with the bubble sized by seats held and coloured by average engagement.',
-                how: `Only users who were active at least once are averaged, so unused seats do not drag a department towards the origin - they are counted in the reclaim figures instead. Active days are normalised to a ${o.habitBucketNormalisationDays}-day month so the axis does not change meaning with the period. Departments with fewer than ${o.minSeatsPerSegment} seats are omitted.`,
-                formula:
-                  `x = mean(activeDays of active users) x ${o.habitBucketNormalisationDays} / ${o.windowDays}\n` +
-                  'y = sum(interactions of active users) / sum(activeDays of active users)',
-                source:
-                  'Bottom-right is frequent but shallow - those users need richer scenarios. Top-left is deep but occasional - those users need a reason to come back tomorrow.',
-              }}
-            />
-          </div>
-          <div className={styles.cardBody}>
-            <IntensityScatter points={summary.intensityByDepartment} options={o} />
-          </div>
-        </Card>
-      )}
-
-      <Card>
-        <div className={styles.cardHead}>
-          <div>
-            <Text weight="semibold" size={400}>
-              Adoption by department
-            </Text>
-            <Text size={200} block className={styles.muted}>
-              Lowest adoption first - the running order for an enablement plan. Departments with fewer than{' '}
-              {o.minSeatsPerSegment} seats are omitted because the percentage would not be meaningful.
-            </Text>
-          </div>
-          <InfoTip
-            title="Adoption by department"
-            content={{
-              what: 'Copilot adoption for each department, worst first, with the raw seat counts alongside the percentage.',
-              how: `Department comes from the imported user metadata; users with none are grouped as "(no department)". A department needs at least ${o.minSeatsPerSegment} seats to appear - a two-seat department with one active user is a 50% data point that means nothing and would sit at the top of the list.`,
-              source:
-                'The counts are shown next to the rate deliberately: 0% across six seats and 0% across six hundred are the same percentage and completely different decisions.',
-            }}
-          />
-        </div>
-        <div className={styles.cardBody}>
-          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel="Department" bands={bandThresholds} />
-        </div>
-      </Card>
-
       {summary.adoptionByCountry.length > 0 && (
         <Card>
           <Text weight="semibold" size={400}>
@@ -893,39 +1062,6 @@ function OverviewTab({ summary, sql }: { summary: CopilotAdoptionSummary; sql: R
           </Text>
           <div className={styles.cardBody}>
             <SegmentTable rows={summary.adoptionByCountry} segmentLabel="Country" bands={bandThresholds} />
-          </div>
-        </Card>
-      )}
-
-      {summary.opportunityByDepartment.length > 0 && (
-        <Card>
-          <div className={styles.cardHead}>
-            <div>
-              <Text weight="semibold" size={400}>
-                Where the unmet demand is
-              </Text>
-              <Text size={200} block className={styles.muted}>
-                Departments with the most recommended licence candidates. Pair this with the department adoption
-                table above: a department with unused seats and strong candidates can often be rebalanced at no cost.
-              </Text>
-            </div>
-            <div className={styles.cardTools}>
-              <InfoTip
-                title="Where the unmet demand is"
-                content={{
-                  what: `How many unlicensed users in each department scored ${o.opportunityRecommendScore} or above on the business-case score - i.e. how many people there have a strong case for a seat they do not have.`,
-                  how: 'Only recommended candidates are counted, not every unlicensed user. Disabled accounts are excluded. The full ranked list with each person\u2019s justification is on the "Licence opportunities" tab.',
-                  source:
-                    'Read against the department adoption table: a department that appears in both has seats going unused and people who would use them, which is a reassignment rather than a purchase.',
-                }}
-              />
-              {sql?.licenceOpportunities && (
-                <SqlPopover sql={sql.licenceOpportunities} title="SQL behind this chart" />
-              )}
-            </div>
-          </div>
-          <div className={styles.cardBody}>
-            <CategoryBarChart categories={summary.opportunityByDepartment} valueLabel="Candidates" />
           </div>
         </Card>
       )}
@@ -1033,9 +1169,10 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 <strong>reclaimable seats</strong> figure.
               </Text>
               <Text>
-                <strong>Habit buckets</strong> answer the same question with no weighting in it, which is what
-                makes them useful to a sceptical reader: how many days a month does this person actually open
-                Copilot? Infrequent is 1-{o.habitModerateMinDays - 1} days, Moderate {o.habitModerateMinDays}-
+                <strong>"How often people open Copilot"</strong> answers a narrower question with no weighting
+                in it, which is what makes it useful to a sceptical reader: how many days a month does this
+                person actually open Copilot? Infrequent is 1-{o.habitModerateMinDays - 1} days, Moderate{' '}
+                {o.habitModerateMinDays}-
                 {o.habitFrequentMinDays - 1}, Frequent {o.habitFrequentMinDays}-{o.habitDailyMinDays - 1}, and
                 Daily {o.habitDailyMinDays}+ - essentially every working day.
               </Text>

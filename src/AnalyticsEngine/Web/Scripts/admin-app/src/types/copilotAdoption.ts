@@ -374,6 +374,8 @@ export interface AdoptionFilterOptions {
 export interface LicensedUserFilters {
   search: string;
   bands: AdoptionBand[];
+  /** Recommended-action codes to restrict to. Drives the drill-through from the enablement plan. */
+  actions: string[];
   department: string;
   country: string;
   coworkOnly: boolean;

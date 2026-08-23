@@ -353,24 +353,25 @@ namespace Common.Entities.CopilotAdoption
                     var since = row.DaysSinceLastUse.HasValue
                         ? $"last used it {row.DaysSinceLastUse.Value} days ago"
                         : "has used it in the past";
-                    return $"Re-engage - {since} but not once in this period. "
+                    return $"Win back - {since} but not once in this period. "
                          + "Ask what stopped and offer a refresher, or reassign the seat.";
 
                 case AdoptionBand.Trialling:
-                    return "Coach - occasional use only. Target one repeatable Copilot habit in the app they "
-                         + "already live in.";
+                    return "Build a first habit - occasional use only. Target one repeatable Copilot habit in "
+                         + "the app they already live in.";
 
                 case AdoptionBand.Developing:
                     return row.BreadthScore < 34
-                        ? $"Broaden - building a habit but only in {AppsPhrase(row.AppsUsed)}. Introduce a second "
-                          + "surface such as Outlook or Teams meeting recaps."
-                        : "Grow - a habit is forming. A short scenario-based session should move them to daily use.";
+                        ? $"Add a second app - building a habit but only in {AppsPhrase(row.AppsUsed)}. Introduce "
+                          + "a second surface such as Outlook or Teams meeting recaps."
+                        : "Deepen to daily use - a habit is forming. A short scenario-based session should move "
+                          + "them to daily use.";
 
                 case AdoptionBand.Established:
                     return row.BreadthScore < 50
-                        ? $"Broaden - solid regular use, but confined to {AppsPhrase(row.AppsUsed)}; "
+                        ? $"Add a second app - solid regular use, but confined to {AppsPhrase(row.AppsUsed)}; "
                           + "showing them one more surface is the cheapest remaining gain."
-                        : "Sustain - Copilot is part of their working week. No action needed.";
+                        : "No action needed - Copilot is part of their working week.";
 
                 case AdoptionBand.Champion:
                     // A Champion who only ever works in one surface is still leaving value on the
@@ -441,17 +442,24 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
-        /// <summary>Short display label for an action code.</summary>
+        /// <summary>
+        /// Short display label for an action code.
+        ///
+        /// Each label names the step to take, not the state the user is in. "Coach" and "Grow" were
+        /// the original labels and read as synonyms to anyone who had not memorised the band
+        /// definitions, which defeats the point of an action column: two rows that need genuinely
+        /// different interventions looked like the same instruction.
+        /// </summary>
         public static string ActionLabel(string code)
         {
             switch (code)
             {
                 case AdoptionActionCodes.Reclaim: return "Reclaim or onboard";
-                case AdoptionActionCodes.Reengage: return "Re-engage";
-                case AdoptionActionCodes.Coach: return "Coach";
-                case AdoptionActionCodes.Broaden: return "Broaden";
-                case AdoptionActionCodes.Grow: return "Grow";
-                case AdoptionActionCodes.Sustain: return "Sustain";
+                case AdoptionActionCodes.Reengage: return "Win back";
+                case AdoptionActionCodes.Coach: return "Build a first habit";
+                case AdoptionActionCodes.Broaden: return "Add a second app";
+                case AdoptionActionCodes.Grow: return "Deepen to daily use";
+                case AdoptionActionCodes.Sustain: return "No action needed";
                 case AdoptionActionCodes.Advocate: return "Recruit as advocate";
                 default: return string.Empty;
             }

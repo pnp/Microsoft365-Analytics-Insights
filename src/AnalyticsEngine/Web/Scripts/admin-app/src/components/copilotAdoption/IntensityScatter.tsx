@@ -3,6 +3,34 @@ import type { AdoptionIntensityPoint, CopilotAdoptionOptions } from '../../types
 import { formatValue } from '../charts/chartCommon';
 import { scoreColour } from './adoptionShared';
 
+/**
+ * A second, non-colour encoding of the engagement band.
+ *
+ * Colour alone fails for roughly one man in twelve, and fails completely when this page is printed,
+ * pasted into a deck in greyscale, or read on a projector with the contrast turned down - all of
+ * which are normal for a chart whose whole audience is people in meetings. The initial is drawn
+ * inside the bubble wherever it fits, and the legend below repeats the pairing.
+ */
+function bandInitial(
+  score: number,
+  bands: { champion: number; established: number; developing: number },
+): string {
+  if (score >= bands.champion) return 'C';
+  if (score >= bands.established) return 'E';
+  if (score >= bands.developing) return 'D';
+  if (score > 0) return 'T';
+  return '-';
+}
+
+const BAND_KEY: Array<{ initial: string; label: string; score: (b: ScatterBands) => number }> = [
+  { initial: 'C', label: 'Champion', score: (b) => b.champion },
+  { initial: 'E', label: 'Established', score: (b) => b.established },
+  { initial: 'D', label: 'Developing', score: (b) => b.developing },
+  { initial: 'T', label: 'Trialling', score: () => 1 },
+];
+
+type ScatterBands = { champion: number; established: number; developing: number };
+
 const useStyles = makeStyles({
   root: {
     width: '100%',
@@ -17,6 +45,31 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     marginTop: '6px',
     display: 'block',
+  },
+  legend: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '14px',
+    alignItems: 'center',
+    marginTop: '8px',
+  },
+  legendItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    color: tokens.colorNeutralForeground2,
+    fontSize: '12px',
+  },
+  legendSwatch: {
+    width: '16px',
+    height: '16px',
+    borderRadius: '50%',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#ffffff',
+    fontSize: '10px',
+    fontWeight: 700,
   },
 });
 
@@ -92,7 +145,7 @@ export default function IntensityScatter({
   // and make the chart overstate them.
   const rOf = (seats: number) => Math.max(3, MAX_RADIUS * Math.sqrt(seats / maxSeats));
 
-  const bands = {
+  const bands: ScatterBands = {
     champion: options.championScore,
     established: options.establishedScore,
     developing: options.developingScore,
@@ -280,6 +333,20 @@ export default function IntensityScatter({
                 </title>
               </circle>
 
+              {r >= 9 && (
+                <text
+                  x={cx}
+                  y={cy + 4}
+                  textAnchor="middle"
+                  fontSize={11}
+                  fontWeight={700}
+                  fill="#ffffff"
+                  style={{ pointerEvents: 'none' }}
+                >
+                  {bandInitial(p.activeUserAverageScore, bands)}
+                </text>
+              )}
+
               {(above || below) && (
                 <text
                   x={cx}
@@ -297,12 +364,28 @@ export default function IntensityScatter({
         })}
       </svg>
 
+      <div className={styles.legend}>
+        {BAND_KEY.map((k) => (
+          <span key={k.initial} className={styles.legendItem}>
+            <span
+              className={styles.legendSwatch}
+              style={{ backgroundColor: scoreColour(k.score(bands), bands) }}
+              aria-hidden="true"
+            >
+              {k.initial}
+            </span>
+            {k.label}
+          </span>
+        ))}
+      </div>
+
       <Text size={200} className={styles.caption}>
-        Bubble area is proportional to the number of seats the department holds; colour is the average
-        engagement score of its <em>active</em> users, using the same bands as the rest of the page. The dashed
-        lines are your own medians, not fixed targets - each quadrant is "compared with your other
-        departments". Only users who were active at least once are averaged, so a department is not dragged
-        towards the origin by seats that were never used; those are counted in the reclaimable-seat figure.
+        Bubble area is proportional to the number of seats the department holds; colour <em>and</em> the letter
+        inside each bubble both give the average engagement band of its <em>active</em> users, so the chart
+        still reads in greyscale or to a colour-blind reader. The dashed lines are your own medians, not fixed
+        targets - each quadrant is "compared with your other departments". Only users who were active at least
+        once are averaged, so a department is not dragged towards the origin by seats that were never used;
+        those are counted in the reclaimable-seat figure.
       </Text>
     </div>
   );

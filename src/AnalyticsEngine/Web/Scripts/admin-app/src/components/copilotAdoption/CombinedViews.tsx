@@ -26,6 +26,14 @@ const useStyles = makeStyles({
     fontSize: '12px',
     fontVariantNumeric: 'tabular-nums',
     minWidth: '2px',
+    // A hairline between slices so two adjacent steps of the ramp stay separable in greyscale, on a
+    // projector, or to a reader who cannot distinguish the hues at all.
+    borderRightWidth: '1px',
+    borderRightStyle: 'solid',
+    borderRightColor: '#ffffff',
+    ':last-child': {
+      borderRightWidth: '0',
+    },
   },
   legend: {
     display: 'flex',
@@ -39,9 +47,16 @@ const useStyles = makeStyles({
     gap: '6px',
   },
   swatch: {
-    width: '10px',
-    height: '10px',
-    borderRadius: '2px',
+    width: '16px',
+    height: '16px',
+    borderRadius: '3px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#ffffff',
+    fontSize: '10px',
+    fontWeight: 700,
+    flexShrink: 0,
   },
   muted: {
     color: tokens.colorNeutralForeground3,
@@ -88,7 +103,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
               b.sharePct,
             )} of all activity), ${b.interactionsPerUser} each`}
           >
-            {b.sharePct >= 8 ? formatPct(b.sharePct) : ''}
+            {b.sharePct >= 8 ? `${i + 1}. ${formatPct(b.sharePct)}` : ''}
           </div>
         ))}
       </div>
@@ -96,7 +111,13 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
       <div className={styles.legend}>
         {bands.map((b, i) => (
           <div key={b.label} className={styles.legendItem}>
-            <span className={styles.swatch} style={{ backgroundColor: COHORT_COLOUR[i % COHORT_COLOUR.length] }} />
+            <span
+              className={styles.swatch}
+              style={{ backgroundColor: COHORT_COLOUR[i % COHORT_COLOUR.length] }}
+              aria-hidden="true"
+            >
+              {i + 1}
+            </span>
             <Text size={200}>
               <strong>{b.label}</strong>{' '}
               <span className={styles.muted}>

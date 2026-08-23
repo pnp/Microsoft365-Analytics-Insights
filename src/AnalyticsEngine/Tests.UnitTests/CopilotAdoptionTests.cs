@@ -166,7 +166,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, neverUsed.AdoptionScore);
             Assert.AreEqual(0, dormant.AdoptionScore);
             StringAssert.Contains(neverUsed.RecommendedAction, "Reclaim");
-            StringAssert.Contains(dormant.RecommendedAction, "Re-engage");
+            StringAssert.Contains(dormant.RecommendedAction, "Win back");
         }
 
         [TestMethod]
@@ -1215,6 +1215,46 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void EveryActionLabel_IsDistinctAndNamesTheStepToTake()
+        {
+            // The action column exists so an admin can group by it and say "these 76 need X". That
+            // only works if two different interventions do not read as the same instruction. The
+            // original "Coach" / "Grow" pair failed this: both are vague encouragement verbs, and a
+            // reader had to know the band thresholds to tell them apart.
+            var labels = CopilotAdoptionScoring.AllActionCodes
+                .Select(CopilotAdoptionScoring.ActionLabel)
+                .ToList();
+
+            CollectionAssert.AllItemsAreUnique(labels.ToList(), "Two actions share a label.");
+
+            foreach (var code in CopilotAdoptionScoring.AllActionCodes)
+            {
+                var label = CopilotAdoptionScoring.ActionLabel(code);
+                Assert.IsFalse(string.IsNullOrWhiteSpace(label), $"'{code}' has no label.");
+                Assert.IsFalse(
+                    string.IsNullOrWhiteSpace(CopilotAdoptionScoring.ActionDescription(code)),
+                    $"'{code}' has a label but no explanation of why anyone qualifies for it.");
+
+                // A label that is a bare single word is almost always a state ("Coach", "Sustain")
+                // rather than an instruction. The one exception would have to be argued for.
+                Assert.IsTrue(
+                    label.Split(' ').Length > 1,
+                    $"'{label}' is a single word - say what to do, not what the user is.");
+            }
+
+            // No label may be wholly contained in another: that is the shape of a near-synonym pair.
+            foreach (var a in labels)
+            {
+                foreach (var b in labels.Where(x => x != a))
+                {
+                    Assert.IsFalse(
+                        b.IndexOf(a, StringComparison.OrdinalIgnoreCase) >= 0,
+                        $"'{a}' is contained in '{b}' - these will read as the same action.");
+                }
+            }
+        }
+
         #endregion
 
         #region Frequency vs intensity
@@ -1574,6 +1614,58 @@ namespace Tests.UnitTests
                 CopilotAdoptionAPIController.ParseBands("champion").ToArray());
 
             Assert.AreEqual(0, CopilotAdoptionAPIController.ParseBands("99,not-a-band").Count);
+        }
+
+        [TestMethod]
+        public void ActionFilter_DrillsThroughToExactlyTheGroupThePlanCounted()
+        {
+            // The whole value of the drill-through is that the list it lands on has the same members
+            // as the aggregate that was clicked. If it filtered by band instead, "Add a second app" -
+            // which spans Developing and Established - would land on a different set of people than
+            // the number the reader just clicked, which is worse than having no link at all.
+            var rows = new[]
+            {
+                ActionRow("a@contoso.com", CopilotAdoptionScoring.AdoptionActionCodes.Broaden),
+                ActionRow("b@contoso.com", CopilotAdoptionScoring.AdoptionActionCodes.Broaden),
+                ActionRow("c@contoso.com", CopilotAdoptionScoring.AdoptionActionCodes.Reclaim),
+            };
+
+            var broaden = CopilotAdoptionExports.Apply(rows, new LicensedUserQuery
+            {
+                Actions = new List<string> { CopilotAdoptionScoring.AdoptionActionCodes.Broaden },
+            });
+
+            CollectionAssert.AreEquivalent(
+                new[] { "a@contoso.com", "b@contoso.com" },
+                broaden.Select(r => r.UserPrincipalName).ToArray());
+
+            // No filter must mean no filtering, not "match nothing".
+            Assert.AreEqual(3, CopilotAdoptionExports.Apply(rows, new LicensedUserQuery()).Count);
+
+            // Codes arrive from a query string, so casing and whitespace are not guaranteed.
+            CollectionAssert.AreEqual(
+                new[] { CopilotAdoptionScoring.AdoptionActionCodes.Reclaim },
+                CopilotAdoptionAPIController.ParseActions(" RECLAIM , reclaim ").ToArray());
+
+            // An unknown code must not silently filter the list down to nothing - that reads as
+            // "there is nobody in this group", which is the most misleading possible failure here.
+            Assert.AreEqual(0, CopilotAdoptionAPIController.ParseActions("not-an-action").Count);
+            Assert.AreEqual(
+                3,
+                CopilotAdoptionExports.Apply(rows, new LicensedUserQuery
+                {
+                    Actions = CopilotAdoptionAPIController.ParseActions("not-an-action"),
+                }).Count);
+        }
+
+        private static LicensedUserAdoptionRow ActionRow(string upn, string actionCode)
+        {
+            return new LicensedUserAdoptionRow
+            {
+                UserPrincipalName = upn,
+                RecommendedActionCode = actionCode,
+                RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(actionCode),
+            };
         }
 
         #endregion

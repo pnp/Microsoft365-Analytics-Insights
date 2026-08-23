@@ -17,6 +17,15 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Restrict to these engagement bands; empty means all.</summary>
         public List<AdoptionBand> Bands { get; set; } = new List<AdoptionBand>();
 
+        /// <summary>
+        /// Restrict to these recommended-action codes; empty means all. Separate from
+        /// <see cref="Bands"/> because an action is not a band: "Add a second app" spans two bands,
+        /// and it is the action that an enablement programme is actually organised around, so the
+        /// aggregate plan on the overview has to be able to drill through to exactly the people it
+        /// counted rather than to an approximation of them.
+        /// </summary>
+        public List<string> Actions { get; set; } = new List<string>();
+
         public string Department { get; set; }
 
         public string Country { get; set; }
@@ -116,6 +125,12 @@ namespace Common.Entities.CopilotAdoption
         private static bool MatchesLicensedUser(LicensedUserAdoptionRow row, LicensedUserQuery q)
         {
             if (q.Bands != null && q.Bands.Count > 0 && !q.Bands.Contains(row.Band))
+            {
+                return false;
+            }
+
+            if (q.Actions != null && q.Actions.Count > 0 &&
+                !q.Actions.Contains(row.RecommendedActionCode ?? string.Empty, StringComparer.OrdinalIgnoreCase))
             {
                 return false;
             }
