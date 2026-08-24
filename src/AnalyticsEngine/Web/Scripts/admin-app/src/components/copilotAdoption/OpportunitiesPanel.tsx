@@ -17,12 +17,14 @@ import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react
 import { fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
+  CopilotAdoptionOptions,
   LicenceOpportunityPage,
   OpportunityFilters,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
 import { ScoreBar, useAdoptionTableStyles } from './adoptionShared';
 import { formatCount, formatDate } from './KpiGrid';
+import InfoTip from './InfoTip';
 
 const PAGE_SIZE = 50;
 
@@ -78,6 +80,11 @@ const useStyles = makeStyles({
     backgroundColor: '#107c10',
     whiteSpace: 'nowrap',
   },
+  thWithInfo: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
+  },
 });
 
 const DEFAULT_FILTERS: OpportunityFilters = {
@@ -101,10 +108,13 @@ const DEFAULT_FILTERS: OpportunityFilters = {
 export default function OpportunitiesPanel({
   windowDays,
   filterOptions,
+  options,
   seatLicenceTypeIds,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
+  /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
+  options: CopilotAdoptionOptions;
   seatLicenceTypeIds?: number[];
 }) {
   const styles = useStyles();
@@ -248,13 +258,57 @@ export default function OpportunitiesPanel({
               <tr>
                 <th className={table.th}>User</th>
                 <th className={table.th}>Department</th>
-                <th className={table.th}>Business case</th>
-                <th className={table.th}>Already using Copilot</th>
+                <th className={table.th}>
+                  <span className={styles.thWithInfo}>
+                    Business case
+                    <InfoTip
+                      title="Business case score"
+                      content={{
+                        what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Anyone at ${options.opportunityRecommendScore} or above is counted in the "recommended for a licence" headline.`,
+                        how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own.`,
+                        formula:
+                          `copilot     = min(1, unlicensedCopilotInteractions / ${options.opportunityCopilotTarget})\n` +
+                          `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
+                          `email       = min(1, (emailsSent + emailsRead) / ${options.opportunityEmailTarget})\n` +
+                          `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
+                          `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}`,
+                        source:
+                          'Copilot use comes from the Copilot audit import and covers this period exactly. The Teams, email and document figures come from the latest Microsoft 365 usage-report snapshot, which is a Microsoft-defined window rather than the period selected above. Hover any row for its four component scores.',
+                      }}
+                    />
+                  </span>
+                </th>
+                <th className={table.th}>
+                  <span className={styles.thWithInfo}>
+                    Already using Copilot
+                    <InfoTip
+                      title="Already using Copilot"
+                      content={{
+                        what: 'Copilot interactions this person made in the selected period despite holding no Microsoft 365 Copilot licence - almost always Copilot Chat, which is available without one.',
+                        how: 'Counted from the Copilot audit log for users who hold none of the SKUs classified as a Copilot licence. Shown as interactions and the number of distinct days they happened on, because ten interactions across ten days is a habit and ten in one afternoon is an experiment.',
+                        source:
+                          'Invisible in Microsoft\u2019s own Copilot usage report, which only covers licensed users. It needs the Copilot audit import to be enabled.',
+                      }}
+                    />
+                  </span>
+                </th>
                 <th className={`${table.th} ${table.thNumeric}`}>Teams</th>
                 <th className={`${table.th} ${table.thNumeric}`}>Email</th>
                 <th className={`${table.th} ${table.thNumeric}`}>Files</th>
                 <th className={table.th}>Last M365 activity</th>
-                <th className={table.th}>Justification</th>
+                <th className={table.th}>
+                  <span className={styles.thWithInfo}>
+                    Justification
+                    <InfoTip
+                      title="Justification"
+                      content={{
+                        what: 'The score restated in plain English, naming the specific signals that produced it for this person.',
+                        how: 'Written per user rather than per band - unlike the licensed-user list, no two candidates reach the same score by the same route, so this genuinely differs from row to row.',
+                        source: 'Safe to paste directly into a licence request. It is also in the CSV export.',
+                      }}
+                    />
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>

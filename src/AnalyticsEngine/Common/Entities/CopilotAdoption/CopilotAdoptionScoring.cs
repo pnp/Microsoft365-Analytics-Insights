@@ -45,6 +45,24 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
+        /// Inclusive UTC start of a "last N days" window that ends today.
+        ///
+        /// Deliberately <c>N-1</c> days back, not <c>N</c>. Midnight N days ago spans <b>N+1</b> distinct
+        /// calendar dates, so a user active every single day would record 29 active days in a "28-day"
+        /// window - while the frequency component divides by a target derived from 28. The numerator and
+        /// the denominator have to be measuring the same window, or the score is quietly inflated for
+        /// exactly the most engaged users, and "last 28 days" in the UI means something else again.
+        ///
+        /// Lives next to <see cref="TargetActiveDays"/> on purpose: these two are the window definition,
+        /// and they must move together.
+        /// </summary>
+        public static DateTime WindowStartUtc(DateTime nowUtc, int windowDays)
+        {
+            var days = Math.Max(1, windowDays);
+            return nowUtc.Date.AddDays(-(days - 1));
+        }
+
+        /// <summary>
         /// Days of use inside the window that earn full marks for frequency. Reported to the user next
         /// to their actual active days so "62%" is never an unexplained number.
         /// </summary>
@@ -159,6 +177,8 @@ namespace Common.Entities.CopilotAdoption
                 SignalSource = useReport ? SignalSourceUsageReport : SignalSourceAudit,
             };
 
+            scored.RecommendedActionCode = RecommendedActionCode(scored);
+            scored.RecommendedActionLabel = ActionLabel(scored.RecommendedActionCode);
             scored.RecommendedAction = RecommendedAction(scored, o);
             return scored;
         }
@@ -218,6 +238,20 @@ namespace Common.Entities.CopilotAdoption
         };
 
         /// <summary>
+        /// Whether this user did anything with Copilot in the window.
+        ///
+        /// One predicate, used by every headcount. Scoring treats interactions OR active days as
+        /// activity, because Microsoft's usage report can supply a prompt count with no per-day
+        /// breakdown - so testing active days alone silently dropped those users from the
+        /// concentration, department and intensity views while the headline still counted them.
+        /// </summary>
+        public static bool IsActive(LicensedUserAdoptionRow row)
+        {
+            if (row == null) return false;
+            return row.Interactions > 0 || row.ActiveDays > 0;
+        }
+
+        /// <summary>
         /// True when the user has made Copilot part of their working week. Used for the "habit rate"
         /// headline, which is the figure that actually correlates with realised value - "has used it at
         /// least once" is easy to hit and tells an executive nothing.
@@ -227,9 +261,100 @@ namespace Common.Entities.CopilotAdoption
             return band == AdoptionBand.Established || band == AdoptionBand.Champion;
         }
 
+        #region Habit-formation buckets
+
+        /// <summary>
+        /// Restates a per-window figure as a per-month one.
+        ///
+        /// The reporting period is adjustable, so any rate quoted "per user" silently changes meaning
+        /// when the reader changes the period drop-down unless it is normalised. Used for active days
+        /// and for interaction volumes alike - it is a linear rescale, not a days-specific rule.
+        /// </summary>
+        public static double NormaliseToMonth(
+            double valueInWindow,
+            int windowDays,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var days = Math.Max(1, windowDays);
+            return valueInWindow * o.HabitBucketNormalisationDays / (double)days;
+        }
+
+        /// <summary>
+        /// Active days in the window, restated as active days per month.
+        ///
+        /// Without this, "11+ active days" would mean a near-daily user over a 28-day window and a
+        /// once-a-fortnight user over a 180-day one, and the same tile would silently change meaning
+        /// when the reader changed the period drop-down.
+        /// </summary>
+        public static double NormalisedActiveDaysPerMonth(
+            double activeDays,
+            int windowDays,
+            CopilotAdoptionOptions options = null)
+        {
+            return NormaliseToMonth(activeDays, windowDays, options);
+        }
+
+        /// <summary>
+        /// Habit bucket for a normalised active-days-per-month figure.
+        ///
+        /// The normalised value is fractional (12 days in a 90-day window is 3.73 days a month), so it
+        /// is rounded to whole days before bucketing - otherwise the tile captions ("1-5 active days a
+        /// month") would not exactly describe the comparison being made, and a user on 5.6 days would
+        /// sit in a bucket whose label excludes them. Any activity at all rounds up to at least one
+        /// day, so a single interaction in a 180-day window is Infrequent rather than unbucketed.
+        ///
+        /// Zero maps to null: a user with no activity is not "infrequent", they are in the reclaim
+        /// pile, and merging the two hides the more expensive problem.
+        /// </summary>
+        public static string HabitBucketFor(double normalisedActiveDays, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (normalisedActiveDays <= 0) return null;
+
+            var days = Math.Max(1, (int)Math.Round(normalisedActiveDays, MidpointRounding.AwayFromZero));
+
+            if (days >= o.HabitDailyMinDays) return "Daily";
+            if (days >= o.HabitFrequentMinDays) return "Frequent";
+            if (days >= o.HabitModerateMinDays) return "Moderate";
+            return "Infrequent";
+        }
+
+        /// <summary>Bucket names, least engaged first, so a habit strip always shows every bucket.</summary>
+        public static IReadOnlyList<string> AllHabitBuckets { get; } = new[]
+        {
+            "Infrequent", "Moderate", "Frequent", "Daily",
+        };
+
+        /// <summary>The bucket's day range in plain English, e.g. "6-10 active days a month".</summary>
+        public static string HabitBucketRangeLabel(string bucket, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var moderate = (int)Math.Round(o.HabitModerateMinDays, MidpointRounding.AwayFromZero);
+            var frequent = (int)Math.Round(o.HabitFrequentMinDays, MidpointRounding.AwayFromZero);
+            var daily = (int)Math.Round(o.HabitDailyMinDays, MidpointRounding.AwayFromZero);
+
+            switch (bucket)
+            {
+                case "Infrequent": return $"1-{Math.Max(1, moderate - 1)} active days a month";
+                case "Moderate": return $"{moderate}-{Math.Max(moderate, frequent - 1)} active days a month";
+                case "Frequent": return $"{frequent}-{Math.Max(frequent, daily - 1)} active days a month";
+                case "Daily": return $"{daily}+ active days a month";
+                default: return string.Empty;
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// The single next step for this user, in plain English. Exported in the CSV so the list can be
         /// handed to a department lead and acted on without further interpretation.
+        ///
+        /// On screen the prose is shown once per action group rather than once per row - see
+        /// <see cref="RecommendedActionCode"/> and <see cref="ActionDescription"/>. In a CSV, where a
+        /// reader takes one row at a time and may sort or filter it arbitrarily, the full sentence on
+        /// every row is worth the repetition.
         /// </summary>
         public static string RecommendedAction(LicensedUserAdoptionRow row, CopilotAdoptionOptions options = null)
         {
@@ -240,30 +365,31 @@ namespace Common.Entities.CopilotAdoption
             {
                 case AdoptionBand.NeverUsed:
                     return $"Reclaim or onboard - no Copilot activity in the last {o.HistoryDays} days. "
-                         + "Confirm the seat is still needed before renewal.";
+                         + "Confirm the licence is still needed before renewal.";
 
                 case AdoptionBand.Dormant:
                     var since = row.DaysSinceLastUse.HasValue
                         ? $"last used it {row.DaysSinceLastUse.Value} days ago"
                         : "has used it in the past";
-                    return $"Re-engage - {since} but not once in this period. "
-                         + "Ask what stopped and offer a refresher, or reassign the seat.";
+                    return $"Win back - {since} but not once in this period. "
+                         + "Ask what stopped and offer a refresher, or reassign the licence.";
 
                 case AdoptionBand.Trialling:
-                    return "Coach - occasional use only. Target one repeatable Copilot habit in the app they "
-                         + "already live in.";
+                    return "Build a first habit - occasional use only. Target one repeatable Copilot habit in "
+                         + "the app they already live in.";
 
                 case AdoptionBand.Developing:
                     return row.BreadthScore < 34
-                        ? $"Broaden - building a habit but only in {AppsPhrase(row.AppsUsed)}. Introduce a second "
-                          + "surface such as Outlook or Teams meeting recaps."
-                        : "Grow - a habit is forming. A short scenario-based session should move them to daily use.";
+                        ? $"Add a second app - building a habit but only in {AppsPhrase(row.AppsUsed)}. Introduce "
+                          + "a second surface such as Outlook or Teams meeting recaps."
+                        : "Deepen to daily use - a habit is forming. A short scenario-based session should move "
+                          + "them to daily use.";
 
                 case AdoptionBand.Established:
                     return row.BreadthScore < 50
-                        ? $"Sustain and broaden - solid regular use in {AppsPhrase(row.AppsUsed)}; "
+                        ? $"Add a second app - solid regular use, but confined to {AppsPhrase(row.AppsUsed)}; "
                           + "showing them one more surface is the cheapest remaining gain."
-                        : "Sustain - Copilot is part of their working week. No action needed.";
+                        : "No action needed - Copilot is part of their working week.";
 
                 case AdoptionBand.Champion:
                     // A Champion who only ever works in one surface is still leaving value on the
@@ -278,6 +404,348 @@ namespace Common.Entities.CopilotAdoption
                 default:
                     return string.Empty;
             }
+        }
+
+        #region Recommended-action catalogue
+
+        /// <summary>
+        /// The stable action codes. Deliberately a small closed set: an admin planning an enablement
+        /// programme needs to be able to say "these 76 people need coaching", which only works if the
+        /// action is a value they can group and count by rather than a sentence.
+        /// </summary>
+        public static class AdoptionActionCodes
+        {
+            public const string Reclaim = "reclaim";
+            public const string Reengage = "reengage";
+            public const string Coach = "coach";
+            public const string Broaden = "broaden";
+            public const string Grow = "grow";
+            public const string Sustain = "sustain";
+            public const string Advocate = "advocate";
+        }
+
+        /// <summary>All action codes in the order they should be worked through - cheapest saving first.</summary>
+        public static IReadOnlyList<string> AllActionCodes { get; } = new[]
+        {
+            AdoptionActionCodes.Reclaim,
+            AdoptionActionCodes.Reengage,
+            AdoptionActionCodes.Coach,
+            AdoptionActionCodes.Broaden,
+            AdoptionActionCodes.Grow,
+            AdoptionActionCodes.Sustain,
+            AdoptionActionCodes.Advocate,
+        };
+
+        /// <summary>
+        /// Which action this user needs, as a code. Shares its branching with
+        /// <see cref="RecommendedAction"/> so the tag on screen can never disagree with the sentence in
+        /// the CSV.
+        /// </summary>
+        public static string RecommendedActionCode(LicensedUserAdoptionRow row)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+
+            switch (row.Band)
+            {
+                case AdoptionBand.NeverUsed: return AdoptionActionCodes.Reclaim;
+                case AdoptionBand.Dormant: return AdoptionActionCodes.Reengage;
+                case AdoptionBand.Trialling: return AdoptionActionCodes.Coach;
+                case AdoptionBand.Developing:
+                    return row.BreadthScore < 34 ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Grow;
+                case AdoptionBand.Established:
+                    return row.BreadthScore < 50 ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Sustain;
+                case AdoptionBand.Champion:
+                    return AdoptionActionCodes.Advocate;
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Short display label for an action code.
+        ///
+        /// Each label names the step to take, not the state the user is in. "Coach" and "Grow" were
+        /// the original labels and read as synonyms to anyone who had not memorised the band
+        /// definitions, which defeats the point of an action column: two rows that need genuinely
+        /// different interventions looked like the same instruction.
+        /// </summary>
+        public static string ActionLabel(string code)
+        {
+            switch (code)
+            {
+                case AdoptionActionCodes.Reclaim: return "Reclaim or onboard";
+                case AdoptionActionCodes.Reengage: return "Win back";
+                case AdoptionActionCodes.Coach: return "Build a first habit";
+                case AdoptionActionCodes.Broaden: return "Add a second app";
+                case AdoptionActionCodes.Grow: return "Deepen to daily use";
+                case AdoptionActionCodes.Sustain: return "No action needed";
+                case AdoptionActionCodes.Advocate: return "Recruit as advocate";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// What the action means and why these users qualify for it - stated once per action rather
+        /// than repeated on every row that shares it.
+        /// </summary>
+        public static string ActionDescription(string code, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            switch (code)
+            {
+                case AdoptionActionCodes.Reclaim:
+                    return $"No Copilot activity at all in the last {o.HistoryDays} days. Confirm the licence is "
+                         + "still needed before renewal; if it is, this person has never been onboarded and "
+                         + "the licence has produced nothing so far.";
+
+                case AdoptionActionCodes.Reengage:
+                    return "Used Copilot before this period but not once inside it. Someone who tried it and "
+                         + "stopped is a different problem from someone who never started - ask what stopped, "
+                         + "offer a refresher, or reassign the licence.";
+
+                case AdoptionActionCodes.Coach:
+                    return $"Occasional use only (engagement below {o.DevelopingScore}). The cheapest move is "
+                         + "one repeatable habit in the app they already live in, rather than a general "
+                         + "Copilot training session.";
+
+                case AdoptionActionCodes.Broaden:
+                    return "Real, regular use - but almost entirely in a single Copilot surface. Introducing "
+                         + "one more surface (Outlook summaries, Teams meeting recaps) is the cheapest "
+                         + "remaining gain for these users, because they have already accepted Copilot and "
+                         + "simply have not been shown where else it works.";
+
+                case AdoptionActionCodes.Grow:
+                    return $"Engagement between {o.DevelopingScore} and {o.EstablishedScore} across more than "
+                         + "one surface. A short scenario-based session aimed at their actual job is what "
+                         + "moves this group to daily use.";
+
+                case AdoptionActionCodes.Sustain:
+                    return $"Engagement at or above {o.EstablishedScore} across multiple surfaces - Copilot is "
+                         + "part of their working week. No action needed; these are the licences that are paying "
+                         + "for themselves.";
+
+                case AdoptionActionCodes.Advocate:
+                    return $"Engagement at or above {o.ChampionScore} - among your deepest users. Ask them to "
+                         + "run a peer session for their own department, which converts better than centrally "
+                         + "run training. If their breadth score is low they are still worth showing one more "
+                         + "surface.";
+
+                default: return string.Empty;
+            }
+        }
+
+        #endregion
+
+        #endregion
+
+        #region Agent inventory
+
+        /// <summary>
+        /// The verdict on an agent: keep it, review it, retire it - or leave it alone because it is
+        /// too new to judge.
+        ///
+        /// The "New" exemption is the important one. A brand-new agent with two users is not failing,
+        /// it has not started, and an inventory review that retires it on that evidence is how an agent
+        /// programme gets strangled in its first month.
+        /// </summary>
+        public static AgentUsageRow ScoreAgent(
+            AgentUsageQueryRow row,
+            DateTime nowUtc,
+            CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            var daysSinceLastUse = row.LastUsedUtc.HasValue
+                ? (int?)Math.Max(0, (int)(nowUtc.Date - row.LastUsedUtc.Value.Date).TotalDays)
+                : null;
+
+            var daysSinceFirstUse = row.FirstUsedUtc.HasValue
+                ? (int?)Math.Max(0, (int)(nowUtc.Date - row.FirstUsedUtc.Value.Date).TotalDays)
+                : null;
+
+            var scored = new AgentUsageRow
+            {
+                AgentId = row.AgentId,
+                Name = row.Name,
+                AgentKey = row.AgentKey,
+                IsCustomAgent = row.IsCustomAgent,
+                Interactions = row.Interactions,
+                WindowInteractions = row.WindowInteractions,
+                Users = row.Users,
+                LicensedUsers = row.LicensedUsers,
+                ActiveDays = row.ActiveDays,
+                AppsUsed = row.AppsUsed,
+                InteractionsPerUser = row.Users <= 0
+                    ? 0
+                    : Round(row.Interactions / (double)row.Users, 1),
+                FirstUsedUtc = row.FirstUsedUtc,
+                LastUsedUtc = row.LastUsedUtc,
+                DaysSinceLastUse = daysSinceLastUse,
+            };
+
+            scored.Health = AgentHealthFor(daysSinceFirstUse, daysSinceLastUse, row.Users, o);
+            scored.HealthName = AgentHealthDisplayName(scored.Health);
+            scored.HealthReason = AgentHealthReason(scored, o);
+            return scored;
+        }
+
+        /// <summary>The health rule on its own, so it can be tested without building a row.</summary>
+        public static AgentHealth AgentHealthFor(
+            int? daysSinceFirstUse,
+            int? daysSinceLastUse,
+            int users,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            // Never used at all, or no dates recorded: nothing to judge it on but its age.
+            if (!daysSinceLastUse.HasValue)
+            {
+                return daysSinceFirstUse.HasValue && daysSinceFirstUse.Value <= o.AgentNewDays
+                    ? AgentHealth.New
+                    : AgentHealth.Retire;
+            }
+
+            // Checked before the inactivity rules on purpose - see the remarks above.
+            if (daysSinceFirstUse.HasValue && daysSinceFirstUse.Value <= o.AgentNewDays)
+            {
+                return AgentHealth.New;
+            }
+
+            if (daysSinceLastUse.Value >= o.AgentRetireInactiveDays) return AgentHealth.Retire;
+            if (daysSinceLastUse.Value >= o.AgentReviewInactiveDays) return AgentHealth.Review;
+
+            // Current, but used by so few people that it is likely still its author testing it.
+            return users < o.AgentMinUsers ? AgentHealth.Review : AgentHealth.Keep;
+        }
+
+        public static string AgentHealthDisplayName(AgentHealth health)
+        {
+            switch (health)
+            {
+                case AgentHealth.Keep: return "Keep";
+                case AgentHealth.New: return "New";
+                case AgentHealth.Review: return "Review";
+                case AgentHealth.Retire: return "Retire";
+                default: return health.ToString();
+            }
+        }
+
+        /// <summary>All health states, worst first, so a breakdown always shows every bucket.</summary>
+        public static IReadOnlyList<AgentHealth> AllAgentHealthStates { get; } = new[]
+        {
+            AgentHealth.Retire, AgentHealth.Review, AgentHealth.New, AgentHealth.Keep,
+        };
+
+        /// <summary>Why this agent got this verdict - the same explain-yourself rule the rest of the tool follows.</summary>
+        public static string AgentHealthReason(AgentUsageRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            switch (row.Health)
+            {
+                case AgentHealth.New:
+                    return $"First seen within the last {o.AgentNewDays} days. Too new to judge - give it "
+                         + "time to gain adoption before reviewing it.";
+
+                case AgentHealth.Retire:
+                    return row.DaysSinceLastUse.HasValue
+                        ? $"Not used for {row.DaysSinceLastUse.Value} days ({o.AgentRetireInactiveDays}+ is the "
+                          + "retirement line). Confirm with its owner, then remove it."
+                        : "No recorded use at all. Confirm with its owner, then remove it.";
+
+                case AgentHealth.Review:
+                    if (row.DaysSinceLastUse.HasValue && row.DaysSinceLastUse.Value >= o.AgentReviewInactiveDays)
+                    {
+                        return $"Going quiet - last used {row.DaysSinceLastUse.Value} days ago. Worth asking "
+                             + "whether it is still needed before it drifts into the retire pile.";
+                    }
+                    return $"Still in use, but only by {row.Users} "
+                         + (row.Users == 1 ? "person" : "people")
+                         + $" - below the {o.AgentMinUsers} needed to call it adopted. Often this is the author "
+                         + "testing it, or an agent that was never announced to the people it was built for.";
+
+                case AgentHealth.Keep:
+                    return $"Used within the last {o.AgentReviewInactiveDays} days by {row.Users} people. "
+                         + "Genuinely adopted - keep supporting it.";
+
+                default: return string.Empty;
+            }
+        }
+
+        #endregion
+
+        #region Usage concentration
+
+        /// <summary>
+        /// The cohorts the usage distribution is cut into, heaviest first. Percentile boundaries rather
+        /// than fixed counts, so the shape is comparable between a 50-seat tenant and a 50,000-seat one.
+        /// </summary>
+        public static IReadOnlyList<Tuple<string, double>> ConcentrationCohorts { get; } =
+            new[]
+            {
+                Tuple.Create("Top 10%", 0.10),
+                Tuple.Create("Next 15%", 0.15),
+                Tuple.Create("Next 25%", 0.25),
+                Tuple.Create("Bottom 50%", 0.50),
+            };
+
+        /// <summary>
+        /// How concentrated Copilot usage is across the people who actually use it.
+        ///
+        /// Copilot usage is almost always a power law, and "40% adoption spread evenly" and "40%
+        /// adoption where a tenth of them do most of it" are completely different situations that
+        /// produce the same adoption percentage. The first is a programme working; the second is a
+        /// programme propped up by a handful of enthusiasts, and it will collapse when they move team.
+        ///
+        /// Only active users are ranked. Including idle seats would put every one of them in the bottom
+        /// cohort at zero and turn every tenant's chart into the same shape.
+        /// </summary>
+        public static List<AdoptionConcentrationBand> Concentration(IEnumerable<long> interactionsPerActiveUser)
+        {
+            var ranked = (interactionsPerActiveUser ?? Enumerable.Empty<long>())
+                .Where(i => i > 0)
+                .OrderByDescending(i => i)
+                .ToList();
+
+            var bands = new List<AdoptionConcentrationBand>();
+            if (ranked.Count == 0) return bands;
+
+            var total = ranked.Sum();
+            var taken = 0;
+
+            for (var i = 0; i < ConcentrationCohorts.Count; i++)
+            {
+                var cohort = ConcentrationCohorts[i];
+
+                // The last cohort takes whatever is left, so rounding can never lose or duplicate a user.
+                var size = i == ConcentrationCohorts.Count - 1
+                    ? ranked.Count - taken
+                    : Math.Min(ranked.Count - taken, (int)Math.Round(ranked.Count * cohort.Item2, MidpointRounding.AwayFromZero));
+
+                if (size <= 0) continue;
+
+                // GetRange rather than Skip().Take(): Skip walks the list from the start every time,
+                // which at 200k active users would re-traverse the collection once per cohort for no
+                // reason. GetRange copies the slice directly.
+                var slice = ranked.GetRange(taken, size);
+                var sliceTotal = slice.Sum();
+
+                bands.Add(new AdoptionConcentrationBand
+                {
+                    Label = cohort.Item1,
+                    Users = size,
+                    Interactions = sliceTotal,
+                    SharePct = Percentage(sliceTotal, total),
+                    InteractionsPerUser = Round(sliceTotal / (double)size, 1),
+                });
+
+                taken += size;
+            }
+
+            return bands;
         }
 
         #endregion

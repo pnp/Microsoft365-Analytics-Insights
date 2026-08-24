@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -218,6 +219,7 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             string search = null,
             string bands = null,
+            string actions = null,
             string department = null,
             string country = null,
             bool coworkOnly = false,
@@ -233,7 +235,7 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc);
+                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var matched = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query);
 
@@ -259,6 +261,7 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             string search = null,
             string bands = null,
+            string actions = null,
             string department = null,
             string country = null,
             bool coworkOnly = false,
@@ -272,7 +275,7 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc);
+                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var rows = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query).Take(MaxCsvRows).ToList();
 
@@ -353,6 +356,81 @@ namespace Web.AnalyticsWeb.Controllers
 
         #endregion
 
+        #region Workbook export
+
+        /// <summary>
+        /// The whole report as an Excel workbook - every figure, table and chart, with the charts live
+        /// and bound to the cells rather than pasted in as pictures.
+        ///
+        /// Exists for the point-in-time snapshot. A screenshot of this page cannot be compared with
+        /// another screenshot six months later: the numbers cannot be subtracted and nobody can tell
+        /// what period or thresholds either was run with. The workbook records both, so two files taken
+        /// before and after an enablement programme are comparable and the comparison is checkable.
+        ///
+        /// Built from the same cached analysis that renders the page, so the two can never disagree.
+        /// </summary>
+        // GET: api/CopilotAdoption/export/workbook?windowDays=28
+        [HttpGet]
+        [Route("export/workbook")]
+        public async Task<HttpResponseMessage> ExportWorkbook(
+            int windowDays = 28,
+            string seatLicenceTypeIds = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+
+            byte[] bytes;
+            try
+            {
+                bytes = CopilotAdoptionWorkbook.Build(analysis);
+            }
+            catch (Exception ex)
+            {
+                // The workbook is assembled as OpenXML by hand, so a failure here is a defect in this
+                // application rather than anything the caller did. Log it with detail and return a
+                // deliberately plain message: the default Web API behaviour would put the exception
+                // and its stack trace in the response body, and this endpoint is reachable by every
+                // admin user.
+                try
+                {
+                    var config = new AppConfig();
+                    var logger = new AnalyticsLogger(
+                        config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
+                    logger.TrackException(ex);
+                    logger.LogError($"Failed to build the Copilot adoption workbook: {ex.Message}");
+                }
+                catch (Exception)
+                {
+                    // Telemetry must never be the reason a request fails differently. Swallowing here
+                    // is deliberate - the caller is already getting an error, and a logging failure on
+                    // top of it would replace a useful message with a confusing one.
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent(
+                        "The Copilot adoption workbook could not be generated. The failure has been logged; "
+                        + "the CSV exports on the Licensed users and Licence opportunities tabs are unaffected."),
+                };
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(bytes),
+            };
+
+            response.Content.Headers.ContentType =
+                new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+            {
+                FileName = CopilotAdoptionWorkbook.FileName(analysis.Summary),
+            };
+
+            return response;
+        }
+
+        #endregion
+
         #region Analysis cache
 
         /// <summary>
@@ -400,7 +478,7 @@ namespace Web.AnalyticsWeb.Controllers
                 options.WindowDays = window;
 
                 var service = new CopilotAdoptionService(options);
-                return service.AnalyseAsync(overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
+                return RunAndReportAsync(service, overrideIds, window);
             }, LazyThreadSafetyMode.ExecutionAndPublication);
 
             // AddOrGetExisting is atomic. Because the Lazy has not been evaluated yet, the loser costs
@@ -422,6 +500,66 @@ namespace Web.AnalyticsWeb.Controllers
                 TaskContinuationOptions.ExecuteSynchronously);
 
             return task;
+        }
+
+        /// <summary>
+        /// Runs the analysis and reports how it went to App Insights.
+        ///
+        /// Deliberately inside the cache's Lazy factory, so exactly one event is emitted per actual
+        /// analysis rather than one per HTTP request. A cache hit does no work and should not look in
+        /// telemetry as though it did - otherwise the p95 would be dominated by cached reads and the
+        /// slow runs, which are the entire point of measuring, would disappear into the average.
+        /// </summary>
+        private static async Task<CopilotAdoptionAnalysis> RunAndReportAsync(
+            CopilotAdoptionService service, List<int> overrideIds, int windowDays)
+        {
+            var analysis = await service.AnalyseAsync(
+                overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
+
+            TrackAnalysis(analysis, windowDays);
+            return analysis;
+        }
+
+        /// <summary>
+        /// Emits the <c>CopilotAdoptionAnalysis</c> event. Never throws: telemetry must not be the
+        /// reason a request behaves differently, which is the same rule the workbook endpoint follows.
+        /// </summary>
+        private static void TrackAnalysis(CopilotAdoptionAnalysis analysis, int windowDays)
+        {
+            try
+            {
+                var diagnostics = analysis?.Summary?.Diagnostics;
+                if (diagnostics == null) return;
+
+                var steps = new Dictionary<string, long>();
+                foreach (var step in diagnostics.Steps)
+                {
+                    // Last write wins; a step runs once per analysis, so a collision would be a bug.
+                    steps[step.Step] = step.DurationMs;
+                }
+
+                // A step that reached the command timeout is the signal that matters: the query was
+                // abandoned and its figures degraded to a warning rather than an error, so nothing
+                // else in the request tells anyone the report is incomplete.
+                var timeoutMs = CopilotAdoptionService.QueryTimeoutSecs * 1000L;
+                var timedOut = diagnostics.Steps.Any(s => s.DurationMs >= timeoutMs);
+
+                var config = new AppConfig();
+                var logger = new AnalyticsLogger(
+                    config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
+
+                logger.TrackCopilotAdoptionAnalysis(
+                    windowDays,
+                    diagnostics.TotalMs,
+                    steps,
+                    analysis.Summary.Warnings.Count,
+                    timedOut,
+                    diagnostics.SlowestStep?.Step);
+            }
+            catch (Exception)
+            {
+                // Swallowed on purpose - see the workbook endpoint for the same reasoning.
+            }
         }
 
         /// <summary>A cached entry whose analysis already failed must not be served again.</summary>
@@ -507,15 +645,46 @@ namespace Web.AnalyticsWeb.Controllers
             return result.Distinct().ToList();
         }
 
+        /// <summary>
+        /// Parses a comma-separated list of recommended-action codes down to the known catalogue.
+        ///
+        /// Unknown tokens are dropped rather than passed through: an unrecognised code would filter
+        /// the list to nothing and look like "there is no one in this group", which is the most
+        /// misleading possible failure for a page whose job is to size an enablement programme.
+        /// </summary>
+        internal static List<string> ParseActions(string commaSeparated)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrWhiteSpace(commaSeparated))
+            {
+                return result;
+            }
+
+            foreach (var part in commaSeparated.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var token = part.Trim();
+                var known = CopilotAdoptionScoring.AllActionCodes
+                    .FirstOrDefault(c => string.Equals(c, token, StringComparison.OrdinalIgnoreCase));
+
+                if (known != null && !result.Contains(known))
+                {
+                    result.Add(known);
+                }
+            }
+
+            return result;
+        }
+
         private static LicensedUserQuery BuildLicensedUserQuery(
             string search, string bands, string department, string country,
             bool coworkOnly, bool disabledOnly, double? minScore, double? maxScore,
-            string sortBy, bool sortDesc)
+            string sortBy, bool sortDesc, string actions = null)
         {
             return new LicensedUserQuery
             {
                 Search = search,
                 Bands = ParseBands(bands),
+                Actions = ParseActions(actions),
                 Department = department,
                 Country = country,
                 CoworkOnly = coworkOnly,

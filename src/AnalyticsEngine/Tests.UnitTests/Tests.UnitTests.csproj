@@ -149,6 +149,7 @@
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionTests.cs" />
+    <Compile Include="CopilotAdoptionWorkbookTests.cs" />
     <Compile Include="ReportsAPIControllerTests.cs" />
     <Compile Include="SimplePropsDicTests.cs" />
     <Compile Include="PageUpdateEventListParseTests.cs" />

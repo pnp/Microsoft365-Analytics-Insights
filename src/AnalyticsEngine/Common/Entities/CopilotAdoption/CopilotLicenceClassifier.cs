@@ -20,7 +20,7 @@ namespace Common.Entities.CopilotAdoption
     ///
     /// The rules below are therefore, in order:
     /// <list type="number">
-    ///   <item>An explicit exclusion list of "Copilot-branded but not a Microsoft 365 Copilot seat" SKUs.</item>
+    ///   <item>An explicit exclusion list of "Copilot-branded but not a Microsoft 365 Copilot licence" SKUs.</item>
     ///   <item>A prefix match on the SKU part number, which catches present and future variants
     ///         (<c>M365_Copilot</c>, <c>Microsoft_365_Copilot</c>, <c>Microsoft_365_Copilot_EDU</c>, ...).</item>
     ///   <item>A conservative display-name fallback for SKUs whose part number Microsoft renames.</item>

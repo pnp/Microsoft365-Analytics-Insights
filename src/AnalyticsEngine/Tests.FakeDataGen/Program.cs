@@ -398,14 +398,34 @@ namespace Tests.FakeDataGen
             int count = PromptInt("How many events should each generator create?", 5000, 1, int.MaxValue);
             int userCount = PromptInt("How many users should both generators share?", 250, 1, int.MaxValue);
             int daysBack = PromptInt("How many days back should both data sets cover?", 90, 1, 3650);
-            int agentPercent = PromptInt("Percentage of Copilot events with agents (0-100)", 30, 0, 100);
-            int customAgentPercent = PromptInt("Percentage of agent events using custom agents (0-100)", 10, 0, 100);
+
+            // On by default: the combined data set is what the Copilot Adoption report is demonstrated
+            // from, and a purely random scatter puts every licensed user in the same band.
+            bool adoptionScenario = PromptYesNo(
+                "Shape Copilot usage into adoption personas (all funnel stages, contrasting departments)?", true);
+
+            int agentPercent = 0;
+            int customAgentPercent = 0;
+            if (!adoptionScenario)
+            {
+                agentPercent = PromptInt("Percentage of Copilot events with agents (0-100)", 30, 0, 100);
+                customAgentPercent = PromptInt("Percentage of agent events using custom agents (0-100)", 10, 0, 100);
+            }
+
             int copilotLicensePercent = PromptInt("Percentage of users with Copilot licenses (0-100)", 50, 0, 100);
 
             DateTime windowEndUtc = DateTime.UtcNow;
 
             Console.WriteLine();
-            Console.WriteLine($"Generating {count:N0} Copilot + {count:N0} O365 events across the same {daysBack:N0}-day window...");
+            if (adoptionScenario)
+            {
+                Console.WriteLine($"Generating persona-shaped Copilot activity + {count:N0} O365 events across the same {daysBack:N0}-day window...");
+                Console.WriteLine("(Copilot volume follows the persona plan rather than the event count, so the bands come out as intended.)");
+            }
+            else
+            {
+                Console.WriteLine($"Generating {count:N0} Copilot + {count:N0} O365 events across the same {daysBack:N0}-day window...");
+            }
             Console.WriteLine();
 
             // Copilot runs first so an empty database gets one shared user population with
@@ -418,7 +438,8 @@ namespace Tests.FakeDataGen
                 copilotLicensePercent,
                 userCount,
                 daysBack,
-                windowEndUtc);
+                windowEndUtc,
+                adoptionScenario);
 
             Console.WriteLine();
             var office365Generator = new Office365ActivityGenerator(connectionString);
@@ -479,6 +500,18 @@ namespace Tests.FakeDataGen
             {
                 return parsed;
             }
+            return defaultValue;
+        }
+
+        private static bool PromptYesNo(string prompt, bool defaultValue)
+        {
+            Console.Write($"{prompt} [{(defaultValue ? "Y/n" : "y/N")}]: ");
+            string input = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(input)) return defaultValue;
+
+            var trimmed = input.Trim();
+            if (trimmed.StartsWith("y", StringComparison.OrdinalIgnoreCase)) return true;
+            if (trimmed.StartsWith("n", StringComparison.OrdinalIgnoreCase)) return false;
             return defaultValue;
         }
 

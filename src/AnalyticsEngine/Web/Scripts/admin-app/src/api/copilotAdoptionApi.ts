@@ -38,6 +38,7 @@ function scopeParams(windowDays: number, seatLicenceTypeIds?: number[]): URLSear
 function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUserFilters): URLSearchParams {
   if (filters.search.trim()) params.set('search', filters.search.trim());
   if (filters.bands.length > 0) params.set('bands', filters.bands.join(','));
+  if (filters.actions.length > 0) params.set('actions', filters.actions.join(','));
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
   if (filters.coworkOnly) params.set('coworkOnly', 'true');
@@ -144,4 +145,16 @@ export function opportunitiesExportUrl(
 ): string {
   const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   return `${baseUrl()}/opportunities/export?${params}`;
+}
+
+/**
+ * URL of the full Excel workbook export.
+ *
+ * The whole report - every figure, table and chart on the page - in one .xlsx, built from the same
+ * cached analysis the screen is rendered from. Its purpose is the point-in-time snapshot: run it
+ * before an enablement programme starts and again afterwards, and the two files are directly
+ * comparable in a way a screenshot never is.
+ */
+export function workbookExportUrl(windowDays: number, seatLicenceTypeIds?: number[]): string {
+  return `${baseUrl()}/export/workbook?${scopeParams(windowDays, seatLicenceTypeIds)}`;
 }

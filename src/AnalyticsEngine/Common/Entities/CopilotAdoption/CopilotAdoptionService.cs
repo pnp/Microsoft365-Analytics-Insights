@@ -9,31 +9,6 @@ using System.Threading.Tasks;
 namespace Common.Entities.CopilotAdoption
 {
     /// <summary>
-    /// The complete, scored output of one adoption analysis: the executive summary, every scored
-    /// licensed user and every ranked licence candidate.
-    ///
-    /// Produced in a single pass and then sliced in memory, so paging, filtering, sorting and CSV
-    /// export never re-run the heavy queries - and, more importantly, so the list an admin exports is
-    /// guaranteed to be the same data the summary on screen was calculated from. A CSV that quietly
-    /// disagrees with the chart above it is worse than no CSV.
-    /// </summary>
-    public class CopilotAdoptionAnalysis
-    {
-        public CopilotAdoptionSummary Summary { get; set; } = new CopilotAdoptionSummary();
-
-        public List<LicensedUserAdoptionRow> LicensedUsers { get; set; } = new List<LicensedUserAdoptionRow>();
-
-        public List<LicenceOpportunityRow> Opportunities { get; set; } = new List<LicenceOpportunityRow>();
-
-        /// <summary>
-        /// The queries that produced this analysis, keyed by a short name, for the SQL popover the rest
-        /// of the admin site uses. Showing the working is part of the point: these numbers get quoted
-        /// in licence negotiations, so an admin has to be able to verify them independently.
-        /// </summary>
-        public Dictionary<string, string> Sql { get; set; } = new Dictionary<string, string>();
-    }
-
-    /// <summary>
     /// Runs the Copilot licence-adoption analysis.
     ///
     /// Lives in Common.Entities rather than in the web project so the same analysis can be driven from
@@ -83,8 +58,9 @@ namespace Common.Entities.CopilotAdoption
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var nowUtc = DateTime.UtcNow;
-            var windowStart = nowUtc.Date.AddDays(-Math.Max(1, _options.WindowDays));
-            var historyStart = nowUtc.Date.AddDays(-Math.Max(_options.WindowDays, _options.HistoryDays));
+            var windowStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays);
+            var historyStart = CopilotAdoptionScoring.WindowStartUtc(
+                nowUtc, Math.Max(_options.WindowDays, _options.HistoryDays));
             var settled = nowUtc.Date.AddDays(-Math.Max(0, _options.UsageReportLagDays));
             var trendStart = MondayOf(nowUtc.Date.AddMonths(-TrendMonths));
 
@@ -105,7 +81,7 @@ namespace Common.Entities.CopilotAdoption
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
                 summary.Warnings.Add(
-                    "No licence information has been imported, so Copilot seats cannot be identified. "
+                    "No licence information has been imported, so Copilot licences cannot be identified. "
                     + "Enable the user metadata import to use this tool.");
                 return analysis;
             }
@@ -114,11 +90,23 @@ namespace Common.Entities.CopilotAdoption
             var seatIds = CopilotLicenceClassifier.ResolveSeatLicenceTypeIds(licenceTypes, seatLicenceTypeIdOverride);
             summary.DataSources.UserMetadataAvailable = true;
 
+            // When an explicit override is supplied, the classification shown to the admin has to reflect
+            // what was ACTUALLY counted. Leaving the automatic verdict in place meant the methodology page
+            // and the workbook asserted that a SKU was excluded while every figure on the page included it.
+            if (seatLicenceTypeIdOverride != null)
+            {
+                var effective = new HashSet<int>(seatIds);
+                foreach (var licence in summary.SeatLicenceTypes)
+                {
+                    licence.IsCopilotSeat = effective.Contains(licence.Id);
+                }
+            }
+
             if (seatIds.Count == 0)
             {
                 summary.Warnings.Add(
                     "No Microsoft 365 Copilot licences were found in this tenant. Adoption cannot be reported "
-                    + "until at least one Copilot seat is assigned and the user import has run.");
+                    + "until at least one Copilot licence is assigned and the user import has run.");
                 // The licence-opportunity side still works with no seats at all - that is exactly the
                 // "should we buy Copilot?" case - so carry on rather than returning here.
             }
@@ -193,17 +181,239 @@ namespace Common.Entities.CopilotAdoption
             // ----- 3. Licensed users ------------------------------------------------------------
             if (seatIds.Count > 0)
             {
-                await BuildLicensedUsersAsync(analysis, seatIds, windowStart, historyStart, nowUtc, cancellationToken);
-                await BuildUsageByAppAsync(analysis, seatIds, windowStart, cancellationToken);
-                await BuildWeeklyTrendAsync(analysis, seatIds, trendStart, cancellationToken);
+                await TimedAsync(analysis, CopilotAdoptionSteps.LicensedUsers,
+                    () => BuildLicensedUsersAsync(analysis, seatIds, windowStart, historyStart, nowUtc, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.UsageByApp,
+                    () => BuildUsageByAppAsync(analysis, seatIds, windowStart, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.WeeklyTrend,
+                    () => BuildWeeklyTrendAsync(analysis, seatIds, trendStart, cancellationToken));
             }
 
             // ----- 4. Licence opportunities -----------------------------------------------------
-            await BuildOpportunitiesAsync(analysis, seatIds, windowStart, cancellationToken);
+            await TimedAsync(analysis, CopilotAdoptionSteps.LicenceOpportunities,
+                () => BuildOpportunitiesAsync(analysis, seatIds, windowStart, cancellationToken));
 
+            // ----- 5. The populations Microsoft's own reporting cannot see ----------------------
+            // Agents and unlicensed Copilot Chat are reported in their own right, not merely as inputs
+            // to the seat decision: an agent estate has its own retirement problem, and unlicensed
+            // Chat use is the one Copilot population that is invisible in Microsoft's usage reports.
+            if (summary.DataSources.AuditAvailable)
+            {
+                await TimedAsync(analysis, CopilotAdoptionSteps.AgentEstate,
+                    () => BuildAgentEstateAsync(analysis, seatIds, windowStart, nowUtc, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.UnlicensedPopulation,
+                    () => BuildUnlicensedPopulationAsync(analysis, seatIds, windowStart, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.ResourceTypes,
+                    () => BuildResourceTypesAsync(analysis, windowStart, cancellationToken));
+            }
+
+            var scoringWatch = System.Diagnostics.Stopwatch.StartNew();
             FinaliseSummary(analysis);
+            scoringWatch.Stop();
+            summary.Diagnostics.Record(CopilotAdoptionSteps.Scoring, scoringWatch.ElapsedMilliseconds);
+
+            summary.Diagnostics.TotalMs = (long)(DateTime.UtcNow - nowUtc).TotalMilliseconds;
             return analysis;
         }
+
+        /// <summary>
+        /// Runs one step of the analysis and records how long it took.
+        ///
+        /// Timed in a finally block on purpose: a step that threw, or that a query timeout degraded into
+        /// a warning, is precisely the one an operator needs to see the duration of. Recording only
+        /// successful steps would hide the 90-second failures that this instrumentation exists to expose.
+        /// </summary>
+        private static async Task TimedAsync(CopilotAdoptionAnalysis analysis, string step, Func<Task> work)
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var failed = false;
+            try
+            {
+                await work();
+            }
+            catch (Exception)
+            {
+                failed = true;
+                throw;
+            }
+            finally
+            {
+                watch.Stop();
+                analysis.Summary.Diagnostics.Record(step, watch.ElapsedMilliseconds, failed);
+            }
+        }
+
+        #region Agents and the unlicensed population
+
+        /// <summary>
+        /// The agent estate: every agent used in the history window, with the verdict on each.
+        ///
+        /// Uses the history window rather than the reporting period on purpose - an agent that has not
+        /// been touched for six months is precisely the thing an inventory review is looking for, and
+        /// it would be invisible in a 28-day window.
+        /// </summary>
+        private async Task BuildAgentEstateAsync(
+            CopilotAdoptionAnalysis analysis,
+            List<int> seatIds,
+            DateTime windowStart,
+            DateTime nowUtc,
+            CancellationToken cancellationToken)
+        {
+            var summary = analysis.Summary;
+
+            // The inventory reads its own, much shorter history than the rest of the analysis - see
+            // CopilotAdoptionOptions.AgentHistoryDays. Never shorter than the reporting window, or an
+            // agent used inside the period could be missing from its own inventory.
+            var agentHistoryDays = Math.Max(
+                _options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays));
+            var agentHistoryStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentHistoryDays);
+
+            summary.Agents.HistoryDays = agentHistoryDays;
+
+            var sql = CopilotAdoptionSql.AgentUsageSql(seatIds);
+            var parameters = new Dictionary<string, object>
+            {
+                { "@from", windowStart },
+                { "@historyFrom", agentHistoryStart },
+                { "@maxRows", _options.MaxAgents },
+            };
+            analysis.Sql["agents"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var rows = await SafeAsync(
+                () => QueryAsync<AgentUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                summary.Warnings,
+                "Copilot agent usage");
+
+            if (rows == null) return;
+
+            analysis.Agents = rows
+                .Select(r => CopilotAdoptionScoring.ScoreAgent(r, nowUtc, _options))
+                .OrderByDescending(a => a.Interactions)
+                .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (analysis.Agents.Count >= _options.MaxAgents)
+            {
+                summary.Warnings.Add(
+                    $"The agent inventory was capped at {_options.MaxAgents} agents, so the agent figures are "
+                    + "a floor rather than a total.");
+            }
+
+            var byDeptSql = CopilotAdoptionSql.AgentUsageByDepartmentSql();
+            var byDeptParameters = new Dictionary<string, object>
+            {
+                { "@from", windowStart },
+                { "@top", _options.TopSegments },
+            };
+            analysis.Sql["agentsByDepartment"] = CopilotAdoptionSql.ForDisplay(byDeptSql, byDeptParameters);
+
+            var byDept = await SafeAsync(
+                () => QueryAsync<CategoryQueryRow>(byDeptSql, cancellationToken, ToSqlParameters(byDeptParameters)),
+                summary.Warnings,
+                "agent usage by department");
+
+            if (byDept != null)
+            {
+                summary.Agents.UsageByDepartment = byDept
+                    .Select(r => new AdoptionCategory { Label = r.Label, Value = r.Value })
+                    .ToList();
+            }
+        }
+
+        /// <summary>
+        /// Unlicensed Copilot Chat users, described the same way the licensed population is so the two
+        /// can be compared directly.
+        ///
+        /// Deliberately a separate query from the licence-opportunity ranking: that one is capped and
+        /// ordered by score, so its rows are a biased sample and must never be used to describe a
+        /// population's shape.
+        /// </summary>
+        private async Task BuildUnlicensedPopulationAsync(
+            CopilotAdoptionAnalysis analysis,
+            List<int> seatIds,
+            DateTime windowStart,
+            CancellationToken cancellationToken)
+        {
+            var summary = analysis.Summary;
+
+            var sql = CopilotAdoptionSql.UnlicensedUsageRowsSql(seatIds);
+            var parameters = new Dictionary<string, object>
+            {
+                { "@from", windowStart },
+                { "@maxRows", _options.MaxUnlicensedUsersScored },
+            };
+            analysis.Sql["unlicensedUsage"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var rows = await SafeAsync(
+                () => QueryAsync<UnlicensedUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                summary.Warnings,
+                "unlicensed Copilot usage");
+
+            if (rows != null)
+            {
+                analysis.UnlicensedUsers = rows;
+                summary.Unlicensed.Truncated = rows.Count >= _options.MaxUnlicensedUsersScored;
+
+                if (summary.Unlicensed.Truncated)
+                {
+                    summary.Warnings.Add(
+                        $"Unlicensed Copilot usage was capped at {_options.MaxUnlicensedUsersScored} users, so "
+                        + "those figures are a floor rather than a total.");
+                }
+            }
+
+            var appSql = CopilotAdoptionSql.UnlicensedUsageByAppSql(seatIds);
+            var appParameters = new Dictionary<string, object>
+            {
+                { "@from", windowStart },
+                { "@top", _options.TopSegments },
+            };
+            analysis.Sql["unlicensedUsageByApp"] = CopilotAdoptionSql.ForDisplay(appSql, appParameters);
+
+            var apps = await SafeAsync(
+                () => QueryAsync<CategoryQueryRow>(appSql, cancellationToken, ToSqlParameters(appParameters)),
+                summary.Warnings,
+                "unlicensed Copilot usage by app");
+
+            if (apps != null)
+            {
+                summary.Unlicensed.UsageByApp = apps
+                    .Select(r => new AdoptionCategory { Label = r.Label, Value = r.Value })
+                    .ToList();
+            }
+        }
+
+        /// <summary>
+        /// What kinds of tenant content Copilot actually grounded its answers in. The clearest
+        /// available evidence that Copilot is doing work on the organisation's own data rather than
+        /// answering generic questions any free chatbot could.
+        /// </summary>
+        private async Task BuildResourceTypesAsync(
+            CopilotAdoptionAnalysis analysis,
+            DateTime windowStart,
+            CancellationToken cancellationToken)
+        {
+            var sql = CopilotAdoptionSql.TopResourceTypesSql();
+            var parameters = new Dictionary<string, object>
+            {
+                { "@from", windowStart },
+                { "@top", _options.TopSegments },
+            };
+            analysis.Sql["resourceTypes"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var rows = await SafeAsync(
+                () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                analysis.Summary.Warnings,
+                "Copilot accessed resource types");
+
+            if (rows == null) return;
+
+            analysis.Summary.TopResourceTypes = rows
+                .Select(r => new AdoptionCategory { Label = r.Label, Value = r.Value })
+                .ToList();
+        }
+
+        #endregion
 
         #region Licensed users
 
@@ -226,7 +436,7 @@ namespace Common.Entities.CopilotAdoption
             var assignments = await SafeAsync(
                 () => QueryAsync<SeatAssignmentRow>(assignmentsSql, cancellationToken),
                 summary.Warnings,
-                "Copilot seat assignments") ?? new List<SeatAssignmentRow>();
+                "Copilot licence assignments") ?? new List<SeatAssignmentRow>();
 
             var licencesByUser = assignments
                 .GroupBy(a => a.UserId)
@@ -360,7 +570,7 @@ namespace Common.Entities.CopilotAdoption
 
             var weekSpine = WeekSpine(trendStart, MondayOf(DateTime.UtcNow.Date));
 
-            analysis.Summary.WeeklyTrend = rows
+            var series = rows
                 .GroupBy(r => r.SeriesName)
                 .OrderBy(g => g.Key)
                 .Select(g => new AdoptionSeries
@@ -368,6 +578,17 @@ namespace Common.Entities.CopilotAdoption
                     Name = g.Key,
                     Points = FillWeeks(weekSpine, g.ToList()),
                 })
+                .ToList();
+
+            // Headcounts and interaction volumes come from one pass over the same rows, but they cannot
+            // share an axis - a few hundred users plotted against tens of thousands of interactions
+            // flattens the user line onto zero. Split into two charts.
+            analysis.Summary.WeeklyTrend = series
+                .Where(s => !CopilotAdoptionSql.VolumeTrendSeries.Contains(s.Name))
+                .ToList();
+
+            analysis.Summary.WeeklyVolumeTrend = series
+                .Where(s => CopilotAdoptionSql.VolumeTrendSeries.Contains(s.Name))
                 .ToList();
         }
 
@@ -464,6 +685,23 @@ namespace Common.Entities.CopilotAdoption
                 summary.LicensedUsers = users.Count;
             }
 
+            // Every rate below divides by the users actually scored, NOT by the seat count. Those are
+            // the same number unless the detail query hit its row cap - and when it does, dividing by
+            // the seat count is arithmetically wrong rather than merely approximate: a 200,000-seat
+            // tenant scored 50,000 deep could never report adoption above 25%, however healthy it
+            // really was, and the funnel would open with a 75% drop that is pure measurement artefact.
+            summary.ScoredUsers = users.Count;
+            var denominator = summary.ScoredUsers;
+
+            if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
+            {
+                summary.Warnings.Add(
+                    $"This tenant holds {summary.LicensedUsers:N0} Copilot licences, but only {summary.ScoredUsers:N0} "
+                    + "users could be analysed in one pass. Every rate and breakdown below describes those "
+                    + $"{summary.ScoredUsers:N0} users, not the whole tenant - they are not tenant-wide figures "
+                    + "and must not be quoted as such.");
+            }
+
             summary.ActiveUsers = users.Count(u => u.Band > AdoptionBand.Dormant);
             summary.NeverUsedUsers = users.Count(u => u.Band == AdoptionBand.NeverUsed);
             summary.DormantUsers = users.Count(u => u.Band == AdoptionBand.Dormant);
@@ -471,8 +709,8 @@ namespace Common.Entities.CopilotAdoption
             summary.ReclaimableSeats = summary.NeverUsedUsers + summary.DormantUsers;
             summary.TotalInteractions = users.Sum(u => u.Interactions);
 
-            summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, summary.LicensedUsers);
-            summary.HabitRatePct = CopilotAdoptionScoring.Percentage(summary.HabitualUsers, summary.LicensedUsers);
+            summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, denominator);
+            summary.HabitRatePct = CopilotAdoptionScoring.Percentage(summary.HabitualUsers, denominator);
             summary.AverageAdoptionScore = users.Count == 0
                 ? 0
                 : Math.Round(users.Average(u => u.AdoptionScore), 1, MidpointRounding.AwayFromZero);
@@ -480,15 +718,25 @@ namespace Common.Entities.CopilotAdoption
 
             summary.CoworkUsers = users.Count(u => u.UsedCowork);
             summary.CoworkInteractions = users.Sum(u => u.CoworkInteractions);
-            summary.CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(summary.CoworkUsers, summary.LicensedUsers);
+            summary.CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(summary.CoworkUsers, denominator);
             // Only claim a Cowork adoption rate when Cowork was actually seen. On a tenant that has not
             // been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
             summary.CoworkDetected = summary.CoworkInteractions > 0;
 
             summary.Funnel = BuildFunnel(summary, users);
             summary.BandBreakdown = BuildBandBreakdown(users);
+            summary.HabitBuckets = BuildHabitBuckets(users.Select(u => (double)u.ActiveDays));
+            summary.ActionPlan = BuildActionPlan(users);
+            summary.Concentration = CopilotAdoptionScoring.Concentration(
+                users.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
+            summary.ScoreProfiles = BuildScoreProfiles(users);
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
+            summary.IntensityByDepartment = BuildIntensity(users, u => u.Department, "(no department)");
+
+            FinaliseAgents(analysis);
+            FinaliseUnlicensed(analysis);
+            summary.CombinedByDepartment = BuildCombinedSegments(analysis);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
             summary.RecommendedForLicence = opportunities.Count(o => o.Recommended);
@@ -504,6 +752,11 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>
         /// The adoption funnel: every stage is a subset of the one before it, so the biggest drop-off
         /// is visible at a glance and points straight at the intervention that is needed.
+        ///
+        /// The first stage is the scored population rather than the seat count. They are the same
+        /// unless the detail query hit its row cap, and if it did, opening the funnel with the seat
+        /// count would draw a huge drop between stage one and stage two that is entirely an artefact
+        /// of how many users were read - the most misleading thing this chart could possibly say.
         /// </summary>
         private static List<AdoptionCategory> BuildFunnel(
             CopilotAdoptionSummary summary,
@@ -514,7 +767,7 @@ namespace Common.Entities.CopilotAdoption
 
             return new List<AdoptionCategory>
             {
-                new AdoptionCategory { Label = "Licensed", Value = summary.LicensedUsers },
+                new AdoptionCategory { Label = "Licensed", Value = summary.ScoredUsers },
                 new AdoptionCategory { Label = "Ever used Copilot", Value = everUsed },
                 new AdoptionCategory { Label = "Active this period", Value = summary.ActiveUsers },
                 new AdoptionCategory { Label = "Habitual users", Value = summary.HabitualUsers },
@@ -531,6 +784,352 @@ namespace Common.Entities.CopilotAdoption
                     Label = CopilotAdoptionScoring.BandDisplayName(band),
                     Value = users.Count(u => u.Band == band),
                 })
+                .ToList();
+        }
+
+        /// <summary>
+        /// The shape of engagement for the typical active user, next to the shape for the Champions.
+        ///
+        /// The comparison is what makes it useful: the gap between the two profiles says which of the
+        /// three behaviours an enablement programme should actually target here. A tenant whose
+        /// average user matches its Champions on frequency but not breadth has a completely different
+        /// problem from one where the gap is depth, and the overall score is identical in both cases.
+        ///
+        /// Averaged over active users only - an idle seat contributes zero to all three components,
+        /// which drags the whole profile towards the origin and says nothing about shape.
+        /// </summary>
+        private static List<AdoptionScoreProfile> BuildScoreProfiles(
+            IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            var profiles = new List<AdoptionScoreProfile>();
+
+            var active = users.Where(CopilotAdoptionScoring.IsActive).ToList();
+            if (active.Count == 0) return profiles;
+
+            profiles.Add(Profile("Typical active user", active));
+
+            var champions = active.Where(u => u.Band == AdoptionBand.Champion).ToList();
+            if (champions.Count > 0)
+            {
+                profiles.Add(Profile("Your Champions", champions));
+            }
+
+            return profiles;
+        }
+
+        private static AdoptionScoreProfile Profile(string label, IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            return new AdoptionScoreProfile
+            {
+                Label = label,
+                Users = users.Count,
+                FrequencyScore = Math.Round(users.Average(u => u.FrequencyScore), 1, MidpointRounding.AwayFromZero),
+                DepthScore = Math.Round(users.Average(u => u.DepthScore), 1, MidpointRounding.AwayFromZero),
+                BreadthScore = Math.Round(users.Average(u => u.BreadthScore), 1, MidpointRounding.AwayFromZero),
+            };
+        }
+
+        /// <summary>
+        /// Rolls the scored agents up into the estate headline figures.
+        ///
+        /// "Active" means used inside the reporting period; the inventory itself covers the longer
+        /// history window, because an agent nobody has touched for six months is exactly what an
+        /// inventory review is looking for and would be invisible in a 28-day count.
+        /// </summary>
+        private void FinaliseAgents(CopilotAdoptionAnalysis analysis)
+        {
+            var summary = analysis.Summary;
+            var agents = analysis.Agents ?? new List<AgentUsageRow>();
+            var estate = summary.Agents;
+
+            estate.KnownAgents = agents.Count;
+            estate.CustomAgents = agents.Count(a => a.IsCustomAgent);
+
+            var activeInWindow = agents
+                .Where(a => a.LastUsedUtc.HasValue && a.LastUsedUtc.Value >= summary.FromUtc)
+                .ToList();
+
+            estate.ActiveAgents = activeInWindow.Count;
+            // Window-scoped, to match the window-scoped user count it is divided by. Using the
+            // history-wide interaction total here inflated the KPI by the ratio of the two windows.
+            estate.AgentInteractions = activeInWindow.Sum(a => a.WindowInteractions);
+
+            // Agent users cannot be summed across agents without double-counting anyone who uses two,
+            // so the figure comes from the per-user rows instead: licensed users carry AgentsUsed, and
+            // the unlicensed rows carry the same. Reported as a floor when either set was capped.
+            var licensedAgentUsers = (analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
+                .Count(u => u.AgentsUsed > 0);
+            var unlicensedAgentUsers = (analysis.UnlicensedUsers ?? new List<UnlicensedUsageQueryRow>())
+                .Count(u => u.AgentsUsed > 0);
+
+            estate.LicensedAgentUsers = licensedAgentUsers;
+            estate.AgentUsers = licensedAgentUsers + unlicensedAgentUsers;
+            estate.InteractionsPerAgentUser = estate.AgentUsers == 0
+                ? 0
+                : Math.Round(estate.AgentInteractions / (double)estate.AgentUsers, 1, MidpointRounding.AwayFromZero);
+
+            estate.MostPopularAgent = agents
+                .OrderByDescending(a => a.Users)
+                .ThenByDescending(a => a.Interactions)
+                .Select(a => a.Name)
+                .FirstOrDefault();
+
+            // Versatility is breadth of surface, not volume - an agent used everywhere by a few people
+            // is doing a broader job than one used constantly in a single host.
+            estate.MostVersatileAgent = agents
+                .OrderByDescending(a => a.AppsUsed)
+                .ThenByDescending(a => a.Users)
+                .Select(a => a.Name)
+                .FirstOrDefault();
+
+            estate.HealthBreakdown = CopilotAdoptionScoring.AllAgentHealthStates
+                .Select(health => new AdoptionCategory
+                {
+                    Label = CopilotAdoptionScoring.AgentHealthDisplayName(health),
+                    Value = agents.Count(a => a.Health == health),
+                })
+                .ToList();
+
+            estate.UsageByAgent = agents
+                .Where(a => a.Interactions > 0)
+                .OrderByDescending(a => a.Interactions)
+                .Take(_options.TopSegments)
+                .Select(a => new AdoptionCategory { Label = a.Name, Value = a.Interactions })
+                .ToList();
+
+            estate.Agents = agents;
+        }
+
+        /// <summary>
+        /// Rolls the unlicensed rows up, using exactly the same habit rules as the licensed population
+        /// so the two distributions can be read against each other.
+        /// </summary>
+        private void FinaliseUnlicensed(CopilotAdoptionAnalysis analysis)
+        {
+            var summary = analysis.Summary;
+            var rows = analysis.UnlicensedUsers ?? new List<UnlicensedUsageQueryRow>();
+            var unlicensed = summary.Unlicensed;
+
+            unlicensed.ActiveUsers = rows.Count;
+            unlicensed.Interactions = rows.Sum(r => r.Interactions);
+            unlicensed.AgentUsers = rows.Count(r => r.AgentsUsed > 0);
+            unlicensed.InteractionsPerUserPerMonth = rows.Count == 0
+                ? 0
+                : Math.Round(
+                    CopilotAdoptionScoring.NormaliseToMonth(
+                        unlicensed.Interactions / (double)rows.Count, _options.WindowDays, _options),
+                    1,
+                    MidpointRounding.AwayFromZero);
+
+            unlicensed.HabitBuckets = BuildHabitBuckets(rows.Select(r => (double)r.ActiveDays));
+
+            unlicensed.UsageByDepartment = rows
+                .GroupBy(r => string.IsNullOrWhiteSpace(r.Department) ? "(no department)" : r.Department.Trim())
+                .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Sum(r => (double)r.Interactions) })
+                .OrderByDescending(c => c.Value)
+                .Take(_options.TopSegments)
+                .ToList();
+
+            // The headline "unlicensed active users" is its own uncapped COUNT query, so only fall back
+            // to the row count when that query did not run - never overwrite a true total with a capped one.
+            if (summary.UnlicensedActiveUsers == 0 && rows.Count > 0)
+            {
+                summary.UnlicensedActiveUsers = rows.Count;
+            }
+        }
+
+        /// <summary>
+        /// Licensed and unlicensed Copilot use per department, side by side.
+        ///
+        /// This is the view that turns two separate reports into a decision: a department with idle
+        /// seats <i>and</i> heavy unlicensed Chat use is not an adoption problem, it is a
+        /// seat-allocation problem, and it can usually be fixed at no cost.
+        /// </summary>
+        private List<AdoptionCombinedSegmentRow> BuildCombinedSegments(CopilotAdoptionAnalysis analysis)
+        {
+            var licensed = (analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
+                .GroupBy(u => string.IsNullOrWhiteSpace(u.Department) ? "(no department)" : u.Department.Trim())
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+            var unlicensed = (analysis.UnlicensedUsers ?? new List<UnlicensedUsageQueryRow>())
+                .GroupBy(u => string.IsNullOrWhiteSpace(u.Department) ? "(no department)" : u.Department.Trim())
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+            var segments = licensed.Keys
+                .Concat(unlicensed.Keys)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var rows = new List<AdoptionCombinedSegmentRow>();
+
+            foreach (var segment in segments)
+            {
+                List<LicensedUserAdoptionRow> seats;
+                licensed.TryGetValue(segment, out seats);
+                seats = seats ?? new List<LicensedUserAdoptionRow>();
+
+                List<UnlicensedUsageQueryRow> chat;
+                unlicensed.TryGetValue(segment, out chat);
+                chat = chat ?? new List<UnlicensedUsageQueryRow>();
+
+                // A department needs enough of one population or the other to be worth a row. Without
+                // this a single unlicensed Chat user in a department with no seats appears alongside
+                // real departments and reads as a finding.
+                if (seats.Count < _options.MinSeatsPerSegment && chat.Count < _options.MinSeatsPerSegment)
+                {
+                    continue;
+                }
+
+                rows.Add(new AdoptionCombinedSegmentRow
+                {
+                    Segment = segment,
+                    LicensedUsers = seats.Count,
+                    LicensedActiveUsers = seats.Count(CopilotAdoptionScoring.IsActive),
+                    // Per seat held, not per active seat: this column exists to be compared with the
+                    // unlicensed one, and an idle seat is the whole point of the comparison.
+                    InteractionsPerLicensedUser = PerUserPerMonth(seats.Sum(u => (double)u.Interactions), seats.Count),
+                    LicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
+                        seats.Count(u => u.AgentsUsed > 0), seats.Count),
+                    UnlicensedActiveUsers = chat.Count,
+                    InteractionsPerUnlicensedUser = PerUserPerMonth(chat.Sum(u => (double)u.Interactions), chat.Count),
+                    UnlicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
+                        chat.Count(u => u.AgentsUsed > 0), chat.Count),
+                });
+            }
+
+            return rows
+                .OrderByDescending(r => r.LicensedUsers)
+                .ThenByDescending(r => r.UnlicensedActiveUsers)
+                .Take(_options.TopSegments)
+                .ToList();
+        }
+
+        /// <summary>Interactions per user, normalised to a month so the column does not change meaning with the period.</summary>
+        private double PerUserPerMonth(double interactions, int users)
+        {
+            if (users <= 0) return 0;
+
+            return Math.Round(
+                CopilotAdoptionScoring.NormaliseToMonth(interactions / users, _options.WindowDays, _options),
+                1,
+                MidpointRounding.AwayFromZero);
+        }
+
+        /// <summary>
+        /// The habit strip: active licensed users bucketed by how many days a month they actually open
+        /// Copilot.
+        ///
+        /// Reported as a share of <i>active</i> users rather than of all seats, because the question it
+        /// answers is "of the people who use it, how many have a habit?" - mixing in the never-used
+        /// seats would answer a question the reclaim figures already answer better.
+        /// </summary>
+        private List<AdoptionHabitBucket> BuildHabitBuckets(IEnumerable<double> activeDaysPerUser)
+        {
+            var bucketed = (activeDaysPerUser ?? Enumerable.Empty<double>())
+                .Select(days => CopilotAdoptionScoring.HabitBucketFor(
+                    CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(days, _options.WindowDays, _options),
+                    _options))
+                .Where(b => b != null)
+                .ToList();
+
+            return CopilotAdoptionScoring.AllHabitBuckets
+                .Select(bucket =>
+                {
+                    var count = bucketed.Count(b => b == bucket);
+                    return new AdoptionHabitBucket
+                    {
+                        Label = bucket,
+                        RangeLabel = CopilotAdoptionScoring.HabitBucketRangeLabel(bucket, _options),
+                        Users = count,
+                        SharePct = CopilotAdoptionScoring.Percentage(count, bucketed.Count),
+                    };
+                })
+                .ToList();
+        }
+
+        /// <summary>
+        /// How many licensed users need each recommended action, biggest job first.
+        ///
+        /// This is the same information the per-user list carries, aggregated - and it is the form an
+        /// admin can actually plan from. It also lets the list itself stop repeating an identical
+        /// paragraph on every row of a band.
+        ///
+        /// The shares are of the users actually scored, which is normally every licensed user but is
+        /// capped by <see cref="CopilotAdoptionOptions.MaxLicensedUsersScored"/>. When that cap bites
+        /// the analysis already carries an explicit warning, so the denominator is stated rather than
+        /// silently different from the licence count.
+        /// </summary>
+        private List<AdoptionActionSummary> BuildActionPlan(IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            return CopilotAdoptionScoring.AllActionCodes
+                .Select(code =>
+                {
+                    var count = users.Count(u => u.RecommendedActionCode == code);
+                    return new AdoptionActionSummary
+                    {
+                        Code = code,
+                        Label = CopilotAdoptionScoring.ActionLabel(code),
+                        // Passed the real options, not the defaults: the descriptions quote thresholds,
+                        // and a tuned deployment must not be shown the shipped numbers.
+                        Description = CopilotAdoptionScoring.ActionDescription(code, _options),
+                        Users = count,
+                        SharePct = CopilotAdoptionScoring.Percentage(count, users.Count),
+                    };
+                })
+                .Where(a => a.Users > 0)
+                .OrderByDescending(a => a.Users)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Frequency vs intensity per segment: how many days a month its active users open Copilot,
+        /// against how many interactions they run on each of those days.
+        ///
+        /// Two departments on the same adoption percentage sit in completely different places on this
+        /// plot, and the intervention differs accordingly - a high-frequency/low-intensity department
+        /// needs richer scenarios, a low-frequency/high-intensity one needs a reason to come back
+        /// tomorrow. Only active users are averaged, so the never-used seats (already counted in the
+        /// reclaim figures) do not drag every department towards the origin.
+        /// </summary>
+        private List<AdoptionIntensityPoint> BuildIntensity(
+            IEnumerable<LicensedUserAdoptionRow> users,
+            Func<LicensedUserAdoptionRow, string> selector,
+            string emptyLabel)
+        {
+            return users
+                .GroupBy(u => string.IsNullOrWhiteSpace(selector(u)) ? emptyLabel : selector(u).Trim())
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
+                .Select(g =>
+                {
+                    var active = g.Where(CopilotAdoptionScoring.IsActive).ToList();
+                    var activeDayTotal = active.Sum(u => u.ActiveDays);
+
+                    return new AdoptionIntensityPoint
+                    {
+                        Segment = g.Key,
+                        LicensedUsers = g.Count(),
+                        ActiveUsers = active.Count,
+                        ActiveDaysPerUser = active.Count == 0
+                            ? 0
+                            : Math.Round(
+                                CopilotAdoptionScoring.NormaliseToMonth(
+                                    activeDayTotal / (double)active.Count, _options.WindowDays, _options),
+                                1,
+                                MidpointRounding.AwayFromZero),
+                        ActionsPerActiveDay = active.Count == 0
+                            ? 0
+                            : Math.Round(
+                                active.Sum(u => (double)u.Interactions) / Math.Max(1, activeDayTotal),
+                                1,
+                                MidpointRounding.AwayFromZero),
+                        ActiveUserAverageScore = active.Count == 0
+                            ? 0
+                            : Math.Round(active.Average(u => u.AdoptionScore), 1, MidpointRounding.AwayFromZero),
+                    };
+                })
+                .Where(p => p.ActiveUsers > 0)
+                .OrderByDescending(p => p.LicensedUsers)
+                .Take(_options.TopSegments)
                 .ToList();
         }
 

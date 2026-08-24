@@ -45,6 +45,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Copilot\CopilotActivityGenerator.cs" />
+    <Compile Include="Copilot\CopilotAdoptionPersonas.cs" />
+    <Compile Include="Copilot\CopilotAdoptionScenarioGenerator.cs" />
+    <Compile Include="Copilot\CopilotChatFactory.cs" />
     <Compile Include="Copilot\CopilotEventDetailGenerator.cs" />
     <Compile Include="Copilot\CopilotInteractionHistoryGenerator.cs" />
     <Compile Include="Copilot\CopilotActivityGeneratorConfig.cs" />

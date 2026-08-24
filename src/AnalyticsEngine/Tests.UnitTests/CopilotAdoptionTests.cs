@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -166,7 +167,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, neverUsed.AdoptionScore);
             Assert.AreEqual(0, dormant.AdoptionScore);
             StringAssert.Contains(neverUsed.RecommendedAction, "Reclaim");
-            StringAssert.Contains(dormant.RecommendedAction, "Re-engage");
+            StringAssert.Contains(dormant.RecommendedAction, "Win back");
         }
 
         [TestMethod]
@@ -275,6 +276,124 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(20d, CopilotAdoptionScoring.AvailableWorkingDays(options), 0.001);
             Assert.AreEqual(12d, CopilotAdoptionScoring.TargetActiveDays(options), 0.001);
+        }
+
+        [TestMethod]
+        public void WindowStart_SpansExactlyTheRequestedNumberOfDates()
+        {
+            // "Last 28 days" has to contain 28 distinct calendar dates. Starting at midnight 28 days
+            // ago spans 29 of them, so somebody active every single day recorded 29 active days while
+            // the frequency component divided by a target derived from 28 - inflating the score of
+            // precisely the most engaged users, and making the dates shown in the UI a day wider than
+            // the window they are labelled with.
+            var nowUtc = new DateTime(2026, 8, 24, 14, 30, 0, DateTimeKind.Utc);
+
+            foreach (var windowDays in new[] { 7, 28, 90, 180 })
+            {
+                var start = CopilotAdoptionScoring.WindowStartUtc(nowUtc, windowDays);
+
+                var distinctDates = 0;
+                for (var day = start; day.Date <= nowUtc.Date; day = day.AddDays(1))
+                {
+                    distinctDates++;
+                }
+
+                Assert.AreEqual(windowDays, distinctDates,
+                    $"a {windowDays}-day window must contain exactly {windowDays} dates");
+                Assert.AreEqual(start.TimeOfDay, TimeSpan.Zero, "the window must start at midnight");
+            }
+        }
+
+        [TestMethod]
+        public void WindowStart_NeverProducesMoreActiveDaysThanTheFrequencyTargetAssumes()
+        {
+            // The end-to-end version of the bug above: a user active on every date of the window must
+            // not be able to beat the "available working days" the target is derived from.
+            var options = new CopilotAdoptionOptions { WindowDays = 28 };
+            var nowUtc = new DateTime(2026, 8, 24, 23, 59, 0, DateTimeKind.Utc);
+            var start = CopilotAdoptionScoring.WindowStartUtc(nowUtc, options.WindowDays);
+
+            var datesInWindow = (int)(nowUtc.Date - start.Date).TotalDays + 1;
+
+            Assert.AreEqual(options.WindowDays, datesInWindow);
+            Assert.IsTrue(datesInWindow <= options.WindowDays,
+                "the numerator's window cannot be wider than the denominator's");
+        }
+
+        [TestMethod]
+        public void Diagnostics_RecordTimingsAndIdentifyTheSlowestStep()
+        {
+            // The slowest step is reported as a plain string property so an operator can triage from the
+            // event list without unpacking customMeasurements.
+            var diagnostics = new CopilotAdoptionDiagnostics();
+            Assert.IsNull(diagnostics.SlowestStep, "With nothing recorded there is no slowest step.");
+
+            diagnostics.Record(CopilotAdoptionSteps.LicensedUsers, 4200);
+            diagnostics.Record(CopilotAdoptionSteps.WeeklyTrend, 90000, failed: true);
+            diagnostics.Record(CopilotAdoptionSteps.AgentEstate, 300);
+
+            Assert.AreEqual(3, diagnostics.Steps.Count);
+            Assert.AreEqual(CopilotAdoptionSteps.WeeklyTrend, diagnostics.SlowestStep.Step);
+            Assert.AreEqual(90000, diagnostics.SlowestStep.DurationMs);
+
+            // A step that failed still has to carry its duration: a query abandoned at the command
+            // timeout is the single most useful thing in this telemetry, and dropping it would hide
+            // exactly the tenants whose report is quietly degrading.
+            Assert.IsTrue(diagnostics.Steps.Single(s => s.Step == CopilotAdoptionSteps.WeeklyTrend).Failed);
+            Assert.IsFalse(diagnostics.Steps.Single(s => s.Step == CopilotAdoptionSteps.AgentEstate).Failed);
+        }
+
+        [TestMethod]
+        public void Diagnostics_IgnoreAnUnnamedStep()
+        {
+            // Step names become App Insights measurement names, so a blank one would produce an unusable
+            // metric rather than a useful one.
+            var diagnostics = new CopilotAdoptionDiagnostics();
+
+            diagnostics.Record(null, 10);
+            diagnostics.Record(string.Empty, 10);
+            diagnostics.Record("   ", 10);
+
+            Assert.AreEqual(0, diagnostics.Steps.Count);
+        }
+
+        [TestMethod]
+        public void Diagnostics_AreSerialisedInCamelCaseLikeEveryOtherModel()
+        {
+            // This solution has no global camelCase contract resolver, so a model without explicit
+            // [JsonProperty] names silently serialises as PascalCase and the client reads undefined.
+            // That has already happened once in this feature, to CopilotAdoptionOptions.
+            var diagnostics = new CopilotAdoptionDiagnostics { TotalMs = 1234 };
+            diagnostics.Record(CopilotAdoptionSteps.LicensedUsers, 42);
+
+            var json = JsonConvert.SerializeObject(diagnostics);
+
+            StringAssert.Contains(json, "\"totalMs\"");
+            StringAssert.Contains(json, "\"steps\"");
+            StringAssert.Contains(json, "\"durationMs\"");
+            Assert.IsFalse(json.Contains("\"TotalMs\""), "Serialised names must be camelCase.");
+        }
+
+        [TestMethod]
+        public void AgentUsageQuery_DoesNotCountUnattributedEventsAsAUser()
+        {
+            // dbo.audit_events.user_id is nullable, and the agent query's driving CTE does not exclude
+            // NULL users. The original COUNT(DISTINCT au.user_id) skipped them implicitly; the rewritten
+            // form groups by (agent_id, user_id), which puts unattributed events into their own NULL
+            // group. COUNT(*) would count that group as a person - COUNT(user_id) does not.
+            //
+            // This is not cosmetic. Users is the adoption threshold: AgentHealthFor returns Review below
+            // AgentMinUsers (default 3) and Keep at or above it, so one unattributed interaction against
+            // an agent genuinely used by two people would flip its verdict and print "used by 3 people.
+            // Genuinely adopted - keep supporting it."
+            //
+            // A row-for-row comparison against a synthetic tenant does not catch this, because generated
+            // data has no unattributed events. Hence a test on the query text.
+            var sql = CopilotAdoptionSql.AgentUsageSql(new[] { 1 });
+
+            StringAssert.Contains(sql, "COUNT(user_id) AS Users");
+            Assert.AreEqual(0, CountOccurrences(sql, "COUNT(*) AS Users"),
+                "COUNT(*) over a (agent, user) grouping counts the NULL-user group as a person.");
         }
 
         [TestMethod]
@@ -483,14 +602,41 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, CountOccurrences(sql, "dbo.copilot_chats"),
                 "The Copilot audit history must be read exactly once - it is the most expensive join in the product.");
             StringAssert.Contains(sql, "au.time_stamp >= @historyFrom");
-            StringAssert.Contains(sql, "SUM(CASE WHEN au.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions");
-            StringAssert.Contains(sql, "SUM(CASE WHEN au.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions");
+            StringAssert.Contains(sql, "SUM(CASE WHEN c.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions");
+            StringAssert.Contains(sql, "SUM(CASE WHEN c.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions");
 
             // Deterministic truncation, so a capped report is reproducible rather than randomly
             // different between runs.
             StringAssert.Contains(sql, "TOP (@maxRows)");
             StringAssert.Contains(sql, "ORDER BY u.id");
             StringAssert.Contains(sql, "OPTION (RECOMPILE)");
+        }
+
+        [TestMethod]
+        public void LicensedUsersQuery_NeverAsksForSeveralDistinctCountsInOneGrouping()
+        {
+            // This is a performance contract, not a style rule.
+            //
+            // SQL Server streams a single distinct aggregate cheaply, but two or more in the same
+            // GROUP BY force it to fan the input out through a spool and process each distinct
+            // separately. Measured on a synthetic 200k-user / 12M-interaction tenant, writing the
+            // three per-user distinct counts as COUNT(DISTINCT ...) in one grouping cost 115M logical
+            // reads and 281s on the default 28-day window - past the 90s command timeout, so the
+            // report silently degraded to a warning. Computing each from its own pre-projected
+            // DISTINCT set is the same answer in 772k reads and 73s.
+            //
+            // Re-introducing COUNT(DISTINCT ...) here would be an easy, innocent-looking edit, and the
+            // damage only shows up on a tenant large enough that nobody is testing against it.
+            var sql = CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], includeCopilotReport: true);
+
+            Assert.AreEqual(0, CountOccurrences(sql, "COUNT(DISTINCT"),
+                "Per-user distinct counts must come from their own DISTINCT sub-selects, not from "
+                + "COUNT(DISTINCT ...) aggregates sharing one GROUP BY.");
+
+            // The shape that replaces them.
+            StringAssert.Contains(sql, "SELECT DISTINCT user_id, CAST(time_stamp AS date)");
+            StringAssert.Contains(sql, "SELECT DISTINCT user_id, app_host");
+            StringAssert.Contains(sql, "SELECT DISTINCT user_id, agent_id");
         }
 
         [TestMethod]
@@ -938,6 +1084,641 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, CopilotAdoptionScoring.Percentage(5, 0));
         }
 
+        [TestMethod]
+        public void RatesDivideByTheUsersActuallyAnalysed_NotTheSeatCount()
+        {
+            // The failure this guards against is arithmetic, not cosmetic. If the detail query hits its
+            // row cap and the rates still divide by the seat count, a 200,000-seat tenant scored 50,000
+            // deep can never report adoption above 25% however healthy it really is - and the funnel
+            // opens with a 75% drop that is purely an artefact of how many rows were read.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 10).Select(i => ScoredUser($"u{i}@contoso.com", 80, AdoptionBand.Champion)));
+
+            // Ten users analysed, but the tenant holds forty seats.
+            analysis.Summary.LicensedUsers = 40;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            Assert.AreEqual(40, summary.LicensedUsers, "The true seat count must be preserved.");
+            Assert.AreEqual(10, summary.ScoredUsers);
+            Assert.AreEqual(100, summary.AdoptionRatePct,
+                "All ten analysed users are active, so adoption is 100% of what was measured - not 25%.");
+            Assert.AreEqual(100, summary.HabitRatePct);
+
+            Assert.AreEqual(10, summary.Funnel.First().Value,
+                "The funnel must open at the analysed population, or stage one to stage two shows a fake collapse.");
+
+            Assert.IsTrue(
+                summary.Warnings.Any(w => w.Contains("40") && w.Contains("10")),
+                "A capped analysis must say so, naming both the seat count and the analysed count.");
+        }
+
+        [TestMethod]
+        public void WhenEveryLicensedUserIsAnalysed_TheDenominatorsAreIdentical()
+        {
+            // The normal case must be untouched by the fix above.
+            var analysis = SampleAnalysis();
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(analysis.Summary.LicensedUsers, analysis.Summary.ScoredUsers);
+            Assert.AreEqual(50, analysis.Summary.AdoptionRatePct);
+            Assert.IsFalse(
+                analysis.Summary.Warnings.Any(w => w.Contains("could be analysed")),
+                "An uncapped analysis must not carry a truncation warning.");
+        }
+
+        [TestMethod]
+        public void AgentInteractionsPerUser_UsesTheSameWindowForBothSidesOfTheRatio()
+        {
+            // The inventory reads a long history so a dormant agent is still visible, but the agent-user
+            // count is scoped to the reporting period. Summing the history-wide interaction total and
+            // dividing it by that user count inflated a headline KPI by the ratio of the two windows -
+            // roughly four times at the default settings.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-28);
+
+            var user = ScoredUser("power@contoso.com", 80, AdoptionBand.Champion);
+            user.AgentsUsed = 1;
+            analysis.LicensedUsers.Add(user);
+            analysis.Summary.LicensedUsers = 1;
+
+            var agent = Agent("Contoso Expenses Agent", users: 1, interactions: 1000, appsUsed: 1);
+            agent.WindowInteractions = 40;
+            analysis.Agents.Add(agent);
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(40, analysis.Summary.Agents.AgentInteractions,
+                "The headline interaction count must be the in-period figure, not the whole history.");
+            Assert.AreEqual(40, analysis.Summary.Agents.InteractionsPerAgentUser, 0.01,
+                "Numerator and denominator must share the reporting window.");
+        }
+
+        [TestMethod]
+        public void ConcentrationAndSegments_CountAUserWithPromptsButNoDayBreakdown()
+        {
+            // Microsoft's usage report can supply a prompt count with no per-day breakdown. Scoring
+            // treats that as active; several downstream views tested active days alone and silently
+            // dropped those users, so the headline and the breakdowns disagreed about the population.
+            var analysis = new CopilotAdoptionAnalysis();
+            var reportOnly = ScoredUser("reportonly@contoso.com", 40, AdoptionBand.Developing);
+            reportOnly.Interactions = 30;
+            reportOnly.ActiveDays = 0;
+            reportOnly.Department = "Finance";
+
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Departmentalise(ActiveUser($"u{i}@contoso.com", 10, 50), "Finance")));
+            analysis.LicensedUsers.Add(reportOnly);
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(6, analysis.Summary.Concentration.Sum(b => b.Users),
+                "A user with prompts but no day breakdown is active, and must be ranked.");
+
+            var finance = analysis.Summary.IntensityByDepartment.Single();
+            Assert.AreEqual(6, finance.ActiveUsers,
+                "The intensity view must count the same active population as the headline figures.");
+        }
+
+        #endregion
+
+        #region Explainability: the options must survive serialisation
+
+        [TestMethod]
+        public void EveryTuningValue_IsSerialisedInCamelCase()
+        {
+            // The UI states the formula behind every figure using the options the API returns. Without
+            // an explicit camelCase JsonProperty the client reads `undefined` for every threshold and
+            // the entire "How this is calculated" tab renders as "NaN% of the score" - which is exactly
+            // the regression this test exists to stop happening again.
+            var json = Newtonsoft.Json.Linq.JObject.Parse(
+                Newtonsoft.Json.JsonConvert.SerializeObject(CopilotAdoptionOptions.Default));
+
+            var propertyNames = json.Properties().Select(p => p.Name).ToList();
+
+            Assert.AreEqual(
+                typeof(CopilotAdoptionOptions).GetProperties().Length - 1,
+                propertyNames.Count,
+                "Every tuning property except the static Default must be serialised.");
+
+            foreach (var name in propertyNames)
+            {
+                Assert.IsTrue(
+                    char.IsLower(name[0]),
+                    $"'{name}' is serialised in PascalCase; the client reads camelCase and would show NaN.");
+            }
+
+            // Spot-check the values the methodology tab quotes directly.
+            Assert.AreEqual(0.5, (double)json["frequencyWeight"]);
+            Assert.AreEqual(75, (double)json["championScore"]);
+            Assert.AreEqual(50, (double)json["opportunityRecommendScore"]);
+            Assert.AreEqual(35, (double)json["opportunityUnlicensedCopilotWeight"]);
+            Assert.AreEqual(28, (int)json["habitBucketNormalisationDays"]);
+        }
+
+        #endregion
+
+        #region Habit buckets
+
+        [TestMethod]
+        public void HabitBuckets_MeanTheSameThingWhicheverPeriodIsSelected()
+        {
+            // 12 active days is a near-daily habit over 28 days and an occasional one over 90. Without
+            // normalisation the same tile would silently change meaning when the reader changed the
+            // period drop-down - the sort of thing nobody notices until a decision has been made on it.
+            var over28 = CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(12, 28);
+            var over90 = CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(12, 90);
+
+            Assert.AreEqual(12, over28, 0.01);
+            Assert.AreEqual(3.73, over90, 0.01);
+            Assert.AreEqual("Frequent", CopilotAdoptionScoring.HabitBucketFor(over28));
+            Assert.AreEqual("Infrequent", CopilotAdoptionScoring.HabitBucketFor(over90));
+        }
+
+        [TestMethod]
+        public void AUserWithNoActivity_IsNotCalledInfrequent()
+        {
+            // They are a reclaimable seat, which is a much more expensive problem. Folding them into
+            // "infrequent" would hide it inside a bucket that looks like light-but-real usage.
+            Assert.IsNull(CopilotAdoptionScoring.HabitBucketFor(0));
+            Assert.AreEqual("Infrequent", CopilotAdoptionScoring.HabitBucketFor(1));
+
+            // One interaction in a 180-day window normalises to well under a day. It must still land in
+            // a bucket rather than vanishing, because it is real activity.
+            Assert.AreEqual(
+                "Infrequent",
+                CopilotAdoptionScoring.HabitBucketFor(CopilotAdoptionScoring.NormalisedActiveDaysPerMonth(1, 180)));
+        }
+
+        [TestMethod]
+        public void BucketBoundaries_MatchTheirPrintedCaptions()
+        {
+            // The tiles are captioned "1-5 / 6-10 / 11-19 / 20+ active days a month". Because the
+            // normalised figure is fractional, it is rounded to whole days first - otherwise a user on
+            // 5.6 days would be filed under a caption that visibly excludes them.
+            Assert.AreEqual("Infrequent", CopilotAdoptionScoring.HabitBucketFor(5.4));
+            Assert.AreEqual("Moderate", CopilotAdoptionScoring.HabitBucketFor(5.6));
+            Assert.AreEqual("Moderate", CopilotAdoptionScoring.HabitBucketFor(10.4));
+            Assert.AreEqual("Frequent", CopilotAdoptionScoring.HabitBucketFor(10.6));
+            Assert.AreEqual("Frequent", CopilotAdoptionScoring.HabitBucketFor(19.4));
+            Assert.AreEqual("Daily", CopilotAdoptionScoring.HabitBucketFor(19.6));
+
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Infrequent"), "1-5");
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Moderate"), "6-10");
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Frequent"), "11-19");
+            StringAssert.StartsWith(CopilotAdoptionScoring.HabitBucketRangeLabel("Daily"), "20+");
+        }
+
+        [TestMethod]
+        public void HabitBucketShares_AreOfActiveUsersAndSumTo100()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(new[]
+            {
+                ActiveUser("daily@contoso.com", activeDays: 20, interactions: 200),
+                ActiveUser("frequent@contoso.com", activeDays: 12, interactions: 60),
+                ActiveUser("moderate@contoso.com", activeDays: 7, interactions: 21),
+                ActiveUser("rare@contoso.com", activeDays: 2, interactions: 3),
+                ScoredUser("never@contoso.com", 0, AdoptionBand.NeverUsed),
+            });
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var buckets = analysis.Summary.HabitBuckets;
+            CollectionAssert.AreEqual(
+                CopilotAdoptionScoring.AllHabitBuckets.ToArray(),
+                buckets.Select(b => b.Label).ToArray(),
+                "Every bucket must appear, including the empty ones - an empty 'Daily' tile is the finding.");
+
+            Assert.AreEqual(4, buckets.Sum(b => b.Users), "The never-used seat must not be bucketed.");
+            Assert.AreEqual(100, buckets.Sum(b => b.SharePct), 0.11);
+            Assert.AreEqual(1, buckets.Single(b => b.Label == "Daily").Users);
+            Assert.AreEqual(25, buckets.Single(b => b.Label == "Daily").SharePct, 0.01);
+        }
+
+        #endregion
+
+        #region Enablement plan
+
+        [TestMethod]
+        public void EveryLicensedUser_GetsExactlyOneAction()
+        {
+            // The plan is only usable as a plan if the counts add up to the whole population - an admin
+            // reads it as "these are all the jobs, and this is how big each one is".
+            var analysis = SampleAnalysis();
+            foreach (var user in analysis.LicensedUsers)
+            {
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(
+                analysis.Summary.LicensedUsers,
+                analysis.Summary.ActionPlan.Sum(a => a.Users),
+                "Every licensed user must be counted in exactly one action group.");
+            Assert.IsTrue(analysis.Summary.ActionPlan.All(a => a.Users > 0), "Empty action groups are padding.");
+            Assert.IsTrue(
+                analysis.Summary.ActionPlan.All(a => !string.IsNullOrWhiteSpace(a.Description)),
+                "Each action must explain itself once, since the per-row prose was removed.");
+        }
+
+        [TestMethod]
+        public void TheActionTagAndTheExportedProse_NeverDisagree()
+        {
+            // The screen shows a two-word tag and the CSV carries the full sentence. If those two are
+            // derived independently they will drift, and a department lead will act on prose that
+            // contradicts the tag someone else filtered on.
+            var cases = new[]
+            {
+                CopilotAdoptionScoring.Score(UsageRow(0, 0, 0, null), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(2, 1, 1, Now.AddDays(-1)), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(30, 6, 1, Now), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(100, 20, 1, Now), WindowStart, Now, auditAvailable: true),
+                CopilotAdoptionScoring.Score(UsageRow(100, 20, 4, Now), WindowStart, Now, auditAvailable: true),
+            };
+
+            // The middle case must be the one that used to disagree: an Established user whose habit is
+            // confined to a single surface is tagged "Broaden", so the sentence has to say Broaden too.
+            Assert.IsTrue(
+                cases.Any(c => c.RecommendedActionCode == CopilotAdoptionScoring.AdoptionActionCodes.Broaden),
+                "This test is only meaningful if it covers the broaden case.");
+
+            foreach (var scored in cases)
+            {
+                Assert.IsFalse(string.IsNullOrWhiteSpace(scored.RecommendedActionCode), $"{scored.Band} has no action code.");
+                Assert.AreEqual(
+                    CopilotAdoptionScoring.ActionLabel(scored.RecommendedActionCode),
+                    scored.RecommendedActionLabel);
+                StringAssert.StartsWith(
+                    scored.RecommendedAction,
+                    FirstWord(scored.RecommendedActionLabel),
+                    $"The '{scored.RecommendedActionLabel}' tag must match the sentence exported for band {scored.Band}.");
+            }
+        }
+
+        [TestMethod]
+        public void EveryActionLabel_IsDistinctAndNamesTheStepToTake()
+        {
+            // The action column exists so an admin can group by it and say "these 76 need X". That
+            // only works if two different interventions do not read as the same instruction. The
+            // original "Coach" / "Grow" pair failed this: both are vague encouragement verbs, and a
+            // reader had to know the band thresholds to tell them apart.
+            var labels = CopilotAdoptionScoring.AllActionCodes
+                .Select(CopilotAdoptionScoring.ActionLabel)
+                .ToList();
+
+            CollectionAssert.AllItemsAreUnique(labels.ToList(), "Two actions share a label.");
+
+            foreach (var code in CopilotAdoptionScoring.AllActionCodes)
+            {
+                var label = CopilotAdoptionScoring.ActionLabel(code);
+                Assert.IsFalse(string.IsNullOrWhiteSpace(label), $"'{code}' has no label.");
+                Assert.IsFalse(
+                    string.IsNullOrWhiteSpace(CopilotAdoptionScoring.ActionDescription(code)),
+                    $"'{code}' has a label but no explanation of why anyone qualifies for it.");
+
+                // A label that is a bare single word is almost always a state ("Coach", "Sustain")
+                // rather than an instruction. The one exception would have to be argued for.
+                Assert.IsTrue(
+                    label.Split(' ').Length > 1,
+                    $"'{label}' is a single word - say what to do, not what the user is.");
+            }
+
+            // No label may be wholly contained in another: that is the shape of a near-synonym pair.
+            foreach (var a in labels)
+            {
+                foreach (var b in labels.Where(x => x != a))
+                {
+                    Assert.IsFalse(
+                        b.IndexOf(a, StringComparison.OrdinalIgnoreCase) >= 0,
+                        $"'{a}' is contained in '{b}' - these will read as the same action.");
+                }
+            }
+        }
+
+        #endregion
+
+        #region Frequency vs intensity
+
+        [TestMethod]
+        public void IntensityPlot_SeparatesFrequentButShallowFromDeepButOccasional()
+        {
+            // The whole point of the chart: these two departments have identical adoption rates and
+            // identical average scores would still hide which intervention each of them needs.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"shallow{i}@contoso.com", activeDays: 20, interactions: 20), "Support")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"deep{i}@contoso.com", activeDays: 4, interactions: 80), "Legal")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var support = analysis.Summary.IntensityByDepartment.Single(p => p.Segment == "Support");
+            var legal = analysis.Summary.IntensityByDepartment.Single(p => p.Segment == "Legal");
+
+            Assert.IsTrue(support.ActiveDaysPerUser > legal.ActiveDaysPerUser, "Support opens Copilot far more often.");
+            Assert.IsTrue(legal.ActionsPerActiveDay > support.ActionsPerActiveDay, "Legal does far more each time.");
+            Assert.AreEqual(1, support.ActionsPerActiveDay, 0.01);
+            Assert.AreEqual(20, legal.ActionsPerActiveDay, 0.01);
+        }
+
+        [TestMethod]
+        public void IntensityBubbleColour_AveragesTheSamePopulationAsItsAxes()
+        {
+            // The bubble is coloured by engagement, and both its axes describe active users only. If
+            // the colour averaged the whole department it would contradict the chart's own caption and
+            // double-count the unused seats that the reclaim figures already report.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ActiveUser($"active{i}@contoso.com", activeDays: 10, interactions: 50), "Finance")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ScoredUser($"idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "Finance")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var finance = analysis.Summary.IntensityByDepartment.Single();
+            Assert.AreEqual(50, finance.ActiveUserAverageScore, 0.01,
+                "Averaged over the three active users, not diluted to 25 by the three unused seats.");
+
+            // The department table deliberately keeps the whole-population average - the two answer
+            // different questions and both are labelled as such.
+            Assert.AreEqual(25, analysis.Summary.AdoptionByDepartment.Single().AverageAdoptionScore, 0.01);
+        }
+
+        [TestMethod]
+        public void IntensityPlot_IgnoresUnusedSeatsSoDepartmentsAreNotDraggedToTheOrigin()
+        {
+            // Unused seats are already counted (and acted on) as reclaimable. Averaging them in here
+            // would make every department look mediocre and hide the real spread between them.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ActiveUser($"active{i}@contoso.com", activeDays: 10, interactions: 50), "Finance")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3)
+                .Select(i => Departmentalise(ScoredUser($"idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "Finance")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var finance = analysis.Summary.IntensityByDepartment.Single();
+            Assert.AreEqual(6, finance.LicensedUsers, "The bubble is still sized by all the seats held.");
+            Assert.AreEqual(3, finance.ActiveUsers);
+            Assert.AreEqual(10, finance.ActiveDaysPerUser, 0.01, "Averaged over the active users only.");
+            Assert.AreEqual(5, finance.ActionsPerActiveDay, 0.01);
+        }
+
+        #endregion
+
+        #region Agent inventory
+
+        [TestMethod]
+        public void ANewAgentIsNotRetired_HoweverFewPeopleUseIt()
+        {
+            // The exemption that stops an agent programme being strangled in its first month. A
+            // brand-new agent with one user has not failed, it has not started.
+            Assert.AreEqual(
+                AgentHealth.New,
+                CopilotAdoptionScoring.AgentHealthFor(daysSinceFirstUse: 5, daysSinceLastUse: 1, users: 1));
+
+            // The same agent a few months later, still with one user, is a genuine review candidate.
+            Assert.AreEqual(
+                AgentHealth.Review,
+                CopilotAdoptionScoring.AgentHealthFor(daysSinceFirstUse: 120, daysSinceLastUse: 1, users: 1));
+        }
+
+        [TestMethod]
+        public void AgentVerdicts_FollowInactivityThenAdoption()
+        {
+            var o = CopilotAdoptionOptions.Default;
+
+            Assert.AreEqual(
+                AgentHealth.Retire,
+                CopilotAdoptionScoring.AgentHealthFor(200, o.AgentRetireInactiveDays, 50),
+                "Long-dormant agents are retire candidates however popular they once were.");
+
+            Assert.AreEqual(
+                AgentHealth.Review,
+                CopilotAdoptionScoring.AgentHealthFor(200, o.AgentReviewInactiveDays, 50),
+                "Going quiet is a review, not yet a retirement.");
+
+            Assert.AreEqual(
+                AgentHealth.Keep,
+                CopilotAdoptionScoring.AgentHealthFor(200, 1, o.AgentMinUsers),
+                "Current and genuinely adopted.");
+
+            Assert.AreEqual(
+                AgentHealth.Review,
+                CopilotAdoptionScoring.AgentHealthFor(200, 1, o.AgentMinUsers - 1),
+                "Current but below the adoption floor - usually the author testing it.");
+        }
+
+        [TestMethod]
+        public void AnAgentWithNoRecordedUse_IsRetiredRatherThanCrashing()
+        {
+            Assert.AreEqual(AgentHealth.Retire, CopilotAdoptionScoring.AgentHealthFor(null, null, 0));
+            Assert.AreEqual(AgentHealth.New, CopilotAdoptionScoring.AgentHealthFor(3, null, 0));
+        }
+
+        [TestMethod]
+        public void EveryAgentVerdict_ExplainsItself()
+        {
+            // Same rule as the rest of the tool: an assertion the reader cannot check is not evidence.
+            var scored = CopilotAdoptionScoring.ScoreAgent(
+                new AgentUsageQueryRow
+                {
+                    AgentId = 1,
+                    Name = "Contoso Expenses Agent",
+                    Interactions = 40,
+                    Users = 8,
+                    AppsUsed = 2,
+                    FirstUsedUtc = Now.AddDays(-200),
+                    LastUsedUtc = Now.AddDays(-1),
+                },
+                Now);
+
+            Assert.AreEqual(AgentHealth.Keep, scored.Health);
+            Assert.AreEqual("Keep", scored.HealthName);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(scored.HealthReason));
+            Assert.AreEqual(5, scored.InteractionsPerUser, 0.01);
+            Assert.AreEqual(1, scored.DaysSinceLastUse);
+        }
+
+        [TestMethod]
+        public void MostPopularAndMostVersatile_AnswerDifferentQuestions()
+        {
+            // An agent one person runs constantly is not the most widely useful one, and an agent used
+            // everywhere by a few people is doing a broader job than a high-volume single-surface one.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-28);
+            analysis.Agents.AddRange(new[]
+            {
+                Agent("Heavy single-surface agent", users: 2, interactions: 5000, appsUsed: 1),
+                Agent("Widely used agent", users: 40, interactions: 400, appsUsed: 2),
+                Agent("Everywhere agent", users: 6, interactions: 120, appsUsed: 5),
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("Widely used agent", analysis.Summary.Agents.MostPopularAgent);
+            Assert.AreEqual("Everywhere agent", analysis.Summary.Agents.MostVersatileAgent);
+        }
+
+        [TestMethod]
+        public void AgentUsers_AreNotDoubleCountedAcrossAgents()
+        {
+            // Summing users across agents would count anyone using two agents twice, which is how an
+            // agent programme ends up reporting more users than the tenant has people.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-28);
+
+            var multiAgentUser = ScoredUser("power@contoso.com", 80, AdoptionBand.Champion);
+            multiAgentUser.AgentsUsed = 3;
+            analysis.LicensedUsers.Add(multiAgentUser);
+            analysis.LicensedUsers.Add(ScoredUser("none@contoso.com", 10, AdoptionBand.Trialling));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            analysis.Agents.AddRange(new[]
+            {
+                Agent("A", users: 1, interactions: 10, appsUsed: 1),
+                Agent("B", users: 1, interactions: 10, appsUsed: 1),
+                Agent("C", users: 1, interactions: 10, appsUsed: 1),
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(1, analysis.Summary.Agents.AgentUsers,
+                "One person using three agents is one agent user, not three.");
+            Assert.AreEqual(1, analysis.Summary.Agents.LicensedAgentUsers);
+        }
+
+        #endregion
+
+        #region Usage concentration
+
+        [TestMethod]
+        public void Concentration_ExposesUsageCarriedByAFewPeople()
+        {
+            // Two tenants with identical adoption rates and identical totals; only the distribution
+            // differs. The adoption percentage cannot tell them apart, which is the whole point.
+            var even = CopilotAdoptionScoring.Concentration(Enumerable.Repeat(10L, 100));
+            var skewed = CopilotAdoptionScoring.Concentration(
+                Enumerable.Repeat(91L, 10).Concat(Enumerable.Repeat(1L, 90)));
+
+            var evenTop = even.Single(b => b.Label == "Top 10%");
+            var skewedTop = skewed.Single(b => b.Label == "Top 10%");
+
+            Assert.AreEqual(10, evenTop.SharePct, 0.5, "Evenly spread usage puts ~10% of activity in the top 10%.");
+            Assert.IsTrue(skewedTop.SharePct > 85,
+                $"A tenant carried by its top decile must show it - got {skewedTop.SharePct}%.");
+        }
+
+        [TestMethod]
+        public void Concentration_AccountsForEveryActiveUserExactlyOnce()
+        {
+            // Rounding percentile boundaries is the obvious way to lose or duplicate a user.
+            foreach (var count in new[] { 1, 2, 3, 7, 13, 99, 100, 101, 1000 })
+            {
+                var bands = CopilotAdoptionScoring.Concentration(
+                    Enumerable.Range(1, count).Select(i => (long)i));
+
+                Assert.AreEqual(count, bands.Sum(b => b.Users),
+                    $"Every one of the {count} active users must land in exactly one cohort.");
+                Assert.AreEqual(100, bands.Sum(b => b.SharePct), 0.2);
+            }
+        }
+
+        [TestMethod]
+        public void Concentration_IgnoresIdleSeats()
+        {
+            // Including them would put every idle seat in the bottom cohort at zero and give every
+            // tenant on earth the same chart.
+            var bands = CopilotAdoptionScoring.Concentration(new long[] { 100, 50, 0, 0, 0, 0 });
+            Assert.AreEqual(2, bands.Sum(b => b.Users));
+        }
+
+        [TestMethod]
+        public void Concentration_HandlesAnEmptyPopulation()
+        {
+            Assert.AreEqual(0, CopilotAdoptionScoring.Concentration(new long[0]).Count);
+            Assert.AreEqual(0, CopilotAdoptionScoring.Concentration(null).Count);
+        }
+
+        #endregion
+
+        #region Unlicensed population and the combined view
+
+        [TestMethod]
+        public void UnlicensedUsers_AreBucketedByTheSameHabitRulesAsLicensedOnes()
+        {
+            // The two strips are meant to be read against each other, which only works if they mean
+            // the same thing.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.Add(ActiveUser("seat@contoso.com", activeDays: 20, interactions: 100));
+            analysis.Summary.LicensedUsers = 1;
+            analysis.UnlicensedUsers.AddRange(new[]
+            {
+                Unlicensed("chat1@contoso.com", department: "Legal", activeDays: 20, interactions: 200),
+                Unlicensed("chat2@contoso.com", department: "Legal", activeDays: 2, interactions: 4),
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var unlicensed = analysis.Summary.Unlicensed;
+            Assert.AreEqual(2, unlicensed.ActiveUsers);
+            Assert.AreEqual(204, unlicensed.Interactions);
+            CollectionAssert.AreEqual(
+                CopilotAdoptionScoring.AllHabitBuckets.ToArray(),
+                unlicensed.HabitBuckets.Select(b => b.Label).ToArray());
+            Assert.AreEqual(1, unlicensed.HabitBuckets.Single(b => b.Label == "Daily").Users);
+            Assert.AreEqual(1, unlicensed.HabitBuckets.Single(b => b.Label == "Infrequent").Users);
+        }
+
+        [TestMethod]
+        public void CombinedView_ShowsIdleSeatsNextToHeavyUnlicensedUse()
+        {
+            // The seat-allocation case: a department whose seats sit idle while its unlicensed people
+            // use Copilot heavily. Neither single-population view can show this.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ScoredUser($"idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "Legal")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Unlicensed($"chat{i}@contoso.com", "Legal", activeDays: 15, interactions: 280)));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var legal = analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Legal");
+            Assert.AreEqual(6, legal.LicensedUsers);
+            Assert.AreEqual(0, legal.LicensedActiveUsers);
+            Assert.AreEqual(0, legal.InteractionsPerLicensedUser);
+            Assert.AreEqual(6, legal.UnlicensedActiveUsers);
+            Assert.IsTrue(legal.InteractionsPerUnlicensedUser > 0,
+                "The unlicensed side of a department with entirely idle seats is the finding.");
+        }
+
+        [TestMethod]
+        public void CombinedView_DropsDepartmentsTooSmallToRead()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"big{i}@contoso.com", 10, 50), "Engineering")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+            analysis.UnlicensedUsers.Add(Unlicensed("lone@contoso.com", "Facilities", activeDays: 20, interactions: 500));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var segments = analysis.Summary.CombinedByDepartment.Select(r => r.Segment).ToList();
+            CollectionAssert.Contains(segments, "Engineering");
+            CollectionAssert.DoesNotContain(segments, "Facilities",
+                "One unlicensed user is not a department-level finding.");
+        }
+
         #endregion
 
         #region Controller parameter handling
@@ -981,6 +1762,58 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, CopilotAdoptionAPIController.ParseBands("99,not-a-band").Count);
         }
 
+        [TestMethod]
+        public void ActionFilter_DrillsThroughToExactlyTheGroupThePlanCounted()
+        {
+            // The whole value of the drill-through is that the list it lands on has the same members
+            // as the aggregate that was clicked. If it filtered by band instead, "Add a second app" -
+            // which spans Developing and Established - would land on a different set of people than
+            // the number the reader just clicked, which is worse than having no link at all.
+            var rows = new[]
+            {
+                ActionRow("a@contoso.com", CopilotAdoptionScoring.AdoptionActionCodes.Broaden),
+                ActionRow("b@contoso.com", CopilotAdoptionScoring.AdoptionActionCodes.Broaden),
+                ActionRow("c@contoso.com", CopilotAdoptionScoring.AdoptionActionCodes.Reclaim),
+            };
+
+            var broaden = CopilotAdoptionExports.Apply(rows, new LicensedUserQuery
+            {
+                Actions = new List<string> { CopilotAdoptionScoring.AdoptionActionCodes.Broaden },
+            });
+
+            CollectionAssert.AreEquivalent(
+                new[] { "a@contoso.com", "b@contoso.com" },
+                broaden.Select(r => r.UserPrincipalName).ToArray());
+
+            // No filter must mean no filtering, not "match nothing".
+            Assert.AreEqual(3, CopilotAdoptionExports.Apply(rows, new LicensedUserQuery()).Count);
+
+            // Codes arrive from a query string, so casing and whitespace are not guaranteed.
+            CollectionAssert.AreEqual(
+                new[] { CopilotAdoptionScoring.AdoptionActionCodes.Reclaim },
+                CopilotAdoptionAPIController.ParseActions(" RECLAIM , reclaim ").ToArray());
+
+            // An unknown code must not silently filter the list down to nothing - that reads as
+            // "there is nobody in this group", which is the most misleading possible failure here.
+            Assert.AreEqual(0, CopilotAdoptionAPIController.ParseActions("not-an-action").Count);
+            Assert.AreEqual(
+                3,
+                CopilotAdoptionExports.Apply(rows, new LicensedUserQuery
+                {
+                    Actions = CopilotAdoptionAPIController.ParseActions("not-an-action"),
+                }).Count);
+        }
+
+        private static LicensedUserAdoptionRow ActionRow(string upn, string actionCode)
+        {
+            return new LicensedUserAdoptionRow
+            {
+                UserPrincipalName = upn,
+                RecommendedActionCode = actionCode,
+                RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(actionCode),
+            };
+        }
+
         #endregion
 
         #region Test data helpers
@@ -1016,6 +1849,61 @@ namespace Tests.UnitTests
             var row = ScoredUser(upn, score, score >= 50 ? AdoptionBand.Established : score > 0 ? AdoptionBand.Trialling : AdoptionBand.NeverUsed);
             row.Department = department;
             return row;
+        }
+
+        /// <summary>A user with real activity, for the habit-bucket and intensity tests.</summary>
+        private static LicensedUserAdoptionRow ActiveUser(string upn, int activeDays, long interactions)
+        {
+            var row = ScoredUser(upn, 50, AdoptionBand.Established);
+            row.ActiveDays = activeDays;
+            row.Interactions = interactions;
+            row.AppsUsed = 2;
+            return row;
+        }
+
+        private static LicensedUserAdoptionRow Departmentalise(LicensedUserAdoptionRow row, string department)
+        {
+            row.Department = department;
+            return row;
+        }
+
+        /// <summary>An agent for the estate roll-up tests, active as of "now".</summary>
+        private static AgentUsageRow Agent(string name, int users, long interactions, int appsUsed)
+        {
+            return new AgentUsageRow
+            {
+                AgentId = Math.Abs(name.GetHashCode()),
+                Name = name,
+                Users = users,
+                LicensedUsers = users,
+                Interactions = interactions,
+                WindowInteractions = interactions,
+                AppsUsed = appsUsed,
+                FirstUsedUtc = Now.AddDays(-200),
+                LastUsedUtc = Now.AddDays(-1),
+                Health = AgentHealth.Keep,
+                HealthName = "Keep",
+            };
+        }
+
+        /// <summary>One unlicensed Copilot Chat user.</summary>
+        private static UnlicensedUsageQueryRow Unlicensed(string upn, string department, int activeDays, long interactions)
+        {
+            return new UnlicensedUsageQueryRow
+            {
+                UserId = upn.GetHashCode(),
+                Department = department,
+                ActiveDays = activeDays,
+                Interactions = interactions,
+                AppsUsed = 1,
+                LastInteractionUtc = Now.AddDays(-1),
+            };
+        }
+
+        /// <summary>First word of an action label, which is how the exported sentence always opens.</summary>
+        private static string FirstWord(string label)
+        {
+            return string.IsNullOrEmpty(label) ? label : label.Split(' ')[0];
         }
 
         /// <summary>Six licensed users spread across the bands, for the summary assembly tests.</summary>
