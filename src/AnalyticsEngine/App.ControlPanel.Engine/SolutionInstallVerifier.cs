@@ -9,6 +9,8 @@ using CloudInstallEngine.Azure;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -673,6 +675,7 @@ namespace App.ControlPanel.Engine
         // "'D7'" produces period=''D7'', which Graph's OData parser rejects ("Syntax error at
         // position 13 in 'period=''D7'''"). See issue #133.
         internal const string TeamsUserActivityReportPeriod = "D7";
+        internal const string GraphReportsUnknownTenantErrorCode = "UnknownTenantId";
 
         /// <summary>
         /// Reads the Teams user-activity usage report via the typed Graph SDK - the exact call the
@@ -694,6 +697,69 @@ namespace App.ControlPanel.Engine
             }
         }
 
+        /// <summary>
+        /// Graph Reports wraps service-specific errors inside the outer Graph error message. For
+        /// example, the outer code can be "UnknownError" while its JSON message contains the real
+        /// "UnknownTenantId" code. Recognize both shapes without treating unrelated text as a match.
+        /// </summary>
+        internal static bool IsGraphReportsUnknownTenant(Exception ex)
+        {
+            if (ex == null)
+            {
+                return false;
+            }
+
+            if (ex is Microsoft.Graph.Models.ODataErrors.ODataError oDataError)
+            {
+                if (string.Equals(oDataError.Error?.Code, GraphReportsUnknownTenantErrorCode, StringComparison.OrdinalIgnoreCase)
+                    || JsonErrorPayloadContainsCode(oDataError.Error?.Message, GraphReportsUnknownTenantErrorCode))
+                {
+                    return true;
+                }
+            }
+
+            return JsonErrorPayloadContainsCode(ex.Message, GraphReportsUnknownTenantErrorCode);
+        }
+
+        private static bool JsonErrorPayloadContainsCode(string payload, string expectedCode, int remainingNestedMessages = 2)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return false;
+            }
+
+            try
+            {
+                var error = JObject.Parse(payload)["error"];
+                if (error == null)
+                {
+                    return false;
+                }
+
+                if (string.Equals(error["code"]?.Value<string>(), expectedCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                var nestedMessage = error["message"]?.Value<string>();
+                return remainingNestedMessages > 0
+                    && JsonErrorPayloadContainsCode(nestedMessage, expectedCode, remainingNestedMessages - 1);
+            }
+            catch (JsonReaderException)
+            {
+                return false;
+            }
+        }
+
+        private void LogGraphReportsUnknownTenant()
+        {
+            _logger.LogWarning(
+                $"Microsoft Graph Reports does not recognize this tenant ('{GraphReportsUnknownTenantErrorCode}'), so usage-report access could not be verified. " +
+                "For a newly created tenant, the Microsoft 365 reporting service can take time to onboard it and start generating reports. " +
+                "Retry after usage reports are available in the Microsoft 365 admin center. If the tenant is not new or this persists, contact Microsoft support. " +
+                "This response is not a Reports.Read.All permission denial.");
+        }
+
         async Task VerifyUserActivityImport(Microsoft.Graph.GraphServiceClient graphClient, TeamsUserUsageLoader teamsUserUsageLoader)
         {
             _logger.LogInformation("Verifying Graph API for user activity import...");
@@ -703,6 +769,11 @@ namespace App.ControlPanel.Engine
             try
             {
                 await ReadTeamsUserActivityReportAsync(graphClient);
+            }
+            catch (Exception ex) when (IsGraphReportsUnknownTenant(ex))
+            {
+                LogGraphReportsUnknownTenant();
+                return;
             }
             catch (Exception ex)
             {
@@ -726,6 +797,11 @@ namespace App.ControlPanel.Engine
             try
             {
                 await teamsUserUsageLoader.PopulateLoadedReportPagesFromGraph(DAYS_BACK_CHECK);
+            }
+            catch (Exception ex) when (IsGraphReportsUnknownTenant(ex))
+            {
+                LogGraphReportsUnknownTenant();
+                return;
             }
             catch (Exception ex)
             {
