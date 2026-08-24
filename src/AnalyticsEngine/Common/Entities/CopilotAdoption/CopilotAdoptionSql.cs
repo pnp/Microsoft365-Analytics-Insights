@@ -182,23 +182,72 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.user_license_type_lookups AS ul\r\n" +
                 $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "),\r\n" +
-                "-- One bounded pass over the Copilot audit history. The reporting window and the\r\n" +
-                "-- earlier history are separated with CASE rather than by running the join twice.\r\n" +
-                "CopilotUsage AS (\r\n" +
+                "-- One bounded pass over the Copilot audit history, projected to just the four columns\r\n" +
+                "-- the aggregates need. The reporting window and the earlier history are separated with\r\n" +
+                "-- CASE rather than by running the join twice.\r\n" +
+                "CopilotWindow AS (\r\n" +
                 "    SELECT au.user_id AS user_id,\r\n" +
-                "           SUM(CASE WHEN au.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions,\r\n" +
-                "           SUM(CASE WHEN au.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions,\r\n" +
-                "           COUNT(DISTINCT CASE WHEN au.time_stamp >= @from THEN CAST(au.time_stamp AS date) END) AS ActiveDays,\r\n" +
-                "           COUNT(DISTINCT CASE WHEN au.time_stamp >= @from THEN c.app_host END) AS AppsUsed,\r\n" +
-                "           COUNT(DISTINCT CASE WHEN au.time_stamp >= @from THEN c.agent_id END) AS AgentsUsed,\r\n" +
-                $"           SUM(CASE WHEN au.time_stamp >= @from AND ({cowork}) THEN 1 ELSE 0 END) AS CoworkInteractions,\r\n" +
-                "           MIN(au.time_stamp) AS FirstInteractionUtc,\r\n" +
-                "           MAX(au.time_stamp) AS LastInteractionUtc\r\n" +
+                "           au.time_stamp AS time_stamp,\r\n" +
+                "           c.app_host AS app_host,\r\n" +
+                "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    " + AuditJoin + "\r\n" +
                 "    JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
                 "    WHERE au.time_stamp >= @historyFrom\r\n" +
-                "    GROUP BY au.user_id\r\n" +
+                "),\r\n" +
+                "-- The counting totals: cheap, because none of them is a DISTINCT.\r\n" +
+                "CopilotTotals AS (\r\n" +
+                "    SELECT c.user_id AS user_id,\r\n" +
+                "           SUM(CASE WHEN c.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions,\r\n" +
+                "           SUM(CASE WHEN c.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions,\r\n" +
+                $"           SUM(CASE WHEN c.time_stamp >= @from AND ({cowork}) THEN 1 ELSE 0 END) AS CoworkInteractions,\r\n" +
+                "           MIN(c.time_stamp) AS FirstInteractionUtc,\r\n" +
+                "           MAX(c.time_stamp) AS LastInteractionUtc\r\n" +
+                "    FROM CopilotWindow AS c\r\n" +
+                "    GROUP BY c.user_id\r\n" +
+                "),\r\n" +
+                "-- Each distinct count comes from its own pre-projected DISTINCT set.\r\n" +
+                "--\r\n" +
+                "-- Asking for these three as distinct aggregates inside CopilotTotals is the obvious way to\r\n" +
+                "-- write it and is catastrophically slow: SQL Server can stream a single distinct aggregate,\r\n" +
+                "-- but two or more in one grouping force it to fan the input out through a spool and process\r\n" +
+                "-- each distinct separately. Measured on a 200k-user / 12M-interaction synthetic tenant, that\r\n" +
+                "-- spool alone was 25M of the query's 115M logical reads and the whole query took 281s (28-day\r\n" +
+                "-- window) - past the 90s command timeout, so the report degraded to a warning. Split this way\r\n" +
+                "-- it is 772k reads and 73s. Full numbers are in the pull request and the wiki.\r\n" +
+                "CopilotActiveDays AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS ActiveDays\r\n" +
+                "    FROM (SELECT DISTINCT user_id, CAST(time_stamp AS date) AS active_date\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from) AS d\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "CopilotApps AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS AppsUsed\r\n" +
+                "    FROM (SELECT DISTINCT user_id, app_host\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND app_host IS NOT NULL) AS a\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "CopilotAgents AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS AgentsUsed\r\n" +
+                "    FROM (SELECT DISTINCT user_id, agent_id\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND agent_id IS NOT NULL) AS g\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "-- Reassembled under the original name and shape, so everything downstream is unchanged.\r\n" +
+                "CopilotUsage AS (\r\n" +
+                "    SELECT t.user_id AS user_id,\r\n" +
+                "           t.Interactions AS Interactions,\r\n" +
+                "           t.PriorInteractions AS PriorInteractions,\r\n" +
+                "           ISNULL(d.ActiveDays, 0) AS ActiveDays,\r\n" +
+                "           ISNULL(a.AppsUsed, 0) AS AppsUsed,\r\n" +
+                "           ISNULL(g.AgentsUsed, 0) AS AgentsUsed,\r\n" +
+                "           t.CoworkInteractions AS CoworkInteractions,\r\n" +
+                "           t.FirstInteractionUtc AS FirstInteractionUtc,\r\n" +
+                "           t.LastInteractionUtc AS LastInteractionUtc\r\n" +
+                "    FROM CopilotTotals AS t\r\n" +
+                "    LEFT JOIN CopilotActiveDays AS d ON d.user_id = t.user_id\r\n" +
+                "    LEFT JOIN CopilotApps AS a ON a.user_id = t.user_id\r\n" +
+                "    LEFT JOIN CopilotAgents AS g ON g.user_id = t.user_id\r\n" +
                 ")";
 
             if (includeCopilotReport)
@@ -549,6 +598,211 @@ namespace Common.Entities.CopilotAdoption
                 "OPTION (RECOMPILE);";
         }
 
+        /// <summary>
+        /// Every Copilot agent that was actually used in the window, with the figures needed to decide
+        /// whether to keep, review or retire it.
+        ///
+        /// Counted across the whole tenant rather than licensed users only: agents are used by
+        /// unlicensed Copilot Chat users too, and an agent's value to the organisation does not depend
+        /// on the licence status of the people using it. The licensed share is returned separately so
+        /// the two populations can still be told apart.
+        ///
+        /// "Versatility" is the number of distinct Copilot surfaces the agent was invoked from. An
+        /// agent that only ever runs in one host is doing a narrower job than its interaction count
+        /// suggests, which is exactly the sort of thing an inventory review needs to see.
+        /// </summary>
+        public static string AgentUsageSql(IEnumerable<int> seatLicenceTypeIds)
+        {
+            var seats = IdList(seatLicenceTypeIds);
+
+            return
+                "WITH SeatUsers AS (\r\n" +
+                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
+                $"    FROM dbo.user_license_type_lookups AS ul WHERE ul.license_type_id IN ({seats})\r\n" +
+                "),\r\n" +
+                // One projected pass, then a separate grouping per distinct set. Four distinct counts in
+                // one grouping made SQL Server spool the input and process each separately: 6.0M of this
+                // query's 6.4M logical reads were that spool, and it ran for 128s against a 90s timeout.
+                // See LicensedUsersSql for the full measurement.
+                "AgentUse AS (\r\n" +
+                "    SELECT c.agent_id AS agent_id,\r\n" +
+                "           au.user_id AS user_id,\r\n" +
+                "           au.time_stamp AS time_stamp,\r\n" +
+                "           ISNULL(c.app_host, '(unknown)') AS app_host,\r\n" +
+                "           CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END AS IsLicensed\r\n" +
+                "    FROM dbo.copilot_chats AS c\r\n" +
+                "    " + AuditJoin + "\r\n" +
+                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
+                "    WHERE au.time_stamp >= @historyFrom\r\n" +
+                // Redundant against the inner join to copilot_agents below, but it lets the optimiser
+                // eliminate the (usually large) majority of Copilot interactions that carry no agent
+                // before it does any joining, rather than discovering it during the join.
+                "      AND c.agent_id IS NOT NULL\r\n" +
+                "),\r\n" +
+                "Totals AS (\r\n" +
+                "    SELECT agent_id,\r\n" +
+                "           COUNT_BIG(*) AS Interactions,\r\n" +
+                // Window-scoped as well as history-scoped. The inventory needs the long view to spot a
+                // dormant agent, but the headline "interactions per agent user" divides by a user count
+                // that is scoped to the reporting period - mixing the two inflates that KPI by the ratio
+                // of the windows (roughly 4x at the defaults).
+                "           COUNT_BIG(CASE WHEN time_stamp >= @from THEN 1 END) AS WindowInteractions,\r\n" +
+                "           MIN(time_stamp) AS FirstUsedUtc,\r\n" +
+                "           MAX(time_stamp) AS LastUsedUtc\r\n" +
+                "    FROM AgentUse GROUP BY agent_id\r\n" +
+                "),\r\n" +
+                "AgentUsers AS (\r\n" +
+                // COUNT(user_id), not COUNT(*). The old COUNT(DISTINCT au.user_id) skipped NULL users
+                // implicitly; grouping by (agent_id, user_id) puts unattributed events into their own
+                // NULL group, which COUNT(*) would count as a person. That matters because Users is not
+                // just displayed - it is the adoption threshold (AgentMinUsers, default 3), so a single
+                // unattributed interaction could flip an agent from Review to Keep.
+                "    SELECT agent_id, COUNT(user_id) AS Users, SUM(IsLicensed) AS LicensedUsers\r\n" +
+                "    FROM (SELECT agent_id, user_id, MAX(IsLicensed) AS IsLicensed\r\n" +
+                "          FROM AgentUse GROUP BY agent_id, user_id) AS u\r\n" +
+                "    GROUP BY agent_id\r\n" +
+                "),\r\n" +
+                "AgentDays AS (\r\n" +
+                "    SELECT agent_id, COUNT(*) AS ActiveDays\r\n" +
+                "    FROM (SELECT DISTINCT agent_id, CAST(time_stamp AS date) AS active_date FROM AgentUse) AS d\r\n" +
+                "    GROUP BY agent_id\r\n" +
+                "),\r\n" +
+                "AgentApps AS (\r\n" +
+                "    SELECT agent_id, COUNT(*) AS AppsUsed\r\n" +
+                "    FROM (SELECT DISTINCT agent_id, app_host FROM AgentUse) AS a\r\n" +
+                "    GROUP BY agent_id\r\n" +
+                ")\r\n" +
+                "SELECT TOP (@maxRows)\r\n" +
+                "       ag.id AS AgentId,\r\n" +
+                "       ISNULL(ag.name, '(unnamed agent)') AS Name,\r\n" +
+                "       ag.agent_id AS AgentKey,\r\n" +
+                "       CAST(ISNULL(ag.is_custom_agent, 0) AS bit) AS IsCustomAgent,\r\n" +
+                "       t.Interactions AS Interactions,\r\n" +
+                "       t.WindowInteractions AS WindowInteractions,\r\n" +
+                "       ISNULL(u.Users, 0) AS Users,\r\n" +
+                "       ISNULL(u.LicensedUsers, 0) AS LicensedUsers,\r\n" +
+                "       ISNULL(d.ActiveDays, 0) AS ActiveDays,\r\n" +
+                "       ISNULL(a.AppsUsed, 0) AS AppsUsed,\r\n" +
+                "       t.FirstUsedUtc AS FirstUsedUtc,\r\n" +
+                "       t.LastUsedUtc AS LastUsedUtc\r\n" +
+                "FROM Totals AS t\r\n" +
+                "JOIN dbo.copilot_agents AS ag ON ag.id = t.agent_id\r\n" +
+                "LEFT JOIN AgentUsers AS u ON u.agent_id = t.agent_id\r\n" +
+                "LEFT JOIN AgentDays AS d ON d.agent_id = t.agent_id\r\n" +
+                "LEFT JOIN AgentApps AS a ON a.agent_id = t.agent_id\r\n" +
+                "ORDER BY Interactions DESC\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// Agent interactions per department in the window, so agent adoption can be read the same way
+        /// as seat adoption. Departments come from the imported user metadata.
+        /// </summary>
+        public static string AgentUsageByDepartmentSql()
+        {
+            return
+                "SELECT TOP (@top) ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)') AS Label,\r\n" +
+                "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
+                "FROM dbo.copilot_chats AS c\r\n" +
+                "" + AuditJoin + "\r\n" +
+                "JOIN dbo.users AS u ON u.id = au.user_id\r\n" +
+                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+                "WHERE au.time_stamp >= @from\r\n" +
+                "  AND c.agent_id IS NOT NULL\r\n" +
+                "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)')\r\n" +
+                "ORDER BY Value DESC\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// One row per unlicensed user who used Copilot in the window, with the same shape of figures
+        /// the licensed population is scored from.
+        ///
+        /// Separate from <see cref="LicenceOpportunitiesSql"/> on purpose: that query ranks candidates
+        /// and is capped and ordered by score, so its rows are a biased sample and must never be used
+        /// to describe the population. This one is "everyone who actually used it", which is what a
+        /// habit distribution needs.
+        /// </summary>
+        public static string UnlicensedUsageRowsSql(IEnumerable<int> seatLicenceTypeIds)
+        {
+            return
+                // Grouped to one row per (user, day/app/agent) set separately, then rolled up. Asking for
+                // the three distinct counts in a single grouping made SQL Server spool the input and
+                // process each distinct separately: 8.1M of this query's 8.4M logical reads were that
+                // spool, and it ran for 131s against a 90s timeout. See LicensedUsersSql for the full
+                // measurement and the reasoning.
+                "WITH Unlicensed AS (\r\n" +
+                "    SELECT au.user_id AS user_id,\r\n" +
+                "           au.time_stamp AS time_stamp,\r\n" +
+                "           ISNULL(c.app_host, '(unknown)') AS app_host,\r\n" +
+                "           c.agent_id AS agent_id\r\n" +
+                "    FROM dbo.copilot_chats AS c\r\n" +
+                "    " + AuditJoin + "\r\n" +
+                "    WHERE au.time_stamp >= @from\r\n" +
+                "      AND au.user_id IS NOT NULL\r\n" +
+                "      AND NOT EXISTS (\r\n" +
+                "          SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
+                "          WHERE ul.user_id = au.user_id\r\n" +
+                $"            AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
+                "      )\r\n" +
+                "),\r\n" +
+                "Totals AS (\r\n" +
+                "    SELECT user_id, COUNT_BIG(*) AS Interactions, MAX(time_stamp) AS LastInteractionUtc\r\n" +
+                "    FROM Unlicensed GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "Days AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS ActiveDays\r\n" +
+                "    FROM (SELECT DISTINCT user_id, CAST(time_stamp AS date) AS active_date FROM Unlicensed) AS d\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "Apps AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS AppsUsed\r\n" +
+                "    FROM (SELECT DISTINCT user_id, app_host FROM Unlicensed) AS a\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "Agents AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS AgentsUsed\r\n" +
+                "    FROM (SELECT DISTINCT user_id, agent_id FROM Unlicensed WHERE agent_id IS NOT NULL) AS g\r\n" +
+                "    GROUP BY user_id\r\n" +
+                ")\r\n" +
+                "SELECT TOP (@maxRows)\r\n" +
+                "       t.user_id AS UserId,\r\n" +
+                "       ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '') AS Department,\r\n" +
+                "       t.Interactions AS Interactions,\r\n" +
+                "       ISNULL(d.ActiveDays, 0) AS ActiveDays,\r\n" +
+                "       ISNULL(a.AppsUsed, 0) AS AppsUsed,\r\n" +
+                "       ISNULL(g.AgentsUsed, 0) AS AgentsUsed,\r\n" +
+                "       t.LastInteractionUtc AS LastInteractionUtc\r\n" +
+                "FROM Totals AS t\r\n" +
+                "LEFT JOIN Days AS d ON d.user_id = t.user_id\r\n" +
+                "LEFT JOIN Apps AS a ON a.user_id = t.user_id\r\n" +
+                "LEFT JOIN Agents AS g ON g.user_id = t.user_id\r\n" +
+                "LEFT JOIN dbo.users AS u ON u.id = t.user_id\r\n" +
+                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+                "ORDER BY Interactions DESC\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// The kinds of tenant content Copilot actually grounded its answers in (documents, meetings,
+        /// chats...). The clearest evidence that Copilot is doing work on the organisation's own data
+        /// rather than answering generic questions any free chatbot could.
+        /// </summary>
+        public static string TopResourceTypesSql()
+        {
+            return
+                "SELECT TOP (@top) ISNULL(rt.name, '(unknown)') AS Label,\r\n" +
+                "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
+                "FROM dbo.copilot_event_accessed_resources AS ar\r\n" +
+                "JOIN dbo.copilot_chats AS c ON c.event_id = ar.copilot_chat_id\r\n" +
+                "" + AuditJoin + "\r\n" +
+                "LEFT JOIN dbo.copilot_event_accessed_resource_types AS rt ON rt.id = ar.resource_type_id\r\n" +
+                "WHERE au.time_stamp >= @from\r\n" +
+                "GROUP BY ISNULL(rt.name, '(unknown)')\r\n" +
+                "ORDER BY Value DESC\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
         #endregion
 
         #region Charts
@@ -571,6 +825,31 @@ namespace Common.Entities.CopilotAdoption
                 "" + AuditJoin + "\r\n" +
                 "JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
                 "WHERE au.time_stamp >= @from\r\n" +
+                "GROUP BY ISNULL(c.app_host, '(unknown)')\r\n" +
+                "ORDER BY Value DESC\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// The same breakdown for people with no Copilot seat. Kept as its own query rather than a flag
+        /// on <see cref="UsageByAppSql"/> so the two can be shown side by side, which is where the
+        /// interesting difference usually is: unlicensed use concentrates in Teams and Copilot Chat,
+        /// while seats are normally sold on the promise of Word and Outlook.
+        /// </summary>
+        public static string UnlicensedUsageByAppSql(IEnumerable<int> seatLicenceTypeIds)
+        {
+            return
+                "SELECT TOP (@top) ISNULL(c.app_host, '(unknown)') AS Label,\r\n" +
+                "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
+                "FROM dbo.copilot_chats AS c\r\n" +
+                "" + AuditJoin + "\r\n" +
+                "WHERE au.time_stamp >= @from\r\n" +
+                "  AND au.user_id IS NOT NULL\r\n" +
+                "  AND NOT EXISTS (\r\n" +
+                "      SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
+                "      WHERE ul.user_id = au.user_id\r\n" +
+                $"        AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
+                "  )\r\n" +
                 "GROUP BY ISNULL(c.app_host, '(unknown)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -618,15 +897,39 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.user_license_type_lookups AS ul\r\n" +
                 $"    WHERE ul.license_type_id IN ({seats})\r\n" +
                 "),\r\n" +
-                "Weekly AS (\r\n" +
+                // Collapsed to one row per (week, user) FIRST, with the per-user facts carried as flags.
+                // Every headline series here is a distinct *user* count under a different filter, and
+                // asking for four of those as COUNT(DISTINCT ...) in one grouping makes SQL Server spool
+                // the input and process each separately - 24.2M of this query's 24.5M logical reads were
+                // that spool, and it ran for 315s against a 90s timeout. Grouping by (week, user) once
+                // removes every distinct: a user is licensed or not for the whole week, so MAX() over the
+                // flag is exactly the same answer, and the roll-up below is then a trivial SUM.
+                "WeekUser AS (\r\n" +
                 $"    SELECT {week} AS WeekStart,\r\n" +
-                "           COUNT(DISTINCT au.user_id) AS ActiveUsers,\r\n" +
-                $"           COUNT(DISTINCT CASE WHEN ({cowork}) THEN au.user_id END) AS CoworkUsers\r\n" +
+                "           au.user_id AS user_id,\r\n" +
+                "           MAX(CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END) AS IsLicensed,\r\n" +
+                "           MAX(CASE WHEN seats.user_id IS NOT NULL\r\n" +
+                $"                     AND ({cowork}) THEN 1 ELSE 0 END) AS IsCowork,\r\n" +
+                "           MAX(CASE WHEN c.agent_id IS NOT NULL THEN 1 ELSE 0 END) AS UsedAgent,\r\n" +
+                "           COUNT_BIG(CASE WHEN seats.user_id IS NOT NULL THEN 1 END) AS LicensedInteractions,\r\n" +
+                "           COUNT_BIG(CASE WHEN seats.user_id IS NULL THEN 1 END) AS UnlicensedInteractions\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    " + AuditJoin + "\r\n" +
-                "    JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
+                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
                 "    WHERE au.time_stamp >= @trendFrom\r\n" +
-                $"    GROUP BY {week}\r\n" +
+                "      AND au.user_id IS NOT NULL\r\n" +
+                $"    GROUP BY {week}, au.user_id\r\n" +
+                "),\r\n" +
+                "Weekly AS (\r\n" +
+                "    SELECT WeekStart,\r\n" +
+                "           SUM(IsLicensed) AS ActiveUsers,\r\n" +
+                "           SUM(IsCowork) AS CoworkUsers,\r\n" +
+                "           SUM(CASE WHEN IsLicensed = 0 THEN 1 ELSE 0 END) AS UnlicensedUsers,\r\n" +
+                "           SUM(UsedAgent) AS AgentUsers,\r\n" +
+                "           SUM(LicensedInteractions) AS LicensedInteractions,\r\n" +
+                "           SUM(UnlicensedInteractions) AS UnlicensedInteractions\r\n" +
+                "    FROM WeekUser\r\n" +
+                "    GROUP BY WeekStart\r\n" +
                 ")\r\n" +
                 "SELECT v.SeriesName AS SeriesName,\r\n" +
                 "       w.WeekStart AS WeekStart,\r\n" +
@@ -634,12 +937,28 @@ namespace Common.Entities.CopilotAdoption
                 "FROM Weekly AS w\r\n" +
                 "CROSS APPLY (VALUES\r\n" +
                 "    ('Active licensed users', w.ActiveUsers),\r\n" +
-                "    ('Cowork users', w.CoworkUsers)\r\n" +
+                "    ('Cowork users', w.CoworkUsers),\r\n" +
+                "    ('Active unlicensed users', w.UnlicensedUsers),\r\n" +
+                "    ('Agent users', w.AgentUsers),\r\n" +
+                "    ('Licensed interactions', w.LicensedInteractions),\r\n" +
+                "    ('Unlicensed interactions', w.UnlicensedInteractions)\r\n" +
                 ") AS v(SeriesName, Value)\r\n" +
-                "WHERE NOT (v.SeriesName = 'Cowork users' AND v.Value = 0)\r\n" +
+                "WHERE NOT (v.SeriesName IN ('Cowork users', 'Agent users', 'Active unlicensed users')\r\n" +
+                "           AND v.Value = 0)\r\n" +
                 "ORDER BY SeriesName, WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
         }
+
+        /// <summary>
+        /// The series from <see cref="WeeklyAdoptionTrendSql"/> that count interactions rather than
+        /// people. Split into their own chart because a volume line and a headcount line share no
+        /// sensible axis - plotted together, the headcount flattens to nothing.
+        /// </summary>
+        public static readonly string[] VolumeTrendSeries =
+        {
+            "Licensed interactions",
+            "Unlicensed interactions",
+        };
 
         #endregion
 

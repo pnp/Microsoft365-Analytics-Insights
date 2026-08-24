@@ -16,9 +16,32 @@ export const CHART_PALETTE = [
   '#5c2e91', // dark purple
 ] as const;
 
+/**
+ * A lighter partner for each palette colour, for gradient fills.
+ *
+ * Flat fills read as functional; a subtle vertical or horizontal gradient reads as finished, which
+ * matters when the same chart ends up in a board pack. The lighter stop is only ever used as the
+ * far end of a gradient on the same hue, so it never changes which series a colour identifies.
+ */
+export const CHART_PALETTE_LIGHT = [
+  '#63a7e0',
+  '#e57377',
+  '#5fbc5f',
+  '#b7a1d8',
+  '#e8a173',
+  '#4fb8ab',
+  '#dfc65a',
+  '#9c7bc4',
+] as const;
+
 /** Colour for the series/bar at index i (cycles through the palette). */
 export function seriesColor(i: number): string {
   return CHART_PALETTE[i % CHART_PALETTE.length];
+}
+
+/** The lighter partner of {@link seriesColor}, for the far end of a gradient fill. */
+export function seriesColorLight(i: number): string {
+  return CHART_PALETTE_LIGHT[i % CHART_PALETTE_LIGHT.length];
 }
 
 /**

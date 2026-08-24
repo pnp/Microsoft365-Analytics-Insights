@@ -45,6 +45,7 @@ export interface AdoptionDataSources {
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
   copilotUsageReportDate: string | null;
+  copilotUsageReportPeriodDays: number;
   m365UsageReportDate: string | null;
   copilotUsageReportObfuscated: boolean;
 }
@@ -74,8 +75,150 @@ export interface CopilotAdoptionOptions {
   championScore: number;
   establishedScore: number;
   developingScore: number;
+
+  habitBucketNormalisationDays: number;
+  habitModerateMinDays: number;
+  habitFrequentMinDays: number;
+  habitDailyMinDays: number;
+
+  agentReviewInactiveDays: number;
+  agentRetireInactiveDays: number;
+  agentNewDays: number;
+  agentMinUsers: number;
+  agentHistoryDays: number;
+
+  opportunityUnlicensedCopilotWeight: number;
+  opportunityCollaborationWeight: number;
+  opportunityEmailWeight: number;
+  opportunityDocumentWeight: number;
+  opportunityCopilotTarget: number;
+  opportunityCollaborationTarget: number;
+  opportunityEmailTarget: number;
+  opportunityDocumentTarget: number;
   opportunityRecommendScore: number;
+
+  usageReportLagDays: number;
+  topSegments: number;
   minSeatsPerSegment: number;
+  maxLicensedUsersScored: number;
+  maxOpportunityCandidates: number;
+  maxAgents: number;
+  maxUnlicensedUsersScored: number;
+}
+
+/** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
+export interface AdoptionHabitBucket {
+  label: string;
+  rangeLabel: string;
+  users: number;
+  sharePct: number;
+}
+
+/** A department plotted as frequency (active days a month) against intensity (actions per active day). */
+export interface AdoptionIntensityPoint {
+  segment: string;
+  licensedUsers: number;
+  activeUsers: number;
+  activeDaysPerUser: number;
+  actionsPerActiveDay: number;
+  activeUserAverageScore: number;
+}
+
+/** One recommended action and how many licensed users need it. */
+export interface AdoptionActionSummary {
+  code: string;
+  label: string;
+  description: string;
+  users: number;
+  sharePct: number;
+}
+
+/** What to do about an agent. Numeric values match the C# AgentHealth enum, worst first. */
+export enum AgentHealth {
+  Retire = 0,
+  Review = 1,
+  New = 2,
+  Keep = 3,
+}
+
+/** One Copilot agent with the figures an inventory review needs, and the verdict on it. */
+export interface AgentUsageRow {
+  agentId: number;
+  name: string;
+  agentKey: string | null;
+  isCustomAgent: boolean;
+  interactions: number;
+  users: number;
+  licensedUsers: number;
+  activeDays: number;
+  appsUsed: number;
+  interactionsPerUser: number;
+  firstUsedUtc: string | null;
+  lastUsedUtc: string | null;
+  daysSinceLastUse: number | null;
+  health: AgentHealth;
+  healthName: string;
+  healthReason: string;
+}
+
+/** The agent estate at a glance. */
+export interface AgentEstateSummary {
+  historyDays: number;
+  activeAgents: number;
+  knownAgents: number;
+  customAgents: number;
+  agentUsers: number;
+  licensedAgentUsers: number;
+  agentInteractions: number;
+  interactionsPerAgentUser: number;
+  mostPopularAgent: string | null;
+  mostVersatileAgent: string | null;
+  healthBreakdown: ReportCategory[];
+  usageByDepartment: ReportCategory[];
+  usageByAgent: ReportCategory[];
+  agents: AgentUsageRow[];
+}
+
+/** Unlicensed Copilot Chat as a population in its own right. */
+export interface UnlicensedPopulationSummary {
+  activeUsers: number;
+  interactions: number;
+  interactionsPerUserPerMonth: number;
+  agentUsers: number;
+  habitBuckets: AdoptionHabitBucket[];
+  usageByApp: ReportCategory[];
+  usageByDepartment: ReportCategory[];
+  truncated: boolean;
+}
+
+/** The average shape of engagement for a group of users - frequency, depth and breadth on one scale. */
+export interface AdoptionScoreProfile {
+  label: string;
+  users: number;
+  frequencyScore: number;
+  depthScore: number;
+  breadthScore: number;
+}
+
+/** How much of all Copilot activity one cohort of users accounts for. */
+export interface AdoptionConcentrationBand {
+  label: string;
+  users: number;
+  interactions: number;
+  sharePct: number;
+  interactionsPerUser: number;
+}
+
+/** Licensed and unlicensed Copilot use for one department, side by side. */
+export interface AdoptionCombinedSegmentRow {
+  segment: string;
+  licensedUsers: number;
+  licensedActiveUsers: number;
+  interactionsPerLicensedUser: number;
+  licensedAgentUserPct: number;
+  unlicensedActiveUsers: number;
+  interactionsPerUnlicensedUser: number;
+  unlicensedAgentUserPct: number;
 }
 
 /** The executive view. */
@@ -88,6 +231,7 @@ export interface CopilotAdoptionSummary {
   seatLicenceTypes: LicenceTypeClassification[];
 
   licensedUsers: number;
+  scoredUsers: number;
   activeUsers: number;
   neverUsedUsers: number;
   dormantUsers: number;
@@ -109,11 +253,21 @@ export interface CopilotAdoptionSummary {
 
   funnel: ReportCategory[];
   bandBreakdown: ReportCategory[];
+  habitBuckets: AdoptionHabitBucket[];
+  intensityByDepartment: AdoptionIntensityPoint[];
+  actionPlan: AdoptionActionSummary[];
   adoptionByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];
+  weeklyVolumeTrend: ReportSeries[];
+  scoreProfiles: AdoptionScoreProfile[];
+  concentration: AdoptionConcentrationBand[];
+  combinedByDepartment: AdoptionCombinedSegmentRow[];
+  topResourceTypes: ReportCategory[];
+  agents: AgentEstateSummary;
+  unlicensed: UnlicensedPopulationSummary;
 
   options: CopilotAdoptionOptions;
   warnings: string[];
@@ -157,6 +311,8 @@ export interface LicensedUserAdoptionRow {
   bandName: string;
   signalSource: string;
   recommendedAction: string;
+  recommendedActionCode: string;
+  recommendedActionLabel: string;
 }
 
 /** An unlicensed user ranked as a candidate for a Copilot seat. */
@@ -218,6 +374,8 @@ export interface AdoptionFilterOptions {
 export interface LicensedUserFilters {
   search: string;
   bands: AdoptionBand[];
+  /** Recommended-action codes to restrict to. Drives the drill-through from the enablement plan. */
+  actions: string[];
   department: string;
   country: string;
   coworkOnly: boolean;

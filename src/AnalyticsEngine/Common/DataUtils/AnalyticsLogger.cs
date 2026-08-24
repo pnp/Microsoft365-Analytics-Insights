@@ -111,9 +111,21 @@ namespace DataUtils
 
         public void TrackEvent(AnalyticsEvent analyticsEvent, Dictionary<string, string> context)
         {
+            TrackEvent(analyticsEvent, context, null);
+        }
+
+        /// <summary>
+        /// Track an event with optional numeric measurements.
+        ///
+        /// Measurements matter for anything performance-related: App Insights stores them as numbers in
+        /// <c>customMeasurements</c>, so they can be averaged, percentiled and charted directly. The same
+        /// value in <c>customDimensions</c> is a string, and every query against it needs a cast first.
+        /// </summary>
+        public void TrackEvent(AnalyticsEvent analyticsEvent, Dictionary<string, string> context, Dictionary<string, double> metrics)
+        {
             const string SEP = ";";
             var contextString = string.Empty;
-            if (context.Count > 0)
+            if (context != null && context.Count > 0)
             {
                 foreach (var kv in context)
                 {
@@ -128,7 +140,7 @@ namespace DataUtils
                 string eventName = Enum.GetName(typeof(AnalyticsEvent), analyticsEvent);
                 if (context != null)
                 {
-                    AppInsights.TrackEvent(eventName, context);
+                    AppInsights.TrackEvent(eventName, context, metrics);
                 }
                 else
                 {
@@ -182,6 +194,57 @@ namespace DataUtils
             TrackEvent(AnalyticsEvent.ImporterHeartbeat, context);
         }
 
+        /// <summary>
+        /// Emit a structured <c>CopilotAdoptionAnalysis</c> event: one per completed analysis run, with
+        /// per-step durations as measurements.
+        ///
+        /// The Copilot adoption analysis is the most expensive thing the web application does, and its
+        /// failure mode is quiet - a query that exceeds the command timeout degrades to a warning on the
+        /// page rather than an error, so a tenant can sit with a half-populated report indefinitely and
+        /// never raise a ticket. One event per run, with durations, makes that visible and alertable.
+        ///
+        /// Durations go in <c>customMeasurements</c> rather than <c>customDimensions</c> so they can be
+        /// percentiled and charted without casting. Step names are compile-time constants, so a saved
+        /// query keeps working. Nothing here is derived from tenant data.
+        /// </summary>
+        /// <param name="windowDays">Reporting window the analysis was run for.</param>
+        /// <param name="totalMs">Wall-clock duration of the whole analysis.</param>
+        /// <param name="stepDurationsMs">Per-step wall-clock durations, keyed by step name.</param>
+        /// <param name="warningCount">How many figures degraded. Non-zero means the report is incomplete.</param>
+        /// <param name="timedOut">Whether any step hit the query timeout - the signal that matters most.</param>
+        /// <param name="slowestStep">Name of the slowest step, for triage without unpacking the measurements.</param>
+        public void TrackCopilotAdoptionAnalysis(
+            int windowDays,
+            long totalMs,
+            IDictionary<string, long> stepDurationsMs,
+            int warningCount,
+            bool timedOut,
+            string slowestStep)
+        {
+            var context = new Dictionary<string, string>
+            {
+                { "WindowDays", windowDays.ToString(CultureInfo.InvariantCulture) },
+                { "WarningCount", warningCount.ToString(CultureInfo.InvariantCulture) },
+                { "TimedOut", timedOut ? "true" : "false" },
+                { "Outcome", warningCount == 0 ? "Complete" : "Degraded" },
+            };
+            if (!string.IsNullOrEmpty(slowestStep))
+            {
+                context.Add("SlowestStep", slowestStep);
+            }
+
+            var metrics = new Dictionary<string, double> { { "TotalMs", totalMs } };
+            if (stepDurationsMs != null)
+            {
+                foreach (var step in stepDurationsMs)
+                {
+                    metrics[step.Key + "Ms"] = step.Value;
+                }
+            }
+
+            TrackEvent(AnalyticsEvent.CopilotAdoptionAnalysis, context, metrics);
+        }
+
         public override void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
         {
             if (!IsEnabled(logLevel)) return;
@@ -228,7 +291,8 @@ namespace DataUtils
             FinishedSectionImport,
             FinishedImportCycle,
             HealthCheck,
-            ImporterHeartbeat
+            ImporterHeartbeat,
+            CopilotAdoptionAnalysis
         }
     }
 }
