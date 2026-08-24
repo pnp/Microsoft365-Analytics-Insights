@@ -9,37 +9,6 @@ using System.Threading.Tasks;
 namespace Common.Entities.CopilotAdoption
 {
     /// <summary>
-    /// The complete, scored output of one adoption analysis: the executive summary, every scored
-    /// licensed user and every ranked licence candidate.
-    ///
-    /// Produced in a single pass and then sliced in memory, so paging, filtering, sorting and CSV
-    /// export never re-run the heavy queries - and, more importantly, so the list an admin exports is
-    /// guaranteed to be the same data the summary on screen was calculated from. A CSV that quietly
-    /// disagrees with the chart above it is worse than no CSV.
-    /// </summary>
-    public class CopilotAdoptionAnalysis
-    {
-        public CopilotAdoptionSummary Summary { get; set; } = new CopilotAdoptionSummary();
-
-        public List<LicensedUserAdoptionRow> LicensedUsers { get; set; } = new List<LicensedUserAdoptionRow>();
-
-        public List<LicenceOpportunityRow> Opportunities { get; set; } = new List<LicenceOpportunityRow>();
-
-        /// <summary>Every Copilot agent seen in the history window, with its health verdict.</summary>
-        public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
-
-        /// <summary>Raw usage for every unlicensed person who used Copilot in the window.</summary>
-        public List<UnlicensedUsageQueryRow> UnlicensedUsers { get; set; } = new List<UnlicensedUsageQueryRow>();
-
-        /// <summary>
-        /// The queries that produced this analysis, keyed by a short name, for the SQL popover the rest
-        /// of the admin site uses. Showing the working is part of the point: these numbers get quoted
-        /// in licence negotiations, so an admin has to be able to verify them independently.
-        /// </summary>
-        public Dictionary<string, string> Sql { get; set; } = new Dictionary<string, string>();
-    }
-
-    /// <summary>
     /// Runs the Copilot licence-adoption analysis.
     ///
     /// Lives in Common.Entities rather than in the web project so the same analysis can be driven from
@@ -89,8 +58,9 @@ namespace Common.Entities.CopilotAdoption
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var nowUtc = DateTime.UtcNow;
-            var windowStart = nowUtc.Date.AddDays(-Math.Max(1, _options.WindowDays));
-            var historyStart = nowUtc.Date.AddDays(-Math.Max(_options.WindowDays, _options.HistoryDays));
+            var windowStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays);
+            var historyStart = CopilotAdoptionScoring.WindowStartUtc(
+                nowUtc, Math.Max(_options.WindowDays, _options.HistoryDays));
             var settled = nowUtc.Date.AddDays(-Math.Max(0, _options.UsageReportLagDays));
             var trendStart = MondayOf(nowUtc.Date.AddMonths(-TrendMonths));
 
@@ -255,10 +225,11 @@ namespace Common.Entities.CopilotAdoption
             // The inventory reads its own, much shorter history than the rest of the analysis - see
             // CopilotAdoptionOptions.AgentHistoryDays. Never shorter than the reporting window, or an
             // agent used inside the period could be missing from its own inventory.
-            var agentHistoryStart = nowUtc.Date.AddDays(
-                -Math.Max(_options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays)));
+            var agentHistoryDays = Math.Max(
+                _options.WindowDays, Math.Max(_options.AgentRetireInactiveDays, _options.AgentHistoryDays));
+            var agentHistoryStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentHistoryDays);
 
-            summary.Agents.HistoryDays = (int)Math.Round((nowUtc.Date - agentHistoryStart).TotalDays);
+            summary.Agents.HistoryDays = agentHistoryDays;
 
             var sql = CopilotAdoptionSql.AgentUsageSql(seatIds);
             var parameters = new Dictionary<string, object>

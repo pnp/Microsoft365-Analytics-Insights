@@ -45,6 +45,24 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
+        /// Inclusive UTC start of a "last N days" window that ends today.
+        ///
+        /// Deliberately <c>N-1</c> days back, not <c>N</c>. Midnight N days ago spans <b>N+1</b> distinct
+        /// calendar dates, so a user active every single day would record 29 active days in a "28-day"
+        /// window - while the frequency component divides by a target derived from 28. The numerator and
+        /// the denominator have to be measuring the same window, or the score is quietly inflated for
+        /// exactly the most engaged users, and "last 28 days" in the UI means something else again.
+        ///
+        /// Lives next to <see cref="TargetActiveDays"/> on purpose: these two are the window definition,
+        /// and they must move together.
+        /// </summary>
+        public static DateTime WindowStartUtc(DateTime nowUtc, int windowDays)
+        {
+            var days = Math.Max(1, windowDays);
+            return nowUtc.Date.AddDays(-(days - 1));
+        }
+
+        /// <summary>
         /// Days of use inside the window that earn full marks for frequency. Reported to the user next
         /// to their actual active days so "62%" is never an unexplained number.
         /// </summary>

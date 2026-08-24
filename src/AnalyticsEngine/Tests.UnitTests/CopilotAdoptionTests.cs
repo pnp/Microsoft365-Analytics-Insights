@@ -278,6 +278,48 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void WindowStart_SpansExactlyTheRequestedNumberOfDates()
+        {
+            // "Last 28 days" has to contain 28 distinct calendar dates. Starting at midnight 28 days
+            // ago spans 29 of them, so somebody active every single day recorded 29 active days while
+            // the frequency component divided by a target derived from 28 - inflating the score of
+            // precisely the most engaged users, and making the dates shown in the UI a day wider than
+            // the window they are labelled with.
+            var nowUtc = new DateTime(2026, 8, 24, 14, 30, 0, DateTimeKind.Utc);
+
+            foreach (var windowDays in new[] { 7, 28, 90, 180 })
+            {
+                var start = CopilotAdoptionScoring.WindowStartUtc(nowUtc, windowDays);
+
+                var distinctDates = 0;
+                for (var day = start; day.Date <= nowUtc.Date; day = day.AddDays(1))
+                {
+                    distinctDates++;
+                }
+
+                Assert.AreEqual(windowDays, distinctDates,
+                    $"a {windowDays}-day window must contain exactly {windowDays} dates");
+                Assert.AreEqual(start.TimeOfDay, TimeSpan.Zero, "the window must start at midnight");
+            }
+        }
+
+        [TestMethod]
+        public void WindowStart_NeverProducesMoreActiveDaysThanTheFrequencyTargetAssumes()
+        {
+            // The end-to-end version of the bug above: a user active on every date of the window must
+            // not be able to beat the "available working days" the target is derived from.
+            var options = new CopilotAdoptionOptions { WindowDays = 28 };
+            var nowUtc = new DateTime(2026, 8, 24, 23, 59, 0, DateTimeKind.Utc);
+            var start = CopilotAdoptionScoring.WindowStartUtc(nowUtc, options.WindowDays);
+
+            var datesInWindow = (int)(nowUtc.Date - start.Date).TotalDays + 1;
+
+            Assert.AreEqual(options.WindowDays, datesInWindow);
+            Assert.IsTrue(datesInWindow <= options.WindowDays,
+                "the numerator's window cannot be wider than the denominator's");
+        }
+
+        [TestMethod]
         public void CustomWeights_StillProduceAScoreOutOfOneHundred()
         {
             // The weights are tunable, so a set that does not sum to 1 must still normalise rather than
