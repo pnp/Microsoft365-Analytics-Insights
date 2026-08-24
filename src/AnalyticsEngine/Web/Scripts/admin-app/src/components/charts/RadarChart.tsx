@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
@@ -15,26 +16,49 @@ const useStyles = makeStyles({
   legend: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
-    minWidth: '180px',
+    gap: '10px',
+    minWidth: '250px',
     flexGrow: 1,
   },
-  legendRow: {
+  table: {
     display: 'grid',
-    gridTemplateColumns: 'auto 1fr auto',
-    gap: '8px',
+    columnGap: '16px',
+    rowGap: '5px',
     alignItems: 'center',
   },
-  swatch: {
-    width: '10px',
-    height: '10px',
-    borderRadius: '2px',
+  headCell: {
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'right',
+    whiteSpace: 'nowrap',
   },
-  label: {
+  headCellKey: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    justifyContent: 'flex-end',
+    whiteSpace: 'nowrap',
+  },
+  axisCell: {
     color: tokens.colorNeutralForeground2,
+    whiteSpace: 'nowrap',
   },
   value: {
     fontVariantNumeric: 'tabular-nums',
+    textAlign: 'right',
+  },
+  gap: {
+    fontVariantNumeric: 'tabular-nums',
+    textAlign: 'right',
+    color: tokens.colorNeutralForeground3,
+  },
+  swatch: {
+    width: '14px',
+    height: '3px',
+    borderRadius: '2px',
+    flexShrink: 0,
+  },
+  label: {
+    color: tokens.colorNeutralForeground2,
   },
   empty: {
     color: tokens.colorNeutralForeground3,
@@ -57,11 +81,24 @@ export type RadarSeries = { name: string; colour: string; values: number[] };
  * Deliberately limited to a handful of axes on one shared scale. A radar with a dozen axes, or with
  * axes on different units, is decorative rather than informative - it is very easy to make one that
  * looks impressive and says nothing.
+ *
+ * Three specific things keep it readable, because the naive version of this chart is a mess:
+ *
+ * 1. **Only the first series is filled.** Two translucent polygons overlapping produce a third,
+ *    muddy colour exactly where the reader is trying to compare them. The benchmark series is drawn
+ *    as a dashed outline instead - which also means the two are told apart by line style and not by
+ *    colour alone, so it survives being printed or read by someone colour-blind.
+ * 2. **The rings are labelled.** An unlabelled web of gridlines gives no sense of whether the shape
+ *    is big or small; the reader cannot tell 40 from 80 without a number to anchor against.
+ * 3. **Every value is printed in the adjacent table, per axis, with the gap.** Radar area grows with
+ *    the square of the values, so a series twice as good looks four times as big - reading the size
+ *    of the shape systematically overstates the difference. The shape is there to be *recognised*;
+ *    the table is there to be *read*. No conclusion depends on estimating an area.
  */
 export default function RadarChart({
   axes,
   series,
-  size = 250,
+  size = 260,
   maxValue = 100,
 }: {
   axes: string[];
@@ -76,7 +113,7 @@ export default function RadarChart({
   }
 
   const centre = size / 2;
-  const radius = centre - 34;
+  const radius = centre - 42;
   const rings = 4;
 
   // First axis points straight up: an unrotated radar starts at 3 o'clock, which makes the shape
@@ -91,6 +128,11 @@ export default function RadarChart({
 
   const polygonFor = (values: number[]) =>
     values.map((v, i) => { const p = pointFor(i, v); return `${p.x},${p.y}`; }).join(' ');
+
+  // Two series is the case this chart is built for (typical user against the benchmark), and it is
+  // the only case where a per-axis difference is meaningful rather than ambiguous.
+  const showGap = series.length === 2;
+  const columns = `1fr repeat(${series.length + (showGap ? 1 : 0)}, auto)`;
 
   return (
     <div className={styles.root}>
@@ -110,7 +152,7 @@ export default function RadarChart({
 
         {axes.map((axis, i) => {
           const outer = pointFor(i, maxValue);
-          const labelPoint = pointFor(i, maxValue * 1.2);
+          const labelPoint = pointFor(i, maxValue * 1.19);
           return (
             <g key={axis}>
               <line x1={centre} y1={centre} x2={outer.x} y2={outer.y} stroke={tokens.colorNeutralStroke2} />
@@ -127,38 +169,109 @@ export default function RadarChart({
           );
         })}
 
-        {series.map((s) => (
-          <g key={s.name}>
-            <polygon points={polygonFor(s.values)} fill={s.colour} fillOpacity={0.22} stroke={s.colour} strokeWidth={2} />
-            {s.values.map((v, i) => {
-              const p = pointFor(i, v);
-              return (
-                <circle key={i} cx={p.x} cy={p.y} r={3.5} fill={s.colour}>
-                  <title>{`${s.name} - ${axes[i]}: ${Math.round(v)}`}</title>
-                </circle>
-              );
-            })}
-          </g>
-        ))}
+        {/* Ring values. Without these the gridlines say only "there are rings", and the reader has
+            no anchor for whether a shape is big or small. Painted with a background-coloured halo so
+            they stay legible where they sit on top of a gridline or a series outline. */}
+        {Array.from({ length: rings }, (_, ring) => {
+          const value = (maxValue * (ring + 1)) / rings;
+          return (
+            <text
+              key={ring}
+              x={centre + 5}
+              y={centre - (radius * (ring + 1)) / rings + 3.5}
+              fontSize={9.5}
+              fill={tokens.colorNeutralForeground3}
+              stroke={tokens.colorNeutralBackground1}
+              strokeWidth={3}
+              paintOrder="stroke"
+            >
+              {Math.round(value)}
+            </text>
+          );
+        })}
+
+        {series.map((s, si) => {
+          // Only the first series is filled - see the note on the component. Later series are dashed
+          // outlines, which reads as "the line to reach" and never muddies the colour underneath.
+          const filled = si === 0;
+          return (
+            <g key={s.name}>
+              <polygon
+                points={polygonFor(s.values)}
+                fill={filled ? s.colour : 'none'}
+                fillOpacity={filled ? 0.2 : 0}
+                stroke={s.colour}
+                strokeWidth={2}
+                strokeDasharray={filled ? undefined : '5 3'}
+                strokeLinejoin="round"
+              />
+              {s.values.map((v, i) => {
+                const p = pointFor(i, v);
+                return (
+                  <circle key={i} cx={p.x} cy={p.y} r={3.5} fill={filled ? s.colour : tokens.colorNeutralBackground1} stroke={s.colour} strokeWidth={filled ? 0 : 2}>
+                    <title>{`${s.name} - ${axes[i]}: ${Math.round(v)}`}</title>
+                  </circle>
+                );
+              })}
+            </g>
+          );
+        })}
       </svg>
 
       <div className={styles.legend}>
-        {series.map((s) => (
-          <div key={s.name} className={styles.legendRow}>
-            <span className={styles.swatch} style={{ backgroundColor: s.colour }} />
-            <Text size={200} className={styles.label}>
-              {s.name}
+        <div className={styles.table} style={{ gridTemplateColumns: columns }}>
+          <span />
+          {series.map((s, si) => (
+            <div key={s.name} className={styles.headCellKey}>
+              <span
+                className={styles.swatch}
+                style={{
+                  backgroundColor: si === 0 ? s.colour : 'transparent',
+                  backgroundImage: si === 0 ? undefined : `repeating-linear-gradient(to right, ${s.colour} 0 5px, transparent 5px 8px)`,
+                }}
+              />
+              <Text size={200} className={styles.label}>
+                {s.name}
+              </Text>
+            </div>
+          ))}
+          {showGap && (
+            <Text size={200} className={styles.headCell}>
+              Gap
             </Text>
-            <Text size={200} weight="semibold" className={styles.value}>
-              {s.values.map((v) => Math.round(v)).join(' / ')}
-            </Text>
-          </div>
-        ))}
+          )}
+
+          {axes.map((axis, i) => (
+            <Fragment key={axis}>
+              <Text size={200} className={styles.axisCell}>
+                {axis}
+              </Text>
+              {series.map((s) => (
+                <Text key={s.name} size={200} weight="semibold" className={styles.value}>
+                  {Math.round(s.values[i] ?? 0)}
+                </Text>
+              ))}
+              {showGap && (
+                <Text size={200} className={styles.gap}>
+                  {formatGap(Math.round(series[1].values[i] ?? 0) - Math.round(series[0].values[i] ?? 0))}
+                </Text>
+              )}
+            </Fragment>
+          ))}
+        </div>
+
         <Text size={100} className={styles.label}>
-          Values in axis order: {axes.join(' / ')}. All three are 0-100 and share one scale, so the shape is
-          directly comparable.
+          All {axes.length} components are 0-{maxValue} and share one scale, so the two outlines are directly
+          comparable. Read the table for the sizes - the area of a radar grows with the square of its
+          values, so the shape overstates the difference.
         </Text>
       </div>
     </div>
   );
+}
+
+/** Signed so a reader can see at a glance which way round the difference runs. */
+function formatGap(value: number) {
+  if (value === 0) return '0';
+  return value > 0 ? `+${value}` : `${value}`;
 }
