@@ -375,6 +375,28 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AgentUsageQuery_DoesNotCountUnattributedEventsAsAUser()
+        {
+            // dbo.audit_events.user_id is nullable, and the agent query's driving CTE does not exclude
+            // NULL users. The original COUNT(DISTINCT au.user_id) skipped them implicitly; the rewritten
+            // form groups by (agent_id, user_id), which puts unattributed events into their own NULL
+            // group. COUNT(*) would count that group as a person - COUNT(user_id) does not.
+            //
+            // This is not cosmetic. Users is the adoption threshold: AgentHealthFor returns Review below
+            // AgentMinUsers (default 3) and Keep at or above it, so one unattributed interaction against
+            // an agent genuinely used by two people would flip its verdict and print "used by 3 people.
+            // Genuinely adopted - keep supporting it."
+            //
+            // A row-for-row comparison against a synthetic tenant does not catch this, because generated
+            // data has no unattributed events. Hence a test on the query text.
+            var sql = CopilotAdoptionSql.AgentUsageSql(new[] { 1 });
+
+            StringAssert.Contains(sql, "COUNT(user_id) AS Users");
+            Assert.AreEqual(0, CountOccurrences(sql, "COUNT(*) AS Users"),
+                "COUNT(*) over a (agent, user) grouping counts the NULL-user group as a person.");
+        }
+
+        [TestMethod]
         public void CustomWeights_StillProduceAScoreOutOfOneHundred()
         {
             // The weights are tunable, so a set that does not sum to 1 must still normalise rather than

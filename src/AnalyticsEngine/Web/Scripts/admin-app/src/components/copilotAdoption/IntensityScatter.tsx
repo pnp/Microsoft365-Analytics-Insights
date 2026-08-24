@@ -101,7 +101,7 @@ export default function IntensityScatter({
   if (points.length === 0) {
     return (
       <div className={styles.empty}>
-        Not enough licensed users in any department to plot. Departments need at least the minimum seat
+        Not enough licensed users in any department to plot. Departments need at least the minimum licence
         count to appear.
       </div>
     );
@@ -380,12 +380,12 @@ export default function IntensityScatter({
       </div>
 
       <Text size={200} className={styles.caption}>
-        Bubble area is proportional to the number of seats the department holds; colour <em>and</em> the letter
+        Bubble area is proportional to the number of licences the department holds; colour <em>and</em> the letter
         inside each bubble both give the average engagement band of its <em>active</em> users, so the chart
         still reads in greyscale or to a colour-blind reader. The dashed lines are your own medians, not fixed
         targets - each quadrant is "compared with your other departments". Only users who were active at least
-        once are averaged, so a department is not dragged towards the origin by seats that were never used;
-        those are counted in the reclaimable-seat figure.
+        once are averaged, so a department is not dragged towards the origin by licences that were never used;
+        those are counted in the reclaimable-licence figure.
       </Text>
     </div>
   );

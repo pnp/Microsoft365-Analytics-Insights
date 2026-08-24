@@ -72,7 +72,7 @@ export default function UnlicensedPanel({
           No unlicensed Copilot use in this period
         </Text>
         <Text size={200} block className={styles.muted} style={{ marginTop: '6px' }}>
-          Nobody without a Microsoft 365 Copilot seat used Copilot in the last {windowDays} days. That is
+          Nobody without a Microsoft 365 Copilot licence used Copilot in the last {windowDays} days. That is
           either a genuine finding or a sign the Copilot audit import is not running - the Health page will
           say which.
         </Text>

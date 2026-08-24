@@ -192,7 +192,7 @@ export function SegmentTable({
       <thead>
         <tr>
           <th className={styles.th}>{segmentLabel}</th>
-          <th className={`${styles.th} ${styles.thNumeric}`}>Seats</th>
+          <th className={`${styles.th} ${styles.thNumeric}`}>Licences</th>
           <th className={`${styles.th} ${styles.thNumeric}`}>Active</th>
           <th className={`${styles.th} ${styles.thNumeric}`}>Habitual</th>
           <th className={`${styles.th} ${styles.thNumeric}`}>Never used</th>

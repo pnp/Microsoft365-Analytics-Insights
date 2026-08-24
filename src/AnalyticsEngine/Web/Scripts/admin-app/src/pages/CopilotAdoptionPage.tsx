@@ -445,7 +445,7 @@ function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
       <div className={styles.cardHead}>
         <div>
           <Text weight="semibold" size={500}>
-            No Copilot seats found
+            No Copilot licences found
           </Text>
           <Text size={300} block className={styles.muted}>
             The analysis ran and completed - it found no users holding a Microsoft 365 Copilot licence, so
@@ -459,26 +459,26 @@ function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
         </Text>
         <ol style={{ margin: 0, paddingInlineStart: '20px', lineHeight: 1.7 }}>
           <li>
-            <strong>Licence data has not been imported yet.</strong> Copilot seats come from the user-licence
+            <strong>Licence data has not been imported yet.</strong> Copilot licences come from the user-licence
             import, which runs on its own schedule. On a new installation the first full import can take
             several hours. Check the Health page for when the licence import last succeeded.
           </li>
           <li>
-            <strong>No Copilot SKU is marked as a Copilot seat.</strong> Seat detection matches the licence
+            <strong>No Copilot SKU is marked as a Copilot licence.</strong> Licence detection matches the licence
             names imported from your tenant. If your organisation holds a SKU this build does not recognise,
             mark it as a Copilot licence in the licence-type settings and re-run this page.
           </li>
           <li>
             <strong>The tenant genuinely holds no Copilot licences.</strong> In that case the{' '}
             <em>Licence opportunities</em> tab is the useful one: it ranks unlicensed users by how strong a
-            business case each of them would have for a seat, using their existing Microsoft 365 activity.
+            business case each of them would have for a licence, using their existing Microsoft 365 activity.
           </li>
         </ol>
         {summary.unlicensed?.activeUsers > 0 && (
           <MessageBar intent="info" style={{ marginTop: '14px' }}>
             <MessageBarBody>
               Copilot activity was found for {formatCount(summary.unlicensed.activeUsers)} users who do not
-              appear to hold a seat. That combination usually means the licence import is incomplete rather
+              appear to hold a licence. That combination usually means the licence import is incomplete rather
               than that Copilot is unlicensed - see point 1 above.
             </MessageBarBody>
           </MessageBar>
@@ -527,7 +527,7 @@ function OverviewTab({
           <span className={styles.sectionIndex}>1.</span> Where you stand
         </Text>
         <Text size={200} className={styles.muted}>
-          The headline position: how many seats are earning their keep, and where the drop-off is.
+          The headline position: how many licences are earning their keep, and where the drop-off is.
         </Text>
       </div>
 
@@ -538,7 +538,7 @@ function OverviewTab({
               Where you stand
             </Text>
             <Text size={200} block className={styles.muted}>
-              The two rates that decide whether the seats are earning their keep, against the scale this tool
+              The two rates that decide whether the licences are earning their keep, against the scale this tool
               judges them on.
             </Text>
           </div>
@@ -647,7 +647,7 @@ function OverviewTab({
             </Text>
             <Text size={200} block className={styles.muted}>
               Lowest adoption first - the running order for an enablement plan. Departments with fewer than{' '}
-              {o.minSeatsPerSegment} seats are omitted because the percentage would not be meaningful.
+              {o.minSeatsPerSegment} licences are omitted because the percentage would not be meaningful.
             </Text>
           </div>
           <InfoTip
@@ -674,7 +674,7 @@ function OverviewTab({
               </Text>
               <Text size={200} block className={styles.muted}>
                 Departments with the most recommended licence candidates. Pair this with the department adoption
-                table above: a department with unused seats and strong candidates can often be rebalanced at no cost.
+                table above: a department with unused licences and strong candidates can often be rebalanced at no cost.
               </Text>
             </div>
             <div className={styles.cardTools}>
@@ -747,7 +747,7 @@ function OverviewTab({
               </Text>
               <Text size={200} block className={styles.muted}>
                 Every licensed user in exactly one band. "Never used" and "Dormant" together are the
-                reclaimable seats.
+                reclaimable licences.
               </Text>
             </div>
             <InfoTip
@@ -1032,7 +1032,7 @@ function OverviewTab({
                 Licensed and unlicensed, side by side
               </Text>
               <Text size={200} block className={styles.muted}>
-                A department with idle seats and heavy unlicensed use is a seat-allocation problem, not an
+                A department with idle licences and heavy unlicensed use is a licence-allocation problem, not an
                 adoption problem - and it can usually be fixed at no cost.
               </Text>
             </div>
@@ -1164,9 +1164,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 <em>Dormant</em> (used Copilot at some point in the last {o.historyDays} days, but not once in
                 this period) and <em>Never used</em> (no Copilot activity anywhere in that history). The
                 distinction decides the action: a dormant user tried Copilot and stopped, and needs a
-                conversation about what went wrong before the seat is taken away; a never-used seat has produced
+                conversation about what went wrong before the licence is taken away; a never-used licence has produced
                 nothing at all and needs either onboarding or reassignment. Together they are the{' '}
-                <strong>reclaimable seats</strong> figure.
+                <strong>reclaimable licences</strong> figure.
               </Text>
               <Text>
                 <strong>"How often people open Copilot"</strong> answers a narrower question with no weighting
@@ -1188,8 +1188,8 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 {`daysPerMonth = round(activeDays x ${o.habitBucketNormalisationDays} / ${o.windowDays})`}
               </div>
               <Text>
-                The habit percentages are a share of <em>active</em> users, not of all seats. Someone who never
-                opened Copilot is not an infrequent user - they are a reclaimable seat, and merging the two would
+                The habit percentages are a share of <em>active</em> users, not of all licences. Someone who never
+                opened Copilot is not an infrequent user - they are a reclaimable licence, and merging the two would
                 hide the more expensive of the two problems.
               </Text>
             </div>
@@ -1260,7 +1260,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               </Text>
               <Text>
                 Disabled accounts are excluded from the candidate list. They are, however, kept in the licensed
-                user list - a disabled account still holding a Copilot seat is the clearest reclaim there is.
+                user list - a disabled account still holding a Copilot licence is the clearest reclaim there is.
               </Text>
             </div>
           </AccordionPanel>
@@ -1303,9 +1303,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               </Text>
               <Text>
                 <strong>Usage concentration</strong> ranks active licensed users by interaction count and
-                cuts them into percentile cohorts. Only active users are ranked - including idle seats would
+                cuts them into percentile cohorts. Only active users are ranked - including idle licences would
                 place every one of them in the bottom cohort at zero and give every tenant an identical
-                chart. Percentiles rather than fixed counts, so a 50-seat tenant and a 50,000-seat one are
+                chart. Percentiles rather than fixed counts, so a 50-licence tenant and a 50,000-licence one are
                 directly comparable.
               </Text>
             </div>
@@ -1343,12 +1343,12 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
         </AccordionItem>
 
         <AccordionItem value="skus">
-          <AccordionHeader>Which licences were counted as Copilot seats</AccordionHeader>
+          <AccordionHeader>Which SKUs were counted as Copilot licences</AccordionHeader>
           <AccordionPanel>
             <div className={styles.method}>
               <Text>
-                Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot seat (Copilot Studio,
-                Copilot for Sales), and ships new seat SKUs regularly. Everything the tool found is listed below so
+                Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio,
+                Copilot for Sales), and ships new licence SKUs regularly. Everything the tool found is listed below so
                 the licensed population can be checked rather than taken on trust.
               </Text>
               <table className={styles.skuTable}>
@@ -1357,7 +1357,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                     <th className={styles.skuCell}>Product</th>
                     <th className={styles.skuCell}>SKU</th>
                     <th className={styles.skuCell}>Users</th>
-                    <th className={styles.skuCell}>Counted as a Copilot seat</th>
+                    <th className={styles.skuCell}>Counted as a Copilot licence</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1398,7 +1398,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
   const denominatorNote = capped
     ? ` Rates are of the ${formatCount(summary.scoredUsers)} users this analysis could score, not all ${formatCount(
         summary.licensedUsers,
-      )} seats - see the warning at the top of the page.`
+      )} licences - see the warning at the top of the page.`
     : '';
 
   const items: KpiDefinition[] = [
@@ -1473,7 +1473,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
           weightSharePct(o.frequencyWeight, scoreWeights),
         )}), depth (${formatPct(weightSharePct(o.depthWeight, scoreWeights))}) and breadth (${formatPct(
           weightSharePct(o.breadthWeight, scoreWeights),
-        )}). Unused seats are included in the average on purpose - excluding them would make a tenant with half its seats idle look identical to one with none.`,
+        )}). Unused licences are included in the average on purpose - excluding them would make a tenant with half its licences idle look identical to one with none.`,
         formula: `mean = ${Math.round(summary.averageAdoptionScore)}, median = ${Math.round(
           summary.medianAdoptionScore,
         )}`,

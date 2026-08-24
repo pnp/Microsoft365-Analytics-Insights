@@ -86,7 +86,7 @@ export default function HabitStrip({ buckets }: { buckets: AdoptionHabitBucket[]
   if (total === 0) {
     return (
       <div className={styles.empty}>
-        No user was active in this period, so there is no habit to measure. The reclaimable-seat figure is
+        No user was active in this period, so there is no habit to measure. The reclaimable-licence figure is
         the one that matters here.
       </div>
     );

@@ -163,10 +163,10 @@ export function CombinedSegmentTable({ rows }: { rows: AdoptionCombinedSegmentRo
       <thead>
         <tr>
           <th className={table.th}>Department</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Seats</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Active seats</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Interactions per seat</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Seats using agents</th>
+          <th className={`${table.th} ${table.thNumeric}`}>Licences</th>
+          <th className={`${table.th} ${table.thNumeric}`}>Active licences</th>
+          <th className={`${table.th} ${table.thNumeric}`}>Interactions per licence</th>
+          <th className={`${table.th} ${table.thNumeric}`}>Licences using agents</th>
           <th className={`${table.th} ${table.thNumeric}`}>Unlicensed users</th>
           <th className={`${table.th} ${table.thNumeric}`}>Interactions per unlicensed user</th>
           <th className={`${table.th} ${table.thNumeric}`}>Unlicensed using agents</th>

@@ -652,7 +652,12 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM AgentUse GROUP BY agent_id\r\n" +
                 "),\r\n" +
                 "AgentUsers AS (\r\n" +
-                "    SELECT agent_id, COUNT(*) AS Users, SUM(IsLicensed) AS LicensedUsers\r\n" +
+                // COUNT(user_id), not COUNT(*). The old COUNT(DISTINCT au.user_id) skipped NULL users
+                // implicitly; grouping by (agent_id, user_id) puts unattributed events into their own
+                // NULL group, which COUNT(*) would count as a person. That matters because Users is not
+                // just displayed - it is the adoption threshold (AgentMinUsers, default 3), so a single
+                // unattributed interaction could flip an agent from Review to Keep.
+                "    SELECT agent_id, COUNT(user_id) AS Users, SUM(IsLicensed) AS LicensedUsers\r\n" +
                 "    FROM (SELECT agent_id, user_id, MAX(IsLicensed) AS IsLicensed\r\n" +
                 "          FROM AgentUse GROUP BY agent_id, user_id) AS u\r\n" +
                 "    GROUP BY agent_id\r\n" +
