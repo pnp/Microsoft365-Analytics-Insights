@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -317,6 +318,60 @@ namespace Tests.UnitTests
             Assert.AreEqual(options.WindowDays, datesInWindow);
             Assert.IsTrue(datesInWindow <= options.WindowDays,
                 "the numerator's window cannot be wider than the denominator's");
+        }
+
+        [TestMethod]
+        public void Diagnostics_RecordTimingsAndIdentifyTheSlowestStep()
+        {
+            // The slowest step is reported as a plain string property so an operator can triage from the
+            // event list without unpacking customMeasurements.
+            var diagnostics = new CopilotAdoptionDiagnostics();
+            Assert.IsNull(diagnostics.SlowestStep, "With nothing recorded there is no slowest step.");
+
+            diagnostics.Record(CopilotAdoptionSteps.LicensedUsers, 4200);
+            diagnostics.Record(CopilotAdoptionSteps.WeeklyTrend, 90000, failed: true);
+            diagnostics.Record(CopilotAdoptionSteps.AgentEstate, 300);
+
+            Assert.AreEqual(3, diagnostics.Steps.Count);
+            Assert.AreEqual(CopilotAdoptionSteps.WeeklyTrend, diagnostics.SlowestStep.Step);
+            Assert.AreEqual(90000, diagnostics.SlowestStep.DurationMs);
+
+            // A step that failed still has to carry its duration: a query abandoned at the command
+            // timeout is the single most useful thing in this telemetry, and dropping it would hide
+            // exactly the tenants whose report is quietly degrading.
+            Assert.IsTrue(diagnostics.Steps.Single(s => s.Step == CopilotAdoptionSteps.WeeklyTrend).Failed);
+            Assert.IsFalse(diagnostics.Steps.Single(s => s.Step == CopilotAdoptionSteps.AgentEstate).Failed);
+        }
+
+        [TestMethod]
+        public void Diagnostics_IgnoreAnUnnamedStep()
+        {
+            // Step names become App Insights measurement names, so a blank one would produce an unusable
+            // metric rather than a useful one.
+            var diagnostics = new CopilotAdoptionDiagnostics();
+
+            diagnostics.Record(null, 10);
+            diagnostics.Record(string.Empty, 10);
+            diagnostics.Record("   ", 10);
+
+            Assert.AreEqual(0, diagnostics.Steps.Count);
+        }
+
+        [TestMethod]
+        public void Diagnostics_AreSerialisedInCamelCaseLikeEveryOtherModel()
+        {
+            // This solution has no global camelCase contract resolver, so a model without explicit
+            // [JsonProperty] names silently serialises as PascalCase and the client reads undefined.
+            // That has already happened once in this feature, to CopilotAdoptionOptions.
+            var diagnostics = new CopilotAdoptionDiagnostics { TotalMs = 1234 };
+            diagnostics.Record(CopilotAdoptionSteps.LicensedUsers, 42);
+
+            var json = JsonConvert.SerializeObject(diagnostics);
+
+            StringAssert.Contains(json, "\"totalMs\"");
+            StringAssert.Contains(json, "\"steps\"");
+            StringAssert.Contains(json, "\"durationMs\"");
+            Assert.IsFalse(json.Contains("\"TotalMs\""), "Serialised names must be camelCase.");
         }
 
         [TestMethod]

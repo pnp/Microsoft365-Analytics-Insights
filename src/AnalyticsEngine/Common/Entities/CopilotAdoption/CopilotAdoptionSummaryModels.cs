@@ -453,6 +453,17 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+
+        /// <summary>
+        /// How long the analysis took, per step. Emitted to App Insights so a tenant whose report is
+        /// quietly degrading (queries timing out into warnings rather than errors) is visible to an
+        /// operator instead of only to whoever happens to open the page.
+        ///
+        /// Not rendered on screen; it is telemetry that travels with the analysis so the controller can
+        /// report it without re-running anything.
+        /// </summary>
+        [JsonProperty("diagnostics")]
+        public CopilotAdoptionDiagnostics Diagnostics { get; set; } = new CopilotAdoptionDiagnostics();
     }
 
     /// <summary>Which parts of the adoption tool this deployment can actually show.</summary>

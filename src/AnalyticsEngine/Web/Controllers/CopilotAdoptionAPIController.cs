@@ -478,7 +478,7 @@ namespace Web.AnalyticsWeb.Controllers
                 options.WindowDays = window;
 
                 var service = new CopilotAdoptionService(options);
-                return service.AnalyseAsync(overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
+                return RunAndReportAsync(service, overrideIds, window);
             }, LazyThreadSafetyMode.ExecutionAndPublication);
 
             // AddOrGetExisting is atomic. Because the Lazy has not been evaluated yet, the loser costs
@@ -500,6 +500,66 @@ namespace Web.AnalyticsWeb.Controllers
                 TaskContinuationOptions.ExecuteSynchronously);
 
             return task;
+        }
+
+        /// <summary>
+        /// Runs the analysis and reports how it went to App Insights.
+        ///
+        /// Deliberately inside the cache's Lazy factory, so exactly one event is emitted per actual
+        /// analysis rather than one per HTTP request. A cache hit does no work and should not look in
+        /// telemetry as though it did - otherwise the p95 would be dominated by cached reads and the
+        /// slow runs, which are the entire point of measuring, would disappear into the average.
+        /// </summary>
+        private static async Task<CopilotAdoptionAnalysis> RunAndReportAsync(
+            CopilotAdoptionService service, List<int> overrideIds, int windowDays)
+        {
+            var analysis = await service.AnalyseAsync(
+                overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
+
+            TrackAnalysis(analysis, windowDays);
+            return analysis;
+        }
+
+        /// <summary>
+        /// Emits the <c>CopilotAdoptionAnalysis</c> event. Never throws: telemetry must not be the
+        /// reason a request behaves differently, which is the same rule the workbook endpoint follows.
+        /// </summary>
+        private static void TrackAnalysis(CopilotAdoptionAnalysis analysis, int windowDays)
+        {
+            try
+            {
+                var diagnostics = analysis?.Summary?.Diagnostics;
+                if (diagnostics == null) return;
+
+                var steps = new Dictionary<string, long>();
+                foreach (var step in diagnostics.Steps)
+                {
+                    // Last write wins; a step runs once per analysis, so a collision would be a bug.
+                    steps[step.Step] = step.DurationMs;
+                }
+
+                // A step that reached the command timeout is the signal that matters: the query was
+                // abandoned and its figures degraded to a warning rather than an error, so nothing
+                // else in the request tells anyone the report is incomplete.
+                var timeoutMs = CopilotAdoptionService.QueryTimeoutSecs * 1000L;
+                var timedOut = diagnostics.Steps.Any(s => s.DurationMs >= timeoutMs);
+
+                var config = new AppConfig();
+                var logger = new AnalyticsLogger(
+                    config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
+
+                logger.TrackCopilotAdoptionAnalysis(
+                    windowDays,
+                    diagnostics.TotalMs,
+                    steps,
+                    analysis.Summary.Warnings.Count,
+                    timedOut,
+                    diagnostics.SlowestStep?.Step);
+            }
+            catch (Exception)
+            {
+                // Swallowed on purpose - see the workbook endpoint for the same reasoning.
+            }
         }
 
         /// <summary>A cached entry whose analysis already failed must not be served again.</summary>

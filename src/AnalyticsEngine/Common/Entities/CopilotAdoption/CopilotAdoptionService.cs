@@ -181,13 +181,17 @@ namespace Common.Entities.CopilotAdoption
             // ----- 3. Licensed users ------------------------------------------------------------
             if (seatIds.Count > 0)
             {
-                await BuildLicensedUsersAsync(analysis, seatIds, windowStart, historyStart, nowUtc, cancellationToken);
-                await BuildUsageByAppAsync(analysis, seatIds, windowStart, cancellationToken);
-                await BuildWeeklyTrendAsync(analysis, seatIds, trendStart, cancellationToken);
+                await TimedAsync(analysis, CopilotAdoptionSteps.LicensedUsers,
+                    () => BuildLicensedUsersAsync(analysis, seatIds, windowStart, historyStart, nowUtc, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.UsageByApp,
+                    () => BuildUsageByAppAsync(analysis, seatIds, windowStart, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.WeeklyTrend,
+                    () => BuildWeeklyTrendAsync(analysis, seatIds, trendStart, cancellationToken));
             }
 
             // ----- 4. Licence opportunities -----------------------------------------------------
-            await BuildOpportunitiesAsync(analysis, seatIds, windowStart, cancellationToken);
+            await TimedAsync(analysis, CopilotAdoptionSteps.LicenceOpportunities,
+                () => BuildOpportunitiesAsync(analysis, seatIds, windowStart, cancellationToken));
 
             // ----- 5. The populations Microsoft's own reporting cannot see ----------------------
             // Agents and unlicensed Copilot Chat are reported in their own right, not merely as inputs
@@ -195,13 +199,48 @@ namespace Common.Entities.CopilotAdoption
             // Chat use is the one Copilot population that is invisible in Microsoft's usage reports.
             if (summary.DataSources.AuditAvailable)
             {
-                await BuildAgentEstateAsync(analysis, seatIds, windowStart, nowUtc, cancellationToken);
-                await BuildUnlicensedPopulationAsync(analysis, seatIds, windowStart, cancellationToken);
-                await BuildResourceTypesAsync(analysis, windowStart, cancellationToken);
+                await TimedAsync(analysis, CopilotAdoptionSteps.AgentEstate,
+                    () => BuildAgentEstateAsync(analysis, seatIds, windowStart, nowUtc, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.UnlicensedPopulation,
+                    () => BuildUnlicensedPopulationAsync(analysis, seatIds, windowStart, cancellationToken));
+                await TimedAsync(analysis, CopilotAdoptionSteps.ResourceTypes,
+                    () => BuildResourceTypesAsync(analysis, windowStart, cancellationToken));
             }
 
+            var scoringWatch = System.Diagnostics.Stopwatch.StartNew();
             FinaliseSummary(analysis);
+            scoringWatch.Stop();
+            summary.Diagnostics.Record(CopilotAdoptionSteps.Scoring, scoringWatch.ElapsedMilliseconds);
+
+            summary.Diagnostics.TotalMs = (long)(DateTime.UtcNow - nowUtc).TotalMilliseconds;
             return analysis;
+        }
+
+        /// <summary>
+        /// Runs one step of the analysis and records how long it took.
+        ///
+        /// Timed in a finally block on purpose: a step that threw, or that a query timeout degraded into
+        /// a warning, is precisely the one an operator needs to see the duration of. Recording only
+        /// successful steps would hide the 90-second failures that this instrumentation exists to expose.
+        /// </summary>
+        private static async Task TimedAsync(CopilotAdoptionAnalysis analysis, string step, Func<Task> work)
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var failed = false;
+            try
+            {
+                await work();
+            }
+            catch (Exception)
+            {
+                failed = true;
+                throw;
+            }
+            finally
+            {
+                watch.Stop();
+                analysis.Summary.Diagnostics.Record(step, watch.ElapsedMilliseconds, failed);
+            }
         }
 
         #region Agents and the unlicensed population
