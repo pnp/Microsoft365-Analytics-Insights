@@ -48,7 +48,7 @@ const useStyles = makeStyles({
  * Unlicensed Copilot Chat as a population in its own right.
  *
  * Worth its own view rather than being folded into the licence-candidate list, because it answers a
- * different question. The candidate list asks "who should get a seat"; this asks "how much Copilot
+ * different question. The candidate list asks "who should get a licence"; this asks "how much Copilot
  * is this organisation already doing without paying for it", which is both the strongest evidence of
  * demand available and the one Copilot population Microsoft's own reporting cannot see at all.
  */
@@ -104,10 +104,10 @@ export default function UnlicensedPanel({
           <InfoTip
             title="Habit formation without a licence"
             content={{
-              what: 'People with no Copilot seat, split by how many days a month they use Copilot Chat.',
+              what: 'People with no Copilot licence, split by how many days a month they use Copilot Chat.',
               how: `Identical rules to the licensed habit strip: active days in the period restated as days per ${options.habitBucketNormalisationDays}-day month and rounded to whole days. Infrequent 1-${options.habitModerateMinDays - 1}, Moderate ${options.habitModerateMinDays}-${options.habitFrequentMinDays - 1}, Frequent ${options.habitFrequentMinDays}-${options.habitDailyMinDays - 1}, Daily ${options.habitDailyMinDays}+.`,
               source:
-                'Anyone in the Frequent or Daily tile has built a Copilot habit with no seat and no enablement. That is the strongest licence case in the building, and it is invisible in Microsoft\u2019s own reports.',
+                'Anyone in the Frequent or Daily tile has built a Copilot habit with no licence and no enablement. That is the strongest licence case in the building, and it is invisible in Microsoft\u2019s own reports.',
             }}
           />
         </div>
@@ -132,9 +132,9 @@ export default function UnlicensedPanel({
                 title="Where unlicensed Copilot is used"
                 content={{
                   what: 'Copilot interactions by unlicensed users, broken down by the app they happened in.',
-                  how: `Top ${options.topSegments} app hosts from the Copilot audit log, for users holding none of the SKUs classified as a Copilot seat.`,
+                  how: `Top ${options.topSegments} app hosts from the Copilot audit log, for users holding none of the SKUs classified as a Copilot licence.`,
                   source:
-                    'Unlicensed use concentrates in Copilot Chat and Teams, because that is what is available without a seat. Seats are normally sold on Word and Outlook - if the licensed breakdown looks the same as this one, the seats are not buying anything the free experience does not already give.',
+                    'Unlicensed use concentrates in Copilot Chat and Teams, because that is what is available without a licence. Licences are normally sold on Word and Outlook - if the licensed breakdown looks the same as this one, the licences are not buying anything the free experience does not already give.',
                 }}
               />
               {sql?.unlicensedUsageByApp && (
@@ -168,7 +168,7 @@ export default function UnlicensedPanel({
                   what: 'Copilot interactions by unlicensed users, grouped by their department.',
                   how: `Top ${options.topSegments} departments by interaction volume. Counts interactions rather than people, so one very heavy user can lift a department.`,
                   source:
-                    'Compare with the licensed/unlicensed table on the Overview tab: a department that appears here and also has idle seats can usually be rebalanced instead of bought for.',
+                    'Compare with the licensed/unlicensed table on the Overview tab: a department that appears here and also has idle licences can usually be rebalanced instead of bought for.',
                 }}
               />
               {sql?.unlicensedUsage && <SqlPopover sql={sql.unlicensedUsage} title="SQL behind this chart" />}
@@ -202,10 +202,10 @@ function buildUnlicensedKpis(
       label: 'Unlicensed Copilot users',
       value: formatCount(u.activeUsers),
       tone: 'opportunity',
-      hint: `Used Copilot in the last ${windowDays} days with no seat`,
+      hint: `Used Copilot in the last ${windowDays} days with no licence`,
       info: {
-        what: 'Distinct people with no Microsoft 365 Copilot licence who nevertheless used Copilot in the period - in practice Copilot Chat, which is available without a seat.',
-        how: 'Counted from the Copilot audit log for every user holding none of the SKUs classified as a Copilot seat. Distinct people, not interactions.',
+        what: 'Distinct people with no Microsoft 365 Copilot licence who nevertheless used Copilot in the period - in practice Copilot Chat, which is available without a licence.',
+        how: 'Counted from the Copilot audit log for every user holding none of the SKUs classified as a Copilot licence. Distinct people, not interactions.',
         source:
           'Entirely invisible in Microsoft\u2019s own Copilot usage reports, which cover licensed users only. This is the single strongest piece of evidence for unmet demand available anywhere.',
       },
@@ -217,10 +217,10 @@ function buildUnlicensedKpis(
       tone: 'opportunity',
       hint: `${u.interactionsPerUserPerMonth} per user per month`,
       info: {
-        what: 'Total Copilot interactions run by people without a seat, and the monthly average per person.',
+        what: 'Total Copilot interactions run by people without a licence, and the monthly average per person.',
         how: `Interactions in the last ${windowDays} days, restated per ${o.habitBucketNormalisationDays}-day month so the per-user figure does not change meaning when the period changes.`,
         source:
-          'Compare the per-user figure against the licensed population: unlicensed users out-using licensed ones is a seat-allocation problem, not an adoption problem.',
+          'Compare the per-user figure against the licensed population: unlicensed users out-using licensed ones is a licence-allocation problem, not an adoption problem.',
       },
     },
     {
@@ -230,10 +230,10 @@ function buildUnlicensedKpis(
       tone: habitual > 0 ? 'critical' : 'neutral',
       hint: `${o.habitFrequentMinDays}+ active days a month`,
       info: {
-        what: 'Unlicensed people who use Copilot Chat frequently or daily - they have built a habit with no seat, no training and no prompting.',
+        what: 'Unlicensed people who use Copilot Chat frequently or daily - they have built a habit with no licence, no training and no prompting.',
         how: `The Frequent (${o.habitFrequentMinDays}-${o.habitDailyMinDays - 1} active days a month) and Daily (${o.habitDailyMinDays}+) buckets combined.`,
         source:
-          'Coloured as a problem deliberately. Every person in this figure is doing knowledge work with a free tool that a seat would materially improve, and is a stronger candidate than anyone identified by inference from Teams or email volume.',
+          'Coloured as a problem deliberately. Every person in this figure is doing knowledge work with a free tool that a licence would materially improve, and is a stronger candidate than anyone identified by inference from Teams or email volume.',
       },
     },
     {
@@ -241,7 +241,7 @@ function buildUnlicensedKpis(
       label: 'Using agents unlicensed',
       value: formatCount(u.agentUsers),
       tone: 'opportunity',
-      hint: 'Reached for an agent without a seat',
+      hint: 'Reached for an agent without a licence',
       info: {
         what: 'Unlicensed people who invoked at least one Copilot agent in the period.',
         how: 'Counted from the agent attributed to each Copilot interaction in the audit log.',

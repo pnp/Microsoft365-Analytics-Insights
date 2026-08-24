@@ -365,14 +365,14 @@ namespace Common.Entities.CopilotAdoption
             {
                 case AdoptionBand.NeverUsed:
                     return $"Reclaim or onboard - no Copilot activity in the last {o.HistoryDays} days. "
-                         + "Confirm the seat is still needed before renewal.";
+                         + "Confirm the licence is still needed before renewal.";
 
                 case AdoptionBand.Dormant:
                     var since = row.DaysSinceLastUse.HasValue
                         ? $"last used it {row.DaysSinceLastUse.Value} days ago"
                         : "has used it in the past";
                     return $"Win back - {since} but not once in this period. "
-                         + "Ask what stopped and offer a refresher, or reassign the seat.";
+                         + "Ask what stopped and offer a refresher, or reassign the licence.";
 
                 case AdoptionBand.Trialling:
                     return "Build a first habit - occasional use only. Target one repeatable Copilot habit in "
@@ -494,14 +494,14 @@ namespace Common.Entities.CopilotAdoption
             switch (code)
             {
                 case AdoptionActionCodes.Reclaim:
-                    return $"No Copilot activity at all in the last {o.HistoryDays} days. Confirm the seat is "
+                    return $"No Copilot activity at all in the last {o.HistoryDays} days. Confirm the licence is "
                          + "still needed before renewal; if it is, this person has never been onboarded and "
-                         + "the seat has produced nothing so far.";
+                         + "the licence has produced nothing so far.";
 
                 case AdoptionActionCodes.Reengage:
                     return "Used Copilot before this period but not once inside it. Someone who tried it and "
                          + "stopped is a different problem from someone who never started - ask what stopped, "
-                         + "offer a refresher, or reassign the seat.";
+                         + "offer a refresher, or reassign the licence.";
 
                 case AdoptionActionCodes.Coach:
                     return $"Occasional use only (engagement below {o.DevelopingScore}). The cheapest move is "
@@ -521,7 +521,7 @@ namespace Common.Entities.CopilotAdoption
 
                 case AdoptionActionCodes.Sustain:
                     return $"Engagement at or above {o.EstablishedScore} across multiple surfaces - Copilot is "
-                         + "part of their working week. No action needed; these are the seats that are paying "
+                         + "part of their working week. No action needed; these are the licences that are paying "
                          + "for themselves.";
 
                 case AdoptionActionCodes.Advocate:

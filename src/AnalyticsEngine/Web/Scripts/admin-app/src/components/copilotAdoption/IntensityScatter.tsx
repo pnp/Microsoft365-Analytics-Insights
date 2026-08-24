@@ -326,7 +326,7 @@ export default function IntensityScatter({
                 stroke={scoreColour(p.activeUserAverageScore, bands)}
               >
                 <title>
-                  {`${p.segment}: ${formatValue(p.licensedUsers)} seats, ${formatValue(p.activeUsers)} active. ` +
+                  {`${p.segment}: ${formatValue(p.licensedUsers)} licences, ${formatValue(p.activeUsers)} active. ` +
                     `${formatValue(p.activeDaysPerUser)} active days a month, ` +
                     `${formatValue(p.actionsPerActiveDay)} interactions per active day. ` +
                     `Average engagement of its active users ${formatValue(p.activeUserAverageScore)}.`}

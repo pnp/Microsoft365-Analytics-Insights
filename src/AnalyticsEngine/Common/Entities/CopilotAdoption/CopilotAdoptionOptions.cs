@@ -161,7 +161,7 @@ namespace Common.Entities.CopilotAdoption
         #region Licence-opportunity tuning
 
         /// <summary>
-        /// Weight of "already using Copilot Chat without a seat" in the licence-opportunity score.
+        /// Weight of "already using Copilot Chat without a licence" in the licence-opportunity score.
         /// The heaviest weight by design: it is the only signal that is evidence of demand for Copilot
         /// specifically, rather than an inference from general Microsoft 365 activity.
         /// </summary>

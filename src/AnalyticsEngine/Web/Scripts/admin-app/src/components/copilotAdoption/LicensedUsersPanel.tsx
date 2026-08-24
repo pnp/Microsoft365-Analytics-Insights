@@ -281,7 +281,7 @@ export default function LicensedUsersPanel({
           onChange={(_e, d) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
         />
         <Tooltip
-          content="Disabled accounts still holding a Copilot licence - the clearest seats to reclaim."
+          content="Disabled accounts still holding a Copilot licence - the clearest licences to reclaim."
           relationship="description"
         >
           <Checkbox
@@ -377,7 +377,7 @@ export default function LicensedUsersPanel({
                         what: 'The engagement score turned into a label, so a list of numbers becomes a list of decisions.',
                         how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used.`,
                         source:
-                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is what "reclaimable seats" counts.',
+                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is what "reclaimable licences" counts.',
                       }}
                     />
                   </span>

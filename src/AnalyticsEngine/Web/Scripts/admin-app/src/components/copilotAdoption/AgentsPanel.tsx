@@ -210,7 +210,7 @@ export default function AgentsPanel({
               title="Where agent effort goes"
               content={{
                 what: 'Total interactions attributed to each agent across the history window, sized by area.',
-                how: `The top ${options.topSegments} agents by interaction count. Counted across everyone - an agent's worth to the organisation does not depend on whether the people using it hold a Copilot seat.`,
+                how: `The top ${options.topSegments} agents by interaction count. Counted across everyone - an agent's worth to the organisation does not depend on whether the people using it hold a Copilot licence.`,
                 source:
                   'Read against the inventory table below: a large tile with very few users is one person\u2019s tool, not an adopted agent.',
               }}
@@ -273,7 +273,7 @@ export default function AgentsPanel({
               title="Agent inventory"
               content={{
                 what: 'Every Copilot agent that has been used at least once in the history window, with how many people use it, how much, how broadly, and the verdict on it.',
-                how: `"Users" is distinct people across the whole tenant; "licensed" is how many of them hold a Copilot seat. "Surfaces" is the number of distinct Copilot hosts the agent was invoked from - an agent used in only one host is doing a narrower job than its interaction count suggests, which is what "most versatile" above measures.`,
+                how: `"Users" is distinct people across the whole tenant; "licensed" is how many of them hold a Copilot licence. "Surfaces" is the number of distinct Copilot hosts the agent was invoked from - an agent used in only one host is doing a narrower job than its interaction count suggests, which is what "most versatile" above measures.`,
                 source:
                   'Agent identity comes from the Copilot audit log. Agents that have never been invoked do not appear at all - the audit log only records agents that were used.',
               }}
@@ -447,7 +447,7 @@ function buildAgentKpis(
       key: 'users',
       label: 'Agent users',
       value: formatCount(estate.agentUsers),
-      hint: `${formatCount(estate.licensedAgentUsers)} of them hold a Copilot seat`,
+      hint: `${formatCount(estate.licensedAgentUsers)} of them hold a Copilot licence`,
       info: {
         what: `Distinct people who used at least one agent in the last ${windowDays} days, licensed or not.`,
         how: 'Counted from the per-user rows rather than by summing across agents, which would double-count anyone who uses more than one.',

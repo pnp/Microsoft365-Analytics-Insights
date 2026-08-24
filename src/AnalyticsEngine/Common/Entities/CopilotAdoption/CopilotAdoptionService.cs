@@ -81,7 +81,7 @@ namespace Common.Entities.CopilotAdoption
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
                 summary.Warnings.Add(
-                    "No licence information has been imported, so Copilot seats cannot be identified. "
+                    "No licence information has been imported, so Copilot licences cannot be identified. "
                     + "Enable the user metadata import to use this tool.");
                 return analysis;
             }
@@ -106,7 +106,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 summary.Warnings.Add(
                     "No Microsoft 365 Copilot licences were found in this tenant. Adoption cannot be reported "
-                    + "until at least one Copilot seat is assigned and the user import has run.");
+                    + "until at least one Copilot licence is assigned and the user import has run.");
                 // The licence-opportunity side still works with no seats at all - that is exactly the
                 // "should we buy Copilot?" case - so carry on rather than returning here.
             }
@@ -397,7 +397,7 @@ namespace Common.Entities.CopilotAdoption
             var assignments = await SafeAsync(
                 () => QueryAsync<SeatAssignmentRow>(assignmentsSql, cancellationToken),
                 summary.Warnings,
-                "Copilot seat assignments") ?? new List<SeatAssignmentRow>();
+                "Copilot licence assignments") ?? new List<SeatAssignmentRow>();
 
             var licencesByUser = assignments
                 .GroupBy(a => a.UserId)
@@ -657,7 +657,7 @@ namespace Common.Entities.CopilotAdoption
             if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
             {
                 summary.Warnings.Add(
-                    $"This tenant holds {summary.LicensedUsers:N0} Copilot seats, but only {summary.ScoredUsers:N0} "
+                    $"This tenant holds {summary.LicensedUsers:N0} Copilot licences, but only {summary.ScoredUsers:N0} "
                     + "users could be analysed in one pass. Every rate and breakdown below describes those "
                     + $"{summary.ScoredUsers:N0} users, not the whole tenant - they are not tenant-wide figures "
                     + "and must not be quoted as such.");

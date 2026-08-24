@@ -264,8 +264,8 @@ export default function OpportunitiesPanel({
                     <InfoTip
                       title="Business case score"
                       content={{
-                        what: `How strong the case for giving this person a Copilot seat is, from 0 to 100. Anyone at ${options.opportunityRecommendScore} or above is counted in the "recommended for a licence" headline.`,
-                        how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a seat is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own.`,
+                        what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Anyone at ${options.opportunityRecommendScore} or above is counted in the "recommended for a licence" headline.`,
+                        how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own.`,
                         formula:
                           `copilot     = min(1, unlicensedCopilotInteractions / ${options.opportunityCopilotTarget})\n` +
                           `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
@@ -284,8 +284,8 @@ export default function OpportunitiesPanel({
                     <InfoTip
                       title="Already using Copilot"
                       content={{
-                        what: 'Copilot interactions this person made in the selected period despite holding no Microsoft 365 Copilot seat - almost always Copilot Chat, which is available without one.',
-                        how: 'Counted from the Copilot audit log for users who hold none of the SKUs classified as a Copilot seat. Shown as interactions and the number of distinct days they happened on, because ten interactions across ten days is a habit and ten in one afternoon is an experiment.',
+                        what: 'Copilot interactions this person made in the selected period despite holding no Microsoft 365 Copilot licence - almost always Copilot Chat, which is available without one.',
+                        how: 'Counted from the Copilot audit log for users who hold none of the SKUs classified as a Copilot licence. Shown as interactions and the number of distinct days they happened on, because ten interactions across ten days is a habit and ten in one afternoon is an experiment.',
                         source:
                           'Invisible in Microsoft\u2019s own Copilot usage report, which only covers licensed users. It needs the Copilot audit import to be enabled.',
                       }}

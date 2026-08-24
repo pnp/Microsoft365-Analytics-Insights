@@ -3,7 +3,7 @@ import type { AdoptionActionSummary } from '../../types/copilotAdoption';
 import { formatCount, formatPct } from './KpiGrid';
 
 /**
- * Action colours run from "this seat is costing money" through to "this seat is paying for itself",
+ * Action colours run from "this licence is costing money" through to "this licence is paying for itself",
  * matching the engagement-band palette so the two views never appear to disagree.
  */
 export const ACTION_COLOUR: Record<string, string> = {

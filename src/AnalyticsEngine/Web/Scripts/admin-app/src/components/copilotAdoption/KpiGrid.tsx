@@ -5,7 +5,7 @@ import type { InfoTipContent } from './InfoTip';
 
 /**
  * Visual weight of a headline figure. This is judgement, not decoration: on a page that is used to
- * justify licence spend, colouring "42 unused seats" the same as "1,204 interactions" buries the
+ * justify licence spend, colouring "42 unused licences" the same as "1,204 interactions" buries the
  * number the reader is supposed to act on.
  */
 export type KpiTone = 'neutral' | 'good' | 'warning' | 'critical' | 'opportunity';

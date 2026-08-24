@@ -87,7 +87,7 @@ namespace Common.Entities.CopilotAdoption
                 "All 'this period' figures use this window.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
                 summary.ScoredUsers < summary.LicensedUsers
-                    ? $"Of {summary.LicensedUsers:N0} seats. Rates in this workbook are of the analysed users only."
+                    ? $"Of {summary.LicensedUsers:N0} licences. Rates in this workbook are of the analysed users only."
                     : "Every licensed user was analysed.");
             AddMeta(sheet, "From (UTC)", summary.FromUtc, string.Empty);
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
@@ -168,7 +168,7 @@ namespace Common.Entities.CopilotAdoption
             var first = sheet.CurrentRow + 1;
 
             AddMeta(sheet, "Copilot licences", summary.LicensedUsers,
-                "Users holding at least one licence classified as a Microsoft 365 Copilot seat. The true seat count.");
+                "Users holding at least one licence classified as a Microsoft 365 Copilot licence. The true licence count.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
                 summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
@@ -181,23 +181,23 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Dormant", summary.DormantUsers,
                 "Used Copilot before this period but not inside it. Needs a conversation about what stopped.");
             AddMeta(sheet, "Never used", summary.NeverUsedUsers,
-                $"No Copilot activity anywhere in the last {summary.Options.HistoryDays} days. Needs onboarding, or the seat back.");
-            AddMeta(sheet, "Reclaimable seats", summary.ReclaimableSeats,
-                "Dormant plus never used - seats that produced nothing this period.");
+                $"No Copilot activity anywhere in the last {summary.Options.HistoryDays} days. Needs onboarding, or the licence back.");
+            AddMeta(sheet, "Reclaimable licences", summary.ReclaimableSeats,
+                "Dormant plus never used - licences that produced nothing this period.");
 
             var last = sheet.CurrentRow;
 
             sheet.AddBlankRow();
             AddMeta(sheet, "Adoption rate %", summary.AdoptionRatePct, "Active users as a share of the users analysed.");
             AddMeta(sheet, "Habit rate %", summary.HabitRatePct, "Habitual users as a share of the users analysed.");
-            AddMeta(sheet, "Average engagement", summary.AverageAdoptionScore, "Mean score out of 100, including seats scoring zero.");
+            AddMeta(sheet, "Average engagement", summary.AverageAdoptionScore, "Mean score out of 100, including licences scoring zero.");
             AddMeta(sheet, "Median engagement", summary.MedianAdoptionScore,
                 "Reported next to the mean because a few Champions pull the mean up; a large gap means a long tail of light users.");
             AddMeta(sheet, "Total interactions", summary.TotalInteractions, "All Copilot interactions by licensed users in the period.");
 
             sheet.AddBlankRow();
             AddMeta(sheet, "Using Copilot unlicensed", summary.UnlicensedActiveUsers,
-                "People with no seat who used Copilot anyway - proven, unmet demand, and invisible in Microsoft's own reports.");
+                "People with no licence who used Copilot anyway - proven, unmet demand, and invisible in Microsoft's own reports.");
             AddMeta(sheet, "Recommended for a licence", summary.RecommendedForLicence,
                 $"Unlicensed users whose business-case score reached {summary.Options.OpportunityRecommendScore}.");
 
@@ -312,8 +312,8 @@ namespace Common.Entities.CopilotAdoption
                     + "people open Copilot constantly and do very little with it. Counts ACTIVE users only, and "
                     + "restates active days per "
                     + summary.Options.HabitBucketNormalisationDays
-                    + "-day month so they mean the same thing whichever period was selected. A seat that was never "
-                    + "used is not 'infrequent' - it is in the reclaimable-seat figure."));
+                    + "-day month so they mean the same thing whichever period was selected. A licence that was never "
+                    + "used is not 'infrequent' - it is in the reclaimable-licence figure."));
                 sheet.AddHeaderRow("Usage frequency", "Users", "% of active", "Range");
 
                 var habitFirst = sheet.CurrentRow + 1;
@@ -513,7 +513,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Adoption by department, worst first - the running order for an enablement plan. "
-                    + $"Departments with fewer than {summary.Options.MinSeatsPerSegment} seats are omitted because "
+                    + $"Departments with fewer than {summary.Options.MinSeatsPerSegment} licences are omitted because "
                     + "the percentage would not be meaningful."));
                 sheet.AddHeaderRow("Department", "Seats", "Active", "Habitual", "Never used", "Adoption rate %", "Avg. score");
 
@@ -559,12 +559,12 @@ namespace Common.Entities.CopilotAdoption
             {
                 sheet.AddBlankRow();
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "Licensed and unlicensed side by side. A department with idle seats AND heavy unlicensed use "
-                    + "is a seat-allocation problem, not an adoption problem, and can usually be fixed at no cost. "
-                    + "Interactions per seat divides by all seats including idle ones - that is the point of the "
+                    "Licensed and unlicensed side by side. A department with idle licences AND heavy unlicensed use "
+                    + "is a licence-allocation problem, not an adoption problem, and can usually be fixed at no cost. "
+                    + "Interactions per licence divides by all licences including idle ones - that is the point of the "
                     + "comparison. Both per-user columns are normalised to a month."));
-                sheet.AddHeaderRow("Department", "Seats", "Active seats", "Interactions per seat",
-                    "Seats using agents %", "Unlicensed users", "Interactions per unlicensed user",
+                sheet.AddHeaderRow("Department", "Seats", "Active licences", "Interactions per licence",
+                    "Licences using agents %", "Unlicensed users", "Interactions per unlicensed user",
                     "Unlicensed using agents %");
 
                 foreach (var row in summary.CombinedByDepartment)
@@ -741,9 +741,9 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddTitle("Unlicensed Copilot Chat");
             sheet.AddRow(XlsxCell.Wrapped(
-                "People with no Copilot seat who use Copilot anyway. This is the one Copilot population "
+                "People with no Copilot licence who use Copilot anyway. This is the one Copilot population "
                 + "Microsoft's own reporting cannot see at all, and the strongest evidence of unmet demand "
-                + "available - these people chose to use Copilot with no seat, no training and no prompting."));
+                + "available - these people chose to use Copilot with no licence, no training and no prompting."));
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow("Measure", "Value");
@@ -978,7 +978,7 @@ namespace Common.Entities.CopilotAdoption
                 + $"{o.DevelopingScore}+, Trialling below that. Users with no activity in the period are not scored "
                 + $"at all: Dormant means they used Copilot within the last {o.HistoryDays} days but not in this "
                 + "period; Never used means no activity anywhere in that history. The distinction decides the "
-                + "action - one needs a conversation, the other needs onboarding or the seat back.");
+                + "action - one needs a conversation, the other needs onboarding or the licence back.");
 
             AddMethod(sheet, "Habitual users",
                 $"Engagement of {o.EstablishedScore} or more. This is the figure that tracks realised value - the "
@@ -992,12 +992,12 @@ namespace Common.Entities.CopilotAdoption
                 + "This is UNWEIGHTED frequency and is deliberately NOT the same measure as 'habitual users' above, "
                 + "which is the weighted engagement score. The two are meant to be compared: a large Daily figure "
                 + "with a low habit rate means people open Copilot constantly and do very little with it.\n"
-                + "Percentages are of ACTIVE users. A seat that was never used is not 'infrequent' - it is a "
-                + "reclaimable seat, and merging the two hides the more expensive problem.");
+                + "Percentages are of ACTIVE users. A licence that was never used is not 'infrequent' - it is a "
+                + "reclaimable licence, and merging the two hides the more expensive problem.");
 
             AddMethod(sheet, "Usage concentration",
                 "Active licensed users ranked by interaction count and cut into percentile cohorts. Only active "
-                + "users are ranked - including idle seats would put every one of them in the bottom cohort at zero "
+                + "users are ranked - including idle licences would put every one of them in the bottom cohort at zero "
                 + "and give every tenant an identical chart.");
 
             AddMethod(sheet, "Business case score",
@@ -1006,7 +1006,7 @@ namespace Common.Entities.CopilotAdoption
                 + $"collaboration = min(1, (teamsMessages + teamsMeetings) / {o.OpportunityCollaborationTarget}) x {o.OpportunityCollaborationWeight}\n"
                 + $"email = min(1, (emailsSent + emailsRead) / {o.OpportunityEmailTarget}) x {o.OpportunityEmailWeight}\n"
                 + $"documents = min(1, filesViewedOrEdited / {o.OpportunityDocumentTarget}) x {o.OpportunityDocumentWeight}\n"
-                + $"Recommended at {o.OpportunityRecommendScore} or above. Already using Copilot Chat without a seat "
+                + $"Recommended at {o.OpportunityRecommendScore} or above. Already using Copilot Chat without a licence "
                 + "carries the most weight because it is the only signal that proves demand for Copilot itself "
                 + "rather than inferring it from general activity.");
 
@@ -1024,14 +1024,14 @@ namespace Common.Entities.CopilotAdoption
                 + "'the bar moved'.");
 
             AddMethod(sheet, "Licence classification",
-                "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot seat (Copilot Studio, "
-                + "Copilot for Sales), and ships new seat SKUs regularly. Everything found is listed below, "
+                "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "
+                + "Copilot for Sales), and ships new licence SKUs regularly. Everything found is listed below, "
                 + "including what was excluded, so the licensed population can be checked rather than trusted.");
 
             if (summary.SeatLicenceTypes.Count > 0)
             {
                 sheet.AddBlankRow();
-                sheet.AddHeaderRow("Product", "SKU", "Users", "Counted as a Copilot seat");
+                sheet.AddHeaderRow("Product", "SKU", "Users", "Counted as a Copilot licence");
                 foreach (var licence in summary.SeatLicenceTypes)
                 {
                     sheet.AddRow(licence.Name, licence.SkuPartNumber, licence.AssignedUsers,
