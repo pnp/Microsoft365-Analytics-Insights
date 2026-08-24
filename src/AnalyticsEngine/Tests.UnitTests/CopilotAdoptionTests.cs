@@ -525,14 +525,41 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, CountOccurrences(sql, "dbo.copilot_chats"),
                 "The Copilot audit history must be read exactly once - it is the most expensive join in the product.");
             StringAssert.Contains(sql, "au.time_stamp >= @historyFrom");
-            StringAssert.Contains(sql, "SUM(CASE WHEN au.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions");
-            StringAssert.Contains(sql, "SUM(CASE WHEN au.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions");
+            StringAssert.Contains(sql, "SUM(CASE WHEN c.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions");
+            StringAssert.Contains(sql, "SUM(CASE WHEN c.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions");
 
             // Deterministic truncation, so a capped report is reproducible rather than randomly
             // different between runs.
             StringAssert.Contains(sql, "TOP (@maxRows)");
             StringAssert.Contains(sql, "ORDER BY u.id");
             StringAssert.Contains(sql, "OPTION (RECOMPILE)");
+        }
+
+        [TestMethod]
+        public void LicensedUsersQuery_NeverAsksForSeveralDistinctCountsInOneGrouping()
+        {
+            // This is a performance contract, not a style rule.
+            //
+            // SQL Server streams a single distinct aggregate cheaply, but two or more in the same
+            // GROUP BY force it to fan the input out through a spool and process each distinct
+            // separately. Measured on a synthetic 200k-user / 12M-interaction tenant, writing the
+            // three per-user distinct counts as COUNT(DISTINCT ...) in one grouping cost 115M logical
+            // reads and 281s on the default 28-day window - past the 90s command timeout, so the
+            // report silently degraded to a warning. Computing each from its own pre-projected
+            // DISTINCT set is the same answer in 772k reads and 73s.
+            //
+            // Re-introducing COUNT(DISTINCT ...) here would be an easy, innocent-looking edit, and the
+            // damage only shows up on a tenant large enough that nobody is testing against it.
+            var sql = CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], includeCopilotReport: true);
+
+            Assert.AreEqual(0, CountOccurrences(sql, "COUNT(DISTINCT"),
+                "Per-user distinct counts must come from their own DISTINCT sub-selects, not from "
+                + "COUNT(DISTINCT ...) aggregates sharing one GROUP BY.");
+
+            // The shape that replaces them.
+            StringAssert.Contains(sql, "SELECT DISTINCT user_id, CAST(time_stamp AS date)");
+            StringAssert.Contains(sql, "SELECT DISTINCT user_id, app_host");
+            StringAssert.Contains(sql, "SELECT DISTINCT user_id, agent_id");
         }
 
         [TestMethod]

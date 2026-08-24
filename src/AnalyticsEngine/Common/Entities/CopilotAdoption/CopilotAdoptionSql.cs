@@ -182,23 +182,72 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.user_license_type_lookups AS ul\r\n" +
                 $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "),\r\n" +
-                "-- One bounded pass over the Copilot audit history. The reporting window and the\r\n" +
-                "-- earlier history are separated with CASE rather than by running the join twice.\r\n" +
-                "CopilotUsage AS (\r\n" +
+                "-- One bounded pass over the Copilot audit history, projected to just the four columns\r\n" +
+                "-- the aggregates need. The reporting window and the earlier history are separated with\r\n" +
+                "-- CASE rather than by running the join twice.\r\n" +
+                "CopilotWindow AS (\r\n" +
                 "    SELECT au.user_id AS user_id,\r\n" +
-                "           SUM(CASE WHEN au.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions,\r\n" +
-                "           SUM(CASE WHEN au.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions,\r\n" +
-                "           COUNT(DISTINCT CASE WHEN au.time_stamp >= @from THEN CAST(au.time_stamp AS date) END) AS ActiveDays,\r\n" +
-                "           COUNT(DISTINCT CASE WHEN au.time_stamp >= @from THEN c.app_host END) AS AppsUsed,\r\n" +
-                "           COUNT(DISTINCT CASE WHEN au.time_stamp >= @from THEN c.agent_id END) AS AgentsUsed,\r\n" +
-                $"           SUM(CASE WHEN au.time_stamp >= @from AND ({cowork}) THEN 1 ELSE 0 END) AS CoworkInteractions,\r\n" +
-                "           MIN(au.time_stamp) AS FirstInteractionUtc,\r\n" +
-                "           MAX(au.time_stamp) AS LastInteractionUtc\r\n" +
+                "           au.time_stamp AS time_stamp,\r\n" +
+                "           c.app_host AS app_host,\r\n" +
+                "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    " + AuditJoin + "\r\n" +
                 "    JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
                 "    WHERE au.time_stamp >= @historyFrom\r\n" +
-                "    GROUP BY au.user_id\r\n" +
+                "),\r\n" +
+                "-- The counting totals: cheap, because none of them is a DISTINCT.\r\n" +
+                "CopilotTotals AS (\r\n" +
+                "    SELECT c.user_id AS user_id,\r\n" +
+                "           SUM(CASE WHEN c.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions,\r\n" +
+                "           SUM(CASE WHEN c.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions,\r\n" +
+                $"           SUM(CASE WHEN c.time_stamp >= @from AND ({cowork}) THEN 1 ELSE 0 END) AS CoworkInteractions,\r\n" +
+                "           MIN(c.time_stamp) AS FirstInteractionUtc,\r\n" +
+                "           MAX(c.time_stamp) AS LastInteractionUtc\r\n" +
+                "    FROM CopilotWindow AS c\r\n" +
+                "    GROUP BY c.user_id\r\n" +
+                "),\r\n" +
+                "-- Each distinct count comes from its own pre-projected DISTINCT set.\r\n" +
+                "--\r\n" +
+                "-- Asking for these three as distinct aggregates inside CopilotTotals is the obvious way to\r\n" +
+                "-- write it and is catastrophically slow: SQL Server can stream a single distinct aggregate,\r\n" +
+                "-- but two or more in one grouping force it to fan the input out through a spool and process\r\n" +
+                "-- each distinct separately. Measured on a 200k-user / 12M-interaction synthetic tenant, that\r\n" +
+                "-- spool alone was 25M of the query's 115M logical reads and the whole query took 281s (28-day\r\n" +
+                "-- window) - past the 90s command timeout, so the report degraded to a warning. Split this way\r\n" +
+                "-- it is 772k reads and 73s. Full numbers are in the pull request and the wiki.\r\n" +
+                "CopilotActiveDays AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS ActiveDays\r\n" +
+                "    FROM (SELECT DISTINCT user_id, CAST(time_stamp AS date) AS active_date\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from) AS d\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "CopilotApps AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS AppsUsed\r\n" +
+                "    FROM (SELECT DISTINCT user_id, app_host\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND app_host IS NOT NULL) AS a\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "CopilotAgents AS (\r\n" +
+                "    SELECT user_id, COUNT(*) AS AgentsUsed\r\n" +
+                "    FROM (SELECT DISTINCT user_id, agent_id\r\n" +
+                "          FROM CopilotWindow WHERE time_stamp >= @from AND agent_id IS NOT NULL) AS g\r\n" +
+                "    GROUP BY user_id\r\n" +
+                "),\r\n" +
+                "-- Reassembled under the original name and shape, so everything downstream is unchanged.\r\n" +
+                "CopilotUsage AS (\r\n" +
+                "    SELECT t.user_id AS user_id,\r\n" +
+                "           t.Interactions AS Interactions,\r\n" +
+                "           t.PriorInteractions AS PriorInteractions,\r\n" +
+                "           ISNULL(d.ActiveDays, 0) AS ActiveDays,\r\n" +
+                "           ISNULL(a.AppsUsed, 0) AS AppsUsed,\r\n" +
+                "           ISNULL(g.AgentsUsed, 0) AS AgentsUsed,\r\n" +
+                "           t.CoworkInteractions AS CoworkInteractions,\r\n" +
+                "           t.FirstInteractionUtc AS FirstInteractionUtc,\r\n" +
+                "           t.LastInteractionUtc AS LastInteractionUtc\r\n" +
+                "    FROM CopilotTotals AS t\r\n" +
+                "    LEFT JOIN CopilotActiveDays AS d ON d.user_id = t.user_id\r\n" +
+                "    LEFT JOIN CopilotApps AS a ON a.user_id = t.user_id\r\n" +
+                "    LEFT JOIN CopilotAgents AS g ON g.user_id = t.user_id\r\n" +
                 ")";
 
             if (includeCopilotReport)
