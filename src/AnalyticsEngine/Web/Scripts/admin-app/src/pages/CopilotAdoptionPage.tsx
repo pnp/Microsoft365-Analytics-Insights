@@ -590,7 +590,7 @@ function OverviewTab({
               title="Adoption funnel"
               content={{
                 what: 'The licensed population narrowed one stage at a time, so the single biggest loss of value is visible rather than averaged away.',
-                how: `Licensed = holders of a Copilot seat SKU. Ever used = any Copilot activity in the last ${o.historyDays} days. Active this period = at least one interaction inside the selected period. Habitual = engagement of ${o.establishedScore} or more. Champions = ${o.championScore} or more. The percentage on the right is the conversion from the stage above, not from the top - a 90% that follows a 40% is still a healthy step.`,
+                how: `Licensed = holders of a Copilot seat SKU. Ever used = any Copilot activity in the last ${o.historyDays} days. Active this period = at least one interaction inside the selected period. Habitual = engagement of ${o.establishedScore} or more. Champions = ${o.championScore} or more. The percentage on the right is the conversion from the stage above, not from the top - a 90% that follows a 40% is still a healthy step. The red "lost here" counts are drop-offs worth acting on; the final step is grey because reaching Champion is not expected of everyone - habitual users are already established and the action plan says they need no action.`,
                 source:
                   'Licensed counts come from the imported licence assignments; every activity stage comes from the Copilot audit log, falling back to Microsoft\u2019s per-user usage report where the audit import is unavailable.',
               }}

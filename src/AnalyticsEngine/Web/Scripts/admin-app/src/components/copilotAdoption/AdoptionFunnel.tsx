@@ -48,7 +48,9 @@ const STAGE_COLOURS = ['#8ec3ea', '#5aa6dd', '#2f86cc', '#1466ad', '#0a4a80'];
  * Each stage is a trapezoid whose bottom edge matches the next stage's top edge, so the outline is
  * continuous. A "funnel" drawn as disconnected bars of decreasing length is just a bar chart wearing
  * a funnel's name. The drop-off between stages is called out on the right, because that is the
- * number that decides where the effort goes.
+ * number that decides where the effort goes - except on the final step, which is a top tier rather
+ * than a target for the whole population and is therefore reported neutrally. See the note on
+ * isTopTier below.
  */
 export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] }) {
   const styles = useStyles();
@@ -98,6 +100,30 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
           // Reporting it as 100% gave a tenant with no usage a funnel of apparently perfect steps.
           const conversion = previous === null || previous === 0 ? null : (stage.value / previous) * 100;
           const sharePct = (stage.value / top) * 100;
+
+          // The bottom stage is a top tier, not a target for the whole population. Everyone who
+          // reaches the stage above it has already formed a habit - the action catalogue explicitly
+          // says those users need no action and are paying for their seat. Printing "N lost here" in
+          // red against them contradicts that advice and points enablement budget at the people who
+          // are already succeeding, so the final step is reported as a neutral "not yet" instead.
+          const isTopTier = index === stages.length - 1;
+          const previousLabel = previous === null ? null : stages[index - 1].label;
+          const dropText = isTopTier
+            ? `${formatCount(lost)} not yet ${stage.label}`
+            : `${formatCount(lost)} lost here`;
+          const dropColour = isTopTier
+            ? tokens.colorNeutralForeground3
+            : tokens.colorPaletteRedForeground1;
+          const dropHelp = previous === null
+            ? ''
+            : isTopTier
+              ? `${formatCount(lost)} of the ${formatCount(previous)} users at "${previousLabel}" have not reached "${stage.label}". `
+                + `Reaching "${stage.label}" is the top tier of engagement, not a target for everyone: users at `
+                + `"${previousLabel}" have already formed a habit and need no action. Read this as the size of your `
+                + `advocate pool, not as a loss.`
+              : `${formatCount(lost)} of the ${formatCount(previous)} users at "${previousLabel}" did not reach "${stage.label}". `
+                + `The percentage is the conversion from the stage immediately above, not from the top of the funnel. `
+                + `The biggest single drop is where enablement effort should go.`;
 
           // The narrowest point decides whether the labels fit. A stage holding a handful of users is
           // only a few pixels wide, and white text centred on it lands on the page background where
@@ -166,12 +192,25 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
                 </text>
               ) : (
                 <>
+                  {/* Transparent hit area so the whole right-hand column is hoverable, not just the
+                      glyphs. The labels below opt out of pointer events so this rect keeps the hover. */}
+                  <rect
+                    x={W - DROP_W}
+                    y={y}
+                    width={DROP_W}
+                    height={STAGE_H}
+                    fill="transparent"
+                    style={{ pointerEvents: 'all' }}
+                  >
+                    <title>{dropHelp}</title>
+                  </rect>
                   <text
                     x={W - DROP_W + 14}
                     y={y + STAGE_H / 2 - 3}
                     fontSize={15}
                     fontWeight={600}
                     fill={conversion === null ? tokens.colorNeutralForeground3 : tokens.colorNeutralForeground1}
+                    style={{ pointerEvents: 'none' }}
                   >
                     {conversion === null ? '\u2014' : formatPct(conversion)}
                   </text>
@@ -180,9 +219,10 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
                       x={W - DROP_W + 14}
                       y={y + STAGE_H / 2 + 16}
                       fontSize={12}
-                      fill={tokens.colorPaletteRedForeground1}
+                      fill={dropColour}
+                      style={{ pointerEvents: 'none' }}
                     >
-                      {formatCount(lost)} lost here
+                      {dropText}
                     </text>
                   )}
                 </>
@@ -194,7 +234,9 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
 
       <Text size={200} className={styles.caption}>
         Each stage is a subset of the one above it. The figure on the right is the conversion from the stage
-        immediately above, not from the top - the biggest single drop is where the effort should go.
+        immediately above, not from the top - the biggest single drop is where the effort should go. The last
+        step is shown in grey rather than red because it is not a loss: everyone who reaches the stage above it
+        has already formed a habit. Hover any figure for the detail.
       </Text>
     </div>
   );
