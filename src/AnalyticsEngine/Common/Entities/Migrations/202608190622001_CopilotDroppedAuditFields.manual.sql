@@ -209,104 +209,18 @@ IF COL_LENGTH(N'dbo.copilot_event_messages', N'is_prompt') IS NULL
 GO
 
 /* ---------------------------------------------------------------------------------------------------
-   3. Foreign-key indexes on copilot_event_accessed_resources.
-      VERBATIM copy of CopilotDroppedAuditFields.JunctionIndexes_Sql (the constant the migration runs),
-      so the by-hand and installer paths execute exactly the same SQL. THIS IS THE LONG STEP.
+   3. (Removed.) The two foreign-key indexes on copilot_event_accessed_resources are NOT built here.
+
+      They were split out into their own migration, 202608250900001_IndexCopilotAccessedResourceFkColumns,
+      so that this migration could become a single atomic transaction. An index build cannot run inside
+      the migration transaction on a large table, and EF commits everything before a transaction-suppressed
+      statement - so a failed build used to leave this migration's tables, columns and foreign keys
+      committed but unstamped, after which the retry failed on objects that already existed.
+
+      Run 202608250900001_IndexCopilotAccessedResourceFkColumns.manual.sql after this one to build them.
+      This script deliberately does not, so the by-hand path matches what the installer actually does, and
+      so a failure building those indexes cannot block THIS migration's stamp.
    --------------------------------------------------------------------------------------------------- */
-SET NOCOUNT ON;
-
-DECLARE @migration nvarchar(100) = N'CopilotDroppedAuditFields';
-DECLARE @start datetime2(3) = SYSUTCDATETIME();
-DECLARE @stepStart datetime2(3);
-DECLARE @msg nvarchar(2000);
-DECLARE @tbl sysname = N'copilot_event_accessed_resources';
-DECLARE @edition int = CAST(SERVERPROPERTY('EngineEdition') AS int);
-DECLARE @canOnline bit = CASE WHEN CAST(SERVERPROPERTY('EngineEdition') AS int) IN (3, 5, 8) THEN 1 ELSE 0 END;
-DECLARE @onlineDone bit;
-DECLARE @rowCount bigint;
-DECLARE @sql nvarchar(max);
-DECLARE @ix sysname;
-DECLARE @col sysname;
-DECLARE @i int = 1;
-
-DECLARE @targets table (seq int NOT NULL PRIMARY KEY, ix sysname NOT NULL, col sysname NOT NULL);
-INSERT INTO @targets (seq, ix, col) VALUES
-    (1, N'IX_copilot_event_accessed_resources_action_id', N'action_id'),
-    (2, N'IX_copilot_event_accessed_resources_list_item_unique_id_id', N'list_item_unique_id_id');
-
-SET @msg = @migration + N': EngineEdition=' + CAST(@edition AS nvarchar(10)) + N'; ONLINE index builds '
-    + CASE WHEN @canOnline = 1 THEN N'will be attempted (with offline fallback).'
-           ELSE N'are not supported on this edition - each build briefly locks the table, so run large upgrades in a maintenance window with the importer stopped.' END;
-RAISERROR(@msg, 0, 1) WITH NOWAIT;
-
-IF OBJECT_ID(N'dbo.' + @tbl, N'U') IS NULL
-BEGIN
-    SET @msg = @migration + N': dbo.' + @tbl + N' does not exist; skipping the junction indexes.';
-    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-END
-ELSE
-BEGIN
-    SET @rowCount = (SELECT ISNULL(SUM(p.rows), 0) FROM sys.partitions p
-                     WHERE p.object_id = OBJECT_ID(N'dbo.' + @tbl) AND p.index_id IN (0, 1));
-    SET @msg = @migration + N': ' + @tbl + N' row estimate = ' + CAST(@rowCount AS nvarchar(20)) + N'.';
-    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-
-    WHILE @i <= 2
-    BEGIN
-        SELECT @ix = ix, @col = col FROM @targets WHERE seq = @i;
-
-        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.' + @tbl) AND name = @col)
-        BEGIN
-            SET @msg = @migration + N': ' + @tbl + N'.' + @col + N' does not exist; skipping [' + @ix + N'].';
-            RAISERROR(@msg, 0, 1) WITH NOWAIT;
-        END
-        ELSE IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.' + @tbl) AND name = @ix)
-        BEGIN
-            SET @msg = @migration + N': [' + @ix + N'] already exists; nothing to do.';
-            RAISERROR(@msg, 0, 1) WITH NOWAIT;
-        END
-        ELSE
-        BEGIN
-            SET @stepStart = SYSUTCDATETIME();
-            SET @onlineDone = 0;
-
-            IF @canOnline = 1
-            BEGIN
-                BEGIN TRY
-                    SET @msg = @migration + N': creating [' + @ix + N'] WITH (ONLINE = ON)...';
-                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-                    SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']) WITH (ONLINE = ON);';
-                    EXEC sp_executesql @sql;
-                    SET @onlineDone = 1;
-                END TRY
-                BEGIN CATCH
-                    SET @msg = @migration + N': ONLINE build of [' + @ix + N'] unavailable (' + ERROR_MESSAGE() + N'); retrying offline.';
-                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-                END CATCH
-            END
-
-            IF @onlineDone = 0
-            BEGIN
-                SET @msg = @migration + N': creating [' + @ix + N'] (offline)...';
-                RAISERROR(@msg, 0, 1) WITH NOWAIT;
-                SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']);';
-                EXEC sp_executesql @sql;
-            END
-
-            SET @msg = @migration + N': [' + @ix + N'] created in '
-                + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms ('
-                + CASE WHEN @onlineDone = 1 THEN N'online' ELSE N'offline' END + N').';
-            RAISERROR(@msg, 0, 1) WITH NOWAIT;
-        END
-
-        SET @i += 1;
-    END
-END
-
-SET @msg = @migration + N': junction indexes finished in '
-    + CAST(DATEDIFF(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
-RAISERROR(@msg, 0, 1) WITH NOWAIT;
-GO
 
 /* ---------------------------------------------------------------------------------------------------
    4. Foreign keys for the two new columns (guarded). Cheap: every existing row has NULL in both, so
@@ -381,10 +295,10 @@ BEGIN
     IF COL_LENGTH(N'dbo.copilot_event_messages', N'size') IS NULL SET @missing += N'copilot_event_messages.size; ';
     IF COL_LENGTH(N'dbo.copilot_event_messages', N'is_prompt') IS NULL SET @missing += N'copilot_event_messages.is_prompt; ';
 
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_accessed_resources') AND name = N'IX_copilot_event_accessed_resources_action_id')
-        SET @missing += N'index IX_copilot_event_accessed_resources_action_id; ';
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_accessed_resources') AND name = N'IX_copilot_event_accessed_resources_list_item_unique_id_id')
-        SET @missing += N'index IX_copilot_event_accessed_resources_list_item_unique_id_id; ';
+    -- The two IX_copilot_event_accessed_resources_* foreign-key indexes are deliberately NOT asserted
+    -- here: they belong to 202608250900001_IndexCopilotAccessedResourceFkColumns, not to this migration.
+    -- Requiring them would let a failure in that migration's work block this one's stamp, which is the
+    -- coupling the split exists to remove.
 
     -- The indexes and foreign keys on the two new junction tables are SEPARATE statements from their
     -- CREATE TABLE, so the table existing does not prove they were created. A run interrupted between
