@@ -154,17 +154,12 @@ namespace Tests.UnitTests
 
             foreach (var table in copilotTables)
             {
-                var purged = Regex.IsMatch(
-                    cleanupScript,
-                    @"delete\s+top\s*\(\s*@copilotBatch\s*\)\s+from\s+" + Regex.Escape(table) + @"\b",
-                    RegexOptions.IgnoreCase);
-
                 var exempt = Regex.IsMatch(
                     cleanupScript,
                     @"RETENTION-EXEMPT:\s*" + Regex.Escape(table) + @"\b",
                     RegexOptions.IgnoreCase);
 
-                Assert.IsTrue(purged || exempt,
+                Assert.IsTrue(IsPurgedInBatches(cleanupScript, table) || exempt,
                     $"'{table}' is a Copilot usage-report table in the entity model, but Clean Old Data " +
                     "Data.sql neither purges it nor declares it exempt, so it grows forever (issue #286). " +
                     $"Either add 'delete top (@copilotBatch) from {table} where ...' inside a batch loop, " +
@@ -205,14 +200,17 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// The three usage-report tables that exist today are the fast-growing ones, so they must not
-        /// merely be aged - they must be aged in BATCHES. Kept separate from the inventory guard above
-        /// because it is a stronger claim about a known set rather than a claim about every future table.
+        /// The three usage-report tables that exist today are the fast-growing ones. This pins them by
+        /// name, which the reflection-driven guard above deliberately does not: if the namespace or the
+        /// <c>[Table]</c> attributes move, discovery could quietly stop finding them and only the
+        /// <c>&gt;= 3</c> floor would notice. Both tests use the same <see cref="IsPurgedInBatches"/>
+        /// matcher, so there is one definition of what counts as batched.
         /// </summary>
         [TestMethod]
         public void CleanupScript_BatchesTheCopilotUsageReportDeletes()
         {
             var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+            var discovered = DiscoverCopilotUsageReportTables();
 
             var mustBeBatched = new[]
             {
@@ -223,15 +221,43 @@ namespace Tests.UnitTests
 
             foreach (var table in mustBeBatched)
             {
-                StringAssert.Contains(
-                    cleanupScript,
-                    "delete top (@copilotBatch) from " + table,
+                Assert.IsTrue(
+                    discovered.Contains(table, StringComparer.OrdinalIgnoreCase),
+                    $"'{table}' was not discovered by reflection over the usage-report namespace, so the " +
+                    "inventory guard is no longer covering it. Check that its [Table] attribute and " +
+                    "namespace still match what DiscoverCopilotUsageReportTables looks for.");
+
+                Assert.IsTrue(
+                    IsPurgedInBatches(cleanupScript, table),
                     $"'{table}' has no batched retention delete in Clean Old Data Data.sql (issue #286). " +
                     "The batch size must come from @copilotBatch rather than a literal, because the loop " +
                     "exits by comparing @@ROWCOUNT against that same variable - a literal that drifts " +
                     "from it would stop the purge after a single pass.");
             }
         }
+
+        /// <summary>
+        /// Whether <paramref name="cleanupScript"/> deletes <paramref name="table"/> in batches driven by
+        /// <c>@copilotBatch</c>.
+        /// <para>
+        /// Tolerates the SQL spellings a future edit might reasonably use - an optional <c>dbo.</c>
+        /// qualifier and optional square brackets around either part - because bracket-quoting is the
+        /// house style elsewhere in this very script (<c>[sessions]</c>, <c>[date]</c>,
+        /// <c>[event_meta_general]</c>) and <c>dbo.</c> appears in every <c>OBJECT_ID</c> guard. A guard
+        /// that reports correct, batched code as "grows forever" gets weakened rather than trusted.
+        /// </para>
+        /// <para>
+        /// The <c>\b</c> sits immediately after the table name and before the optional closing bracket,
+        /// so <c>copilot_user</c> still does not match inside <c>copilot_user_count_log</c> - underscore
+        /// is a regex word character, which is what makes that work.
+        /// </para>
+        /// </summary>
+        private static bool IsPurgedInBatches(string cleanupScript, string table) =>
+            Regex.IsMatch(
+                cleanupScript,
+                @"delete\s+top\s*\(\s*@copilotBatch\s*\)\s+from\s+(?:\[?dbo\]?\s*\.\s*)?\[?"
+                    + Regex.Escape(table) + @"\b\]?",
+                RegexOptions.IgnoreCase);
 
         // Resolves to <repoRoot>\src\Clean Old Data Data.sql relative to this source file (Tests.UnitTests\DataCleanupTests.cs).
         private static string GetCleanOldDataSqlPath([CallerFilePath] string thisFilePath = "")
