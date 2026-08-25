@@ -279,6 +279,69 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608191533567_DeprecateTeamsAddons')
 BEGIN
+    /* ---------------------------------------------------------------------------------------------
+       Refuse to stamp unless the schema work above actually completed.
+
+       This script is split into GO batches, and by default sqlcmd/SSMS CONTINUE to the next batch after
+       a statement fails - a severity-16 error aborts its own batch, not the script. Without this check
+       a partially failed run would fall through and record the migration as applied when it is not,
+       which is worse than the original error: EF then skips it forever and the missing changes surface
+       later as runtime errors nobody can trace back to this upgrade.
+
+       The end state to assert DEPENDS ON THE BRANCH the migration took, so it is recomputed here rather
+       than assumed:
+
+         * add-on tables absent, or present but ALL EMPTY -> they are dropped and vwTeamsAddOns_Log is
+           dropped with them, so the view must be gone.
+         * any add-on table HOLDS DATA -> the tables are deliberately retained as read-only history and
+           the views are left completely untouched, so vwTeamsAddOns_Log SHOULD still exist. Asserting
+           it was dropped would hard-fail every tenant with add-on history - which is the case this
+           migration exists to protect, and the one most likely to be upgraded by hand.
+
+       vwTeamsStats is only asserted to still EXIST: it is rewritten in the empty branch and untouched in
+       the retain branch, so in both cases its absence means something went wrong.
+
+       Run with sqlcmd -b as well - this guard is the backstop, not a substitute for stopping on error.
+       --------------------------------------------------------------------------------------------- */
+    DECLARE @missing nvarchar(max) = N'';
+    DECLARE @guardAnyRows bit = 0;
+    DECLARE @guardTable sysname;
+    DECLARE @guardHasRows bit;
+    DECLARE @guardSql nvarchar(max);
+
+    DECLARE guard_tables CURSOR LOCAL FAST_FORWARD FOR
+        SELECT name FROM (VALUES (N'teams_addons'), (N'teams_addons_log'), (N'teams_addons_user_installed_log')) AS t(name);
+    OPEN guard_tables;
+    FETCH NEXT FROM guard_tables INTO @guardTable;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        IF OBJECT_ID(N'dbo.' + @guardTable) IS NOT NULL
+        BEGIN
+            SET @guardHasRows = 0;
+            SET @guardSql = N'SELECT @out = CASE WHEN EXISTS (SELECT 1 FROM [dbo].[' + @guardTable + N']) THEN 1 ELSE 0 END;';
+            EXEC sp_executesql @guardSql, N'@out bit OUTPUT', @out = @guardHasRows OUTPUT;
+            IF @guardHasRows = 1 SET @guardAnyRows = 1;
+        END
+        FETCH NEXT FROM guard_tables INTO @guardTable;
+    END
+    CLOSE guard_tables;
+    DEALLOCATE guard_tables;
+
+    IF @guardAnyRows = 0 AND OBJECT_ID(N'dbo.vwTeamsAddOns_Log') IS NOT NULL
+        SET @missing += N'view vwTeamsAddOns_Log still exists although the add-on tables were empty and should have been removed with it; ';
+    IF OBJECT_ID(N'dbo.vwTeamsStats') IS NULL
+        SET @missing += N'view vwTeamsStats is missing (it should still exist in both the retain and the remove case); ';
+
+    IF @missing <> N''
+    BEGIN
+        DECLARE @incomplete nvarchar(max) =
+            N'DeprecateTeamsAddons: NOT stamped - the schema changes did not complete. Problem: '
+            + @missing
+            + N'Re-run this script (it is guarded and safe to repeat) and check the earlier output for the '
+            + N'failure. The migration is deliberately left unstamped so the upgrade can be retried.';
+        RAISERROR(@incomplete, 16, 1) WITH NOWAIT;
+    END
+    ELSE
     IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608190725064_AddCopilotUsageReports')
     BEGIN
         DECLARE @model varbinary(max);

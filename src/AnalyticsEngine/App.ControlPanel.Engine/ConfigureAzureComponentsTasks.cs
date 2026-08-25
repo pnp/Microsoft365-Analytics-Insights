@@ -10,6 +10,7 @@ using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -240,10 +241,82 @@ namespace App.ControlPanel.Engine
             connectionStrings.Properties.Add("Redis", new ConnStringValueTypePair(redisConnectionString, ConnectionStringType.Custom));
 
             await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = new SiteConfigProperties { Use32BitWorkerProcess = false, IsAlwaysOn = true } });
+            await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
             await webApp.UpdateApplicationSettingsAsync(appSettings);
             await webApp.UpdateConnectionStringsAsync(connectionStrings);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        /// <summary>
+        /// Copies any app setting the installer does not manage from the live App Service into the
+        /// settings about to be written.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <c>UpdateApplicationSettingsAsync</c> REPLACES the whole collection - anything absent from the
+        /// dictionary is deleted. The dictionary above is built from scratch on every run, so without this
+        /// merge an upgrade silently wipes every setting an operator added by hand.
+        /// </para>
+        /// <para>
+        /// That is not a small set. <c>AppConfig</c> reads around 37 app settings and the installer writes
+        /// roughly a dozen; the rest are operator-tunable and would be lost on each upgrade - including
+        /// <c>TenantDomain</c>, <c>StatsApiSecret</c>, <c>UseClientCertificate</c>, every import-tuning knob
+        /// (<c>ImportAggressiveness</c>, <c>ChunkSize</c>, <c>MaxSqlCommitConcurrency</c>, the
+        /// <c>CopilotInteractionHistory*</c> values...), and <c>UserGroupsFilter</c>.
+        /// </para>
+        /// <para>
+        /// <c>UserGroupsFilter</c> is the one with a privacy consequence rather than a performance one: it is
+        /// the only way to narrow Copilot interaction-history import to a pilot group, and it is not exposed
+        /// in the installer UI, so it can ONLY have been set by hand. Erasing it silently widens that import
+        /// to every enabled user - and where Cognitive Services is configured, their prompt text is then sent
+        /// to Azure AI Language. A scope that disappears on upgrade is worse than one that was never set.
+        /// </para>
+        /// <para>
+        /// Installer-managed keys deliberately win: this only fills in keys the installer is not writing, so
+        /// a value the wizard is responsible for still gets refreshed. A failure to read the existing
+        /// settings is logged and swallowed rather than failing the install - on a first-time deployment
+        /// there is nothing to preserve, and losing tuning values is a far smaller harm than aborting a
+        /// deployment part-way through.
+        /// </para>
+        /// </remarks>
+        private async Task PreserveUnmanagedAppSettingsAsync(WebSiteResource webApp, AppServiceConfigurationDictionary appSettings)
+        {
+            try
+            {
+                var existing = await webApp.GetApplicationSettingsAsync();
+                if (existing?.Value?.Properties == null)
+                {
+                    return;
+                }
+
+                var preserved = new List<string>();
+                foreach (var setting in existing.Value.Properties)
+                {
+                    if (appSettings.Properties.ContainsKey(setting.Key))
+                    {
+                        continue;
+                    }
+
+                    appSettings.Properties.Add(setting.Key, setting.Value);
+                    preserved.Add(setting.Key);
+                }
+
+                if (preserved.Count > 0)
+                {
+                    // Names only - values can be secrets.
+                    _logger.LogInformation(
+                        $"Preserved {preserved.Count} existing app setting(s) the installer does not manage: "
+                        + string.Join(", ", preserved) + ".");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    "Could not read the existing App Service app settings, so any manually added settings may "
+                    + "be replaced by this deployment. Re-apply them afterwards if you had customised any "
+                    + $"(for example UserGroupsFilter). Reason: {ex.Message}");
+            }
         }
     }
 }

@@ -313,6 +313,96 @@ GO
    ===================================================================================================== */
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608190622001_CopilotDroppedAuditFields')
 BEGIN
+    /* ---------------------------------------------------------------------------------------------
+       Refuse to stamp unless the schema work above actually completed.
+
+       This script is split into GO batches, and by default sqlcmd/SSMS CONTINUE to the next batch after
+       a statement fails - a severity-16 error aborts its own batch, not the script. (Verified: a later
+       batch still ran after a severity-16 failure; only sqlcmd -b stops.) Without this check an
+       interrupted or partially failed run - out of disk, log full, killed session, cancelled index
+       build - would fall through to the stamp and record the migration as applied when it is not.
+
+       That failure mode is worse than the original error, because EF then believes the schema is at this
+       version: DatabaseUpgrader skips the migration forever, and the missing tables/columns surface much
+       later as runtime errors nobody can trace back to this upgrade. Stamping is the one step that must
+       never happen optimistically.
+
+       Run with sqlcmd -b (or SSMS SQLCMD mode with :on error exit) as well - this guard is the backstop,
+       not a substitute for stopping at the first error.
+       --------------------------------------------------------------------------------------------- */
+    DECLARE @missing nvarchar(max) = N'';
+
+    IF OBJECT_ID(N'dbo.copilot_event_accessed_resource_actions') IS NULL SET @missing += N'table copilot_event_accessed_resource_actions; ';
+    IF OBJECT_ID(N'dbo.copilot_ai_system_plugins') IS NULL SET @missing += N'table copilot_ai_system_plugins; ';
+    IF OBJECT_ID(N'dbo.copilot_event_context_types') IS NULL SET @missing += N'table copilot_event_context_types; ';
+    IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') IS NULL SET @missing += N'table copilot_event_ai_system_plugins; ';
+    IF OBJECT_ID(N'dbo.copilot_event_contexts') IS NULL SET @missing += N'table copilot_event_contexts; ';
+
+    IF COL_LENGTH(N'dbo.copilot_ai_models', N'provider_name') IS NULL SET @missing += N'copilot_ai_models.provider_name; ';
+    IF COL_LENGTH(N'dbo.copilot_ai_models', N'version') IS NULL SET @missing += N'copilot_ai_models.version; ';
+    IF COL_LENGTH(N'dbo.copilot_chats', N'thread_id') IS NULL SET @missing += N'copilot_chats.thread_id; ';
+    IF COL_LENGTH(N'dbo.copilot_chats', N'client_region') IS NULL SET @missing += N'copilot_chats.client_region; ';
+    IF COL_LENGTH(N'dbo.copilot_chats', N'copilot_log_version') IS NULL SET @missing += N'copilot_chats.copilot_log_version; ';
+    IF COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'action_id') IS NULL SET @missing += N'copilot_event_accessed_resources.action_id; ';
+    IF COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'list_item_unique_id_id') IS NULL SET @missing += N'copilot_event_accessed_resources.list_item_unique_id_id; ';
+    IF COL_LENGTH(N'dbo.copilot_event_messages', N'size') IS NULL SET @missing += N'copilot_event_messages.size; ';
+    IF COL_LENGTH(N'dbo.copilot_event_messages', N'is_prompt') IS NULL SET @missing += N'copilot_event_messages.is_prompt; ';
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_accessed_resources') AND name = N'IX_copilot_event_accessed_resources_action_id')
+        SET @missing += N'index IX_copilot_event_accessed_resources_action_id; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_accessed_resources') AND name = N'IX_copilot_event_accessed_resources_list_item_unique_id_id')
+        SET @missing += N'index IX_copilot_event_accessed_resources_list_item_unique_id_id; ';
+
+    -- The indexes and foreign keys on the two new junction tables are SEPARATE statements from their
+    -- CREATE TABLE, so the table existing does not prove they were created. A run interrupted between
+    -- them leaves a table with no indexes and no referential integrity, which the earlier version of
+    -- this guard would have accepted as complete.
+    IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_copilot_chat_id')
+            SET @missing += N'index IX_copilot_chat_id on copilot_event_ai_system_plugins; ';
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_ai_system_plugin_id')
+            SET @missing += N'index IX_ai_system_plugin_id on copilot_event_ai_system_plugins; ';
+    END
+
+    IF OBJECT_ID(N'dbo.copilot_event_contexts') IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_copilot_chat_id')
+            SET @missing += N'index IX_copilot_chat_id on copilot_event_contexts; ';
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_context_type_id')
+            SET @missing += N'index IX_context_type_id on copilot_event_contexts; ';
+    END
+
+    -- All six foreign keys, including the two added last on copilot_event_accessed_resources - those run
+    -- after the transaction-suppressed index build, so they are the most likely of all to be missed.
+    --
+    -- Looked up via sys.foreign_keys rather than OBJECT_ID(): EF's constraint names themselves contain
+    -- dots ("FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id"), so OBJECT_ID parses them
+    -- as multi-part server.database.schema.object names and returns NULL for a constraint that is
+    -- actually present. That produced a guard which refused to stamp a perfectly complete database.
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_ai_system_plugins_ai_system_plugin_id')
+        SET @missing += N'FK copilot_event_ai_system_plugins -> copilot_ai_system_plugins; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_chats_copilot_chat_id')
+        SET @missing += N'FK copilot_event_ai_system_plugins -> copilot_chats; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_event_context_types_context_type_id')
+        SET @missing += N'FK copilot_event_contexts -> copilot_event_context_types; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id')
+        SET @missing += N'FK copilot_event_contexts -> copilot_chats; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_accessed_resources_dbo.copilot_event_accessed_resource_actions_action_id')
+        SET @missing += N'FK copilot_event_accessed_resources.action_id; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_accessed_resources_dbo.copilot_event_accessed_resource_ids_list_item_unique_id_id')
+        SET @missing += N'FK copilot_event_accessed_resources.list_item_unique_id_id; ';
+
+    IF @missing <> N''
+    BEGIN
+        DECLARE @incomplete nvarchar(max) =
+            N'CopilotDroppedAuditFields: NOT stamped - the schema changes did not complete. Missing: '
+            + @missing
+            + N'Re-run this script (it is guarded and safe to repeat) and check the earlier output for the '
+            + N'failure. The migration is deliberately left unstamped so the upgrade can be retried.';
+        RAISERROR(@incomplete, 16, 1) WITH NOWAIT;
+    END
+    ELSE
     IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608131055001_IndexReportDateQueries')
     BEGIN
         DECLARE @model varbinary(max);
