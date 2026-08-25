@@ -139,5 +139,17 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("charts")]
         public List<ReportChart> Charts { get; set; } = new List<ReportChart>();
+
+        /// <summary>
+        /// Whether the app has a usable Azure AI Language (cognitive) configuration.
+        /// <para>
+        /// Only meaningful for the "copilot" area. The three prompt-insight charts (key phrases,
+        /// prompt sentiment, prompt language) are built from cognitive enrichment, so without a
+        /// configuration they are omitted rather than shown permanently empty. Sending the flag lets
+        /// the UI say *why* they are missing instead of leaving the admin to wonder - issue #312.
+        /// </para>
+        /// </summary>
+        [JsonProperty("cognitiveConfigured")]
+        public bool CognitiveConfigured { get; set; }
     }
 }

@@ -52,6 +52,12 @@ export interface ReportAreaData {
   months: number;
   fromWeek: string;
   charts: ReportChart[];
+  /**
+   * Whether Azure AI Language (cognitive services) is configured. Only meaningful on the "copilot"
+   * area: when false the API omits the three prompt-insight charts, and the page explains why
+   * rather than letting them disappear without a word.
+   */
+  cognitiveConfigured?: boolean;
 }
 
 /** A report area key, as used in the api/Reports/{area} route. */

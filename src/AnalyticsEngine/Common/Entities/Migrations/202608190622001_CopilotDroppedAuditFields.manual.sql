@@ -24,7 +24,8 @@
 
      New columns
        * copilot_chats.thread_id, .client_region, .copilot_log_version
-       * copilot_event_accessed_resources.action_id, .list_item_unique_id_id  (+ FK index each)
+       * copilot_event_accessed_resources.action_id, .list_item_unique_id_id
+         (their FK indexes are NOT built here - see 202608250900001)
        * copilot_event_messages.size, .is_prompt
        * copilot_ai_models.provider_name, .version
 
@@ -36,21 +37,36 @@
      * Every ALTER TABLE ... ADD adds a NULLable column with no default, which SQL Server applies as a
        metadata-only change - instant even on a 100M-row copilot_event_accessed_resources.
      * The two foreign keys on copilot_event_accessed_resources are the only step that touches existing
-       data, and they are cheap but not free. Their FK-column indexes are built by the SEPARATE migration
+       data, and they are NOT free. Their FK-column indexes are built by the SEPARATE migration
        202608250900001_IndexCopilotAccessedResourceFkColumns, so SQL Server validates each constraint
-       with one pass over the table: about 7,800 logical reads and ~0.6-0.7 s per constraint on a
-       synthetic 3,000,000-row table. Every existing row has NULL in both columns, so the cost is the
-       scan, not the checking.
+       with one pass over the table - and it holds a schema-modification (Sch-M) lock while doing so.
+       About 7,800 logical reads and ~0.6-0.7 s per constraint on a synthetic 3,000,000-row table. The
+       scan happens even though every existing row has NULL in both columns: the cost is the scan, not
+       the checking. See SAFETY below - this is why a large database still needs a window.
      * The two foreign-key INDEXES are NOT built by this script any more - see section 3 - so the long,
        lock-taking step that used to dominate this migration now belongs to the follow-on script.
 
    SAFETY
      * Idempotent / re-runnable: every object is guarded, so an already-applied step is a no-op and the
        __MigrationHistory stamp is still reached.
-     * No lock-taking index build here, so this script does not by itself require a maintenance window.
-       The follow-on script 202608250900001_IndexCopilotAccessedResourceFkColumns.manual.sql does: where
-       ONLINE is unavailable each of its builds briefly locks copilot_event_accessed_resources, the
-       largest table in the schema on a Copilot-heavy tenant.
+     * A VERY LARGE DATABASE STILL NEEDS A MAINTENANCE WINDOW FOR THIS SCRIPT, ON EVERY EDITION.
+       Section 4 adds two CHECKED foreign keys to copilot_event_accessed_resources, and SQL Server
+       validates each one with a scan of the table while holding a schema-modification (Sch-M) lock,
+       which blocks all access including reads. ONLINE is an INDEX-operation option; there is no
+       online form of foreign-key validation, so Enterprise, Azure SQL DB and Managed Instance get NO
+       relief here - unlike the index builds in the follow-on script, which can go online.
+       Do not be misled by the error text if you try it: on a non-Enterprise edition
+       ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY ... WITH (ONLINE = ON) is parsed and then fails
+       with "Online index operations can only be performed in Enterprise edition of SQL Server",
+       which reads as though Enterprise would make it online. It would not - there is no index being
+       built for a foreign key, and the validation scan is offline on every edition.
+       Measured: 300,000 rows with every value NULL still cost 8,139 logical reads and a Sch-M lock per
+       constraint - the validation scans regardless of whether there is anything to check. Extrapolating
+       the migration's own 3,000,000-row figure (~0.6-0.7 s per constraint), expect roughly 0.4-0.5 s at
+       1M rows, 4-5 s at 10M and 40-50 s at 100M for the pair.
+     * The lock-taking INDEX build is separate: it lives in
+       202608250900001_IndexCopilotAccessedResourceFkColumns.manual.sql, which attempts ONLINE on
+       Enterprise / Azure SQL DB / Managed Instance and falls back to offline elsewhere.
      * No wrapping transaction; every object is independently guarded, so an interrupted run converges on
        re-run rather than needing hand repair.
      * Run it with sqlcmd -b so execution stops at the first error. The completion guard before the
@@ -226,10 +242,12 @@ GO
    --------------------------------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------------------------------
-   4. Foreign keys for the two new columns (guarded). Cheap: every existing row has NULL in both, so
-      every existing row has NULL in both columns so WITH CHECK finds nothing to verify. The FK-column
+   4. Foreign keys for the two new columns (guarded). NOT cheap on a large table, despite there being
+      nothing to verify: every existing row has NULL in both columns, but WITH CHECK still scans the
+      whole table to prove it, under a Sch-M lock that blocks reads as well as writes. The FK-column
       indexes do NOT exist yet at this point (they are built by 202608250900001), so each constraint
-      costs one scan of the table - about 7,800 logical reads / ~0.6-0.7 s at 3,000,000 rows.
+      costs one scan - about 7,800 logical reads / ~0.6-0.7 s at 3,000,000 rows. See SAFETY at the top
+      for the measured figures and why no edition can do this online.
    --------------------------------------------------------------------------------------------------- */
 IF OBJECT_ID(N'dbo.copilot_event_accessed_resource_actions', N'U') IS NOT NULL
    AND COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'action_id') IS NOT NULL

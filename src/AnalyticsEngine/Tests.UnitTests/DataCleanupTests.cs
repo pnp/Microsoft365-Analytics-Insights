@@ -7,7 +7,10 @@ using Common.Entities.Entities.WebTraffic;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -27,6 +30,157 @@ namespace Tests.UnitTests
                 await InsertTestDataAll(db);
 
                 await db.Database.ExecuteSqlCommandAsync(cleanupScript);
+            }
+        }
+
+        /// <summary>
+        /// Issue #286 asked for the Copilot usage-report tables to gain a retention bound AND for the
+        /// delete to be batched, because at the 200,000-user baseline the table gains roughly 800,000
+        /// rows a day and the first purge after enabling the import can be tens of millions of rows.
+        /// <para>
+        /// This asserts the outcome rather than merely running the script: rows older than the cutoff
+        /// go, rows inside it stay. Before the batching change the script deleted these in one
+        /// statement; the assertion holds either way, which is the point - it pins the retention
+        /// behaviour so a future rewrite of the loop cannot silently stop purging.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public async Task Cleanup_PurgesOldCopilotUsageReportRows_AndKeepsRecentOnes()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
+            // The script's cutoff is one month before now, so straddle it.
+            var wellOutsideRetention = DateTime.Now.AddMonths(-6).Date;
+            var wellInsideRetention = DateTime.Now.AddDays(-2).Date;
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User
+                {
+                    UserPrincipalName = "purge" + DateTime.Now.Ticks + "@example.com",
+                    Mail = "purge" + DateTime.Now.Ticks + "@example.com",
+                };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+
+                db.CopilotUsageUserActivityLogs.Add(new CopilotUsageUserActivityLog
+                {
+                    User = user,
+                    Date = wellOutsideRetention,
+                    ReportPeriodDays = 28,
+                });
+                db.CopilotUsageUserActivityLogs.Add(new CopilotUsageUserActivityLog
+                {
+                    User = user,
+                    Date = wellInsideRetention,
+                    ReportPeriodDays = 28,
+                });
+                await db.SaveChangesAsync();
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await db.Database.ExecuteSqlCommandAsync(cleanupScript);
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var remaining = db.CopilotUsageUserActivityLogs
+                    .Where(r => r.User.ID == userId)
+                    .Select(r => r.Date)
+                    .ToList();
+
+                Assert.IsFalse(remaining.Contains(wellOutsideRetention),
+                    "A Copilot usage-report row older than the retention cutoff survived the purge. " +
+                    "copilot_usage_user_activity_log is the fastest-growing table this feature adds " +
+                    "(issue #286); without this delete it grows forever.");
+                Assert.IsTrue(remaining.Contains(wellInsideRetention),
+                    "The purge deleted a Copilot usage-report row INSIDE the retention window. " +
+                    "A batching bug that ignores the date predicate would look exactly like this.");
+            }
+        }
+
+        /// <summary>
+        /// Inventory guard, also from issue #286: fail when a Copilot usage-report table exists in the
+        /// entity model but is not accounted for in the cleanup script. Adding a table to a growing
+        /// feature and forgetting to age it is precisely how the Teams add-on tables became expensive
+        /// enough to need deprecating, and nothing else in the build notices.
+        /// <para>
+        /// The table list is derived from the EF model by reflection, NOT hard-coded, because a
+        /// hard-coded list cannot fail for the case the issue actually cares about - somebody adding a
+        /// FOURTH usage-report entity later. A hard-coded array would stay green precisely when it
+        /// matters.
+        /// </para>
+        /// <para>
+        /// "Accounted for" means named in the script. Deleting it is the usual answer; deliberately not
+        /// ageing it is acceptable too, provided the script says so by name - the existing
+        /// <c>copilot_interaction_user_watermarks</c> note is the precedent. What must not happen is a
+        /// new table appearing and nobody deciding either way.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void CleanupScript_AccountsForEveryCopilotUsageReportTable()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
+            // Every [Table]-mapped Copilot entity declared alongside the usage-report classes.
+            var usageReportNamespace = typeof(CopilotUsageUserActivityLog).Namespace;
+            var copilotTables = typeof(CopilotUsageUserActivityLog).Assembly
+                .GetTypes()
+                .Where(t => t.Namespace == usageReportNamespace)
+                .Select(t => t.GetCustomAttribute<TableAttribute>())
+                .Where(a => a != null && a.Name.StartsWith("copilot_", StringComparison.OrdinalIgnoreCase))
+                .Select(a => a.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // A reflection-driven test that discovers nothing passes vacuously, which would be worse
+            // than no test at all. Pin the floor at the three tables that exist today.
+            Assert.IsTrue(copilotTables.Count >= 3,
+                "Expected to discover at least the three Copilot usage-report tables by reflection, but " +
+                $"found {copilotTables.Count} ({string.Join(", ", copilotTables)}). The namespace or the " +
+                "[Table] attributes have moved, and this guard is no longer guarding anything.");
+
+            foreach (var table in copilotTables)
+            {
+                StringAssert.Contains(
+                    cleanupScript,
+                    table,
+                    $"'{table}' is a Copilot usage-report table in the entity model but is never " +
+                    "mentioned in Clean Old Data Data.sql, so it grows forever (issue #286). Either " +
+                    "add a retention delete for it, or - if it genuinely must not be aged - name it in " +
+                    "a comment explaining why, as copilot_interaction_user_watermarks does.");
+            }
+        }
+
+        /// <summary>
+        /// The three usage-report tables that exist today are the fast-growing ones, so they must not
+        /// merely be aged - they must be aged in BATCHES. Kept separate from the inventory guard above
+        /// because it is a stronger claim about a known set rather than a claim about every future table.
+        /// </summary>
+        [TestMethod]
+        public void CleanupScript_BatchesTheCopilotUsageReportDeletes()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
+            var mustBeBatched = new[]
+            {
+                "copilot_usage_user_activity_log",
+                "copilot_user_count_log",
+                "copilot_usage_report_import_log",
+            };
+
+            foreach (var table in mustBeBatched)
+            {
+                StringAssert.Contains(
+                    cleanupScript,
+                    "delete top (@copilotBatch) from " + table,
+                    $"'{table}' has no batched retention delete in Clean Old Data Data.sql (issue #286). " +
+                    "The batch size must come from @copilotBatch rather than a literal, because the loop " +
+                    "exits by comparing @@ROWCOUNT against that same variable - a literal that drifts " +
+                    "from it would stop the purge after a single pass.");
             }
         }
 
