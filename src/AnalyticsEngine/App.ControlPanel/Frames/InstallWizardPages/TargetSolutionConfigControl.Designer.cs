@@ -91,7 +91,7 @@
             this.grpProductCfgInsights.Margin = new System.Windows.Forms.Padding(2);
             this.grpProductCfgInsights.Name = "grpProductCfgInsights";
             this.grpProductCfgInsights.Padding = new System.Windows.Forms.Padding(2);
-            this.grpProductCfgInsights.Size = new System.Drawing.Size(339, 420);
+            this.grpProductCfgInsights.Size = new System.Drawing.Size(339, 485);
             this.grpProductCfgInsights.TabIndex = 16;
             this.grpProductCfgInsights.TabStop = false;
             this.grpProductCfgInsights.Text = "Advanced Analytics and Insights Options:";
@@ -100,7 +100,7 @@
             // 
             this.label3.AutoSize = true;
             this.label3.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.label3.Location = new System.Drawing.Point(64, 326);
+            this.label3.Location = new System.Drawing.Point(64, 387);
             this.label3.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.label3.Name = "label3";
             this.label3.Size = new System.Drawing.Size(176, 20);
@@ -144,7 +144,7 @@
             // chkWeb
             // 
             this.chkWeb.AutoSize = true;
-            this.chkWeb.Location = new System.Drawing.Point(6, 379);
+            this.chkWeb.Location = new System.Drawing.Point(6, 440);
             this.chkWeb.Margin = new System.Windows.Forms.Padding(2);
             this.chkWeb.Name = "chkWeb";
             this.chkWeb.Size = new System.Drawing.Size(92, 17);
@@ -168,7 +168,7 @@
             // pictureBox3
             // 
             this.pictureBox3.Image = ((System.Drawing.Image)(resources.GetObject("pictureBox3.Image")));
-            this.pictureBox3.Location = new System.Drawing.Point(4, 318);
+            this.pictureBox3.Location = new System.Drawing.Point(4, 379);
             this.pictureBox3.Margin = new System.Windows.Forms.Padding(2);
             this.pictureBox3.Name = "pictureBox3";
             this.pictureBox3.Size = new System.Drawing.Size(56, 56);
@@ -178,7 +178,7 @@
             // chkAuditLog
             // 
             this.chkAuditLog.AutoSize = true;
-            this.chkAuditLog.Location = new System.Drawing.Point(6, 397);
+            this.chkAuditLog.Location = new System.Drawing.Point(6, 458);
             this.chkAuditLog.Margin = new System.Windows.Forms.Padding(2);
             this.chkAuditLog.Name = "chkAuditLog";
             this.chkAuditLog.Size = new System.Drawing.Size(135, 17);
