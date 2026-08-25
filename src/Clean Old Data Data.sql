@@ -139,12 +139,14 @@ if OBJECT_ID('dbo.copilot_interaction_keywords', 'U') is not null
 -- Guarded with OBJECT_ID because the tables only exist once the AddCopilotUsageReports migration has
 -- run, and this script is also used against older databases.
 --
--- DELETED IN BATCHES, unlike the older statements above. At the 200,000-user baseline this table
--- gains ~800,000 rows a day (users x 4 report periods), so the FIRST run after upgrading has to
--- remove everything older than a month that has accumulated since the import was enabled - which can
--- be tens of millions of rows. A single DELETE of that size takes one long exclusive lock, escalates
--- to a table lock, and writes the whole thing to the log as one transaction. Batching keeps each
--- statement short so the purge can run alongside an importer rather than blocking it.
+-- DELETED IN BATCHES, unlike the older statements above. The per-user detail report is requested for
+-- a single period (CopilotReportRequest.DefaultRefreshPeriod, "D28"), so this table gains about one
+-- row per licensed user per day - roughly 200,000 a day at the repo's 200,000-user baseline, or ~6
+-- million over the one-month retention window. The FIRST run after upgrading has to remove everything
+-- older than a month that has accumulated since the import was enabled, which can be far more than
+-- that. A single DELETE of that size takes one long exclusive lock, escalates to a table lock, and
+-- writes the whole thing to the log as one transaction. Batching keeps each statement short so the
+-- purge can run alongside an importer rather than blocking it.
 --
 -- NB: batching only bounds the transaction if the script is NOT wrapped in the "begin transaction
 -- archive" above. Inside that transaction the locks and log growth accumulate regardless; the batch

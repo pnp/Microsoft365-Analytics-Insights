@@ -7,8 +7,10 @@ using Common.Entities.Entities.WebTraffic;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -102,32 +104,83 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// Inventory guard, also from issue #286: fail when a Copilot usage-report table exists in the
-        /// model but has no cleanup rule in the script. Adding a table to a growing feature and
-        /// forgetting to age it is precisely how the Teams add-on tables became expensive enough to
-        /// need deprecating, and nothing else in the build notices.
+        /// entity model but is not accounted for in the cleanup script. Adding a table to a growing
+        /// feature and forgetting to age it is precisely how the Teams add-on tables became expensive
+        /// enough to need deprecating, and nothing else in the build notices.
+        /// <para>
+        /// The table list is derived from the EF model by reflection, NOT hard-coded, because a
+        /// hard-coded list cannot fail for the case the issue actually cares about - somebody adding a
+        /// FOURTH usage-report entity later. A hard-coded array would stay green precisely when it
+        /// matters.
+        /// </para>
+        /// <para>
+        /// "Accounted for" means named in the script. Deleting it is the usual answer; deliberately not
+        /// ageing it is acceptable too, provided the script says so by name - the existing
+        /// <c>copilot_interaction_user_watermarks</c> note is the precedent. What must not happen is a
+        /// new table appearing and nobody deciding either way.
+        /// </para>
         /// </summary>
         [TestMethod]
-        public void CleanupScript_CoversEveryCopilotUsageReportTable()
+        public void CleanupScript_AccountsForEveryCopilotUsageReportTable()
         {
             var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
 
-            // Tables written by the Copilot usage-report import (#260) and its diagnostics log.
-            var mustBeAged = new[]
+            // Every [Table]-mapped Copilot entity declared alongside the usage-report classes.
+            var usageReportNamespace = typeof(CopilotUsageUserActivityLog).Namespace;
+            var copilotTables = typeof(CopilotUsageUserActivityLog).Assembly
+                .GetTypes()
+                .Where(t => t.Namespace == usageReportNamespace)
+                .Select(t => t.GetCustomAttribute<TableAttribute>())
+                .Where(a => a != null && a.Name.StartsWith("copilot_", StringComparison.OrdinalIgnoreCase))
+                .Select(a => a.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // A reflection-driven test that discovers nothing passes vacuously, which would be worse
+            // than no test at all. Pin the floor at the three tables that exist today.
+            Assert.IsTrue(copilotTables.Count >= 3,
+                "Expected to discover at least the three Copilot usage-report tables by reflection, but " +
+                $"found {copilotTables.Count} ({string.Join(", ", copilotTables)}). The namespace or the " +
+                "[Table] attributes have moved, and this guard is no longer guarding anything.");
+
+            foreach (var table in copilotTables)
+            {
+                StringAssert.Contains(
+                    cleanupScript,
+                    table,
+                    $"'{table}' is a Copilot usage-report table in the entity model but is never " +
+                    "mentioned in Clean Old Data Data.sql, so it grows forever (issue #286). Either " +
+                    "add a retention delete for it, or - if it genuinely must not be aged - name it in " +
+                    "a comment explaining why, as copilot_interaction_user_watermarks does.");
+            }
+        }
+
+        /// <summary>
+        /// The three usage-report tables that exist today are the fast-growing ones, so they must not
+        /// merely be aged - they must be aged in BATCHES. Kept separate from the inventory guard above
+        /// because it is a stronger claim about a known set rather than a claim about every future table.
+        /// </summary>
+        [TestMethod]
+        public void CleanupScript_BatchesTheCopilotUsageReportDeletes()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
+            var mustBeBatched = new[]
             {
                 "copilot_usage_user_activity_log",
                 "copilot_user_count_log",
                 "copilot_usage_report_import_log",
             };
 
-            foreach (var table in mustBeAged)
+            foreach (var table in mustBeBatched)
             {
                 StringAssert.Contains(
                     cleanupScript,
                     "delete top (@copilotBatch) from " + table,
-                    $"'{table}' has no batched retention delete in Clean Old Data Data.sql. Every " +
-                    "Copilot usage-report table must be aged, and in batches - see issue #286. The " +
-                    "batch size must come from @copilotBatch rather than a literal, because the loop " +
-                    "exits by comparing @@ROWCOUNT against that same variable.");
+                    $"'{table}' has no batched retention delete in Clean Old Data Data.sql (issue #286). " +
+                    "The batch size must come from @copilotBatch rather than a literal, because the loop " +
+                    "exits by comparing @@ROWCOUNT against that same variable - a literal that drifts " +
+                    "from it would stop the purge after a single pass.");
             }
         }
 
