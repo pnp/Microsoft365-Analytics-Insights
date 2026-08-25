@@ -40,7 +40,6 @@ namespace Web.AnalyticsWeb.Controllers
         private const string CatCallFeedback = "call-feedback";
         private const string CatPageLikes = "page-likes";
         private const string CatPageComments = "page-comments";
-        private const string CatAppInstalls = "app-installs";
         private const string CatUsageOutlook = "usage-outlook";
         private const string CatUsageOneDrive = "usage-onedrive";
         private const string CatUsageSharePoint = "usage-sharepoint";
@@ -90,7 +89,6 @@ namespace Web.AnalyticsWeb.Controllers
         {
             public const string Calls = "Calls";
             public const string UsersMetadata = "GraphUsersMetadata";
-            public const string UserApps = "GraphUserApps";
             public const string UsageReports = "GraphUsageReports";
             public const string Teams = "GraphTeams";
             public const string AuditLog = "ActivityLog";
@@ -117,7 +115,6 @@ namespace Web.AnalyticsWeb.Controllers
             new WorkloadDef { Flag = Wf.Teams, Name = "Teams", Description = "Team memberships, owners, channels and reactions (Graph)." },
             new WorkloadDef { Flag = Wf.Calls, Name = "Teams calls", Description = "Teams call records: organiser and attended sessions." },
             new WorkloadDef { Flag = Wf.UsageReports, Name = "Usage reports", Description = "Daily per-user activity reports (Outlook, OneDrive, SharePoint, Teams, Viva Engage)." },
-            new WorkloadDef { Flag = Wf.UserApps, Name = "User Teams apps", Description = "Teams apps installed per user (Graph)." },
             new WorkloadDef { Flag = Wf.UsersMetadata, Name = "User metadata", Description = "User profile metadata: department, job title, licences, manager, location." },
         };
 
@@ -187,9 +184,6 @@ namespace Web.AnalyticsWeb.Controllers
             new CategoryMeta { Key = CatPageComments, Label = "Page comments", SupportsDetail = true,
                 Table = "page_comments", UserColumn = "user_id", WorkloadFlags = new[] { Wf.WebTraffic },
                 Description = "SharePoint page comments by the user." },
-            new CategoryMeta { Key = CatAppInstalls, Label = "Teams app installs", SupportsDetail = true,
-                Table = "teams_addons_user_installed_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UserApps },
-                Description = "Teams apps installed by the user." },
             new CategoryMeta { Key = CatUsageOutlook, Label = "Outlook usage (daily)", SupportsDetail = true,
                 Table = "outlook_user_activity_log", UserColumn = "user_id", WorkloadFlags = new[] { Wf.UsageReports },
                 Description = "Daily Outlook activity report rows." },
@@ -232,7 +226,6 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 case Wf.Calls: return s.Calls;
                 case Wf.UsersMetadata: return s.GraphUsersMetadata;
-                case Wf.UserApps: return s.GraphUserApps;
                 case Wf.UsageReports: return s.GraphUsageReports;
                 case Wf.Teams: return s.GraphTeams;
                 case Wf.AuditLog: return s.ActivityLog;
@@ -427,8 +420,6 @@ namespace Web.AnalyticsWeb.Controllers
                     return db.UrlLikes.Where(l => l.UserID == userId).CountAsync();
                 case CatPageComments:
                     return db.UrlComments.Where(c => c.UserID == userId).CountAsync();
-                case CatAppInstalls:
-                    return db.UserAppsLog.Where(a => a.UserID == userId).CountAsync();
                 case CatUsageOutlook:
                     return db.OutlookUsageActivityLogs.Where(x => x.UserID == userId).CountAsync();
                 case CatUsageOneDrive:
@@ -596,16 +587,6 @@ namespace Web.AnalyticsWeb.Controllers
                         Title = r.Url,
                         Detail = Truncate(r.Comment, MaxEventDataChars),
                     }).ToList();
-                }
-                case CatAppInstalls:
-                {
-                    var raw = await db.UserAppsLog
-                        .Where(a => a.UserID == userId)
-                        .OrderByDescending(a => a.Date)
-                        .Take(take)
-                        .Select(a => new { a.Date, AddOn = a.AddOn != null ? a.AddOn.Name : null })
-                        .ToListAsync();
-                    return raw.Select(r => new UserDataDetailRowModel { Timestamp = r.Date, Title = r.AddOn }).ToList();
                 }
                 case CatUsageOutlook:
                     return await UsageDetailAsync(db.OutlookUsageActivityLogs.Where(x => x.UserID == userId), take);

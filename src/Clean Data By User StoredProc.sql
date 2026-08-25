@@ -94,7 +94,10 @@ BEGIN
     DELETE FROM page_comments WHERE user_id = @UserId;
 
     -- Teams / user activity logs
-    DELETE FROM teams_addons_user_installed_log WHERE user_id = @UserId;
+    -- Deprecated Teams add-on tracking: the table is dropped by the DeprecateTeamsAddons migration
+    -- once empty, so only delete from it while it still exists.
+    IF OBJECT_ID('dbo.teams_addons_user_installed_log', 'U') IS NOT NULL
+        EXEC sp_executesql N'DELETE FROM teams_addons_user_installed_log WHERE user_id = @UserId;', N'@UserId INT', @UserId = @UserId;
     DELETE FROM teams_user_channel_reactions    WHERE user_id = @UserId;
     DELETE FROM team_membership_log             WHERE user_id = @UserId;
     DELETE FROM team_owners                     WHERE owner_id = @UserId;
@@ -153,6 +156,49 @@ BEGIN
 
     DELETE FROM copilot_chats
     WHERE event_id IN (SELECT Id FROM #UserEvents);
+
+    -------------------------------------------------
+    -- Copilot AI interaction history (optional import)
+    --
+    -- Deleted explicitly rather than left to cascade. copilot_interactions.user_id is intentionally a
+    -- non-cascading FK (users already reach interactions via copilot_interaction_sessions, and two
+    -- cascade paths to the same table is something SQL Server rejects outright), so relying on cascade
+    -- ordering here would be fragile. Leaf -> parent order: key phrases, interactions, then sessions.
+    -- The shared keywords/languages lookups are left alone - they are tenant-wide vocabulary, not user
+    -- data, and are referenced by Teams channel analysis too.
+    -------------------------------------------------
+    IF OBJECT_ID('dbo.copilot_interaction_keywords', 'U') IS NOT NULL
+        DELETE k
+        FROM copilot_interaction_keywords k
+        INNER JOIN copilot_interactions i ON i.id = k.interaction_id
+        WHERE i.user_id = @UserId;
+
+    IF OBJECT_ID('dbo.copilot_interactions', 'U') IS NOT NULL
+        DELETE FROM copilot_interactions WHERE user_id = @UserId;
+
+    IF OBJECT_ID('dbo.copilot_interaction_sessions', 'U') IS NOT NULL
+        DELETE FROM copilot_interaction_sessions WHERE user_id = @UserId;
+
+    IF OBJECT_ID('dbo.copilot_interaction_user_watermarks', 'U') IS NOT NULL
+        DELETE FROM copilot_interaction_user_watermarks WHERE user_id = @UserId;
+
+    -- Copilot usage reports (optional import) - issue #286.
+    --
+    -- Microsoft's own per-user Copilot figures. Deleted explicitly for the same reason as the
+    -- interaction history above: this is per-user usage data, so a request to purge a user has to take
+    -- it with them. copilot_user_count_log is deliberately NOT touched - it is a tenant-level count per
+    -- app and date with no user dimension, so there is nothing user-identifying in it to remove.
+    IF OBJECT_ID('dbo.copilot_usage_user_activity_log', 'U') IS NOT NULL
+        DELETE FROM copilot_usage_user_activity_log WHERE user_id = @UserId;
+
+    -- An extracted key phrase can amount to a whole short prompt, so purging a user must not leave their
+    -- phrases behind. Only phrases now referenced by nothing are removed - the keywords table is shared
+    -- with Teams channel analysis, so both referencing tables are checked.
+    IF OBJECT_ID('dbo.copilot_interaction_keywords', 'U') IS NOT NULL
+        DELETE k
+        FROM keywords k
+        WHERE NOT EXISTS (SELECT 1 FROM copilot_interaction_keywords ck WHERE ck.keyword_id = k.id)
+          AND NOT EXISTS (SELECT 1 FROM teams_channel_stats_log_keywords tk WHERE tk.keyword_id = k.id);
 
     -------------------------------------------------
     -- Other event metadata (add more if needed)

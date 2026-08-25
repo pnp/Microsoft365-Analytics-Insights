@@ -1,0 +1,55 @@
+{
+  "comment": [
+    "Differences between the committed Bicep template and the deployed resource group that are",
+    "expected, and are therefore suppressed by drift-check.yml so real drift stays visible.",
+    "",
+    "Every rule needs a reason. A rule with no propertyPath suppresses the whole resource, which is",
+    "a blunt instrument - prefer a propertyPath. propertyPath is a JavaScript regular expression",
+    "matched against the flattened delta path; propertyChangeType (Create/Delete/Modify/Array)",
+    "narrows a rule to one kind of difference.",
+    "",
+    "Keep this list short. Every entry is a place the check has been told not to look, and the two",
+    "defects that motivated this feature (siteConfig.alwaysOn, and an EasyAuth allowedApplications",
+    "array that had emptied itself) were both single properties on Microsoft.Web resources."
+  ],
+  "rules": [
+    {
+      "reason": "what-if cannot read a Key Vault secret's value, so it always reports the value as changing. The template only sets it at create time; rotation is done out-of-band.",
+      "resourceType": "Microsoft.KeyVault/vaults/secrets",
+      "propertyPath": "^properties\\.value$"
+    },
+    {
+      "reason": "The drift workflow passes a placeholder for the @secure() telemetrySecret parameter (it has no way to read the real one), so any diff on the secret resource is an artefact of the check itself.",
+      "resourceType": "Microsoft.KeyVault/vaults/secrets",
+      "propertyPath": "^properties\\.(attributes|contentType)"
+    },
+    {
+      "reason": "App Service injects its own WEBSITE_*/WEBSITES_* settings at deploy time that the template does not declare, so they show up as deletions. Only Delete is suppressed: if a setting the template DOES declare drifts, that is a Modify and still reported.",
+      "resourceType": "Microsoft.Web/sites/config",
+      "propertyPath": "^properties\\.(WEBSITE_|WEBSITES_)",
+      "propertyChangeType": "Delete"
+    },
+    {
+      "reason": "Application Insights codeless-attach and profiler settings are added by the platform / portal, never by this template.",
+      "resourceType": "Microsoft.Web/sites/config",
+      "propertyPath": "^properties\\.(APPINSIGHTS_|ApplicationInsightsAgent_|APPLICATIONINSIGHTS_AGENT_|DiagnosticServices_|InstrumentationEngine_|SnapshotDebugger_|XDT_)",
+      "propertyChangeType": "Delete"
+    },
+    {
+      "reason": "Deployment tooling stamps the site with its own deployment metadata; it is not configuration this template owns.",
+      "resourceType": "Microsoft.Web/sites/config",
+      "propertyPath": "^properties\\.(SCM_|ENABLE_ORYX_BUILD$|DOCKER_)",
+      "propertyChangeType": "Delete"
+    },
+    {
+      "reason": "ARM returns the Cosmos connection/endpoint sub-properties as read-only values that what-if reports as changing on every run even when nothing has moved.",
+      "resourceType": "Microsoft.DocumentDB/databaseAccounts",
+      "propertyPath": "^properties\\.(provisioningState|documentEndpoint|readLocations|writeLocations|failoverPolicies)"
+    },
+    {
+      "reason": "The App Service system-assigned identity's principalId and tenantId are assigned by the platform, so the template cannot predict them.",
+      "resourceType": "Microsoft.Web/sites",
+      "propertyPath": "^identity\\.(principalId|tenantId)$"
+    }
+  ]
+}

@@ -45,6 +45,8 @@
     <Compile Include="PerfRegressionTests.cs" />
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
+    <Compile Include="GraphPagingFailureTests.cs" />
+    <Compile Include="SentEmailMailboxSkipListTests.cs" />
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
     <Compile Include="InstallTests\AppInsightsArmTemplateTests.cs" />
     <Compile Include="UserImportCaseSensitivityTests.cs" />
@@ -120,6 +122,7 @@
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
+    <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
     <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
@@ -133,6 +136,7 @@
     <Compile Include="AppInsightsImportTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />
+    <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />
@@ -143,6 +147,9 @@
     <Compile Include="PowerPlatformAuditEventManagerTests.cs" />
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
+    <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
+    <Compile Include="CopilotAdoptionTests.cs" />
+    <Compile Include="CopilotAdoptionWorkbookTests.cs" />
     <Compile Include="ReportsAPIControllerTests.cs" />
     <Compile Include="SimplePropsDicTests.cs" />
     <Compile Include="PageUpdateEventListParseTests.cs" />
@@ -162,7 +169,10 @@
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
     <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
+    <Compile Include="CopilotUsageReportImportTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
+    <Compile Include="MigrationSnapshotTests.cs" />
+    <Compile Include="UpgradeFromStableTests.cs" />
     <Compile Include="ScratchDatabase.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressRunner.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressTests.cs" />
@@ -186,7 +196,6 @@
     <Compile Include="FakeLoaderClasses\FakeActivityReportPersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeContentMetaDataLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivitySubscriptionManager.cs" />
-    <Compile Include="FakeLoaderClasses\FakeUserAppLoader.cs" />
     <Compile Include="GraphUsageReportImportTests.cs" />
     <Compile Include="SingleDateStoreTests.cs" />
     <Compile Include="AutoThrottleHttpClientTests.cs" />

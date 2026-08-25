@@ -29,6 +29,18 @@ namespace Common.Entities.Config
         }
 
         /// <summary>
+        /// True when the filter would match every group, i.e. at least one pattern is nothing but
+        /// wildcards ("*", "**"). Such a filter is not a narrowing at all.
+        /// </summary>
+        /// <remarks>
+        /// Worth asking separately because "match everything" and "match these groups" have very
+        /// different costs for a caller that resolves patterns against a directory. Expanding '*' means
+        /// enumerating every group and every group's membership only to conclude "everyone", which a
+        /// caller can nearly always answer far more cheaply by not filtering at all (issue #297).
+        /// </remarks>
+        public bool MatchesEverything => Patterns.Any(p => p.Trim('*').Length == 0);
+
+        /// <summary>
         /// Checks if the given group name matches any filter pattern (supports * wildcard).
         /// </summary>
         public bool Matches(string groupName)

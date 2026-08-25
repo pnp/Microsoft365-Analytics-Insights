@@ -26,13 +26,14 @@ namespace App.ControlPanel.Controls
                         ActivityLog = chkAuditLog.Checked,
                         GraphTeams = chkTeams.Checked,
                         GraphUsageReports = chkUsageReports.Checked,
-                        GraphUserApps = chkUserApps.Checked,
                         GraphUsersMetadata = chkUserMetadata.Checked,
                         Calls = chkCalls.Checked,
                         WebTraffic = chkWeb.Checked,
                         Copilot = chkCopilot.Checked,
                         SentEmails = chkSentEmails.Checked,
-                        ImportPowerPlatform = chkPowerPlatform.Checked
+                        ImportPowerPlatform = chkPowerPlatform.Checked,
+                        GraphCopilotUsageReports = chkCopilotUsageReports.Checked,
+                        CopilotInteractionHistory = chkCopilotInteractionHistory.Checked
                     }
                 };
             }
@@ -49,13 +50,14 @@ namespace App.ControlPanel.Controls
             chkAuditLog.Checked = value.ImportTaskSettings.ActivityLog;
             chkTeams.Checked = value.ImportTaskSettings.GraphTeams;
             chkUsageReports.Checked = value.ImportTaskSettings.GraphUsageReports;
-            chkUserApps.Checked = value.ImportTaskSettings.GraphUserApps;
             chkUserMetadata.Checked = value.ImportTaskSettings.GraphUsersMetadata;
             chkCalls.Checked = value.ImportTaskSettings.Calls;
             chkWeb.Checked = value.ImportTaskSettings.WebTraffic;
             chkCopilot.Checked = value.ImportTaskSettings.Copilot;
             chkSentEmails.Checked = value.ImportTaskSettings.SentEmails;
             chkPowerPlatform.Checked = value.ImportTaskSettings.ImportPowerPlatform;
+            chkCopilotUsageReports.Checked = value.ImportTaskSettings.GraphCopilotUsageReports;
+            chkCopilotInteractionHistory.Checked = value.ImportTaskSettings.CopilotInteractionHistory;
         }
 
 
@@ -69,11 +71,6 @@ namespace App.ControlPanel.Controls
             SolutionSelectionUIChange();
         }
         private void chkCalls_CheckedChanged(object sender, System.EventArgs e)
-        {
-            SolutionSelectionUIChange();
-        }
-
-        private void chkUserApps_CheckedChanged(object sender, System.EventArgs e)
         {
             SolutionSelectionUIChange();
         }

@@ -141,20 +141,52 @@
   <PropertyGroup>
     <!-- File with mtime of last successful npm install -->
     <NpmInstallStampFile>Scripts/admin-app/node_modules/.install-stamp</NpmInstallStampFile>
+    <!-- Vite always emits index.html, so it is the marker for "the SPA bundle is up to date". -->
+    <SpaBuildOutputFile>Scripts/admin-app/build/index.html</SpaBuildOutputFile>
   </PropertyGroup>
-  <Target Name="NpmInstall" BeforeTargets="BeforeBuild" Inputs="Scripts\admin-app\package.json" Outputs="$(NpmInstallStampFile)">
+  <ItemGroup>
+    <!--
+      Every input that can change the SPA bundle.
+
+      package.json on its own is NOT enough, and used to be the only input: it changes only when a
+      dependency changes, so on any machine that had built once, editing a page or component left the
+      npm build skipped and the previously-built bundle served unchanged. A newly added admin page
+      simply never appeared, with nothing in the build output to say why.
+    -->
+    <SpaSourceFile Include="$(SpaRoot)src\**\*" />
+    <SpaSourceFile Include="$(SpaRoot)public\**\*" />
+    <SpaSourceFile Include="$(SpaRoot)index.html" />
+    <SpaSourceFile Include="$(SpaRoot)vite.config.ts" />
+    <SpaSourceFile Include="$(SpaRoot)tsconfig.json" />
+    <SpaSourceFile Include="$(SpaRoot)package.json" />
+  </ItemGroup>
+  <!-- Dependencies only. Re-runs when the manifest or the lock file changes. -->
+  <Target Name="NpmInstall" Inputs="$(SpaRoot)package.json;$(SpaRoot)package-lock.json" Outputs="$(NpmInstallStampFile)">
     <!-- Ensure Node.js is installed -->
     <Exec Command="node --version" ContinueOnError="true">
       <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
     </Exec>
     <Error Condition="'$(ErrorCode)' != '0'" Text="Node.js is required to build and run this project. To continue, please install Node.js from https://nodejs.org/, and then restart your command prompt or IDE." />
-    <Message Importance="high" Text="Restoring dependencies using 'npm'. This may take several minutes..." />
-    <Message Importance="high" Text="Thus: $(SpaRoot)" />
+    <Message Importance="high" Text="Restoring admin-app dependencies using 'npm'. This may take several minutes..." />
     <Exec Command="npm install" WorkingDirectory="$(SpaRoot)" />
-    <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
     <Touch Files="$(NpmInstallStampFile)" AlwaysCreate="true" />
+  </Target>
+  <!-- The bundle itself. Re-runs whenever any SPA source file is newer than the emitted index.html. -->
+  <Target Name="NpmBuildSpa" DependsOnTargets="NpmInstall" Inputs="@(SpaSourceFile)" Outputs="$(SpaBuildOutputFile)">
+    <Message Importance="high" Text="Building the admin SPA with 'npm run build'..." />
+    <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
+  </Target>
+  <!--
+    Registering the built assets as Content has to happen on EVERY build, not only when the bundle was
+    rebuilt. It used to live inside the incremental target, so a skipped npm build also meant the
+    bundle was never copied to the build output or into the publish package.
+
+    It cannot be a plain top-level ItemGroup either: on a first build those files do not exist yet at
+    project-evaluation time, which is why it was inside a target to begin with.
+  -->
+  <Target Name="IncludeSpaBuildOutput" BeforeTargets="BeforeBuild" DependsOnTargets="NpmBuildSpa">
     <ItemGroup>
-      <Content Include="Scripts\admin-app\build\**">
+      <Content Include="$(SpaRoot)build\**" Exclude="@(Content)">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       </Content>
     </ItemGroup>
@@ -181,6 +213,7 @@
     <Compile Include="App_Start\WebApiConfig.cs" />
     <Compile Include="Controllers\AccountController.cs" />
     <Compile Include="Controllers\BaseAPIController.cs" />
+    <Compile Include="Controllers\CopilotAdoptionAPIController.cs" />
     <Compile Include="Controllers\ImportConfigController.cs" />
     <Compile Include="Controllers\InstallLogAPIController.cs" />
     <Compile Include="Controllers\ProfilingStatusAPIController.cs" />

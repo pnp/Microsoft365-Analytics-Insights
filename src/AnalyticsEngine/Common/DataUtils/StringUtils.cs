@@ -14,6 +14,41 @@ namespace DataUtils
 {
     public static class StringUtils
     {
+        private static readonly Regex HtmlTagRegex =
+            new Regex("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// Strips HTML tags and decodes entities, leaving plain text. Tags become a single space so that
+        /// <c>&lt;p&gt;one&lt;/p&gt;&lt;p&gt;two&lt;/p&gt;</c> yields two words rather than one.
+        /// </summary>
+        /// <remarks>
+        /// Used wherever a message body needs measuring or sending to Azure AI Language: sent-email
+        /// sentiment scoring, and the Copilot interaction-history import's word/character counts. Not a
+        /// sanitiser - it is only for producing readable/countable text, never for rendering.
+        /// </remarks>
+        public static string StripHtmlToPlainText(string html)
+        {
+            if (string.IsNullOrEmpty(html))
+                return html;
+
+            var text = HtmlTagRegex.Replace(html, " ");
+            text = System.Net.WebUtility.HtmlDecode(text);
+            return text.Trim();
+        }
+
+        /// <summary>
+        /// Counts whitespace-delimited words in a string. Returns 0 for null/empty/whitespace-only input.
+        /// </summary>
+        public static int CountWords(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 0;
+
+            return text.Split(WordSeparators, StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+
+        private static readonly char[] WordSeparators = { ' ', '\t', '\r', '\n', '\f', '\v', '\u00a0' };
+
         /// <summary>
         /// Hack for https://github.com/dotnet/runtime/issues/21626
         /// </summary>

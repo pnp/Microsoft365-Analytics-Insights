@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
@@ -160,6 +160,26 @@ namespace Common.Entities.Config
                 ? graphTeamsImportIntervalHours
                 : preset.NonFreshGraphIntervalHours;
 
+            // How long a user found to have no Exchange mailbox is skipped before being re-checked.
+            // Mailbox-less users (unlicensed, on-premises, inactive, or guest accounts) return HTTP 404
+            // from Graph on every sent-email call, forever, so re-checking them each 10-minute cycle is
+            // pure waste and noise. The whole directory is re-swept on this interval so newly-licensed
+            // users get picked up. 0 disables the skip list (re-checks everyone every cycle).
+            this.SentEmailNoMailboxRetryHours = int.TryParse(ConfigurationManager.AppSettings.Get("SentEmailNoMailboxRetryHours"), out var sentEmailNoMailboxRetryHours)
+                && sentEmailNoMailboxRetryHours >= 0
+                ? sentEmailNoMailboxRetryHours
+                : 24;
+            // Minimum hours between Copilot usage-report imports. Deliberately NOT preset-derived: the High
+            // preset sets NonFreshGraphIntervalHours = 0 (every cycle) to preserve legacy behaviour for the
+            // imports that already worked that way, and a 10-minute cycle would re-download and re-process
+            // every licensed user's Copilot row against a source that only refreshes about every 48 hours.
+            // This feature is new, so it has no legacy cadence to preserve and defaults to daily on every
+            // preset. 0 disables the gate; the ForceGraphMetadataImport flag still overrides it for one run.
+            this.GraphCopilotUsageReportsIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphCopilotUsageReportsIntervalHours"), out var graphCopilotUsageReportsIntervalHours)
+                && graphCopilotUsageReportsIntervalHours >= 0
+                ? graphCopilotUsageReportsIntervalHours
+                : DefaultCopilotUsageReportsIntervalHours;
+
             // One-off force flag: bypass the cadence gate for the non-fresh Graph imports (user metadata,
             // user apps, Teams) for this run. Mirrors ForceUsageReportsImport. Default false.
             var forceGraphMetadataImport = ConfigurationManager.AppSettings.Get("ForceGraphMetadataImport");
@@ -177,6 +197,29 @@ namespace Common.Entities.Config
                 && importStartStaggerMinutes >= 0
                 ? importStartStaggerMinutes
                 : 0;
+
+            // ---- Copilot AI interaction history (optional, one Graph call per user) -------------------
+            // This import is uniquely expensive, so every knob below exists to bound how much of a cycle
+            // it can consume. See CopilotInteractionHistoryImporter for how they combine.
+            this.CopilotInteractionHistoryIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryIntervalHours"), out var interactionIntervalHours)
+                && interactionIntervalHours >= 0
+                ? interactionIntervalHours
+                : DefaultCopilotInteractionHistoryIntervalHours;
+
+            this.CopilotInteractionHistoryMaxUsersPerCycle = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryMaxUsersPerCycle"), out var interactionMaxUsers)
+                && interactionMaxUsers > 0
+                ? interactionMaxUsers
+                : DefaultCopilotInteractionHistoryMaxUsersPerCycle;
+
+            this.CopilotInteractionHistoryMaxDaysBackOnFirstRun = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryMaxDaysBackOnFirstRun"), out var interactionMaxDaysBack)
+                && interactionMaxDaysBack > 0
+                ? interactionMaxDaysBack
+                : DefaultCopilotInteractionHistoryMaxDaysBackOnFirstRun;
+
+            this.CopilotInteractionHistoryEmptyUserBackOffHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryEmptyUserBackOffHours"), out var interactionBackOffHours)
+                && interactionBackOffHours >= 0
+                ? interactionBackOffHours
+                : DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
         }
 
         /// <summary>
@@ -404,6 +447,20 @@ namespace Common.Entities.Config
         public int GraphTeamsImportIntervalHours { get; set; } = 0;
 
         /// <summary>
+        /// Default hours between Copilot usage-report imports. The source data only refreshes roughly every
+        /// 48 hours, so anything more frequent re-processes every licensed user for nothing.
+        /// </summary>
+        public const int DefaultCopilotUsageReportsIntervalHours = 24;
+
+        /// <summary>
+        /// Minimum hours between imports of the Graph Microsoft 365 Copilot usage reports. Unlike the other
+        /// Graph cadence knobs this is NOT preset-derived - see the comment where it is read - and defaults to
+        /// <see cref="DefaultCopilotUsageReportsIntervalHours"/> on every preset. Override with the
+        /// <c>GraphCopilotUsageReportsIntervalHours</c> AppSetting; 0 disables the gate.
+        /// </summary>
+        public int GraphCopilotUsageReportsIntervalHours { get; set; } = DefaultCopilotUsageReportsIntervalHours;
+
+        /// <summary>
         /// When true, bypasses the cadence gate for the non-fresh Graph imports (user metadata, user
         /// Teams apps, Teams crawl) for one run - the equivalent of <see cref="ForceUsageReportsImport"/>
         /// for those imports. Default false.
@@ -411,11 +468,69 @@ namespace Common.Entities.Config
         public bool ForceGraphMetadataImport { get; set; } = false;
 
         /// <summary>
+        /// Hours a user found to have no Exchange mailbox is skipped by the sent-emails import before
+        /// being re-checked. Such users (unlicensed, on-premises, inactive, or guests) return HTTP 404
+        /// from Graph on every call, permanently. Default 24; 0 disables the skip list entirely.
+        /// Overridable with the <c>SentEmailNoMailboxRetryHours</c> AppSetting.
+        /// </summary>
+        public int SentEmailNoMailboxRetryHours { get; set; } = 24;
+
+        /// <summary>
         /// One-off start offset (minutes) applied before the first import cycle, used to stagger the
         /// two WebJobs so they don't peak on the shared App Service plan simultaneously. Default = half
         /// the cycle pause. 0 disables.
         /// </summary>
         public int ImportStartStaggerMinutes { get; set; } = 0;
+
+        #region Copilot AI interaction history
+
+        /// <summary>Default cadence for the interaction-history import: once a day.</summary>
+        public const int DefaultCopilotInteractionHistoryIntervalHours = 24;
+
+        /// <summary>
+        /// Default per-cycle user cap. Deliberately small: the endpoint is one HTTP call per user and this
+        /// feature is meant for a pilot group, not a whole tenant.
+        /// </summary>
+        public const int DefaultCopilotInteractionHistoryMaxUsersPerCycle = 500;
+
+        /// <summary>Default backfill window the first time a user is seen.</summary>
+        public const int DefaultCopilotInteractionHistoryMaxDaysBackOnFirstRun = 30;
+
+        /// <summary>Default back-off before re-calling a user who keeps returning nothing.</summary>
+        public const int DefaultCopilotInteractionHistoryEmptyUserBackOffHours = 72;
+
+        /// <summary>
+        /// Minimum hours between Copilot interaction-history imports. Defaults to
+        /// <see cref="DefaultCopilotInteractionHistoryIntervalHours"/>; override with the
+        /// <c>CopilotInteractionHistoryIntervalHours</c> AppSetting. 0 disables the gate (runs every cycle),
+        /// which is only sensible for a very small pilot group.
+        /// </summary>
+        public int CopilotInteractionHistoryIntervalHours { get; set; } = DefaultCopilotInteractionHistoryIntervalHours;
+
+        /// <summary>
+        /// Hard ceiling on how many users the interaction-history import will call Graph for in a single
+        /// cycle. Users are processed oldest-watermark-first, so a scope larger than the cap still gets
+        /// covered - just over several cycles, round-robin. Override with
+        /// <c>CopilotInteractionHistoryMaxUsersPerCycle</c>.
+        /// </summary>
+        public int CopilotInteractionHistoryMaxUsersPerCycle { get; set; } = DefaultCopilotInteractionHistoryMaxUsersPerCycle;
+
+        /// <summary>
+        /// How far back to reach the first time a user is imported (they have no watermark yet). Bounds the
+        /// cost of onboarding a pilot group. Override with
+        /// <c>CopilotInteractionHistoryMaxDaysBackOnFirstRun</c>.
+        /// </summary>
+        public int CopilotInteractionHistoryMaxDaysBackOnFirstRun { get; set; } = DefaultCopilotInteractionHistoryMaxDaysBackOnFirstRun;
+
+        /// <summary>
+        /// How long a user who returned no interactions (usually because they have no
+        /// <c>M365_COPILOT_BUSINESS_CHAT</c> service plan) is skipped before being retried. Stops unlicensed
+        /// users consuming the per-cycle call budget forever. 0 disables the back-off. Override with
+        /// <c>CopilotInteractionHistoryEmptyUserBackOffHours</c>.
+        /// </summary>
+        public int CopilotInteractionHistoryEmptyUserBackOffHours { get; set; } = DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
+
+        #endregion
     }
 
     /// <summary>

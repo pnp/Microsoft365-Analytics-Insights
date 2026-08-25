@@ -27,7 +27,66 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var client = new HttpClient();
             client.DefaultRequestHeaders.Add("User-Agent", "AnalyticsEngine-Installer");
             client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+
+            // Anonymous GitHub API requests are limited to 60 per hour PER IP. That is shared by everyone
+            // behind the same outbound address - a CI runner pool, or an entire office behind one NAT - so
+            // the budget is routinely already spent by the time we ask, and the API answers 403.
+            // A token raises the limit to 5,000/hour for whoever supplies one. The installer normally has
+            // none (and must keep working without one), but CI does.
+            var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GH_TOKEN");
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Trim());
+            }
+
             return client;
+        }
+
+        /// <summary>
+        /// Turns a failed GitHub API response into something an admin can act on.
+        /// </summary>
+        /// <remarks>
+        /// A rate-limited response is a bare <c>403 Forbidden</c>, which reads like a permissions problem and
+        /// sends people looking for a credential that was never needed. GitHub distinguishes the two in the
+        /// headers: on a rate limit <c>x-ratelimit-remaining</c> is 0 and <c>x-ratelimit-reset</c> carries the
+        /// unix time it frees up. Say which one it is, and when it will work again.
+        /// </remarks>
+        private static string DescribeFailedRelease(HttpResponseMessage response, string apiUrl)
+        {
+            var remaining = FirstHeader(response, "x-ratelimit-remaining");
+            var isRateLimited = (int)response.StatusCode == 429
+                || (response.StatusCode == System.Net.HttpStatusCode.Forbidden && remaining == "0");
+
+            if (!isRateLimited)
+            {
+                return $"Failed to fetch latest release from GitHub ({response.StatusCode}). URL: {apiUrl}";
+            }
+
+            var resetText = "shortly";
+            if (long.TryParse(FirstHeader(response, "x-ratelimit-reset"), out var resetUnix))
+            {
+                resetText = new DateTimeOffset(DateTimeOffset.FromUnixTimeSeconds(resetUnix).UtcDateTime)
+                    .ToString("u") + " (UTC)";
+            }
+
+            return "GitHub rejected the request because its API rate limit has been reached, not because of a "
+                + $"permissions problem. The limit resets at {resetText}. "
+                + "Anonymous requests are limited to 60 per hour per public IP address, which is shared by "
+                + "everyone on your network, so a busy office or VPN can exhaust it. "
+                + "Either wait for the reset and retry, set a GITHUB_TOKEN environment variable to a token "
+                + "with public read access, or download the release ZIPs manually and install from local "
+                + $"files instead. URL: {apiUrl}";
+        }
+
+        private static string FirstHeader(HttpResponseMessage response, string name)
+        {
+            if (response.Headers.TryGetValues(name, out var values))
+            {
+                return values.FirstOrDefault();
+            }
+            return null;
         }
 
         public override async Task<LocalStorageInstallSourceInfo> ExecuteTaskReturnResult(object contextArg)
@@ -41,7 +100,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var response = await _httpClient.GetAsync(apiUrl);
             if (!response.IsSuccessStatusCode)
             {
-                throw new UnexpectedInstallException($"Failed to fetch latest release from GitHub ({response.StatusCode}). URL: {apiUrl}");
+                throw new UnexpectedInstallException(DescribeFailedRelease(response, apiUrl));
             }
 
             var json = await response.Content.ReadAsStringAsync();

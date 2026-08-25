@@ -5,6 +5,9 @@ using System;
 using System.Data;
 using System.Data.Entity.Migrations;
 using System.Data.SqlClient;
+// Aliased rather than imported: an unqualified `using System.Configuration` makes `Configuration`
+// ambiguous with the EF migrations Configuration this file already uses.
+using ConfigurationManager = System.Configuration.ConfigurationManager;
 
 namespace Tests.UnitTests
 {
@@ -39,9 +42,14 @@ namespace Tests.UnitTests
         // The most recent migration - updated whenever a newer one is added, since these pipeline tests
         // assert the DB reaches the true latest migration after MigrateToLatest(). UrlFullUrlNvarchar (which
         // performs the urls.full_url nvarchar(850) conversion asserted below) still runs as part of the path;
-        // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup and
-        // IndexUsageReportSnapshots are later, unrelated schema-only index migrations.
-        private const string LatestId = "202608131055001_IndexReportDateQueries";
+        // IndexAuditEventsTimeStamp, IndexSitesSiteId, CoverCopilotAccessedResourceDedup,
+        // IndexUsageReportSnapshots and IndexReportDateQueries are later, unrelated schema-only index
+        // migrations, AddCopilotUsageReports adds the Copilot usage-report tables,
+        // DeprecateTeamsAddons drops the Teams add-on tables when they are empty,
+        // AddCopilotInteractionHistory adds the Copilot interaction-history tables, and
+        // WidenCopilotAccessedResourceDedupIndex / IndexCopilotInteractionKeywordsByKeyword /
+        // IndexCopilotInteractionsDedupWindow are three further schema-only index migrations.
+        private const string LatestId = "202608250900001_IndexCopilotAccessedResourceFkColumns";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
@@ -54,9 +62,24 @@ namespace Tests.UnitTests
         {
             if (_connStr == null)
             {
-                // Construct-only (no query) so the auto-migrate initializer is not triggered.
-                using (var db = new AnalyticsEntitiesContext())
-                    _connStr = db.Database.Connection.ConnectionString;
+                // Read the connection string from configuration rather than from a DbContext instance.
+                // These tests deliberately park the database on an OLD migration, and in a Release build the
+                // context's initializer is CreateDatabaseIfNotExists, which validates the current model
+                // against the last __MigrationHistory row and throws "The model backing the
+                // 'AnalyticsEntitiesContext' context has changed since the database was created" whenever the
+                // two differ. In DEBUG the constructor is worse still: it touches ObjectContext (to set
+                // CommandTimeout), which is enough to run MigrateDatabaseToLatestVersion and silently jump the
+                // database forward in between MigrateTo(...) and the assertion. The connection string is the
+                // only thing wanted here, so take it from config and never touch EF.
+                var configured = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
+                if (configured != null)
+                {
+                    _connStr = configured.ConnectionString;
+                }
+                else
+                {
+                    throw new InvalidOperationException("Connection string 'SPOInsightsEntities' is not configured for the test run.");
+                }
             }
             return _connStr;
         }

@@ -1,13 +1,23 @@
 using Common.Entities;
 using Common.Entities.Entities;
-using Common.Entities.Entities.AuditLog;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using Tests.FakeDataGen.Generation;
 
 namespace Tests.FakeDataGen.Copilot
 {
     /// <summary>
-    /// Generates fake Copilot activity data for testing purposes
+    /// Generates fake Copilot activity data for testing purposes.
+    ///
+    /// Two modes, because two very different jobs are being asked of the same data:
+    ///
+    /// * <b>Scatter</b> (the default) spreads <c>count</c> interactions randomly over the population.
+    ///   That is what importer, volume and performance testing needs.
+    /// * <b>Adoption scenario</b> instead shapes the population into deliberate personas covering every
+    ///   stage of the adoption funnel. Random scatter gives every licensed user near-identical usage,
+    ///   which collapses the Copilot Adoption report into a single band and makes it look broken. See
+    ///   <see cref="CopilotAdoptionScenarioGenerator"/>.
     /// </summary>
     public class CopilotActivityGenerator
     {
@@ -15,368 +25,200 @@ namespace Tests.FakeDataGen.Copilot
         private readonly Random _random = new Random();
         private readonly CopilotLicenseManager _licenseManager;
         private readonly CopilotUserManager _userManager;
-        private readonly CopilotResourceGenerator _resourceGenerator;
+        private readonly CopilotChatFactory _chatFactory;
+        private readonly CopilotAdoptionScenarioGenerator _scenarioGenerator;
 
         public CopilotActivityGenerator(string connectionString)
         {
             _connectionString = connectionString;
             _licenseManager = new CopilotLicenseManager();
             _userManager = new CopilotUserManager(_random, _licenseManager);
-            _resourceGenerator = new CopilotResourceGenerator(_random);
+            _chatFactory = new CopilotChatFactory(
+                _random,
+                new CopilotResourceGenerator(_random),
+                new CopilotEventDetailGenerator(_random));
+            _scenarioGenerator = new CopilotAdoptionScenarioGenerator(_random, _chatFactory);
         }
 
         /// <summary>
         /// Generates fake copilot activity events
         /// </summary>
-        /// <param name="count">Number of events to generate</param>
+        /// <param name="count">Number of events to generate. Ignored when <paramref name="shapeAdoptionScenario"/> is set, because the persona plan decides the volume.</param>
         /// <param name="customAgentPercentage">Percentage of events that should use custom agents (0-100)</param>
         /// <param name="agentPercentage">Percentage of events that should have agents (0-100)</param>
         /// <param name="copilotLicensePercentage">Percentage of users that should have Copilot licenses (0-100)</param>
         /// <param name="userCount">Number of test users to create when the database has none (defaults to a medium-sized company)</param>
-        public void GenerateCopilotActivity(int count, int customAgentPercentage = 10, int agentPercentage = 30, int copilotLicensePercentage = 30, int userCount = 250)
+        /// <param name="daysBack">Number of days across which generated activity is spread</param>
+        /// <param name="windowEndUtc">Optional shared UTC endpoint for the generated date window</param>
+        /// <param name="shapeAdoptionScenario">Shape the population into adoption personas instead of scattering events at random.</param>
+        public void GenerateCopilotActivity(
+            int count,
+            int customAgentPercentage = 10,
+            int agentPercentage = 30,
+            int copilotLicensePercentage = 30,
+            int userCount = 250,
+            int daysBack = 90,
+            DateTime? windowEndUtc = null,
+            bool shapeAdoptionScenario = false)
         {
-            Console.WriteLine($"Generating {count} copilot activity events...");
-            Console.WriteLine($"- {agentPercentage}% will have agents");
-            Console.WriteLine($"- {customAgentPercentage}% of those will be custom agents");
-            Console.WriteLine($"- {copilotLicensePercentage}% of users will have Copilot licenses");
+            if (count < 1) throw new ArgumentOutOfRangeException(nameof(count));
+            if (userCount < 1) throw new ArgumentOutOfRangeException(nameof(userCount));
+            if (daysBack < 1) throw new ArgumentOutOfRangeException(nameof(daysBack));
+
+            DateTime effectiveWindowEndUtc = windowEndUtc ?? DateTime.UtcNow;
+
+            if (shapeAdoptionScenario)
+            {
+                Console.WriteLine("Generating Copilot activity shaped into adoption personas...");
+                Console.WriteLine($"- Spread across the last {daysBack} day(s)");
+                Console.WriteLine($"- {copilotLicensePercentage}% of users will have Copilot licenses");
+            }
+            else
+            {
+                Console.WriteLine($"Generating {count} copilot activity events...");
+                Console.WriteLine($"- Spread across the last {daysBack} day(s)");
+                Console.WriteLine($"- {agentPercentage}% will have agents");
+                Console.WriteLine($"- {customAgentPercentage}% of those will be custom agents");
+                Console.WriteLine($"- {copilotLicensePercentage}% of users will have Copilot licenses");
+            }
 
             using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
             {
-                // Ensure we have licenses
-                _licenseManager.EnsureLicensesExist(db);
+                var users = EnsurePopulation(db, userCount, copilotLicensePercentage);
+                var copilotOperation = EnsureCopilotOperation(db);
 
-                // Ensure we have users. Pull up to userCount existing users so activity is spread
-                // across a realistic population rather than a handful of accounts.
-                var users = db.users.Take(userCount).ToList();
-                if (users.Count == 0)
+                if (shapeAdoptionScenario)
                 {
-                    Console.WriteLine($"No users found in database. Creating {userCount} test users...");
-                    users = _userManager.CreateTestUsers(db, userCount, copilotLicensePercentage);
-                }
-                else
-                {
-                    Console.WriteLine($"Found {users.Count} existing users in database.");
+                    var result = _scenarioGenerator.Generate(
+                        db, users, copilotOperation, effectiveWindowEndUtc,
+                        historyDaysAvailable: daysBack);
+
+                    ReportScenario(result);
+                    return;
                 }
 
-                // Ensure we have operations
-                var copilotOperation = db.event_operations.FirstOrDefault(o => o.Name == "CopilotInteraction");
-                if (copilotOperation == null)
+                GenerateScatteredActivity(
+                    db, users, copilotOperation, count, agentPercentage,
+                    customAgentPercentage, daysBack, effectiveWindowEndUtc);
+            }
+        }
+
+        /// <summary>Loads the existing population, creating one if the database is empty.</summary>
+        private List<User> EnsurePopulation(AnalyticsEntitiesContext db, int userCount, int copilotLicensePercentage)
+        {
+            _licenseManager.EnsureLicensesExist(db);
+
+            // Pull up to userCount existing users so activity is spread across a realistic population
+            // rather than a handful of accounts.
+            var users = db.users.OrderBy(u => u.ID).Take(userCount).ToList();
+            if (users.Count == 0)
+            {
+                Console.WriteLine($"No users found in database. Creating {userCount} test users...");
+                users = _userManager.CreateTestUsers(db, userCount, copilotLicensePercentage);
+            }
+            else
+            {
+                Console.WriteLine($"Found {users.Count} existing users in database.");
+            }
+
+            return users;
+        }
+
+        private static EventOperation EnsureCopilotOperation(AnalyticsEntitiesContext db)
+        {
+            var copilotOperation = db.event_operations.FirstOrDefault(o => o.Name == "CopilotInteraction");
+            if (copilotOperation == null)
+            {
+                copilotOperation = new EventOperation { Name = "CopilotInteraction" };
+                db.event_operations.Add(copilotOperation);
+                db.SaveChanges();
+            }
+            return copilotOperation;
+        }
+
+        /// <summary>The original behaviour: N interactions scattered at random over the population.</summary>
+        private void GenerateScatteredActivity(
+            AnalyticsEntitiesContext db,
+            List<User> users,
+            EventOperation copilotOperation,
+            int count,
+            int agentPercentage,
+            int customAgentPercentage,
+            int daysBack,
+            DateTime windowEndUtc)
+        {
+            int inserted = 0;
+            int withAgents = 0;
+            int withCustomAgents = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                var user = users[_random.Next(users.Count)];
+                bool shouldHaveAgent = _random.Next(100) < agentPercentage;
+                bool isCustomAgent = shouldHaveAgent && _random.Next(100) < customAgentPercentage;
+
+                var agent = shouldHaveAgent ? _chatFactory.GetOrCreateAgent(db, isCustomAgent) : null;
+
+                _chatFactory.Create(
+                    db,
+                    user,
+                    copilotOperation,
+                    ActivityTimestampGenerator.Next(_random, daysBack, windowEndUtc),
+                    _chatFactory.RandomAppHost(),
+                    agent);
+
+                if (shouldHaveAgent)
                 {
-                    copilotOperation = new EventOperation { Name = "CopilotInteraction" };
-                    db.event_operations.Add(copilotOperation);
+                    withAgents++;
+                    if (isCustomAgent) withCustomAgents++;
+                }
+
+                inserted++;
+
+                if (inserted % 100 == 0)
+                {
+                    Console.WriteLine($"Inserted {inserted}/{count} events...");
                     db.SaveChanges();
                 }
-
-                int inserted = 0;
-                int withAgents = 0;
-                int withCustomAgents = 0;
-                int withAccessedResources = 0;
-
-                for (int i = 0; i < count; i++)
-                {
-                    var user = users[_random.Next(users.Count)];
-                    bool shouldHaveAgent = _random.Next(100) < agentPercentage;
-                    bool isCustomAgent = shouldHaveAgent && _random.Next(100) < customAgentPercentage;
-
-                    var copilotEvent = GenerateSingleCopilotEvent(db, user, copilotOperation, shouldHaveAgent, isCustomAgent);
-
-                    if (shouldHaveAgent)
-                    {
-                        withAgents++;
-                        if (isCustomAgent)
-                        {
-                            withCustomAgents++;
-                            withAccessedResources++;
-                        }
-                    }
-
-                    inserted++;
-
-                    if (inserted % 100 == 0)
-                    {
-                        Console.WriteLine($"Inserted {inserted}/{count} events...");
-                        db.SaveChanges();
-                    }
-                }
-
-                // Final save
-                db.SaveChanges();
-
-                Console.WriteLine($"\nGeneration complete!");
-                Console.WriteLine($"Total events: {inserted}");
-                Console.WriteLine($"Events with agents: {withAgents} ({(withAgents * 100.0 / inserted):F1}%)");
-                Console.WriteLine($"Events with custom agents: {withCustomAgents} ({(withCustomAgents * 100.0 / inserted):F1}%)");
-                Console.WriteLine($"Events with accessed resources: {withAccessedResources} ({(withAccessedResources * 100.0 / inserted):F1}%)");
             }
+
+            db.SaveChanges();
+
+            Console.WriteLine($"\nGeneration complete!");
+            Console.WriteLine($"Total events: {inserted}");
+            Console.WriteLine($"Events with agents: {withAgents} ({(withAgents * 100.0 / inserted):F1}%)");
+            Console.WriteLine($"Events with custom agents: {withCustomAgents} ({(withCustomAgents * 100.0 / inserted):F1}%)");
         }
 
-        private CopilotChat GenerateSingleCopilotEvent(AnalyticsEntitiesContext db, User user, EventOperation operation, bool withAgent, bool isCustomAgent)
+        private static void ReportScenario(CopilotAdoptionScenarioResult result)
         {
-            // Generate unique event ID - ensure it doesn't already exist
-            Guid eventId;
-            do
+            Console.WriteLine();
+            Console.WriteLine("Adoption scenario complete!");
+            Console.WriteLine($"  Interactions created:       {result.InteractionsCreated:N0}");
+            Console.WriteLine($"  Licensed users shaped:      {result.LicensedUsersShaped:N0}");
+            Console.WriteLine($"  Unlicensed users with use:  {result.UnlicensedUsersShaped:N0}  (licence candidates)");
+            Console.WriteLine($"  Seats on disabled accounts: {result.DisabledSeats:N0}  (immediate reclaim)");
+            Console.WriteLine($"  Agents planted:             {result.AgentsCreated:N0}  (one per health verdict)");
+
+            if (result.UsersByExpectedBand.Count > 0)
             {
-                eventId = Guid.NewGuid();
-            } while (db.AuditEventsCommon.Any(e => e.Id == eventId));
-
-            var timestamp = GenerateRealisticTimestamp();
-
-            // Create common audit event
-            var auditEvent = new CommonAuditEvent
-            {
-                Id = eventId,
-                User = user,
-                Operation = operation,
-                TimeStamp = timestamp,
-                EventData = GenerateEventData()
-            };
-
-            db.AuditEventsCommon.Add(auditEvent);
-
-            // Create copilot chat event
-            var copilotChat = new CopilotChat
-            {
-                EventID = eventId,
-                AuditEvent = auditEvent,
-                AppHost = CopilotActivityGeneratorConfig.AppHosts[_random.Next(CopilotActivityGeneratorConfig.AppHosts.Length)],
-                CopilotCreditEstimateTotal = _random.Next(1, 50)
-            };
-
-            // Add agent if requested
-            if (withAgent)
-            {
-                var agent = GetOrCreateAgent(db, isCustomAgent);
-                copilotChat.Agent = agent;
-
-                // Add accessed resources for custom agents
-                if (isCustomAgent)
+                Console.WriteLine();
+                Console.WriteLine("  Expected adoption funnel:");
+                foreach (var band in result.UsersByExpectedBand.OrderByDescending(b => b.Value))
                 {
-                    _resourceGenerator.AddAccessedResources(db, copilotChat);
+                    Console.WriteLine($"    {band.Key,-16} {band.Value,5:N0}");
                 }
             }
 
-            db.CopilotChats.Add(copilotChat);
-
-            // Randomly decide if this is a file, meeting, or chat-only event
-            int eventType = _random.Next(3);
-
-            if (eventType == 0 && copilotChat.AppHost == "Teams")
+            if (result.UsersByPersona.Count > 0)
             {
-                // Create meeting event
-                CreateMeetingEvent(db, copilotChat, user);
-            }
-            else if (eventType == 1)
-            {
-                // Create file event
-                CreateFileEvent(db, copilotChat);
-            }
-            // Otherwise it's chat-only (no additional metadata)
-
-            return copilotChat;
-        }
-
-        private void CreateMeetingEvent(AnalyticsEntitiesContext db, CopilotChat copilotChat, User user)
-        {
-            // Check if we have any existing meetings in local context first, then database
-            var meeting = db.Set<OnlineMeeting>().Local.FirstOrDefault();
-            if (meeting == null)
-            {
-                meeting = db.Set<OnlineMeeting>().FirstOrDefault();
-            }
-
-            if (meeting == null)
-            {
-                meeting = new OnlineMeeting
+                Console.WriteLine();
+                Console.WriteLine("  Personas planted:");
+                foreach (var persona in result.UsersByPersona.OrderByDescending(p => p.Value))
                 {
-                    Name = "Test Meeting " + _random.Next(1000),
-                    CreatedUTC = DateTime.UtcNow.AddDays(-_random.Next(1, 30)),
-                    MeetingId = Guid.NewGuid().ToString()
-                };
-                db.Set<OnlineMeeting>().Add(meeting);
-            }
-
-            var meetingEvent = new CopilotEventMetadataMeeting
-            {
-                ChatId = copilotChat.EventID,
-                RelatedChat = copilotChat,
-                OnlineMeeting = meeting
-            };
-
-            db.CopilotEventMetadataMeetings.Add(meetingEvent);
-        }
-
-        private void CreateFileEvent(AnalyticsEntitiesContext db, CopilotChat copilotChat)
-        {
-            // Get or create file-related lookups
-            var fileName = GetOrCreateFileName(db, "Document_" + _random.Next(1000));
-            var fileExt = GetOrCreateFileExtension(db, GetRandomExtension());
-            var site = GetOrCreateSite(db, "https://contoso.sharepoint.com/sites/test");
-            var url = GetOrCreateUrl(db, $"https://contoso.sharepoint.com/sites/test/document_{_random.Next(1000)}.{fileExt.extension_name}");
-
-            var fileEvent = new CopilotEventMetadataFile
-            {
-                ChatId = copilotChat.EventID,
-                RelatedChat = copilotChat,
-                FileName = fileName,
-                FileExtension = fileExt,
-                Url = url,
-                Site = site
-            };
-
-            db.CopilotEventMetadataFiles.Add(fileEvent);
-        }
-
-        private CopilotAgent GetOrCreateAgent(AnalyticsEntitiesContext db, bool isCustomAgent)
-        {
-            string agentName;
-            string agentId;
-
-            if (isCustomAgent)
-            {
-                // Custom agent with organization-specific naming
-                agentName = CopilotActivityGeneratorConfig.AgentNames[_random.Next(1, CopilotActivityGeneratorConfig.AgentNames.Length)]; // Skip "Copilot" which is standard
-                agentId = $"Copilot.Studio.Default-{Guid.NewGuid()}-{agentName.Replace(" ", "")}";
-            }
-            else
-            {
-                // Standard Microsoft agent
-                agentName = CopilotActivityGeneratorConfig.AgentNames[0]; // "Copilot"
-                agentId = CopilotActivityGeneratorConfig.StandardAgentIds[_random.Next(CopilotActivityGeneratorConfig.StandardAgentIds.Length)];
-            }
-
-            // Check both database and local context for existing agent
-            var agent = db.CopilotAgents.Local.FirstOrDefault(a => a.AgentID == agentId);
-            if (agent == null)
-            {
-                agent = db.CopilotAgents.FirstOrDefault(a => a.AgentID == agentId);
-            }
-
-            if (agent == null)
-            {
-                agent = new CopilotAgent
-                {
-                    Name = agentName,
-                    AgentID = agentId,
-                    IsCustomAgent = isCustomAgent
-                };
-                db.CopilotAgents.Add(agent);
-            }
-
-            return agent;
-        }
-
-        private SPEventFileName GetOrCreateFileName(AnalyticsEntitiesContext db, string name)
-        {
-            // Check both database and local context for existing file name
-            var fileName = db.event_file_names.Local.FirstOrDefault(f => f.Name == name);
-            if (fileName == null)
-            {
-                fileName = db.event_file_names.FirstOrDefault(f => f.Name == name);
-            }
-
-            if (fileName == null)
-            {
-                fileName = new SPEventFileName { Name = name };
-                db.event_file_names.Add(fileName);
-            }
-            return fileName;
-        }
-
-        private SPEventFileExtension GetOrCreateFileExtension(AnalyticsEntitiesContext db, string ext)
-        {
-            // Check both database and local context for existing file extension
-            var fileExt = db.event_file_ext.Local.FirstOrDefault(f => f.extension_name == ext);
-            if (fileExt == null)
-            {
-                fileExt = db.event_file_ext.FirstOrDefault(f => f.extension_name == ext);
-            }
-
-            if (fileExt == null)
-            {
-                fileExt = new SPEventFileExtension { extension_name = ext };
-                db.event_file_ext.Add(fileExt);
-            }
-            return fileExt;
-        }
-
-        private Url GetOrCreateUrl(AnalyticsEntitiesContext db, string fullUrl)
-        {
-            // Check both database and local context for existing url
-            var url = db.urls.Local.FirstOrDefault(u => u.FullUrl == fullUrl);
-            if (url == null)
-            {
-                url = db.urls.FirstOrDefault(u => u.FullUrl == fullUrl);
-            }
-
-            if (url == null)
-            {
-                url = new Url { FullUrl = fullUrl };
-                db.urls.Add(url);
-            }
-            return url;
-        }
-
-        private Site GetOrCreateSite(AnalyticsEntitiesContext db, string siteUrl)
-        {
-            // Check both database and local context for existing site
-            var site = db.sites.Local.FirstOrDefault(s => s.UrlBase == siteUrl);
-            if (site == null)
-            {
-                site = db.sites.FirstOrDefault(s => s.UrlBase == siteUrl);
-            }
-
-            if (site == null)
-            {
-                site = new Site { UrlBase = siteUrl };
-                db.sites.Add(site);
-            }
-            return site;
-        }
-
-        private string GenerateEventData()
-        {
-            return $"{{\"TestData\": \"Generated at {DateTime.UtcNow}\"}}";
-        }
-
-        /// <summary>
-        /// Produces a timestamp within the last ~90 days that mimics real working patterns:
-        /// activity lands almost entirely on weekdays and clusters around typical business hours,
-        /// with only occasional out-of-hours usage. This keeps generated data looking realistic
-        /// when rolled up into daily/hourly reports instead of a flat random spread.
-        /// </summary>
-        private DateTime GenerateRealisticTimestamp()
-        {
-            // Pick a day in the last 90 days, then push weekends onto a nearby weekday most of the time.
-            DateTime day = DateTime.UtcNow.Date.AddDays(-_random.Next(0, 90));
-            if (day.DayOfWeek == DayOfWeek.Saturday || day.DayOfWeek == DayOfWeek.Sunday)
-            {
-                // ~90% of the time move weekend activity to the preceding Friday.
-                if (_random.Next(100) < 90)
-                {
-                    while (day.DayOfWeek == DayOfWeek.Saturday || day.DayOfWeek == DayOfWeek.Sunday)
-                    {
-                        day = day.AddDays(-1);
-                    }
+                    Console.WriteLine($"    {persona.Key,-38} {persona.Value,5:N0}");
                 }
             }
-
-            // Business hours cluster (9-17) most of the time, with a few early/late outliers.
-            int hour;
-            if (_random.Next(100) < 85)
-            {
-                hour = 9 + _random.Next(0, 9); // 9:00 - 17:59
-            }
-            else
-            {
-                hour = _random.Next(0, 24);
-            }
-
-            return day.AddHours(hour).AddMinutes(_random.Next(0, 60)).AddSeconds(_random.Next(0, 60));
-        }
-
-        private string GetRandomExtension()
-        {
-            return CopilotActivityGeneratorConfig.FileExtensions[_random.Next(CopilotActivityGeneratorConfig.FileExtensions.Length)];
         }
 
         /// <summary>

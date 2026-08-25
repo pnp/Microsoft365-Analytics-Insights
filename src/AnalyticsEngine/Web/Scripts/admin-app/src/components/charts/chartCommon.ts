@@ -16,18 +16,50 @@ export const CHART_PALETTE = [
   '#5c2e91', // dark purple
 ] as const;
 
+/**
+ * A lighter partner for each palette colour, for gradient fills.
+ *
+ * Flat fills read as functional; a subtle vertical or horizontal gradient reads as finished, which
+ * matters when the same chart ends up in a board pack. The lighter stop is only ever used as the
+ * far end of a gradient on the same hue, so it never changes which series a colour identifies.
+ */
+export const CHART_PALETTE_LIGHT = [
+  '#63a7e0',
+  '#e57377',
+  '#5fbc5f',
+  '#b7a1d8',
+  '#e8a173',
+  '#4fb8ab',
+  '#dfc65a',
+  '#9c7bc4',
+] as const;
+
 /** Colour for the series/bar at index i (cycles through the palette). */
 export function seriesColor(i: number): string {
   return CHART_PALETTE[i % CHART_PALETTE.length];
 }
 
-/** Compact number for axis labels: 1234 -> "1.2k", 2_500_000 -> "2.5M". */
+/** The lighter partner of {@link seriesColor}, for the far end of a gradient fill. */
+export function seriesColorLight(i: number): string {
+  return CHART_PALETTE_LIGHT[i % CHART_PALETTE_LIGHT.length];
+}
+
+/**
+ * Compact number for axis labels: 1234 -> "1.2k", 2_500_000 -> "2.5M".
+ *
+ * Small fractional values keep their decimals. Rounding them to whole numbers turned a sentiment
+ * axis of 0, 0.2, 0.4, 0.6, 0.8, 1 into "0, 0, 0, 1, 1, 1" - six labels, four of them duplicates and
+ * none of them true. Integer inputs are unaffected, so the counting charts render exactly as before.
+ */
 export function formatCompact(n: number): string {
   const abs = Math.abs(n);
   if (abs >= 1e9) return `${trim(n / 1e9)}B`;
   if (abs >= 1e6) return `${trim(n / 1e6)}M`;
   if (abs >= 1e3) return `${trim(n / 1e3)}k`;
-  return String(Math.round(n));
+  if (Number.isInteger(n)) return String(n);
+
+  // Enough precision to keep neighbouring ticks distinct without a wall of digits.
+  return Number(n.toFixed(2)).toString();
 }
 
 function trim(n: number): string {
@@ -35,9 +67,9 @@ function trim(n: number): string {
   return n.toFixed(1).replace(/\.0$/, '');
 }
 
-/** Full number for tooltips (e.g. "1,234"; fractional values keep up to one decimal). */
+/** Full number for tooltips (e.g. "1,234"; fractional values keep up to two decimals). */
 export function formatValue(n: number): string {
-  const rounded = Number.isInteger(n) ? n : Math.round(n * 10) / 10;
+  const rounded = Number.isInteger(n) ? n : Math.round(n * 100) / 100;
   return rounded.toLocaleString();
 }
 

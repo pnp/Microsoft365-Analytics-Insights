@@ -91,6 +91,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 // CopilotEventManagerFileContextBreaksBeforeChat tests. If product semantics ever require
                 // capturing trailing chat contexts after a meeting/file, those tests must be updated together
                 // with this loop.
+                //
+                // Note this loop only decides which SINGLE context gets RESOLVED (Graph lookup) into
+                // copilot_event_files / copilot_event_meetings. Every context - including the ones skipped
+                // here - is staged verbatim via contexts_json and lands in dbo.copilot_event_contexts, so
+                // the unordered-collection caveat above no longer means data is lost.
                 foreach (var context in contexts)
                 {
                     // Only one meeting OR file per event is relevant; chat contexts are additive.
@@ -151,22 +156,14 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 var meetingId = StringUtils.GetOnlineMeetingId(contextId, userGuid);
                 var meetingInfo = await _copilotEventAdaptor.GetMeetingInfo(meetingId, userGuid);
 
-                _copilotInsertsTeams.Rows.Add(new TeamsCopilotLogTempEntity
+                var row = new TeamsCopilotLogTempEntity
                 {
-                    EventId = baseOfficeEvent.Id,
-                    AppHost = auditRecord.CopilotEventData.AppHost,
                     MeetingId = meetingId,
                     MeetingCreatedUTC = meetingInfo?.CreatedUTC,
                     MeetingName = meetingInfo?.Subject,
-                    AgentId = auditRecord.AgentId,
-                    AgentName = auditRecord.AgentName,
-                    IsCustomAgent = auditRecord.IsCustomAgent,
-                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord),
-                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
-                    CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
-                    CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
-                });
+                };
+                PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
+                _copilotInsertsTeams.Rows.Add(row);
                 return true; // staged regardless of meetingInfo retrieval success
             }
             catch (Exception ex)
@@ -204,25 +201,17 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     }
                 }
 
-                _copilotInsertsSP.Rows.Add(new SPCopilotLogTempEntity
+                var row = new SPCopilotLogTempEntity
                 {
-                    EventId = baseOfficeEvent.Id,
-                    AppHost = auditRecord.CopilotEventData.AppHost,
                     FileExtension = spFileInfo?.Extension,
                     FileName = spFileInfo?.Filename,
                     // Keep the SharePoint URL within the urls.full_url column width (nvarchar(850)):
                     // strip the volatile xsdata token, else reduce to the page path. See issue #122.
                     Url = StringUtils.EnsureUrlWithinLength(spFileInfo?.Url, Common.Entities.Url.FullUrlMaxLength),
                     UrlBase = spFileInfo?.SiteUrl,
-                    AgentId = auditRecord.AgentId,
-                    AgentName = auditRecord.AgentName,
-                    IsCustomAgent = auditRecord.IsCustomAgent,
-                    AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                    MessagesJson = SerializeMessages(auditRecord),
-                    ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
-                    CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
-                    CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
-                });
+                };
+                PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
+                _copilotInsertsSP.Rows.Add(row);
                 return true; // staged regardless
             }
             catch (Exception ex)
@@ -273,19 +262,35 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         private void AddChatOnly(CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
         {
-            _copilotInsertsChatsNoContext.Rows.Add(new ChatOnlyCopilotLogTempEntity
-            {
-                EventId = baseOfficeEvent.Id,
-                AppHost = auditRecord.CopilotEventData?.AppHost ?? "Unknown",
-                AgentId = auditRecord.AgentId,
-                AgentName = auditRecord.AgentName,
-                IsCustomAgent = auditRecord.IsCustomAgent,
-                AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources),
-                MessagesJson = SerializeMessages(auditRecord),
-                ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord),
-                CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits,
-                CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord)
-            });
+            var row = new ChatOnlyCopilotLogTempEntity();
+            PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
+            _copilotInsertsChatsNoContext.Rows.Add(row);
+        }
+
+        /// <summary>
+        /// Fills the fields every Copilot staging row carries, regardless of workload (SharePoint
+        /// file / Teams meeting / chat-only). Kept in one place so a newly persisted audit field
+        /// can't be wired into two of the three staging paths and silently dropped on the third.
+        /// </summary>
+        private void PopulateCommonStagingFields(BaseCopilotLogTempEntity row, CopilotAuditLogContent auditRecord, CommonAuditEvent baseOfficeEvent)
+        {
+            row.EventId = baseOfficeEvent.Id;
+            // app_host is a NOT NULL staging column, so fall back rather than failing the whole
+            // batch insert on a payload that omits AppHost (previously only the chat-only path did).
+            row.AppHost = auditRecord.CopilotEventData?.AppHost ?? "Unknown";
+            row.AgentId = auditRecord.AgentId;
+            row.AgentName = auditRecord.AgentName;
+            row.IsCustomAgent = auditRecord.IsCustomAgent;
+            row.AccessedResourcesJson = SerializeAccessedResources(auditRecord.CopilotEventData?.AccessedResources);
+            row.MessagesJson = SerializeMessages(auditRecord);
+            row.ModelTransparencyDetailsJson = SerializeModelTransparencyDetails(auditRecord);
+            row.ContextsJson = SerializeContexts(auditRecord.CopilotEventData?.Contexts);
+            row.AISystemPluginsJson = SerializeAISystemPlugins(auditRecord);
+            row.ThreadId = auditRecord.CopilotEventData?.ThreadId;
+            row.ClientRegion = auditRecord.ClientRegion;
+            row.CopilotLogVersion = auditRecord.CopilotLogVersion;
+            row.CopilotCreditEstimateTotal = auditRecord.Cost?.TotalCredits;
+            row.CopilotCreditEstimateJson = SerializeCopilotCreditEstimation(auditRecord);
         }
 
         /// <summary>
@@ -312,7 +317,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>
         /// Serializes Messages from CopilotAuditLogContent to JSON for staging table storage.
         /// Uses the ParsedAuditEvent property which contains the deserialized audit event data.
-        /// Only serializes response messages (IsPrompt = false), not user prompts.
+        ///
+        /// BOTH prompts and responses are serialized. Previously only responses (IsPrompt = false)
+        /// were kept, because the only field persisted was the message id and a prompt row carried
+        /// no extra information. Now that the schema's Size is persisted, the prompt row is the only
+        /// source of the interaction's input volume, and the persisted is_prompt flag would be a
+        /// constant if prompts were still dropped. Cost estimation is unaffected: it reads
+        /// ParsedAuditEvent directly and does its own IsPrompt filtering.
         /// </summary>
         internal string SerializeMessages(CopilotAuditLogContent auditRecord)
         {
@@ -323,19 +334,65 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             try
             {
-                // Filter out prompt messages - only serialize responses
-                var responseMessages = auditRecord.ParsedAuditEvent.Messages.Where(m => !m.IsPrompt).ToList();
-
-                if (responseMessages.Count == 0)
-                {
-                    return null;
-                }
-
-                return JsonConvert.SerializeObject(responseMessages);
+                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.Messages);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to serialize Messages from audit record");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes the interaction's Contexts to JSON for staging table storage. ALL contexts are
+        /// serialized, including the ones the file/meeting resolution above ignores (it only ever
+        /// acts on the first file or meeting context), so nothing in an unordered Contexts collection
+        /// is silently discarded.
+        /// </summary>
+        internal string SerializeContexts(IEnumerable<Context> contexts)
+        {
+            if (contexts == null || !contexts.Any())
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(contexts);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize Contexts");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Serializes the AISystemPlugin entries (plugins / connectors that grounded the answer) to
+        /// JSON for staging table storage. Prefers the strongly-typed CopilotEventData collection and
+        /// falls back to the parsed audit event, since the two are populated from the same payload
+        /// but different call sites construct one or the other.
+        /// </summary>
+        internal string SerializeAISystemPlugins(CopilotAuditLogContent auditRecord)
+        {
+            var plugins = auditRecord?.CopilotEventData?.AISystemPlugin;
+            if (plugins == null || plugins.Count == 0)
+            {
+                plugins = auditRecord?.ParsedAuditEvent?.AISystemPlugin;
+            }
+
+            if (plugins == null || plugins.Count == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.SerializeObject(plugins);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize AISystemPlugin entries from audit record");
                 return null;
             }
         }

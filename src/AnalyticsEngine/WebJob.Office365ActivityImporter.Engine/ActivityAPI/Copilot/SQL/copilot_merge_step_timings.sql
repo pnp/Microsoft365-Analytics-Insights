@@ -11,7 +11,7 @@
 --   2. Let the importer run for a while so several commit batches flow through the merge.
 --   3. Run STEP 2 to see which step dominates (overall and per staging table: chatonly / sp / teams).
 --   4. Run STEP 3 (drop the table) to switch instrumentation back off. Do not leave it enabled long-term:
---      it writes ~16 rows per merge invocation and the merge runs thousands of times per import cycle.
+--      it writes ~21 rows per merge invocation and the merge runs thousands of times per import cycle.
 -- ====================================================================================================
 
 

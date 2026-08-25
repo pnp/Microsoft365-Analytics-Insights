@@ -9,6 +9,18 @@ namespace Common.Entities.Migrations
     /// resource_site_url_id, resource_type_id, sensitivity_label_id)</c> -&gt;
     /// <c>IX_copilot_event_accessed_resources_dedup</c>.
     ///
+    /// SUPERSEDED (comment only - the SQL below is frozen and still correct as the step it was):
+    /// <see cref="WidenCopilotAccessedResourceDedupIndex"/> later rebuilds this index with
+    /// <c>action_id</c> and <c>list_item_unique_id_id</c> added as key columns, because treating those two
+    /// as payload rather than identity dropped distinct actions and could fabricate action / list-item
+    /// pairings (issue #287). The "five resolved lookup foreign keys" described below is therefore the
+    /// tuple as it stood at THIS migration, not as the merge uses it today.
+    ///
+    /// Note for anyone upgrading from a build older than this migration: both run, so the index is created
+    /// here with six key columns and then immediately dropped and rebuilt with eight. That doubled build is
+    /// unavoidable without editing shipped migrations; sites already on current stable only pay for the
+    /// rebuild.
+    ///
     /// Why: the shared Copilot merge (<c>common_upsert_copilot_agents.sql</c>) de-duplicates the accessed-resource
     /// junction with a keyed anti-join that compares the full resolved tuple for a chat:
     /// <code>

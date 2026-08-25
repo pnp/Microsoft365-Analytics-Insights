@@ -271,6 +271,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
     {
         public string Id { get; set; }
         public string Name { get; set; }
+
+        /// <summary>
+        /// Version of the plugin, per the audit schema's AISystemPluginData.Version.
+        /// </summary>
+        public string Version { get; set; }
     }
 
     public class Context

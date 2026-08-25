@@ -10,7 +10,6 @@ namespace Common.Entities
 {
     public class TeamsAndCallsDBLookupManager
     {
-        private readonly TeamsAddOnCache _teamAddOnDefCache = null;
         private readonly TeamsCache _teamsCache;
         private readonly TeamsReactionTypeCache _teamsReactionCache;
         private readonly TeamsChannelCache _teamsChannelCache;
@@ -35,7 +34,6 @@ namespace Common.Entities
 
             _callModalityCache = new CallModalityCache(db);
             _teamsCache = new TeamsCache(db);
-            _teamAddOnDefCache = new TeamsAddOnCache(db);
             _keywordCache = new KeywordCache(db);
             _langCache = new LanguageCache(db);
             _db = db;
@@ -134,7 +132,7 @@ namespace Common.Entities
 
             return await _teamsChannelCache.GetResource(channelId.ToLower());
         }
-        public async Task<TeamTabDefinition> GetOrCreateTeamTab(string tabId, string name, string webUrl, TeamAddOnDefinition associatedAddOn)
+        public async Task<TeamTabDefinition> GetOrCreateTeamTab(string tabId, string name, string webUrl)
         {
             // Sanity
             if (string.IsNullOrEmpty(tabId))
@@ -149,35 +147,8 @@ namespace Common.Entities
             {
                 Name = StringUtils.EnsureMaxLength(name, 100),
                 GraphID = tabId,
-                TeamAddOnDefinition = associatedAddOn,
                 WebUrl = webUrl
             });
-
-            // BugFix: Ensure app def
-            if (lookup.TeamAddOnDefinition != associatedAddOn)
-            {
-                lookup.TeamAddOnDefinition = associatedAddOn;
-            }
-
-            return lookup;
-        }
-
-        public async Task<TeamAddOnDefinition> GetTeamAddOnDefinition(string addOnId, string name)
-        {
-            // Sanity
-            if (string.IsNullOrEmpty(addOnId))
-            {
-                return null;
-            }
-
-            // Object in cache?
-            var newAddInTemplate = new TeamAddOnDefinition()
-            {
-                GraphID = addOnId,
-                Name = StringUtils.EnsureMaxLength(name, 100),
-                AddOnType = 0  // Hardcode type
-            };
-            TeamAddOnDefinition lookup = await _teamAddOnDefCache.GetAndUpdateOrCreateNewResource(addOnId, newAddInTemplate);
 
             return lookup;
         }

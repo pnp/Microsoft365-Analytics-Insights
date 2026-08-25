@@ -124,12 +124,23 @@
     <Compile Include="Entities\WebActivityReportSet.cs" />
     <Compile Include="ExceptionHandler.cs" />
     <Compile Include="Graph\DeltaValueProvider.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\GraphAiInteractionSourceLoader.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\GraphPilotGroupMemberResolver.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\IAiInteractionSourceLoader.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\InteractionCognitiveEnricher.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\InteractionStatsExtractor.cs" />
+    <Compile Include="Graph\Copilot\InteractionHistory\PilotGroupResolution.cs" />
     <Compile Include="Graph\Email\DeltaTokenStores.cs" />
     <Compile Include="Graph\Email\GraphSentEmailSourceLoader.cs" />
     <Compile Include="Graph\Email\ISentEmailSentimentScorer.cs" />
     <Compile Include="Graph\Email\ISentEmailSourceLoader.cs" />
     <Compile Include="Graph\Email\SentEmailImporter.cs" />
+    <Compile Include="Graph\Email\SentEmailMailboxSkipList.cs" />
     <Compile Include="Graph\Email\SentEmailSentimentScorer.cs" />
+    <Compile Include="Graph\GraphHttpException.cs" />
+    <Compile Include="Graph\GraphResourceNotFoundException.cs" />
     <Compile Include="Graph\PageableGraphLoaderExtensions.cs" />
     <Compile Include="Graph\PageableGraphResponse.cs" />
     <Compile Include="Graph\OfficeLicenseNameResolver.cs" />
@@ -155,7 +166,6 @@
     <Compile Include="Graph\GraphServiceClientFactory.cs" />
     <Compile Include="Graph\ManualGraphCallClient.cs" />
     <Compile Include="Graph\Teams\O365Team.cs" />
-    <Compile Include="Graph\Teams\Extensions\ITeamInstalledAppsCollectionPageExtensions.cs" />
     <Compile Include="Graph\GraphLookupCache.cs" />
     <Compile Include="Graph\GraphImporter.cs" />
     <Compile Include="Graph\UsageReports\AbstractUserDailyActivityLoader.cs" />
@@ -164,6 +174,12 @@
     <Compile Include="Graph\UsageReports\Aggregate\AbstractModels.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSiteUsageDetail.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSitesWeeklyUsageReportLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotReportRequest.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotReportSource.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailParser.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportParser.cs" />
     <Compile Include="Graph\UsageReports\OneDriveUsageLoader.cs" />
     <Compile Include="Graph\UsageReports\SharePointUserActivityLoader.cs" />
     <Compile Include="Graph\UsageReports\OneDriveUserActivityLoader.cs" />
@@ -178,10 +194,6 @@
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
-    <Compile Include="Graph\User\UserApps\AbstractUserAppLoader.cs" />
-    <Compile Include="Graph\User\UserApps\GraphAndSqlUserAppLoader.cs" />
-    <Compile Include="Graph\User\UserApps\Models.cs" />
-    <Compile Include="Graph\User\UserApps\UserAppLogUpdater.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
@@ -190,7 +202,6 @@
     <Compile Include="Graph\User\UserLicenseProcessor.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
-    <Compile Include="Graph\User\UserTeamApp.cs" />
     <Compile Include="OAuthContext.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Entities\TimePeriod.cs" />
@@ -246,6 +257,7 @@
   <ItemGroup>
     <None Include="App.config" />
     <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
+    <None Include="Graph\Copilot\InteractionHistory\readme.md" />
     <None Include="Graph\Email\readme.md" />
     <None Include="Graph\User\REFACTORING_SUMMARY.md" />
   </ItemGroup>
