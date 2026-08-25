@@ -36,11 +36,15 @@ namespace Common.Entities.Migrations
     ///   * All nine AddColumn operations add NULLable columns with no default, which SQL Server applies as
     ///     a metadata-only change - instant even on a 100M-row copilot_event_accessed_resources.
     ///   * The two foreign keys on copilot_event_accessed_resources are the only step that touches the
-    ///     existing data. They are cheap but NOT free: the FK-column indexes are built by a later
-    ///     migration (see RESUMABILITY below), so SQL Server validates each constraint with one pass over
-    ///     the table. Measured on a synthetic 3,000,000-row junction table that was about 7,800 logical
-    ///     reads and ~0.6-0.7 s per constraint. Every existing row has NULL in both columns, so there is
-    ///     nothing to verify - the cost is the scan, not the checking.
+    ///     existing data, and they are NOT free. SQL Server validates each checked constraint by scanning
+    ///     the table while holding a schema-modification (Sch-M) lock, which blocks all access including
+    ///     reads - and there is no ONLINE form of foreign-key validation, so no edition avoids it.
+    ///     The scan happens even though every existing row has NULL in both columns and there is
+    ///     therefore nothing to verify: measured, 300,000 all-NULL rows still cost 8,139 logical reads and
+    ///     a Sch-M lock per constraint. On a 3,000,000-row junction table that was about 7,800 logical
+    ///     reads and ~0.6-0.7 s per constraint; extrapolating, roughly 0.4-0.5 s at 1M rows, 4-5 s at 10M
+    ///     and 40-50 s at 100M for the pair. Large databases should therefore run this in a maintenance
+    ///     window with the importer stopped, on EVERY edition.
     ///   * The two foreign-key INDEXES that used to be built here are no longer part of this migration.
     ///     They now belong to <see cref="IndexCopilotAccessedResourceFkColumns"/>, together with their
     ///     measured build times and their ONLINE/offline edition handling.
