@@ -138,15 +138,56 @@ if OBJECT_ID('dbo.copilot_interaction_keywords', 'U') is not null
 -- Bounded on [date] (the report's own snapshot date), matching how every other daily log here is aged.
 -- Guarded with OBJECT_ID because the tables only exist once the AddCopilotUsageReports migration has
 -- run, and this script is also used against older databases.
+--
+-- DELETED IN BATCHES, unlike the older statements above. The per-user detail report is requested for
+-- a single period (CopilotReportRequest.DefaultRefreshPeriod, "D28"), so this table gains about one
+-- row per licensed user per day - roughly 200,000 a day at the repo's 200,000-user baseline, or ~6
+-- million over the one-month retention window. The FIRST run after upgrading has to remove everything
+-- older than a month that has accumulated since the import was enabled, which can be far more than
+-- that. A single DELETE of that size takes one long exclusive lock, escalates to a table lock, and
+-- writes the whole thing to the log as one transaction. Batching keeps each statement short so the
+-- purge can run alongside an importer rather than blocking it.
+--
+-- NB: batching only bounds the transaction if the script is NOT wrapped in the "begin transaction
+-- archive" above. Inside that transaction the locks and log growth accumulate regardless; the batch
+-- loop then only limits how much each individual statement scans.
+--
+-- The loop exits when a DELETE removes fewer rows than the batch size, so the batch size must be the
+-- SAME expression in the DELETE and in the loop condition. Hard-coding a literal in one and reading
+-- @copilotBatch in the other would silently stop after a single pass the moment anyone tuned it.
+declare @copilotBatch int = 10000
+declare @copilotDeleted int
+
 if OBJECT_ID('dbo.copilot_usage_user_activity_log', 'U') is not null
-	delete from copilot_usage_user_activity_log where [date] < @archiveDateMax
+begin
+	set @copilotDeleted = @copilotBatch
+	while @copilotDeleted = @copilotBatch
+	begin
+		delete top (@copilotBatch) from copilot_usage_user_activity_log where [date] < @archiveDateMax
+		set @copilotDeleted = @@ROWCOUNT
+	end
+end
 
 if OBJECT_ID('dbo.copilot_user_count_log', 'U') is not null
-	delete from copilot_user_count_log where report_date < @archiveDateMax
+begin
+	set @copilotDeleted = @copilotBatch
+	while @copilotDeleted = @copilotBatch
+	begin
+		delete top (@copilotBatch) from copilot_user_count_log where report_date < @archiveDateMax
+		set @copilotDeleted = @@ROWCOUNT
+	end
+end
 
 -- The per-run diagnostics log, aged like the interaction-history one above.
 if OBJECT_ID('dbo.copilot_usage_report_import_log', 'U') is not null
-	delete from copilot_usage_report_import_log where imported_utc < @archiveDateMax
+begin
+	set @copilotDeleted = @copilotBatch
+	while @copilotDeleted = @copilotBatch
+	begin
+		delete top (@copilotBatch) from copilot_usage_report_import_log where imported_utc < @archiveDateMax
+		set @copilotDeleted = @@ROWCOUNT
+	end
+end
 
 -- commit/rollback
 --rollback transaction archive

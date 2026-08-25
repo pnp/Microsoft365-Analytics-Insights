@@ -351,6 +351,17 @@ function ReportAreaView({
         </Button>
       </div>
 
+      {area === 'copilot' && data.cognitiveConfigured === false && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Prompt insights (common prompt phrases, weekly prompt sentiment and prompt language) are not shown because
+            Azure AI Language is not configured. Those three charts are built from cognitive enrichment of Copilot
+            prompt history, so without it they would always be empty. Add a Cognitive Services endpoint and key in the
+            installer, then re-run the Copilot interaction history import, to enable them.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
       {data.charts.map((chart) => (
         <Card key={chart.key} className={styles.chartCard}>
           <div className={styles.chartHead}>
