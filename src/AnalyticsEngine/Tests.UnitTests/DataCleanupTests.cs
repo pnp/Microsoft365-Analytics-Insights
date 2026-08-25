@@ -7,11 +7,13 @@ using Common.Entities.Entities.WebTraffic;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -107,9 +109,9 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// Inventory guard, also from issue #286: fail when a Copilot usage-report table exists in the
-        /// entity model but is not accounted for in the cleanup script. Adding a table to a growing
-        /// feature and forgetting to age it is precisely how the Teams add-on tables became expensive
-        /// enough to need deprecating, and nothing else in the build notices.
+        /// entity model but is not aged by the cleanup script. Adding a table to a growing feature and
+        /// forgetting to age it is precisely how the Teams add-on tables became expensive enough to
+        /// need deprecating, and nothing else in the build notices.
         /// <para>
         /// The table list is derived from the EF model by reflection, NOT hard-coded, because a
         /// hard-coded list cannot fail for the case the issue actually cares about - somebody adding a
@@ -117,27 +119,31 @@ namespace Tests.UnitTests
         /// matters.
         /// </para>
         /// <para>
-        /// "Accounted for" means named in the script. Deleting it is the usual answer; deliberately not
-        /// ageing it is acceptable too, provided the script says so by name - the existing
-        /// <c>copilot_interaction_user_watermarks</c> note is the precedent. What must not happen is a
-        /// new table appearing and nobody deciding either way.
+        /// Two subtleties, both of which an earlier version of this test got wrong:
+        /// </para>
+        /// <para>
+        /// It looks for the actual batched <c>DELETE</c>, not merely the table name. A plain substring
+        /// search over the whole file is satisfied by any passing mention in a comment, so removing the
+        /// delete while leaving the surrounding prose - which names all three tables - would have kept
+        /// this green.
+        /// </para>
+        /// <para>
+        /// It matches on word boundaries. <c>copilot_user</c> is a substring of
+        /// <c>copilot_user_count_log</c>, so a future table with a prefix name would have been "found"
+        /// inside a longer one and slipped through the very guard meant to catch it. Underscore is a
+        /// regex word character, so <c>\bcopilot_user\b</c> correctly does not match inside
+        /// <c>copilot_user_count_log</c>.
+        /// </para>
+        /// <para>
+        /// A table that genuinely must not be aged can opt out with a <c>RETENTION-EXEMPT:</c> line
+        /// naming it, which keeps the decision explicit and reviewable rather than silent.
         /// </para>
         /// </summary>
         [TestMethod]
         public void CleanupScript_AccountsForEveryCopilotUsageReportTable()
         {
             var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
-
-            // Every [Table]-mapped Copilot entity declared alongside the usage-report classes.
-            var usageReportNamespace = typeof(CopilotUsageUserActivityLog).Namespace;
-            var copilotTables = typeof(CopilotUsageUserActivityLog).Assembly
-                .GetTypes()
-                .Where(t => t.Namespace == usageReportNamespace)
-                .Select(t => t.GetCustomAttribute<TableAttribute>())
-                .Where(a => a != null && a.Name.StartsWith("copilot_", StringComparison.OrdinalIgnoreCase))
-                .Select(a => a.Name)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var copilotTables = DiscoverCopilotUsageReportTables();
 
             // A reflection-driven test that discovers nothing passes vacuously, which would be worse
             // than no test at all. Pin the floor at the three tables that exist today.
@@ -148,14 +154,54 @@ namespace Tests.UnitTests
 
             foreach (var table in copilotTables)
             {
-                StringAssert.Contains(
+                var purged = Regex.IsMatch(
                     cleanupScript,
-                    table,
-                    $"'{table}' is a Copilot usage-report table in the entity model but is never " +
-                    "mentioned in Clean Old Data Data.sql, so it grows forever (issue #286). Either " +
-                    "add a retention delete for it, or - if it genuinely must not be aged - name it in " +
-                    "a comment explaining why, as copilot_interaction_user_watermarks does.");
+                    @"delete\s+top\s*\(\s*@copilotBatch\s*\)\s+from\s+" + Regex.Escape(table) + @"\b",
+                    RegexOptions.IgnoreCase);
+
+                var exempt = Regex.IsMatch(
+                    cleanupScript,
+                    @"RETENTION-EXEMPT:\s*" + Regex.Escape(table) + @"\b",
+                    RegexOptions.IgnoreCase);
+
+                Assert.IsTrue(purged || exempt,
+                    $"'{table}' is a Copilot usage-report table in the entity model, but Clean Old Data " +
+                    "Data.sql neither purges it nor declares it exempt, so it grows forever (issue #286). " +
+                    $"Either add 'delete top (@copilotBatch) from {table} where ...' inside a batch loop, " +
+                    $"or - if it genuinely must not be aged - add a comment line 'RETENTION-EXEMPT: {table}' " +
+                    "explaining why, as copilot_interaction_user_watermarks is excluded on purpose.");
             }
+        }
+
+        /// <summary>
+        /// Every <c>[Table]</c>-mapped Copilot entity declared alongside the usage-report classes.
+        /// <para>
+        /// <see cref="Assembly.GetTypes"/> throws <see cref="ReflectionTypeLoadException"/> if any type
+        /// in the assembly fails to load, which would error this test rather than fail it cleanly. The
+        /// partial results it carries are enough for an inventory check, so use them.
+        /// </para>
+        /// </summary>
+        private static List<string> DiscoverCopilotUsageReportTables()
+        {
+            var usageReportNamespace = typeof(CopilotUsageUserActivityLog).Namespace;
+
+            Type[] types;
+            try
+            {
+                types = typeof(CopilotUsageUserActivityLog).Assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                types = ex.Types.Where(t => t != null).ToArray();
+            }
+
+            return types
+                .Where(t => t.Namespace == usageReportNamespace)
+                .Select(t => t.GetCustomAttribute<TableAttribute>())
+                .Where(a => a != null && a.Name.StartsWith("copilot_", StringComparison.OrdinalIgnoreCase))
+                .Select(a => a.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         /// <summary>
