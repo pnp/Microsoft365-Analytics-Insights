@@ -690,7 +690,10 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN AgentUsers AS u ON u.agent_id = t.agent_id\r\n" +
                 "LEFT JOIN AgentDays AS d ON d.agent_id = t.agent_id\r\n" +
                 "LEFT JOIN AgentApps AS a ON a.agent_id = t.agent_id\r\n" +
-                "ORDER BY Interactions DESC\r\n" +
+                // ag.id breaks ties deterministically. Without it, TOP truncates the tie region at the cap
+                // arbitrarily, so which agents survive varies between runs - the sibling capped queries in this
+                // file (LicensedUsersSql, LicenceOpportunitiesSql) both carry a unique tie-break for the same reason.
+                "ORDER BY Interactions DESC, ag.id\r\n" +
                 "OPTION (RECOMPILE);";
         }
 
@@ -779,7 +782,9 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN Agents AS g ON g.user_id = t.user_id\r\n" +
                 "LEFT JOIN dbo.users AS u ON u.id = t.user_id\r\n" +
                 "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
-                "ORDER BY Interactions DESC\r\n" +
+                // Deterministic truncation - see the note in AgentUsageSql. This one matters more: when the cap
+                // bites, FinaliseUnlicensed derives the habit distribution from whichever rows survived.
+                "ORDER BY Interactions DESC, t.user_id\r\n" +
                 "OPTION (RECOMPILE);";
         }
 

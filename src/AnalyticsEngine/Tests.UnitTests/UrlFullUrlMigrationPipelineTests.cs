@@ -49,7 +49,7 @@ namespace Tests.UnitTests
         // AddCopilotInteractionHistory adds the Copilot interaction-history tables, and
         // WidenCopilotAccessedResourceDedupIndex / IndexCopilotInteractionKeywordsByKeyword /
         // IndexCopilotInteractionsDedupWindow are three further schema-only index migrations.
-        private const string LatestId = "202608210700003_IndexCopilotInteractionsDedupWindow";
+        private const string LatestId = "202608250900001_IndexCopilotAccessedResourceFkColumns";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

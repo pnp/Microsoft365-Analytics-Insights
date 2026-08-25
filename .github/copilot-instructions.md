@@ -63,6 +63,7 @@ Also:
   - See *Prove every schema change improves performance BEFORE it is approved for stable* in [`src/AnalyticsEngine/.github/copilot-instructions.md`](../src/AnalyticsEngine/.github/copilot-instructions.md), which is the authoritative detail for this rule.
 - **Give admins an upgrade-time estimate for every migration**, as a function of table size (e.g. 1M / 10M / 100M rows), and say whether the build is online or offline on their SQL edition. Index builds on the large fact tables (`audit_events`, `hits`) are the ones that decide the maintenance window.
 - The `release-manager` agent (`.github/agents/release-manager.agent.md`) automates this end to end.
+- The `release-critic` agent (`.github/agents/release-critic.agent.md`) hardens a release *before* it ships: it runs an iterative multi-model critique loop — review, fix blockers, re-review — until a round comes back clean, verifying each finding against the code and testing each fix in both directions. Use it on any release carrying schema changes or a large feature branch. It is deliberately a loop: in the session it was derived from, four consecutive rounds each found a defect introduced by the *previous* round's fix, and the two most damaging would have broken upgrades for exactly the customers the change was meant to protect.
 
 ## Documentation
 - The wiki repo for Microsoft365-Analytics-Insights is normally cloned as a sibling directory named `Microsoft365-Analytics-Insights.wiki` (e.g., `V:\Repos\Microsoft365-Analytics-Insights.wiki`).

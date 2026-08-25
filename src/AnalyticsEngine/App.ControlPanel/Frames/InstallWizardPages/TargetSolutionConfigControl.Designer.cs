@@ -283,7 +283,7 @@
             this.chkCopilotInteractionHistory.Name = "chkCopilotInteractionHistory";
             this.chkCopilotInteractionHistory.Size = new System.Drawing.Size(280, 17);
             this.chkCopilotInteractionHistory.TabIndex = 27;
-            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (pilot group only)";
+            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (tenant-wide unless scoped)";
             this.chkCopilotInteractionHistory.UseVisualStyleBackColor = true;
             // 
             // lblGUITargetsHeader

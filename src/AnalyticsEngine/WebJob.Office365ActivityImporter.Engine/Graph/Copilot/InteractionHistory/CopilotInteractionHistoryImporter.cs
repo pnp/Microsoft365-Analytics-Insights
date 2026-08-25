@@ -262,6 +262,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                     return await SelectDueUsersInGroupsAsync(runLog, now, cap);
                 }
             }
+            else
+            {
+                // Unscoped by configuration. This is a supported choice, not a mistake - see
+                // Import_DoesNotRequireAGroupScope: the workload toggle and the AiEnterpriseInteraction.Read.All
+                // permission are the controls that decide whether this runs, and requiring a group filter as well
+                // would make an admin who wants tenant-wide history opt in twice.
+                //
+                // It is logged at warning level anyway, because the scope is materially wider than the narrowed
+                // case and nothing else says so at run time: every enabled user's prompt history is read, and
+                // where Cognitive Services is configured that prompt text is sent to Azure AI Language. An admin
+                // reading the log should be able to tell which of the two modes they are in without inspecting
+                // config.
+                _logger.LogWarning(
+                    "Copilot interaction history: no UserGroupsFilter is configured, so this import is tenant-wide - "
+                    + "every enabled user is eligible, capped per cycle. Where Cognitive Services is configured, "
+                    + "prompt text for those users is sent to Azure AI Language for enrichment. Set UserGroupsFilter "
+                    + "to the pilot group name(s) to narrow it.");
+            }
 
             return await SelectDueUsersAcrossDirectoryAsync(runLog, now, cap);
         }
