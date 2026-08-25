@@ -51,9 +51,14 @@
      * A VERY LARGE DATABASE STILL NEEDS A MAINTENANCE WINDOW FOR THIS SCRIPT, ON EVERY EDITION.
        Section 4 adds two CHECKED foreign keys to copilot_event_accessed_resources, and SQL Server
        validates each one with a scan of the table while holding a schema-modification (Sch-M) lock,
-       which blocks all access including reads. There is no ONLINE form of foreign-key validation, so
-       Enterprise, Azure SQL DB and Managed Instance get NO relief here - unlike the index builds in
-       the follow-on script, which can go online.
+       which blocks all access including reads. ONLINE is an INDEX-operation option; there is no
+       online form of foreign-key validation, so Enterprise, Azure SQL DB and Managed Instance get NO
+       relief here - unlike the index builds in the follow-on script, which can go online.
+       Do not be misled by the error text if you try it: on a non-Enterprise edition
+       ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY ... WITH (ONLINE = ON) is parsed and then fails
+       with "Online index operations can only be performed in Enterprise edition of SQL Server",
+       which reads as though Enterprise would make it online. It would not - there is no index being
+       built for a foreign key, and the validation scan is offline on every edition.
        Measured: 300,000 rows with every value NULL still cost 8,139 logical reads and a Sch-M lock per
        constraint - the validation scans regardless of whether there is anything to check. Extrapolating
        the migration's own 3,000,000-row figure (~0.6-0.7 s per constraint), expect roughly 0.4-0.5 s at

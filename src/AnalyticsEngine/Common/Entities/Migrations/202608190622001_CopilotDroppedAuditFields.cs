@@ -38,7 +38,12 @@ namespace Common.Entities.Migrations
     ///   * The two foreign keys on copilot_event_accessed_resources are the only step that touches the
     ///     existing data, and they are NOT free. SQL Server validates each checked constraint by scanning
     ///     the table while holding a schema-modification (Sch-M) lock, which blocks all access including
-    ///     reads - and there is no ONLINE form of foreign-key validation, so no edition avoids it.
+    ///     reads. ONLINE is an INDEX-operation option and there is no online form of foreign-key
+    ///     validation, so no edition avoids this - unlike the index builds in
+    ///     <see cref="IndexCopilotAccessedResourceFkColumns"/>. (Misleading detail if you go looking:
+    ///     on a non-Enterprise edition, ADD CONSTRAINT ... FOREIGN KEY ... WITH (ONLINE = ON) parses and
+    ///     then fails with "Online index operations can only be performed in Enterprise edition", which
+    ///     reads as if Enterprise would help. It would not; no index is built for a foreign key.)
     ///     The scan happens even though every existing row has NULL in both columns and there is
     ///     therefore nothing to verify: measured, 300,000 all-NULL rows still cost 8,139 logical reads and
     ///     a Sch-M lock per constraint. On a 3,000,000-row junction table that was about 7,800 logical
