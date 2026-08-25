@@ -24,7 +24,8 @@
 
      New columns
        * copilot_chats.thread_id, .client_region, .copilot_log_version
-       * copilot_event_accessed_resources.action_id, .list_item_unique_id_id  (+ FK index each)
+       * copilot_event_accessed_resources.action_id, .list_item_unique_id_id
+         (their FK indexes are NOT built here - see 202608250900001)
        * copilot_event_messages.size, .is_prompt
        * copilot_ai_models.provider_name, .version
 
@@ -241,10 +242,12 @@ GO
    --------------------------------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------------------------------
-   4. Foreign keys for the two new columns (guarded). Cheap: every existing row has NULL in both, so
-      every existing row has NULL in both columns so WITH CHECK finds nothing to verify. The FK-column
+   4. Foreign keys for the two new columns (guarded). NOT cheap on a large table, despite there being
+      nothing to verify: every existing row has NULL in both columns, but WITH CHECK still scans the
+      whole table to prove it, under a Sch-M lock that blocks reads as well as writes. The FK-column
       indexes do NOT exist yet at this point (they are built by 202608250900001), so each constraint
-      costs one scan of the table - about 7,800 logical reads / ~0.6-0.7 s at 3,000,000 rows.
+      costs one scan - about 7,800 logical reads / ~0.6-0.7 s at 3,000,000 rows. See SAFETY at the top
+      for the measured figures and why no edition can do this online.
    --------------------------------------------------------------------------------------------------- */
 IF OBJECT_ID(N'dbo.copilot_event_accessed_resource_actions', N'U') IS NOT NULL
    AND COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'action_id') IS NOT NULL

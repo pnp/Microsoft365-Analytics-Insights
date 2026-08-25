@@ -310,12 +310,13 @@ namespace Web.AnalyticsWeb.Controllers
         /// date-filtered top-N over a large link table is the shape that goes quadratic if written
         /// naively). Benchmark: 1,000,000 interactions over 400 days, 200,000 users, 10,000,000 link
         /// rows, 50,000 distinct phrases with a Zipf-like spread (the hottest 1% of phrases hold ~21%
-        /// of all links). Medians of five runs, warm cache, after a discarded cold run:
+        /// of all links). True medians (PERCENTILE_CONT) of seven runs, warm cache, after a discarded
+        /// cold run; interquartile spread was under 2% on every row:
         ///
         ///   Query          1 month    3 months   6 months
-        ///   key phrases    2,023 ms   2,542 ms   3,155 ms
-        ///   sentiment        157 ms     230 ms     331 ms
-        ///   languages        280 ms     523 ms     248 ms
+        ///   key phrases    1,923 ms   2,375 ms   2,969 ms
+        ///   sentiment        156 ms     220 ms     313 ms
+        ///   languages        281 ms     469 ms     234 ms
         ///
         /// It is NOT quadratic - cost grows sub-linearly with the window. What the plan does do is read
         /// the whole of IX_copilot_interaction_keywords_keyword_id (22,321 logical reads) whatever the
@@ -325,15 +326,18 @@ namespace Web.AnalyticsWeb.Controllers
         /// result is cached for 60 s - so the worst case is one ~3 s query per window per minute.
         ///
         /// The obvious "optimisation" was measured and REJECTED. Forcing a loop join so the link table
-        /// is seeked per interaction instead of scanned:
+        /// is seeked per interaction instead of scanned (same methodology, medians of seven):
         ///
-        ///   Window     shipped (hash)          forced loop join
-        ///   1 month    22,321 reads / 1,969 ms   248,985 reads / 1,451 ms   (26% faster, 11x reads)
-        ///   6 months   22,321 reads / 3,049 ms 1,453,450 reads / 9,225 ms   (3x SLOWER, 65x reads)
+        ///   Window     shipped      forced loop   verdict
+        ///   1 month    1,923 ms     1,500 ms      22% faster, but 11x the logical reads
+        ///   3 months   2,375 ms     4,361 ms      1.8x SLOWER
+        ///   6 months   2,969 ms     9,252 ms      3.1x SLOWER, 65x the logical reads
         ///
-        /// A join hint would therefore help the narrowest window slightly and hurt the widest badly,
-        /// which is exactly the trap the repo's schema-performance guidance warns about. The optimiser's
-        /// unhinted choice is correct at every window, so no hint and no extra index are shipped.
+        /// The crossover sits between the 1- and 3-month windows, so a join hint would help only the
+        /// narrowest of the three windows the UI offers and hurt the other two - exactly the trap the
+        /// repo's schema-performance guidance describes, and what CopilotQueries_NeverForceAJoinHint
+        /// guards. The optimiser's unhinted choice is right at every window, so no hint and no extra
+        /// index are shipped.
         /// </remarks>
         private static List<Task<ReportChart>> CopilotPromptInsightCharts(DateTime from, List<DateTime> weekSpine)
         {

@@ -8,6 +8,7 @@ using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -27,6 +28,104 @@ namespace Tests.UnitTests
                 await InsertTestDataAll(db);
 
                 await db.Database.ExecuteSqlCommandAsync(cleanupScript);
+            }
+        }
+
+        /// <summary>
+        /// Issue #286 asked for the Copilot usage-report tables to gain a retention bound AND for the
+        /// delete to be batched, because at the 200,000-user baseline the table gains roughly 800,000
+        /// rows a day and the first purge after enabling the import can be tens of millions of rows.
+        /// <para>
+        /// This asserts the outcome rather than merely running the script: rows older than the cutoff
+        /// go, rows inside it stay. Before the batching change the script deleted these in one
+        /// statement; the assertion holds either way, which is the point - it pins the retention
+        /// behaviour so a future rewrite of the loop cannot silently stop purging.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public async Task Cleanup_PurgesOldCopilotUsageReportRows_AndKeepsRecentOnes()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
+            // The script's cutoff is one month before now, so straddle it.
+            var wellOutsideRetention = DateTime.Now.AddMonths(-6).Date;
+            var wellInsideRetention = DateTime.Now.AddDays(-2).Date;
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User
+                {
+                    UserPrincipalName = "purge" + DateTime.Now.Ticks + "@example.com",
+                    Mail = "purge" + DateTime.Now.Ticks + "@example.com",
+                };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+
+                db.CopilotUsageUserActivityLogs.Add(new CopilotUsageUserActivityLog
+                {
+                    User = user,
+                    Date = wellOutsideRetention,
+                    ReportPeriodDays = 28,
+                });
+                db.CopilotUsageUserActivityLogs.Add(new CopilotUsageUserActivityLog
+                {
+                    User = user,
+                    Date = wellInsideRetention,
+                    ReportPeriodDays = 28,
+                });
+                await db.SaveChangesAsync();
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await db.Database.ExecuteSqlCommandAsync(cleanupScript);
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var remaining = db.CopilotUsageUserActivityLogs
+                    .Where(r => r.User.ID == userId)
+                    .Select(r => r.Date)
+                    .ToList();
+
+                Assert.IsFalse(remaining.Contains(wellOutsideRetention),
+                    "A Copilot usage-report row older than the retention cutoff survived the purge. " +
+                    "copilot_usage_user_activity_log is the fastest-growing table this feature adds " +
+                    "(issue #286); without this delete it grows forever.");
+                Assert.IsTrue(remaining.Contains(wellInsideRetention),
+                    "The purge deleted a Copilot usage-report row INSIDE the retention window. " +
+                    "A batching bug that ignores the date predicate would look exactly like this.");
+            }
+        }
+
+        /// <summary>
+        /// Inventory guard, also from issue #286: fail when a Copilot usage-report table exists in the
+        /// model but has no cleanup rule in the script. Adding a table to a growing feature and
+        /// forgetting to age it is precisely how the Teams add-on tables became expensive enough to
+        /// need deprecating, and nothing else in the build notices.
+        /// </summary>
+        [TestMethod]
+        public void CleanupScript_CoversEveryCopilotUsageReportTable()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
+            // Tables written by the Copilot usage-report import (#260) and its diagnostics log.
+            var mustBeAged = new[]
+            {
+                "copilot_usage_user_activity_log",
+                "copilot_user_count_log",
+                "copilot_usage_report_import_log",
+            };
+
+            foreach (var table in mustBeAged)
+            {
+                StringAssert.Contains(
+                    cleanupScript,
+                    "delete top (10000) from " + table,
+                    $"'{table}' has no batched retention delete in Clean Old Data Data.sql. Every " +
+                    "Copilot usage-report table must be aged, and in batches - see issue #286.");
             }
         }
 
