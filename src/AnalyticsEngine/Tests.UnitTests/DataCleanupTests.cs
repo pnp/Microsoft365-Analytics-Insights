@@ -35,8 +35,11 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// Issue #286 asked for the Copilot usage-report tables to gain a retention bound AND for the
-        /// delete to be batched, because at the 200,000-user baseline the table gains roughly 800,000
-        /// rows a day and the first purge after enabling the import can be tens of millions of rows.
+        /// delete to be batched. The per-user detail report is requested for a single period
+        /// (<c>CopilotReportRequest.DefaultRefreshPeriod</c>, "D28"), so the table gains about one row
+        /// per licensed user per day - roughly 200,000 a day at the 200,000-user baseline, or ~6 million
+        /// over the one-month retention window. The first purge after enabling the import has to clear
+        /// everything accumulated since then, which can be far more.
         /// <para>
         /// This asserts the outcome rather than merely running the script: rows older than the cutoff
         /// go, rows inside it stay. Before the batching change the script deleted these in one
