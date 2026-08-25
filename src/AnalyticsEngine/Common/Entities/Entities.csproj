@@ -382,6 +382,10 @@
     <Compile Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.Designer.cs">
       <DependentUpon>202608210700003_IndexCopilotInteractionsDedupWindow.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.cs" />
+    <Compile Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.Designer.cs">
+      <DependentUpon>202608250900001_IndexCopilotAccessedResourceFkColumns.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -573,6 +577,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.resx">
       <DependentUpon>202608210700003_IndexCopilotInteractionsDedupWindow.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.resx">
+      <DependentUpon>202608250900001_IndexCopilotAccessedResourceFkColumns.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

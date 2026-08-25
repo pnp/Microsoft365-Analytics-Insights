@@ -354,7 +354,8 @@ SET @t = SYSUTCDATETIME();
 -- included. They are part of the row's identity, not payload: the same document Read and then Written in
 -- one interaction is two distinct facts, and collapsing them threw one away (issue #287). Matching on
 -- the full tuple is also what stops a re-imported batch inserting a second copy of a row that only
--- differs in the columns the old tuple ignored.
+-- differs in the columns the old tuple ignored - in steady state. Across the upgrade that added those
+-- two columns it is NOT sufficient on its own; see the note on the second NOT EXISTS below.
 --
 -- IX_copilot_event_accessed_resources_dedup carries all seven as KEY columns (widened from five by
 -- migration WidenCopilotAccessedResourceDedupIndex), so this remains an exact (chat_id, tuple) seek
@@ -366,6 +367,20 @@ SET @t = SYSUTCDATETIME();
 -- one (10,904 against 63,883 at 20,000 resolved rows) - but it is 5.5x SLOWER in wall-clock (521 ms
 -- against 94 ms), because the extra columns are only residual predicates so the optimiser abandons the
 -- seek and hash-joins a full index scan instead. See the migration's doc comment for the full table.
+-- The SECOND NOT EXISTS below handles the upgrade boundary, and is not redundant. Migration
+-- CopilotDroppedAuditFields adds action_id and list_item_unique_id_id as NULLable with no backfill, so
+-- every row written before that upgrade has NULL in both. A re-staged pre-upgrade event now resolves a
+-- non-NULL action_id (the payload's Action, present on most accessed resources), and NULL-safe INTERSECT
+-- correctly reports (.., NULL, NULL) as different from (.., <action>, ..) - so the full-tuple check alone
+-- would insert a SECOND copy of a row that is already there. Re-staging is routine, not exotic: the
+-- importer re-reads a rolling look-back window and the blob checkpoint is in-memory by default, so every
+-- event imported in the days before the upgrade comes back through this merge afterwards. Those
+-- duplicates would be permanent and would silently inflate every COUNT over this table.
+--
+-- So a stored row with NULL in both new columns is treated as matching on the five original columns.
+-- That deliberately declines to add a second action for an event imported pre-upgrade: under the old
+-- five-column tuple such an event only ever stored one row anyway, so this preserves what was recorded
+-- rather than half-revising it. Both branches are keyed on copilot_chat_id, so both seek.
 INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id, action_id, list_item_unique_id_id)
 SELECT r.event_id, r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id,
        r.action_id, r.list_item_unique_id_id
@@ -378,6 +393,18 @@ WHERE NOT EXISTS (
           SELECT x.resource_id_id, x.resource_name_id, x.resource_site_url_id, x.resource_type_id, x.sensitivity_label_id, x.action_id, x.list_item_unique_id_id
           INTERSECT
           SELECT r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id, r.action_id, r.list_item_unique_id_id
+      )
+)
+AND NOT EXISTS (
+    SELECT 1
+    FROM copilot_event_accessed_resources x
+    WHERE x.copilot_chat_id = r.event_id
+      AND x.action_id IS NULL
+      AND x.list_item_unique_id_id IS NULL
+      AND EXISTS (
+          SELECT x.resource_id_id, x.resource_name_id, x.resource_site_url_id, x.resource_type_id, x.sensitivity_label_id
+          INTERSECT
+          SELECT r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id
       )
 );
 

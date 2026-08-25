@@ -35,23 +35,26 @@
      * The five CREATE TABLEs are instant (new, empty tables).
      * Every ALTER TABLE ... ADD adds a NULLable column with no default, which SQL Server applies as a
        metadata-only change - instant even on a 100M-row copilot_event_accessed_resources.
-     * The only heavy step is the two foreign-key indexes on copilot_event_accessed_resources.
-       Measured at synthetic scale (LocalDB, offline build, buffer pool dropped before each build,
-       medians of 3 runs) on a 3,000,000-row junction table: 2.5 s / 40.7 MB for the action_id index and
-       3.1 s / 40.7 MB for the list_item_unique_id_id index - 5.6 s and 81 MB for the pair.
-       Extrapolating as O(n log n) the pair costs roughly 2 s / 27 MB at 1M junction rows,
-       20 s / 0.3 GB at 10M rows and 4 min / 2.7 GB at 100M rows. Real timings vary with SQL tier, IO
-       throughput and memory grant.
+     * The two foreign keys on copilot_event_accessed_resources are the only step that touches existing
+       data, and they are cheap but not free. Their FK-column indexes are built by the SEPARATE migration
+       202608250900001_IndexCopilotAccessedResourceFkColumns, so SQL Server validates each constraint
+       with one pass over the table: about 7,800 logical reads and ~0.6-0.7 s per constraint on a
+       synthetic 3,000,000-row table. Every existing row has NULL in both columns, so the cost is the
+       scan, not the checking.
+     * The two foreign-key INDEXES are NOT built by this script any more - see section 3 - so the long,
+       lock-taking step that used to dominate this migration now belongs to the follow-on script.
 
    SAFETY
      * Idempotent / re-runnable: every object is guarded, so an already-applied step is a no-op and the
        __MigrationHistory stamp is still reached.
-     * The index builds attempt ONLINE (non-blocking) on Enterprise (3) / Azure SQL DB (5) / MI (8) and
-       fall back to OFFLINE elsewhere. Where ONLINE is unavailable each build briefly locks
-       copilot_event_accessed_resources, which is the largest table in the schema on a Copilot-heavy
-       tenant - run this in a MAINTENANCE WINDOW WITH THE IMPORTER STOPPED.
-     * No wrapping transaction (matches suppressTransaction: true on the index step); an interrupted run
-       converges on re-run.
+     * No lock-taking index build here, so this script does not by itself require a maintenance window.
+       The follow-on script 202608250900001_IndexCopilotAccessedResourceFkColumns.manual.sql does: where
+       ONLINE is unavailable each of its builds briefly locks copilot_event_accessed_resources, the
+       largest table in the schema on a Copilot-heavy tenant.
+     * No wrapping transaction; every object is independently guarded, so an interrupted run converges on
+       re-run rather than needing hand repair.
+     * Run it with sqlcmd -b so execution stops at the first error. The completion guard before the
+       __MigrationHistory stamp is a backstop, not a substitute.
 
    PREREQUISITE
      The database must already be on migration 202608131055001_IndexReportDateQueries (the previous release).
@@ -110,16 +113,36 @@ BEGIN
         [ai_system_plugin_id] [int] NOT NULL,
         CONSTRAINT [PK_dbo.copilot_event_ai_system_plugins] PRIMARY KEY ([id])
     );
+    RAISERROR('CopilotDroppedAuditFields: created copilot_event_ai_system_plugins.', 0, 1) WITH NOWAIT;
+END
+GO
+
+-- Each index and foreign key is guarded INDEPENDENTLY of the table, not nested inside the
+-- CREATE TABLE block. There is no transaction around these batches, so CREATE TABLE can commit and a
+-- following CREATE INDEX / ALTER TABLE can still fail. If they were nested, the table would exist on
+-- re-run, the whole block would be skipped, and the missing index or constraint could never be
+-- created - the completion guard at the end would then correctly refuse to stamp, forever, with no
+-- way for the operator to converge. Guarding each object separately makes a re-run repair exactly
+-- what is missing, which is what "idempotent and resumable" has to mean here.
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_copilot_chat_id')
     CREATE INDEX [IX_copilot_chat_id] ON [dbo].[copilot_event_ai_system_plugins]([copilot_chat_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_ai_system_plugin_id')
     CREATE INDEX [IX_ai_system_plugin_id] ON [dbo].[copilot_event_ai_system_plugins]([ai_system_plugin_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_ai_system_plugins_ai_system_plugin_id')
     ALTER TABLE [dbo].[copilot_event_ai_system_plugins]
         ADD CONSTRAINT [FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_ai_system_plugins_ai_system_plugin_id]
         FOREIGN KEY ([ai_system_plugin_id]) REFERENCES [dbo].[copilot_ai_system_plugins] ([id]) ON DELETE CASCADE;
+GO
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_chats_copilot_chat_id')
     ALTER TABLE [dbo].[copilot_event_ai_system_plugins]
         ADD CONSTRAINT [FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_chats_copilot_chat_id]
         FOREIGN KEY ([copilot_chat_id]) REFERENCES [dbo].[copilot_chats] ([event_id]) ON DELETE CASCADE;
-    RAISERROR('CopilotDroppedAuditFields: created copilot_event_ai_system_plugins.', 0, 1) WITH NOWAIT;
-END
 GO
 
 IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NULL
@@ -132,16 +155,29 @@ BEGIN
         [container_id] [nvarchar](450),
         CONSTRAINT [PK_dbo.copilot_event_contexts] PRIMARY KEY ([id])
     );
+    RAISERROR('CopilotDroppedAuditFields: created copilot_event_contexts.', 0, 1) WITH NOWAIT;
+END
+GO
+
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_copilot_chat_id')
     CREATE INDEX [IX_copilot_chat_id] ON [dbo].[copilot_event_contexts]([copilot_chat_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_context_type_id')
     CREATE INDEX [IX_context_type_id] ON [dbo].[copilot_event_contexts]([context_type_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_event_context_types_context_type_id')
     ALTER TABLE [dbo].[copilot_event_contexts]
         ADD CONSTRAINT [FK_dbo.copilot_event_contexts_dbo.copilot_event_context_types_context_type_id]
         FOREIGN KEY ([context_type_id]) REFERENCES [dbo].[copilot_event_context_types] ([id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id')
     ALTER TABLE [dbo].[copilot_event_contexts]
         ADD CONSTRAINT [FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id]
         FOREIGN KEY ([copilot_chat_id]) REFERENCES [dbo].[copilot_chats] ([event_id]) ON DELETE CASCADE;
-    RAISERROR('CopilotDroppedAuditFields: created copilot_event_contexts.', 0, 1) WITH NOWAIT;
-END
 GO
 
 /* ---------------------------------------------------------------------------------------------------
@@ -176,108 +212,24 @@ IF COL_LENGTH(N'dbo.copilot_event_messages', N'is_prompt') IS NULL
 GO
 
 /* ---------------------------------------------------------------------------------------------------
-   3. Foreign-key indexes on copilot_event_accessed_resources.
-      VERBATIM copy of CopilotDroppedAuditFields.JunctionIndexes_Sql (the constant the migration runs),
-      so the by-hand and installer paths execute exactly the same SQL. THIS IS THE LONG STEP.
+   3. (Removed.) The two foreign-key indexes on copilot_event_accessed_resources are NOT built here.
+
+      They were split out into their own migration, 202608250900001_IndexCopilotAccessedResourceFkColumns,
+      so that this migration could become a single atomic transaction. An index build cannot run inside
+      the migration transaction on a large table, and EF commits everything before a transaction-suppressed
+      statement - so a failed build used to leave this migration's tables, columns and foreign keys
+      committed but unstamped, after which the retry failed on objects that already existed.
+
+      Run 202608250900001_IndexCopilotAccessedResourceFkColumns.manual.sql after this one to build them.
+      This script deliberately does not, so the by-hand path matches what the installer actually does, and
+      so a failure building those indexes cannot block THIS migration's stamp.
    --------------------------------------------------------------------------------------------------- */
-SET NOCOUNT ON;
-
-DECLARE @migration nvarchar(100) = N'CopilotDroppedAuditFields';
-DECLARE @start datetime2(3) = SYSUTCDATETIME();
-DECLARE @stepStart datetime2(3);
-DECLARE @msg nvarchar(2000);
-DECLARE @tbl sysname = N'copilot_event_accessed_resources';
-DECLARE @edition int = CAST(SERVERPROPERTY('EngineEdition') AS int);
-DECLARE @canOnline bit = CASE WHEN CAST(SERVERPROPERTY('EngineEdition') AS int) IN (3, 5, 8) THEN 1 ELSE 0 END;
-DECLARE @onlineDone bit;
-DECLARE @rowCount bigint;
-DECLARE @sql nvarchar(max);
-DECLARE @ix sysname;
-DECLARE @col sysname;
-DECLARE @i int = 1;
-
-DECLARE @targets table (seq int NOT NULL PRIMARY KEY, ix sysname NOT NULL, col sysname NOT NULL);
-INSERT INTO @targets (seq, ix, col) VALUES
-    (1, N'IX_copilot_event_accessed_resources_action_id', N'action_id'),
-    (2, N'IX_copilot_event_accessed_resources_list_item_unique_id_id', N'list_item_unique_id_id');
-
-SET @msg = @migration + N': EngineEdition=' + CAST(@edition AS nvarchar(10)) + N'; ONLINE index builds '
-    + CASE WHEN @canOnline = 1 THEN N'will be attempted (with offline fallback).'
-           ELSE N'are not supported on this edition - each build briefly locks the table, so run large upgrades in a maintenance window with the importer stopped.' END;
-RAISERROR(@msg, 0, 1) WITH NOWAIT;
-
-IF OBJECT_ID(N'dbo.' + @tbl, N'U') IS NULL
-BEGIN
-    SET @msg = @migration + N': dbo.' + @tbl + N' does not exist; skipping the junction indexes.';
-    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-END
-ELSE
-BEGIN
-    SET @rowCount = (SELECT ISNULL(SUM(p.rows), 0) FROM sys.partitions p
-                     WHERE p.object_id = OBJECT_ID(N'dbo.' + @tbl) AND p.index_id IN (0, 1));
-    SET @msg = @migration + N': ' + @tbl + N' row estimate = ' + CAST(@rowCount AS nvarchar(20)) + N'.';
-    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-
-    WHILE @i <= 2
-    BEGIN
-        SELECT @ix = ix, @col = col FROM @targets WHERE seq = @i;
-
-        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.' + @tbl) AND name = @col)
-        BEGIN
-            SET @msg = @migration + N': ' + @tbl + N'.' + @col + N' does not exist; skipping [' + @ix + N'].';
-            RAISERROR(@msg, 0, 1) WITH NOWAIT;
-        END
-        ELSE IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.' + @tbl) AND name = @ix)
-        BEGIN
-            SET @msg = @migration + N': [' + @ix + N'] already exists; nothing to do.';
-            RAISERROR(@msg, 0, 1) WITH NOWAIT;
-        END
-        ELSE
-        BEGIN
-            SET @stepStart = SYSUTCDATETIME();
-            SET @onlineDone = 0;
-
-            IF @canOnline = 1
-            BEGIN
-                BEGIN TRY
-                    SET @msg = @migration + N': creating [' + @ix + N'] WITH (ONLINE = ON)...';
-                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-                    SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']) WITH (ONLINE = ON);';
-                    EXEC sp_executesql @sql;
-                    SET @onlineDone = 1;
-                END TRY
-                BEGIN CATCH
-                    SET @msg = @migration + N': ONLINE build of [' + @ix + N'] unavailable (' + ERROR_MESSAGE() + N'); retrying offline.';
-                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
-                END CATCH
-            END
-
-            IF @onlineDone = 0
-            BEGIN
-                SET @msg = @migration + N': creating [' + @ix + N'] (offline)...';
-                RAISERROR(@msg, 0, 1) WITH NOWAIT;
-                SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']);';
-                EXEC sp_executesql @sql;
-            END
-
-            SET @msg = @migration + N': [' + @ix + N'] created in '
-                + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms ('
-                + CASE WHEN @onlineDone = 1 THEN N'online' ELSE N'offline' END + N').';
-            RAISERROR(@msg, 0, 1) WITH NOWAIT;
-        END
-
-        SET @i += 1;
-    END
-END
-
-SET @msg = @migration + N': junction indexes finished in '
-    + CAST(DATEDIFF(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
-RAISERROR(@msg, 0, 1) WITH NOWAIT;
-GO
 
 /* ---------------------------------------------------------------------------------------------------
    4. Foreign keys for the two new columns (guarded). Cheap: every existing row has NULL in both, so
-      SQL Server's WITH CHECK validation seeks the indexes created above and finds nothing to verify.
+      every existing row has NULL in both columns so WITH CHECK finds nothing to verify. The FK-column
+      indexes do NOT exist yet at this point (they are built by 202608250900001), so each constraint
+      costs one scan of the table - about 7,800 logical reads / ~0.6-0.7 s at 3,000,000 rows.
    --------------------------------------------------------------------------------------------------- */
 IF OBJECT_ID(N'dbo.copilot_event_accessed_resource_actions', N'U') IS NOT NULL
    AND COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'action_id') IS NOT NULL
@@ -313,6 +265,96 @@ GO
    ===================================================================================================== */
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608190622001_CopilotDroppedAuditFields')
 BEGIN
+    /* ---------------------------------------------------------------------------------------------
+       Refuse to stamp unless the schema work above actually completed.
+
+       This script is split into GO batches, and by default sqlcmd/SSMS CONTINUE to the next batch after
+       a statement fails - a severity-16 error aborts its own batch, not the script. (Verified: a later
+       batch still ran after a severity-16 failure; only sqlcmd -b stops.) Without this check an
+       interrupted or partially failed run - out of disk, log full, killed session, cancelled index
+       build - would fall through to the stamp and record the migration as applied when it is not.
+
+       That failure mode is worse than the original error, because EF then believes the schema is at this
+       version: DatabaseUpgrader skips the migration forever, and the missing tables/columns surface much
+       later as runtime errors nobody can trace back to this upgrade. Stamping is the one step that must
+       never happen optimistically.
+
+       Run with sqlcmd -b (or SSMS SQLCMD mode with :on error exit) as well - this guard is the backstop,
+       not a substitute for stopping at the first error.
+       --------------------------------------------------------------------------------------------- */
+    DECLARE @missing nvarchar(max) = N'';
+
+    IF OBJECT_ID(N'dbo.copilot_event_accessed_resource_actions') IS NULL SET @missing += N'table copilot_event_accessed_resource_actions; ';
+    IF OBJECT_ID(N'dbo.copilot_ai_system_plugins') IS NULL SET @missing += N'table copilot_ai_system_plugins; ';
+    IF OBJECT_ID(N'dbo.copilot_event_context_types') IS NULL SET @missing += N'table copilot_event_context_types; ';
+    IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') IS NULL SET @missing += N'table copilot_event_ai_system_plugins; ';
+    IF OBJECT_ID(N'dbo.copilot_event_contexts') IS NULL SET @missing += N'table copilot_event_contexts; ';
+
+    IF COL_LENGTH(N'dbo.copilot_ai_models', N'provider_name') IS NULL SET @missing += N'copilot_ai_models.provider_name; ';
+    IF COL_LENGTH(N'dbo.copilot_ai_models', N'version') IS NULL SET @missing += N'copilot_ai_models.version; ';
+    IF COL_LENGTH(N'dbo.copilot_chats', N'thread_id') IS NULL SET @missing += N'copilot_chats.thread_id; ';
+    IF COL_LENGTH(N'dbo.copilot_chats', N'client_region') IS NULL SET @missing += N'copilot_chats.client_region; ';
+    IF COL_LENGTH(N'dbo.copilot_chats', N'copilot_log_version') IS NULL SET @missing += N'copilot_chats.copilot_log_version; ';
+    IF COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'action_id') IS NULL SET @missing += N'copilot_event_accessed_resources.action_id; ';
+    IF COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'list_item_unique_id_id') IS NULL SET @missing += N'copilot_event_accessed_resources.list_item_unique_id_id; ';
+    IF COL_LENGTH(N'dbo.copilot_event_messages', N'size') IS NULL SET @missing += N'copilot_event_messages.size; ';
+    IF COL_LENGTH(N'dbo.copilot_event_messages', N'is_prompt') IS NULL SET @missing += N'copilot_event_messages.is_prompt; ';
+
+    -- The two IX_copilot_event_accessed_resources_* foreign-key indexes are deliberately NOT asserted
+    -- here: they belong to 202608250900001_IndexCopilotAccessedResourceFkColumns, not to this migration.
+    -- Requiring them would let a failure in that migration's work block this one's stamp, which is the
+    -- coupling the split exists to remove.
+
+    -- The indexes and foreign keys on the two new junction tables are SEPARATE statements from their
+    -- CREATE TABLE, so the table existing does not prove they were created. A run interrupted between
+    -- them leaves a table with no indexes and no referential integrity, which the earlier version of
+    -- this guard would have accepted as complete.
+    IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_copilot_chat_id')
+            SET @missing += N'index IX_copilot_chat_id on copilot_event_ai_system_plugins; ';
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_ai_system_plugin_id')
+            SET @missing += N'index IX_ai_system_plugin_id on copilot_event_ai_system_plugins; ';
+    END
+
+    IF OBJECT_ID(N'dbo.copilot_event_contexts') IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_copilot_chat_id')
+            SET @missing += N'index IX_copilot_chat_id on copilot_event_contexts; ';
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_context_type_id')
+            SET @missing += N'index IX_context_type_id on copilot_event_contexts; ';
+    END
+
+    -- All six foreign keys, including the two added last on copilot_event_accessed_resources - those run
+    -- after the transaction-suppressed index build, so they are the most likely of all to be missed.
+    --
+    -- Looked up via sys.foreign_keys rather than OBJECT_ID(): EF's constraint names themselves contain
+    -- dots ("FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id"), so OBJECT_ID parses them
+    -- as multi-part server.database.schema.object names and returns NULL for a constraint that is
+    -- actually present. That produced a guard which refused to stamp a perfectly complete database.
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_ai_system_plugins_ai_system_plugin_id')
+        SET @missing += N'FK copilot_event_ai_system_plugins -> copilot_ai_system_plugins; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_chats_copilot_chat_id')
+        SET @missing += N'FK copilot_event_ai_system_plugins -> copilot_chats; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_event_context_types_context_type_id')
+        SET @missing += N'FK copilot_event_contexts -> copilot_event_context_types; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id')
+        SET @missing += N'FK copilot_event_contexts -> copilot_chats; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_accessed_resources_dbo.copilot_event_accessed_resource_actions_action_id')
+        SET @missing += N'FK copilot_event_accessed_resources.action_id; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_accessed_resources_dbo.copilot_event_accessed_resource_ids_list_item_unique_id_id')
+        SET @missing += N'FK copilot_event_accessed_resources.list_item_unique_id_id; ';
+
+    IF @missing <> N''
+    BEGIN
+        DECLARE @incomplete nvarchar(max) =
+            N'CopilotDroppedAuditFields: NOT stamped - the schema changes did not complete. Missing: '
+            + @missing
+            + N'Re-run this script (it is guarded and safe to repeat) and check the earlier output for the '
+            + N'failure. The migration is deliberately left unstamped so the upgrade can be retried.';
+        RAISERROR(@incomplete, 16, 1) WITH NOWAIT;
+    END
+    ELSE
     IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608131055001_IndexReportDateQueries')
     BEGIN
         DECLARE @model varbinary(max);
