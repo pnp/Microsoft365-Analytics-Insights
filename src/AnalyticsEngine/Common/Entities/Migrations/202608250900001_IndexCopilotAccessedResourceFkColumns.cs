@@ -46,15 +46,120 @@ namespace Common.Entities.Migrations
     public partial class IndexCopilotAccessedResourceFkColumns : DbMigration
     {
         /// <summary>
-        /// The index build, verbatim. Exposed as a constant so the manual upgrade script and the unit tests
-        /// run exactly the same SQL. Idempotent, guarded and edition-aware: the ONLINE attempt goes through
-        /// sp_executesql inside TRY/CATCH, which is what makes the "ONLINE is Enterprise only" error
-        /// catchable rather than batch-aborting, with a plain offline build as the fallback.
+        /// Builds the two foreign-key indexes on the (potentially huge) accessed-resource junction table.
+        /// Exposed as a constant so the manual upgrade script and unit tests use the exact same SQL.
+        /// Idempotent, guarded, edition-aware (ONLINE attempt via sp_executesql inside TRY/CATCH - which is
+        /// what makes the "ONLINE is Enterprise only" error catchable - with an offline fallback).
         /// </summary>
-        public const string Up_Sql = CopilotDroppedAuditFields.JunctionIndexes_Sql;
+        public const string Up_Sql = @"
+SET NOCOUNT ON;
 
-        /// <summary>Drops both indexes if present. Guarded, so it is safe on a database that never had them.</summary>
-        public const string Down_Sql = CopilotDroppedAuditFields.JunctionIndexesDown_Sql;
+DECLARE @migration nvarchar(100) = N'IndexCopilotAccessedResourceFkColumns';
+DECLARE @start datetime2(3) = SYSUTCDATETIME();
+DECLARE @stepStart datetime2(3);
+DECLARE @msg nvarchar(2000);
+DECLARE @tbl sysname = N'copilot_event_accessed_resources';
+DECLARE @edition int = CAST(SERVERPROPERTY('EngineEdition') AS int);
+DECLARE @canOnline bit = CASE WHEN CAST(SERVERPROPERTY('EngineEdition') AS int) IN (3, 5, 8) THEN 1 ELSE 0 END;
+DECLARE @onlineDone bit;
+DECLARE @rowCount bigint;
+DECLARE @sql nvarchar(max);
+DECLARE @ix sysname;
+DECLARE @col sysname;
+DECLARE @i int = 1;
+
+DECLARE @targets table (seq int NOT NULL PRIMARY KEY, ix sysname NOT NULL, col sysname NOT NULL);
+INSERT INTO @targets (seq, ix, col) VALUES
+    (1, N'IX_copilot_event_accessed_resources_action_id', N'action_id'),
+    (2, N'IX_copilot_event_accessed_resources_list_item_unique_id_id', N'list_item_unique_id_id');
+
+SET @msg = @migration + N': EngineEdition=' + CAST(@edition AS nvarchar(10)) + N'; ONLINE index builds '
+    + CASE WHEN @canOnline = 1 THEN N'will be attempted (with offline fallback).'
+           ELSE N'are not supported on this edition - each build briefly locks the table, so run large upgrades in a maintenance window with the importer stopped.' END;
+RAISERROR(@msg, 0, 1) WITH NOWAIT;
+
+IF OBJECT_ID(N'dbo.' + @tbl, N'U') IS NULL
+BEGIN
+    SET @msg = @migration + N': dbo.' + @tbl + N' does not exist; skipping the junction indexes.';
+    RAISERROR(@msg, 0, 1) WITH NOWAIT;
+END
+ELSE
+BEGIN
+    SET @rowCount = (SELECT ISNULL(SUM(p.rows), 0) FROM sys.partitions p
+                     WHERE p.object_id = OBJECT_ID(N'dbo.' + @tbl) AND p.index_id IN (0, 1));
+    SET @msg = @migration + N': ' + @tbl + N' row estimate = ' + CAST(@rowCount AS nvarchar(20)) + N'.';
+    RAISERROR(@msg, 0, 1) WITH NOWAIT;
+
+    WHILE @i <= 2
+    BEGIN
+        SELECT @ix = ix, @col = col FROM @targets WHERE seq = @i;
+
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.' + @tbl) AND name = @col)
+        BEGIN
+            SET @msg = @migration + N': ' + @tbl + N'.' + @col + N' does not exist; skipping [' + @ix + N'].';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        END
+        ELSE IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.' + @tbl) AND name = @ix)
+        BEGIN
+            SET @msg = @migration + N': [' + @ix + N'] already exists; nothing to do.';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        END
+        ELSE
+        BEGIN
+            SET @stepStart = SYSUTCDATETIME();
+            SET @onlineDone = 0;
+
+            IF @canOnline = 1
+            BEGIN
+                BEGIN TRY
+                    SET @msg = @migration + N': creating [' + @ix + N'] WITH (ONLINE = ON)...';
+                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
+                    SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']) WITH (ONLINE = ON);';
+                    EXEC sp_executesql @sql;
+                    SET @onlineDone = 1;
+                END TRY
+                BEGIN CATCH
+                    SET @msg = @migration + N': ONLINE build of [' + @ix + N'] unavailable (' + ERROR_MESSAGE() + N'); retrying offline.';
+                    RAISERROR(@msg, 0, 1) WITH NOWAIT;
+                END CATCH
+            END
+
+            IF @onlineDone = 0
+            BEGIN
+                SET @msg = @migration + N': creating [' + @ix + N'] (offline)...';
+                RAISERROR(@msg, 0, 1) WITH NOWAIT;
+                SET @sql = N'CREATE NONCLUSTERED INDEX [' + @ix + N'] ON [dbo].[' + @tbl + N'] ([' + @col + N']);';
+                EXEC sp_executesql @sql;
+            END
+
+            SET @msg = @migration + N': [' + @ix + N'] created in '
+                + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms ('
+                + CASE WHEN @onlineDone = 1 THEN N'online' ELSE N'offline' END + N').';
+            RAISERROR(@msg, 0, 1) WITH NOWAIT;
+        END
+
+        SET @i += 1;
+    END
+END
+
+SET @msg = @migration + N': junction indexes finished in '
+    + CAST(DATEDIFF(MILLISECOND, @start, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms.';
+RAISERROR(@msg, 0, 1) WITH NOWAIT;
+";
+
+        /// <summary>
+        /// SQL executed by <see cref="Down"/> for the junction indexes. Guarded and idempotent.
+        /// </summary>
+        public const string Down_Sql = @"
+SET NOCOUNT ON;
+IF OBJECT_ID(N'dbo.copilot_event_accessed_resources', N'U') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_accessed_resources') AND name = N'IX_copilot_event_accessed_resources_action_id')
+        DROP INDEX [IX_copilot_event_accessed_resources_action_id] ON [dbo].[copilot_event_accessed_resources];
+    IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_accessed_resources') AND name = N'IX_copilot_event_accessed_resources_list_item_unique_id_id')
+        DROP INDEX [IX_copilot_event_accessed_resources_list_item_unique_id_id] ON [dbo].[copilot_event_accessed_resources];
+END
+";
 
         public override void Up()
         {

@@ -35,23 +35,26 @@
      * The five CREATE TABLEs are instant (new, empty tables).
      * Every ALTER TABLE ... ADD adds a NULLable column with no default, which SQL Server applies as a
        metadata-only change - instant even on a 100M-row copilot_event_accessed_resources.
-     * The only heavy step is the two foreign-key indexes on copilot_event_accessed_resources.
-       Measured at synthetic scale (LocalDB, offline build, buffer pool dropped before each build,
-       medians of 3 runs) on a 3,000,000-row junction table: 2.5 s / 40.7 MB for the action_id index and
-       3.1 s / 40.7 MB for the list_item_unique_id_id index - 5.6 s and 81 MB for the pair.
-       Extrapolating as O(n log n) the pair costs roughly 2 s / 27 MB at 1M junction rows,
-       20 s / 0.3 GB at 10M rows and 4 min / 2.7 GB at 100M rows. Real timings vary with SQL tier, IO
-       throughput and memory grant.
+     * The two foreign keys on copilot_event_accessed_resources are the only step that touches existing
+       data, and they are cheap but not free. Their FK-column indexes are built by the SEPARATE migration
+       202608250900001_IndexCopilotAccessedResourceFkColumns, so SQL Server validates each constraint
+       with one pass over the table: about 7,800 logical reads and ~0.6-0.7 s per constraint on a
+       synthetic 3,000,000-row table. Every existing row has NULL in both columns, so the cost is the
+       scan, not the checking.
+     * The two foreign-key INDEXES are NOT built by this script any more - see section 3 - so the long,
+       lock-taking step that used to dominate this migration now belongs to the follow-on script.
 
    SAFETY
      * Idempotent / re-runnable: every object is guarded, so an already-applied step is a no-op and the
        __MigrationHistory stamp is still reached.
-     * The index builds attempt ONLINE (non-blocking) on Enterprise (3) / Azure SQL DB (5) / MI (8) and
-       fall back to OFFLINE elsewhere. Where ONLINE is unavailable each build briefly locks
-       copilot_event_accessed_resources, which is the largest table in the schema on a Copilot-heavy
-       tenant - run this in a MAINTENANCE WINDOW WITH THE IMPORTER STOPPED.
-     * No wrapping transaction (matches suppressTransaction: true on the index step); an interrupted run
-       converges on re-run.
+     * No lock-taking index build here, so this script does not by itself require a maintenance window.
+       The follow-on script 202608250900001_IndexCopilotAccessedResourceFkColumns.manual.sql does: where
+       ONLINE is unavailable each of its builds briefly locks copilot_event_accessed_resources, the
+       largest table in the schema on a Copilot-heavy tenant.
+     * No wrapping transaction; every object is independently guarded, so an interrupted run converges on
+       re-run rather than needing hand repair.
+     * Run it with sqlcmd -b so execution stops at the first error. The completion guard before the
+       __MigrationHistory stamp is a backstop, not a substitute.
 
    PREREQUISITE
      The database must already be on migration 202608131055001_IndexReportDateQueries (the previous release).
@@ -224,7 +227,9 @@ GO
 
 /* ---------------------------------------------------------------------------------------------------
    4. Foreign keys for the two new columns (guarded). Cheap: every existing row has NULL in both, so
-      SQL Server's WITH CHECK validation seeks the indexes created above and finds nothing to verify.
+      every existing row has NULL in both columns so WITH CHECK finds nothing to verify. The FK-column
+      indexes do NOT exist yet at this point (they are built by 202608250900001), so each constraint
+      costs one scan of the table - about 7,800 logical reads / ~0.6-0.7 s at 3,000,000 rows.
    --------------------------------------------------------------------------------------------------- */
 IF OBJECT_ID(N'dbo.copilot_event_accessed_resource_actions', N'U') IS NOT NULL
    AND COL_LENGTH(N'dbo.copilot_event_accessed_resources', N'action_id') IS NOT NULL
