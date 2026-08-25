@@ -123,9 +123,11 @@ namespace Tests.UnitTests
             {
                 StringAssert.Contains(
                     cleanupScript,
-                    "delete top (10000) from " + table,
+                    "delete top (@copilotBatch) from " + table,
                     $"'{table}' has no batched retention delete in Clean Old Data Data.sql. Every " +
-                    "Copilot usage-report table must be aged, and in batches - see issue #286.");
+                    "Copilot usage-report table must be aged, and in batches - see issue #286. The " +
+                    "batch size must come from @copilotBatch rather than a literal, because the loop " +
+                    "exits by comparing @@ROWCOUNT against that same variable.");
             }
         }
 
