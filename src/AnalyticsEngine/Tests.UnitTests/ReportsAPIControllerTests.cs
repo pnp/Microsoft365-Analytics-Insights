@@ -1,9 +1,11 @@
 extern alias AnalyticsWeb;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using ReportAreaData = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportAreaData;
 using ReportChart = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportChart;
 using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
@@ -309,6 +311,33 @@ namespace Tests.UnitTests
                 Assert.IsFalse(sql.Contains("audit_events"),
                     "Prompt insight charts must not read the audit-log Copilot tables.");
             }
+        }
+
+        [TestMethod]
+        public void CognitiveConfigured_IsSentToTheUiAsAJsonFlag()
+        {
+            // Issue #312 requires the three prompt-insight charts to be hidden WITH AN EXPLANATION when
+            // cognitive services are not configured. The controller omits the charts; this flag is what
+            // lets the page say why instead of three panels silently disappearing. The JSON name is a
+            // contract with ReportsPage.tsx, which reads data.cognitiveConfigured - renaming the property
+            // without the attribute would break the explanation and leave the original silent behaviour.
+            var json = JsonConvert.SerializeObject(new ReportAreaData
+            {
+                Area = "copilot",
+                Months = 3,
+                CognitiveConfigured = false,
+            });
+
+            StringAssert.Contains(json, "\"cognitiveConfigured\":false");
+
+            var round = JsonConvert.DeserializeObject<ReportAreaData>(json);
+            Assert.IsFalse(round.CognitiveConfigured);
+
+            // It must serialise when true as well - the UI distinguishes "configured but no data yet"
+            // (charts present, each carrying its own no-data warning) from "not configured at all".
+            StringAssert.Contains(
+                JsonConvert.SerializeObject(new ReportAreaData { Area = "copilot", CognitiveConfigured = true }),
+                "\"cognitiveConfigured\":true");
         }
 
         #endregion

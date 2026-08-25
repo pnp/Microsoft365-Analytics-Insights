@@ -180,13 +180,21 @@ namespace Web.AnalyticsWeb.Controllers
                 : MondayOf(today);
             var weekSpine = WeekSpine(firstMonday, lastMonday);
 
-            var model = new ReportAreaData { Area = area, Months = months, FromWeek = firstMonday };
+            var model = new ReportAreaData
+            {
+                Area = area,
+                Months = months,
+                FromWeek = firstMonday,
+                // Read once here rather than inside CopilotCharts, so the flag the UI receives and the
+                // decision that actually omitted the charts can never disagree.
+                CognitiveConfigured = IsCognitiveEnabled(),
+            };
 
             List<Task<ReportChart>> chartTasks;
             switch (area)
             {
                 case "copilot":
-                    chartTasks = CopilotCharts(firstMonday, weekSpine);
+                    chartTasks = CopilotCharts(firstMonday, weekSpine, model.CognitiveConfigured);
                     break;
                 case "copilot-agents":
                     chartTasks = CopilotAgentCharts(firstMonday, weekSpine, topAgents, normalizedAgentName);
@@ -223,7 +231,7 @@ namespace Web.AnalyticsWeb.Controllers
 
         // Copilot interactions are dated via the joined audit event's time_stamp (copilot_chats has
         // no date column of its own), mirroring the profiling compile.
-        private static List<Task<ReportChart>> CopilotCharts(DateTime from, List<DateTime> weekSpine)
+        private static List<Task<ReportChart>> CopilotCharts(DateTime from, List<DateTime> weekSpine, bool cognitiveConfigured)
         {
             var join = "FROM dbo.copilot_chats AS c "
                 + SelectCopilotAuditJoin(from, hasAgentFilter: false)
@@ -258,7 +266,9 @@ namespace Web.AnalyticsWeb.Controllers
             // The prompt-insight charts are driven by Azure AI Language enrichment of the Copilot
             // interaction-history import. Without a cognitive configuration those columns are never
             // populated, so the charts would be three permanently empty panels - don't offer them at all.
-            if (IsCognitiveEnabled())
+            // ReportAreaData.CognitiveConfigured carries the same decision to the UI, which explains the
+            // absence rather than letting three charts silently vanish (issue #312).
+            if (cognitiveConfigured)
                 charts.AddRange(CopilotPromptInsightCharts(from, weekSpine));
 
             return charts;
@@ -295,6 +305,35 @@ namespace Web.AnalyticsWeb.Controllers
         /// <c>copilot_interaction_keywords</c>, so the phrase query is a SQL-side TOP N aggregate and
         /// never a client-side count. It is bounded by <c>created_utc</c> on the interaction, which is
         /// also what <c>IX_copilot_interactions_dedup_window</c> leads on after the session id.
+        ///
+        /// MEASURED at synthetic scale (issue #312 asks for the plans to be verified, because a
+        /// date-filtered top-N over a large link table is the shape that goes quadratic if written
+        /// naively). Benchmark: 1,000,000 interactions over 400 days, 200,000 users, 10,000,000 link
+        /// rows, 50,000 distinct phrases with a Zipf-like spread (the hottest 1% of phrases hold ~21%
+        /// of all links). Medians of five runs, warm cache, after a discarded cold run:
+        ///
+        ///   Query          1 month    3 months   6 months
+        ///   key phrases    2,023 ms   2,542 ms   3,155 ms
+        ///   sentiment        157 ms     230 ms     331 ms
+        ///   languages        280 ms     523 ms     248 ms
+        ///
+        /// It is NOT quadratic - cost grows sub-linearly with the window. What the plan does do is read
+        /// the whole of IX_copilot_interaction_keywords_keyword_id (22,321 logical reads) whatever the
+        /// window, then hash-join to the date-filtered interactions, so the phrase query's cost tracks
+        /// the SIZE OF THE LINK TABLE rather than the window. That is bounded by the retention purge in
+        /// "Clean Old Data Data.sql", which deletes keyword links with their interactions, and every
+        /// result is cached for 60 s - so the worst case is one ~3 s query per window per minute.
+        ///
+        /// The obvious "optimisation" was measured and REJECTED. Forcing a loop join so the link table
+        /// is seeked per interaction instead of scanned:
+        ///
+        ///   Window     shipped (hash)          forced loop join
+        ///   1 month    22,321 reads / 1,969 ms   248,985 reads / 1,451 ms   (26% faster, 11x reads)
+        ///   6 months   22,321 reads / 3,049 ms 1,453,450 reads / 9,225 ms   (3x SLOWER, 65x reads)
+        ///
+        /// A join hint would therefore help the narrowest window slightly and hurt the widest badly,
+        /// which is exactly the trap the repo's schema-performance guidance warns about. The optimiser's
+        /// unhinted choice is correct at every window, so no hint and no extra index are shipped.
         /// </remarks>
         private static List<Task<ReportChart>> CopilotPromptInsightCharts(DateTime from, List<DateTime> weekSpine)
         {
