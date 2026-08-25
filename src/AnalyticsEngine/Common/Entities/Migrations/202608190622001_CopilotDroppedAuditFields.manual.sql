@@ -110,16 +110,36 @@ BEGIN
         [ai_system_plugin_id] [int] NOT NULL,
         CONSTRAINT [PK_dbo.copilot_event_ai_system_plugins] PRIMARY KEY ([id])
     );
+    RAISERROR('CopilotDroppedAuditFields: created copilot_event_ai_system_plugins.', 0, 1) WITH NOWAIT;
+END
+GO
+
+-- Each index and foreign key is guarded INDEPENDENTLY of the table, not nested inside the
+-- CREATE TABLE block. There is no transaction around these batches, so CREATE TABLE can commit and a
+-- following CREATE INDEX / ALTER TABLE can still fail. If they were nested, the table would exist on
+-- re-run, the whole block would be skipped, and the missing index or constraint could never be
+-- created - the completion guard at the end would then correctly refuse to stamp, forever, with no
+-- way for the operator to converge. Guarding each object separately makes a re-run repair exactly
+-- what is missing, which is what "idempotent and resumable" has to mean here.
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_copilot_chat_id')
     CREATE INDEX [IX_copilot_chat_id] ON [dbo].[copilot_event_ai_system_plugins]([copilot_chat_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_ai_system_plugins') AND name = N'IX_ai_system_plugin_id')
     CREATE INDEX [IX_ai_system_plugin_id] ON [dbo].[copilot_event_ai_system_plugins]([ai_system_plugin_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_ai_system_plugins_ai_system_plugin_id')
     ALTER TABLE [dbo].[copilot_event_ai_system_plugins]
         ADD CONSTRAINT [FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_ai_system_plugins_ai_system_plugin_id]
         FOREIGN KEY ([ai_system_plugin_id]) REFERENCES [dbo].[copilot_ai_system_plugins] ([id]) ON DELETE CASCADE;
+GO
+IF OBJECT_ID(N'dbo.copilot_event_ai_system_plugins', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_chats_copilot_chat_id')
     ALTER TABLE [dbo].[copilot_event_ai_system_plugins]
         ADD CONSTRAINT [FK_dbo.copilot_event_ai_system_plugins_dbo.copilot_chats_copilot_chat_id]
         FOREIGN KEY ([copilot_chat_id]) REFERENCES [dbo].[copilot_chats] ([event_id]) ON DELETE CASCADE;
-    RAISERROR('CopilotDroppedAuditFields: created copilot_event_ai_system_plugins.', 0, 1) WITH NOWAIT;
-END
 GO
 
 IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NULL
@@ -132,16 +152,29 @@ BEGIN
         [container_id] [nvarchar](450),
         CONSTRAINT [PK_dbo.copilot_event_contexts] PRIMARY KEY ([id])
     );
+    RAISERROR('CopilotDroppedAuditFields: created copilot_event_contexts.', 0, 1) WITH NOWAIT;
+END
+GO
+
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_copilot_chat_id')
     CREATE INDEX [IX_copilot_chat_id] ON [dbo].[copilot_event_contexts]([copilot_chat_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_event_contexts') AND name = N'IX_context_type_id')
     CREATE INDEX [IX_context_type_id] ON [dbo].[copilot_event_contexts]([context_type_id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_event_context_types_context_type_id')
     ALTER TABLE [dbo].[copilot_event_contexts]
         ADD CONSTRAINT [FK_dbo.copilot_event_contexts_dbo.copilot_event_context_types_context_type_id]
         FOREIGN KEY ([context_type_id]) REFERENCES [dbo].[copilot_event_context_types] ([id]);
+GO
+IF OBJECT_ID(N'dbo.copilot_event_contexts', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id')
     ALTER TABLE [dbo].[copilot_event_contexts]
         ADD CONSTRAINT [FK_dbo.copilot_event_contexts_dbo.copilot_chats_copilot_chat_id]
         FOREIGN KEY ([copilot_chat_id]) REFERENCES [dbo].[copilot_chats] ([event_id]) ON DELETE CASCADE;
-    RAISERROR('CopilotDroppedAuditFields: created copilot_event_contexts.', 0, 1) WITH NOWAIT;
-END
 GO
 
 /* ---------------------------------------------------------------------------------------------------

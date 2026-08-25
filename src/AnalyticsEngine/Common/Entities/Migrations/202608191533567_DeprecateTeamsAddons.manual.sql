@@ -332,6 +332,19 @@ BEGIN
     IF OBJECT_ID(N'dbo.vwTeamsStats') IS NULL
         SET @missing += N'view vwTeamsStats is missing (it should still exist in both the retain and the remove case); ';
 
+    -- Existence alone is not enough on the remove path. vwTeamsStats is REWRITTEN there to drop its
+    -- AddOns CTE; if that ALTER VIEW failed while the tables were still dropped, the old definition
+    -- would survive, reference tables that no longer exist, and satisfy a bare existence check while
+    -- being permanently broken. Checking the definition is read-only and cheap.
+    --
+    -- Safe against false positives: the rewritten view deliberately keeps its "[Add-Ons - Active Only]"
+    -- column alias for compatibility, but that string does not contain "teams_addons", so a correctly
+    -- rewritten view does not trip this.
+    IF @guardAnyRows = 0
+       AND OBJECT_ID(N'dbo.vwTeamsStats') IS NOT NULL
+       AND OBJECT_DEFINITION(OBJECT_ID(N'dbo.vwTeamsStats')) LIKE N'%teams_addons%'
+        SET @missing += N'view vwTeamsStats still references the add-on tables, so its rewrite did not apply; ';
+
     IF @missing <> N''
     BEGIN
         DECLARE @incomplete nvarchar(max) =
