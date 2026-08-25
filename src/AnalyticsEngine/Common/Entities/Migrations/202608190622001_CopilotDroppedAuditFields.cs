@@ -71,6 +71,18 @@ namespace Common.Entities.Migrations
     /// This migration DOES change the EF entity model, so its .resx snapshot is freshly scaffolded (it is
     /// not a copy of the predecessor's). The manual upgrade script therefore has to stamp
     /// __MigrationHistory with this new model blob rather than copying the previous row.
+    ///
+    /// RESUMABILITY - why the index build is NOT in this migration
+    ///   It used to end with Sql(JunctionIndexes_Sql, suppressTransaction: true). EF commits everything
+    ///   before a transaction-suppressed statement, so a failed or interrupted index build left all five
+    ///   tables, nine columns and the foreign keys COMMITTED while the migration stayed unstamped - and the
+    ///   retry then hit the unconditional CreateTable and failed on objects that already existed. The
+    ///   upgrade could not converge without hand repair, which is exactly what the repo's "idempotent,
+    ///   guarded and resumable" rule exists to prevent.
+    ///
+    ///   The index build now lives in <see cref="IndexCopilotAccessedResourceFkColumns"/>, a later
+    ///   index-only migration. This migration is therefore a single atomic transaction: it either applies
+    ///   and stamps, or rolls back entirely, and a retry starts from a clean state either way.
     /// </summary>
     public partial class CopilotDroppedAuditFields : DbMigration
     {
@@ -263,14 +275,10 @@ END
             AddColumn("dbo.copilot_event_messages", "size", c => c.Long());
             AddColumn("dbo.copilot_event_messages", "is_prompt", c => c.Boolean());
 
-            // EF would scaffold these as CreateIndex(...) inside the migration transaction, with a plain
-            // offline CREATE INDEX. On a Copilot-heavy tenant this junction table is the largest one in the
-            // schema, so the builds are issued as guarded SQL outside the transaction instead: ONLINE where
-            // the edition supports it, offline fallback otherwise, live progress, and a no-op on re-run.
-            Sql(JunctionIndexes_Sql, suppressTransaction: true);
-
-            // Safe (and cheap) after the indexes exist: every existing row has NULL in both new columns, so
-            // SQL Server's WITH CHECK validation is an index seek that finds nothing to verify.
+            // Cheap: every existing row has NULL in both columns, so SQL Server's WITH CHECK validation
+            // finds nothing to verify. These do NOT require the FK-column indexes to exist first - those
+            // are built by the separate IndexCopilotAccessedResourceFkColumns migration (see the remarks
+            // on this class for why the index build had to leave this migration).
             AddForeignKey("dbo.copilot_event_accessed_resources", "action_id", "dbo.copilot_event_accessed_resource_actions", "id");
             AddForeignKey("dbo.copilot_event_accessed_resources", "list_item_unique_id_id", "dbo.copilot_event_accessed_resource_ids", "id");
         }
@@ -289,7 +297,6 @@ END
             DropIndex("dbo.copilot_event_contexts", new[] { "copilot_chat_id" });
             DropIndex("dbo.copilot_event_ai_system_plugins", new[] { "ai_system_plugin_id" });
             DropIndex("dbo.copilot_event_ai_system_plugins", new[] { "copilot_chat_id" });
-            Sql(JunctionIndexesDown_Sql, suppressTransaction: true);
             DropColumn("dbo.copilot_event_messages", "is_prompt");
             DropColumn("dbo.copilot_event_messages", "size");
             DropColumn("dbo.copilot_event_accessed_resources", "list_item_unique_id_id");
