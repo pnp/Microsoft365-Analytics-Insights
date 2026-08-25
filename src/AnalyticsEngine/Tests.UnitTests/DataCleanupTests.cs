@@ -13,6 +13,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -154,6 +155,9 @@ namespace Tests.UnitTests
 
             foreach (var table in copilotTables)
             {
+                // Deliberately matched against the RAW script, not the comment-stripped text that
+                // IsPurgedInBatches uses: an exemption is meant to BE a comment. The two checks look at
+                // opposite halves of the file on purpose.
                 var exempt = Regex.IsMatch(
                     cleanupScript,
                     @"RETENTION-EXEMPT:\s*" + Regex.Escape(table) + @"\b",
@@ -240,6 +244,13 @@ namespace Tests.UnitTests
         /// Whether <paramref name="cleanupScript"/> deletes <paramref name="table"/> in batches driven by
         /// <c>@copilotBatch</c>.
         /// <para>
+        /// Matches against the EXECUTABLE SQL only. Comments and string literals are stripped first,
+        /// because a matcher run over raw text cannot tell a live statement from a commented-out one -
+        /// and commenting out a <c>DELETE</c> is by far the most likely way a purge actually gets
+        /// disabled ("just while I debug this"). Without the strip, doing so leaves both retention
+        /// guards green, which is the same false-pass category this guard exists to close.
+        /// </para>
+        /// <para>
         /// Tolerates the SQL spellings a future edit might reasonably use - an optional <c>dbo.</c>
         /// qualifier and optional square brackets around either part - because bracket-quoting is the
         /// house style elsewhere in this very script (<c>[sessions]</c>, <c>[date]</c>,
@@ -254,10 +265,117 @@ namespace Tests.UnitTests
         /// </summary>
         private static bool IsPurgedInBatches(string cleanupScript, string table) =>
             Regex.IsMatch(
-                cleanupScript,
+                StripSqlCommentsAndLiterals(cleanupScript),
                 @"delete\s+top\s*\(\s*@copilotBatch\s*\)\s+from\s+(?:\[?dbo\]?\s*\.\s*)?\[?"
                     + Regex.Escape(table) + @"\b\]?",
                 RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Replaces every SQL line comment, block comment and single-quoted string literal with
+        /// whitespace, leaving only executable text (and preserving newlines so offsets stay readable).
+        /// <para>
+        /// Written as a single left-to-right scan rather than a set of regexes on purpose: applied
+        /// separately, a <c>--</c> inside a string literal would be mistaken for a comment, and a lone
+        /// apostrophe inside a comment would be mistaken for the start of a literal - either of which
+        /// would swallow the real statement that follows. T-SQL block comments nest, so depth is tracked.
+        /// </para>
+        /// </summary>
+        internal static string StripSqlCommentsAndLiterals(string sql)
+        {
+            var outp = new StringBuilder(sql.Length);
+            var i = 0;
+
+            while (i < sql.Length)
+            {
+                // Line comment: -- to end of line.
+                if (sql[i] == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+                {
+                    while (i < sql.Length && sql[i] != '\n') { outp.Append(' '); i++; }
+                    continue;
+                }
+
+                // Block comment, which nests in T-SQL.
+                if (sql[i] == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+                {
+                    var depth = 0;
+                    while (i < sql.Length)
+                    {
+                        if (sql[i] == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+                        {
+                            depth++; outp.Append("  "); i += 2; continue;
+                        }
+                        if (sql[i] == '*' && i + 1 < sql.Length && sql[i + 1] == '/')
+                        {
+                            depth--; outp.Append("  "); i += 2;
+                            if (depth == 0) break;
+                            continue;
+                        }
+                        outp.Append(sql[i] == '\n' ? '\n' : ' ');
+                        i++;
+                    }
+                    continue;
+                }
+
+                // Single-quoted string literal; '' is an escaped quote, not a terminator.
+                if (sql[i] == '\'')
+                {
+                    outp.Append(' '); i++;
+                    while (i < sql.Length)
+                    {
+                        if (sql[i] == '\'')
+                        {
+                            if (i + 1 < sql.Length && sql[i + 1] == '\'') { outp.Append("  "); i += 2; continue; }
+                            outp.Append(' '); i++; break;
+                        }
+                        outp.Append(sql[i] == '\n' ? '\n' : ' ');
+                        i++;
+                    }
+                    continue;
+                }
+
+                outp.Append(sql[i]);
+                i++;
+            }
+
+            return outp.ToString();
+        }
+
+        /// <summary>
+        /// The retention guards match executable SQL only. Without this, commenting out a purge - the
+        /// most likely way one ever actually gets disabled - would leave both guards green, which is the
+        /// same false-pass category they exist to close.
+        /// <para>
+        /// Tests the matcher directly against synthetic SQL rather than the real script, so it pins the
+        /// behaviour regardless of what the real script happens to contain today.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void RetentionGuard_IgnoresPurgesThatAreCommentedOutOrQuoted()
+        {
+            const string table = "copilot_usage_user_activity_log";
+            const string stmt = "delete top (@copilotBatch) from copilot_usage_user_activity_log where [date] < @d";
+
+            Assert.IsTrue(IsPurgedInBatches(stmt, table),
+                "The bare executable statement must be recognised, or the guard is useless.");
+
+            Assert.IsFalse(IsPurgedInBatches("-- " + stmt, table),
+                "A line-commented purge must NOT count as purging.");
+            Assert.IsFalse(IsPurgedInBatches("/* " + stmt + " */", table),
+                "A block-commented purge must NOT count as purging.");
+            Assert.IsFalse(IsPurgedInBatches("/* outer /* nested */ " + stmt + " */", table),
+                "T-SQL block comments nest; a purge inside a nested comment must NOT count.");
+            Assert.IsFalse(IsPurgedInBatches("PRINT '" + stmt + "'", table),
+                "A purge inside a string literal must NOT count as purging.");
+
+            // The scanner must not over-strip: a '--' or a quote inside one construct must not be
+            // mistaken for the start of another, swallowing the real statement that follows.
+            Assert.IsTrue(IsPurgedInBatches("PRINT 'note -- not a comment';\n" + stmt, table),
+                "A '--' inside a string literal must not start a comment and swallow the real purge.");
+            Assert.IsTrue(IsPurgedInBatches("-- don't be fooled by this apostrophe\n" + stmt, table),
+                "An apostrophe inside a line comment must not start a string literal and swallow the purge.");
+            Assert.IsTrue(IsPurgedInBatches("/* don't be fooled */\n" + stmt, table),
+                "An apostrophe inside a block comment must not start a string literal.");
+        }
 
         // Resolves to <repoRoot>\src\Clean Old Data Data.sql relative to this source file (Tests.UnitTests\DataCleanupTests.cs).
         private static string GetCleanOldDataSqlPath([CallerFilePath] string thisFilePath = "")
