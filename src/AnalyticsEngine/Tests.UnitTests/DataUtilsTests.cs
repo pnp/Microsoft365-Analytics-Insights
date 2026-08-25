@@ -880,7 +880,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(new ImportTaskSettings().Equals(new ImportTaskSettings()));
 
             // All [ImportProp] flags default to false (opt-in). Enabling a subset must not equal a fresh default.
-            var someEnabled = new ImportTaskSettings() { GraphTeams = true, GraphUsageReports = true, GraphUserApps = true, GraphUsersMetadata = true };
+            var someEnabled = new ImportTaskSettings() { GraphTeams = true, GraphUsageReports = true, GraphUsersMetadata = true };
             Assert.IsFalse(someEnabled.Equals(new ImportTaskSettings()));
 
             var someEnabled2 = new ImportTaskSettings(someEnabled.ToSettingsString());

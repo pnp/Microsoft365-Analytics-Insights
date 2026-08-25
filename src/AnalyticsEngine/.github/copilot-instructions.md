@@ -36,7 +36,7 @@ When writing or reviewing such code, call this out in the PR description / revie
 ### Diagnosing a slow DB query / merge (measure before indexing)
 Confirm the root cause from the plan / DMVs **before** adding an index or blaming fragmentation — and validate the fix at scale before shipping it to a customer:
 - **Triage with the live request:** `sys.dm_exec_requests` showing **high `logical_reads` + ~0 `physical_reads` + `wait_type` NULL = a bad in-memory nested-loop plan** (repeated rescans) — a *plan/index* problem, **not** fragmentation (`sys.dm_db_index_physical_stats.avg_fragmentation_in_percent`) and **not** data skew (rows-per-key). Rule those two out with their own queries before doing an offline rebuild in a maintenance window.
-- **Index shape for a full-tuple existence check** (e.g. the Copilot merge's `NOT EXISTS … INTERSECT` accessed-resource de-dup): it needs the **whole tuple as a composite KEY** to seek. A covering `INCLUDE` index only removes key lookups — it does **not** give the tuple seek (here it was measurably *worse*). **Validate the chosen index with a synthetic-scale reproduction** (populate a replica table, `SET STATISTICS IO, TIME ON`, compare before/after) before shipping an offline index build to prod.
+- **Index shape for a full-tuple existence check** (e.g. the Copilot merge's `NOT EXISTS … INTERSECT` accessed-resource de-dup): it needs the **whole tuple as a composite KEY** to seek. A covering `INCLUDE` index only removes key lookups — it does **not** give the tuple seek (here it was measurably *worse*). But don't over-generalise that into "`INCLUDE` is bad": it is the right shape when the extra column is only *returned* rather than *matched* — see *When `INCLUDE` is right and when a composite KEY is right*. **Validate the chosen index with a synthetic-scale reproduction** (populate a replica table, `SET STATISTICS IO, TIME ON`, compare before/after) before shipping an offline index build to prod.
 - **Use the built-in import diagnostics instead of guessing:** the per-step SQL profiler `dbo.copilot_merge_step_timings` (create the table to enable, drop to disable — zero overhead when absent; see `WebJob.Office365ActivityImporter.Engine/ActivityAPI/Copilot/SQL/copilot_merge_step_timings.sql`) and the importer's per-cycle `metadata breakdown` / `Copilot commit timing` save-timing traces (`ActivityImporter.cs`, `CopilotAuditEventManager.cs`) pinpoint the exact slow stage.
 
 ## NuGet Package Management
@@ -82,12 +82,39 @@ This is not hypothetical. Measured in this repo at synthetic scale on the Copilo
 | **+ covering `INCLUDE`** | **25,228** ⬆️ 3x worse | 137 ms |
 | **+ full composite KEY** | **6,414** | **7 ms** ✅ |
 
-The covering `INCLUDE` **tripled logical reads** — it would have shipped as an "optimisation" that made the hot path worse. `INCLUDE` columns only remove key lookups; they do **not** provide a seekable access path, so they cannot fix a full-tuple existence check.
+The covering `INCLUDE` **tripled logical reads** — it would have shipped as an "optimisation" that made the hot path worse. `INCLUDE` columns only remove key lookups; they do **not** provide a seekable access path.
+
+### When `INCLUDE` is right and when a composite KEY is right
+
+The rule above is often mis-generalised into "`INCLUDE` is bad". It isn't — it just answers a different question. The distinction is **what the extra column is used for**:
+
+- The extra column takes part in **matching** (it's in the `JOIN` / `NOT EXISTS` / `WHERE` equality that decides *which* rows qualify) → it must be a **KEY** column, or there is no seekable access path for it.
+- The extra column is only **returned** (the predicate is fully satisfied by the key columns, and you just want to avoid a lookup) → **`INCLUDE`** is exactly right and cheaper than widening the key.
+
+Both shapes are in the codebase, each measured:
+
+| Migration | Query | Right shape | Why |
+|---|---|---|---|
+| `WidenCopilotAccessedResourceDedupIndex` (#287) | full-tuple `NOT EXISTS … INTERSECT` — every column is part of the match | composite **KEY** | `INCLUDE` made the extra columns residual predicates, so the optimiser abandoned the seek and hash-joined a full scan |
+| `IndexCopilotInteractionsDedupWindow` (#294) | seek on `(session_id, created_utc)`, only `graph_interaction_id` returned | key + **`INCLUDE`** | the predicate is fully served by the key; `INCLUDE` just removes the lookup |
+
+### Logical reads alone can choose the slower index
+
+Measured on the #287 de-dup with a 20,000-row commit batch:
+
+| Index shape | Logical reads | Elapsed | Plan |
+|---|---|---|---|
+| 6-key + 2 `INCLUDE` | **10,904** ⬅️ fewest reads | **521 ms** ⬅️ 5.5x slower | Index Scan + Hash Match |
+| full 8-column composite KEY | 63,883 | **94 ms** ✅ | Index Seek |
+
+The `INCLUDE` shape wins on reads by 6x and loses on wall-clock by 5.5x: one sequential scan of a compact index touches far fewer pages than 20,000 individual seeks, but the hash build costs far more time. **Had this been judged on logical reads alone — as the guidance above used to imply — the slower index would have shipped.** Read counts and elapsed time answer different questions; a shape is only proven when both are acceptable, at more than one batch size / selectivity.
+
+Note also that the right answer flipped with **batch size**, not with the date window: at 500 rows every shape seeks and the numbers are identical. Vary whichever input actually changes the plan — for a merge that's the batch size, for a report query it's the date range.
 
 **What "proven" means — required evidence:**
 1. A **synthetic-scale reproduction**: replica tables populated to a realistic size for a ~200k-user tenant (millions of rows on the fact tables — `audit_events`, `hits`, the `*_user_activity_log` tables). Never benchmark against a customer database, and never paste real data or real row counts into the repo (see the sensitive-data policy).
 2. **The real query**, taken from the code that motivated the change (e.g. the report queries in `Web/Controllers/ReportsAPIController.cs` or the merge SQL), not a simplified stand-in.
-3. **Before/after `logical reads` AND elapsed time**, via `SET STATISTICS IO, TIME ON`, medians over several runs, discarding the first (cold) run and defeating plan caching (`OPTION (RECOMPILE)` / `DBCC FREEPROCCACHE`). Logical reads matter more than wall-clock: they are stable across machines, and a reads regression is the early warning that wall-clock will regress under real concurrency.
+3. **Before/after `logical reads` AND elapsed time**, via `SET STATISTICS IO, TIME ON`, medians over several runs, discarding the first (cold) run and defeating plan caching (`OPTION (RECOMPILE)` / `DBCC FREEPROCCACHE`). **Measure both and judge on both.** Logical reads are the more stable signal — they don't move with machine load, and a reads regression is the early warning that wall-clock will regress under real concurrency — but reads *alone* will sometimes pick the wrong index outright. See *Logical reads alone can choose the slower index* below.
 4. **The plan operator before and after** (seek vs scan) — proving *why* it got faster, not just that it did on the day.
 5. **More than one window/selectivity.** Test both a narrow range (e.g. 30 days) and a wide one (e.g. 365 days). Regressions frequently appear only at one end, which is exactly how a fixed join hint or index shape can help one case and hurt the other.
 6. **Index build time and storage overhead**, so the release notes can give admins an upgrade-window estimate as a function of table size, and so the added disk cost is a conscious decision.
@@ -119,7 +146,7 @@ Canonical examples: `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` (`urls.full
    - The migration id/timestamp (`yyyyMMddHHmmssf`, 15 digits) must sort **after** the current latest migration.
    - Register all three files in `Common/Entities/Entities.csproj`: `.cs` as `<Compile>`, `.Designer.cs` as `<Compile>` with `<DependentUpon>`, `.resx` as `<EmbeddedResource>` with `<DependentUpon>`.
    - Add the manual SQL upgrade script (rule 7) and attach it to the release.
-   - Update any test that hard-codes the latest migration id (e.g. `UrlFullUrlMigrationPipelineTests.LatestId`).
+   - Update any test that hard-codes the latest migration id (`UrlFullUrlMigrationPipelineTests.LatestId`). This is the easiest item on the list to miss — the class name mentions neither "migration id" nor the area you're working in, so a filtered local test run usually won't cover it. `test_dotnet (Release)` catches it, but only after you've pushed: `Assert.AreEqual failed. Expected:<...> Actual:<...>. DB should now be at the latest migration.`
    - Some tables are created **only by migrations**, not by `Common/Entities/Resources/Create DB.sql` — check which, and update `Create DB.sql` too if the table is defined there.
 9. **C# verbatim-string gotcha:** SQL held in a C# `@"..."` string must **double every `"`** (or avoid them) — a single stray `"` (e.g. inside a SQL comment) silently terminates the string and produces confusing compile errors far from the real spot.
 

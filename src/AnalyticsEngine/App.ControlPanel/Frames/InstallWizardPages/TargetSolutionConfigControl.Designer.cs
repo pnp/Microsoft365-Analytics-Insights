@@ -35,7 +35,6 @@
             this.label2 = new System.Windows.Forms.Label();
             this.label1 = new System.Windows.Forms.Label();
             this.chkUserMetadata = new System.Windows.Forms.CheckBox();
-            this.chkUserApps = new System.Windows.Forms.CheckBox();
             this.chkWeb = new System.Windows.Forms.CheckBox();
             this.chkCalls = new System.Windows.Forms.CheckBox();
             this.pictureBox3 = new System.Windows.Forms.PictureBox();
@@ -48,6 +47,8 @@
             this.chkCopilot = new System.Windows.Forms.CheckBox();
             this.chkSentEmails = new System.Windows.Forms.CheckBox();
             this.chkPowerPlatform = new System.Windows.Forms.CheckBox();
+            this.chkCopilotUsageReports = new System.Windows.Forms.CheckBox();
+            this.chkCopilotInteractionHistory = new System.Windows.Forms.CheckBox();
             this.pnlSolutionSelectionContainer.SuspendLayout();
             this.grpProductCfgInsights.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).BeginInit();
@@ -76,7 +77,8 @@
             this.grpProductCfgInsights.Controls.Add(this.chkCopilot);
             this.grpProductCfgInsights.Controls.Add(this.chkSentEmails);
             this.grpProductCfgInsights.Controls.Add(this.chkPowerPlatform);
-            this.grpProductCfgInsights.Controls.Add(this.chkUserApps);
+            this.grpProductCfgInsights.Controls.Add(this.chkCopilotUsageReports);
+            this.grpProductCfgInsights.Controls.Add(this.chkCopilotInteractionHistory);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
             this.grpProductCfgInsights.Controls.Add(this.chkCalls);
             this.grpProductCfgInsights.Controls.Add(this.pictureBox3);
@@ -138,18 +140,6 @@
             this.chkUserMetadata.Text = "User Entra ID extended metadata";
             this.chkUserMetadata.UseVisualStyleBackColor = true;
             this.chkUserMetadata.CheckedChanged += new System.EventHandler(this.chkUserMetadata_CheckedChanged);
-            // 
-            // chkUserApps
-            // 
-            this.chkUserApps.AutoSize = true;
-            this.chkUserApps.Location = new System.Drawing.Point(4, 115);
-            this.chkUserApps.Margin = new System.Windows.Forms.Padding(2);
-            this.chkUserApps.Name = "chkUserApps";
-            this.chkUserApps.Size = new System.Drawing.Size(115, 17);
-            this.chkUserApps.TabIndex = 14;
-            this.chkUserApps.Text = "User installed apps";
-            this.chkUserApps.UseVisualStyleBackColor = true;
-            this.chkUserApps.CheckedChanged += new System.EventHandler(this.chkUserApps_CheckedChanged);
             // 
             // chkWeb
             // 
@@ -274,6 +264,28 @@
             this.chkPowerPlatform.Text = "Power Platform";
             this.chkPowerPlatform.UseVisualStyleBackColor = true;
             // 
+            // chkCopilotUsageReports
+            // 
+            this.chkCopilotUsageReports.AutoSize = true;
+            this.chkCopilotUsageReports.Location = new System.Drawing.Point(4, 306);
+            this.chkCopilotUsageReports.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotUsageReports.Name = "chkCopilotUsageReports";
+            this.chkCopilotUsageReports.Size = new System.Drawing.Size(250, 17);
+            this.chkCopilotUsageReports.TabIndex = 26;
+            this.chkCopilotUsageReports.Text = "Copilot usage reports (Microsoft Graph)";
+            this.chkCopilotUsageReports.UseVisualStyleBackColor = true;
+            // 
+            // chkCopilotInteractionHistory
+            // 
+            this.chkCopilotInteractionHistory.AutoSize = true;
+            this.chkCopilotInteractionHistory.Location = new System.Drawing.Point(4, 325);
+            this.chkCopilotInteractionHistory.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotInteractionHistory.Name = "chkCopilotInteractionHistory";
+            this.chkCopilotInteractionHistory.Size = new System.Drawing.Size(280, 17);
+            this.chkCopilotInteractionHistory.TabIndex = 27;
+            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (tenant-wide unless scoped)";
+            this.chkCopilotInteractionHistory.UseVisualStyleBackColor = true;
+            // 
             // lblGUITargetsHeader
             // 
             this.lblGUITargetsHeader.AutoSize = true;
@@ -312,7 +324,6 @@
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.CheckBox chkUserMetadata;
-        private System.Windows.Forms.CheckBox chkUserApps;
         private System.Windows.Forms.CheckBox chkWeb;
         private System.Windows.Forms.CheckBox chkCalls;
         private System.Windows.Forms.PictureBox pictureBox3;
@@ -325,5 +336,7 @@
         private System.Windows.Forms.CheckBox chkCopilot;
         private System.Windows.Forms.CheckBox chkSentEmails;
         private System.Windows.Forms.CheckBox chkPowerPlatform;
+        private System.Windows.Forms.CheckBox chkCopilotUsageReports;
+        private System.Windows.Forms.CheckBox chkCopilotInteractionHistory;
     }
 }

@@ -16,7 +16,6 @@ namespace Common.Entities.Entities
         }
 
         public List<TeamChannel> Channels { get; set; }
-        public List<TeamAddOnLog> AddOns { get; set; }
 
         /// <summary>
         /// Date Team was first discovered

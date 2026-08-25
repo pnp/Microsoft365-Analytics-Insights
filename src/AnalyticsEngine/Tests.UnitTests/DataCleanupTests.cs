@@ -7,8 +7,14 @@ using Common.Entities.Entities.WebTraffic;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -28,6 +34,347 @@ namespace Tests.UnitTests
 
                 await db.Database.ExecuteSqlCommandAsync(cleanupScript);
             }
+        }
+
+        /// <summary>
+        /// Issue #286 asked for the Copilot usage-report tables to gain a retention bound AND for the
+        /// delete to be batched. The per-user detail report is requested for a single period
+        /// (<c>CopilotReportRequest.DefaultRefreshPeriod</c>, "D28"), so the table gains about one row
+        /// per licensed user per day - roughly 200,000 a day at the 200,000-user baseline, or ~6 million
+        /// over the one-month retention window. The first purge after enabling the import has to clear
+        /// everything accumulated since then, which can be far more.
+        /// <para>
+        /// This asserts the outcome rather than merely running the script: rows older than the cutoff
+        /// go, rows inside it stay. Before the batching change the script deleted these in one
+        /// statement; the assertion holds either way, which is the point - it pins the retention
+        /// behaviour so a future rewrite of the loop cannot silently stop purging.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public async Task Cleanup_PurgesOldCopilotUsageReportRows_AndKeepsRecentOnes()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+
+            // The script's cutoff is one month before now, so straddle it.
+            var wellOutsideRetention = DateTime.Now.AddMonths(-6).Date;
+            var wellInsideRetention = DateTime.Now.AddDays(-2).Date;
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User
+                {
+                    UserPrincipalName = "purge" + DateTime.Now.Ticks + "@example.com",
+                    Mail = "purge" + DateTime.Now.Ticks + "@example.com",
+                };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+
+                db.CopilotUsageUserActivityLogs.Add(new CopilotUsageUserActivityLog
+                {
+                    User = user,
+                    Date = wellOutsideRetention,
+                    ReportPeriodDays = 28,
+                });
+                db.CopilotUsageUserActivityLogs.Add(new CopilotUsageUserActivityLog
+                {
+                    User = user,
+                    Date = wellInsideRetention,
+                    ReportPeriodDays = 28,
+                });
+                await db.SaveChangesAsync();
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await db.Database.ExecuteSqlCommandAsync(cleanupScript);
+            }
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var remaining = db.CopilotUsageUserActivityLogs
+                    .Where(r => r.User.ID == userId)
+                    .Select(r => r.Date)
+                    .ToList();
+
+                Assert.IsFalse(remaining.Contains(wellOutsideRetention),
+                    "A Copilot usage-report row older than the retention cutoff survived the purge. " +
+                    "copilot_usage_user_activity_log is the fastest-growing table this feature adds " +
+                    "(issue #286); without this delete it grows forever.");
+                Assert.IsTrue(remaining.Contains(wellInsideRetention),
+                    "The purge deleted a Copilot usage-report row INSIDE the retention window. " +
+                    "A batching bug that ignores the date predicate would look exactly like this.");
+            }
+        }
+
+        /// <summary>
+        /// Inventory guard, also from issue #286: fail when a Copilot usage-report table exists in the
+        /// entity model but is not aged by the cleanup script. Adding a table to a growing feature and
+        /// forgetting to age it is precisely how the Teams add-on tables became expensive enough to
+        /// need deprecating, and nothing else in the build notices.
+        /// <para>
+        /// The table list is derived from the EF model by reflection, NOT hard-coded, because a
+        /// hard-coded list cannot fail for the case the issue actually cares about - somebody adding a
+        /// FOURTH usage-report entity later. A hard-coded array would stay green precisely when it
+        /// matters.
+        /// </para>
+        /// <para>
+        /// Two subtleties, both of which an earlier version of this test got wrong:
+        /// </para>
+        /// <para>
+        /// It looks for the actual batched <c>DELETE</c>, not merely the table name. A plain substring
+        /// search over the whole file is satisfied by any passing mention in a comment, so removing the
+        /// delete while leaving the surrounding prose - which names all three tables - would have kept
+        /// this green.
+        /// </para>
+        /// <para>
+        /// It matches on word boundaries. <c>copilot_user</c> is a substring of
+        /// <c>copilot_user_count_log</c>, so a future table with a prefix name would have been "found"
+        /// inside a longer one and slipped through the very guard meant to catch it. Underscore is a
+        /// regex word character, so <c>\bcopilot_user\b</c> correctly does not match inside
+        /// <c>copilot_user_count_log</c>.
+        /// </para>
+        /// <para>
+        /// A table that genuinely must not be aged can opt out with a <c>RETENTION-EXEMPT:</c> line
+        /// naming it, which keeps the decision explicit and reviewable rather than silent.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void CleanupScript_AccountsForEveryCopilotUsageReportTable()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+            var copilotTables = DiscoverCopilotUsageReportTables();
+
+            // A reflection-driven test that discovers nothing passes vacuously, which would be worse
+            // than no test at all. Pin the floor at the three tables that exist today.
+            Assert.IsTrue(copilotTables.Count >= 3,
+                "Expected to discover at least the three Copilot usage-report tables by reflection, but " +
+                $"found {copilotTables.Count} ({string.Join(", ", copilotTables)}). The namespace or the " +
+                "[Table] attributes have moved, and this guard is no longer guarding anything.");
+
+            foreach (var table in copilotTables)
+            {
+                // Deliberately matched against the RAW script, not the comment-stripped text that
+                // IsPurgedInBatches uses: an exemption is meant to BE a comment. The two checks look at
+                // opposite halves of the file on purpose.
+                var exempt = Regex.IsMatch(
+                    cleanupScript,
+                    @"RETENTION-EXEMPT:\s*" + Regex.Escape(table) + @"\b",
+                    RegexOptions.IgnoreCase);
+
+                Assert.IsTrue(IsPurgedInBatches(cleanupScript, table) || exempt,
+                    $"'{table}' is a Copilot usage-report table in the entity model, but Clean Old Data " +
+                    "Data.sql neither purges it nor declares it exempt, so it grows forever (issue #286). " +
+                    $"Either add 'delete top (@copilotBatch) from {table} where ...' inside a batch loop, " +
+                    $"or - if it genuinely must not be aged - add a comment line 'RETENTION-EXEMPT: {table}' " +
+                    "explaining why, as copilot_interaction_user_watermarks is excluded on purpose.");
+            }
+        }
+
+        /// <summary>
+        /// Every <c>[Table]</c>-mapped Copilot entity declared alongside the usage-report classes.
+        /// <para>
+        /// <see cref="Assembly.GetTypes"/> throws <see cref="ReflectionTypeLoadException"/> if any type
+        /// in the assembly fails to load, which would error this test rather than fail it cleanly. The
+        /// partial results it carries are enough for an inventory check, so use them.
+        /// </para>
+        /// </summary>
+        private static List<string> DiscoverCopilotUsageReportTables()
+        {
+            var usageReportNamespace = typeof(CopilotUsageUserActivityLog).Namespace;
+
+            Type[] types;
+            try
+            {
+                types = typeof(CopilotUsageUserActivityLog).Assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                types = ex.Types.Where(t => t != null).ToArray();
+            }
+
+            return types
+                .Where(t => t.Namespace == usageReportNamespace)
+                .Select(t => t.GetCustomAttribute<TableAttribute>())
+                .Where(a => a != null && a.Name.StartsWith("copilot_", StringComparison.OrdinalIgnoreCase))
+                .Select(a => a.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        /// <summary>
+        /// The three usage-report tables that exist today are the fast-growing ones. This pins them by
+        /// name, which the reflection-driven guard above deliberately does not: if the namespace or the
+        /// <c>[Table]</c> attributes move, discovery could quietly stop finding them and only the
+        /// <c>&gt;= 3</c> floor would notice. Both tests use the same <see cref="IsPurgedInBatches"/>
+        /// matcher, so there is one definition of what counts as batched.
+        /// </summary>
+        [TestMethod]
+        public void CleanupScript_BatchesTheCopilotUsageReportDeletes()
+        {
+            var cleanupScript = File.ReadAllText(GetCleanOldDataSqlPath());
+            var discovered = DiscoverCopilotUsageReportTables();
+
+            var mustBeBatched = new[]
+            {
+                "copilot_usage_user_activity_log",
+                "copilot_user_count_log",
+                "copilot_usage_report_import_log",
+            };
+
+            foreach (var table in mustBeBatched)
+            {
+                Assert.IsTrue(
+                    discovered.Contains(table, StringComparer.OrdinalIgnoreCase),
+                    $"'{table}' was not discovered by reflection over the usage-report namespace, so the " +
+                    "inventory guard is no longer covering it. Check that its [Table] attribute and " +
+                    "namespace still match what DiscoverCopilotUsageReportTables looks for.");
+
+                Assert.IsTrue(
+                    IsPurgedInBatches(cleanupScript, table),
+                    $"'{table}' has no batched retention delete in Clean Old Data Data.sql (issue #286). " +
+                    "The batch size must come from @copilotBatch rather than a literal, because the loop " +
+                    "exits by comparing @@ROWCOUNT against that same variable - a literal that drifts " +
+                    "from it would stop the purge after a single pass.");
+            }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="cleanupScript"/> deletes <paramref name="table"/> in batches driven by
+        /// <c>@copilotBatch</c>.
+        /// <para>
+        /// Matches against the EXECUTABLE SQL only. Comments and string literals are stripped first,
+        /// because a matcher run over raw text cannot tell a live statement from a commented-out one -
+        /// and commenting out a <c>DELETE</c> is by far the most likely way a purge actually gets
+        /// disabled ("just while I debug this"). Without the strip, doing so leaves both retention
+        /// guards green, which is the same false-pass category this guard exists to close.
+        /// </para>
+        /// <para>
+        /// Tolerates the SQL spellings a future edit might reasonably use - an optional <c>dbo.</c>
+        /// qualifier and optional square brackets around either part - because bracket-quoting is the
+        /// house style elsewhere in this very script (<c>[sessions]</c>, <c>[date]</c>,
+        /// <c>[event_meta_general]</c>) and <c>dbo.</c> appears in every <c>OBJECT_ID</c> guard. A guard
+        /// that reports correct, batched code as "grows forever" gets weakened rather than trusted.
+        /// </para>
+        /// <para>
+        /// The <c>\b</c> sits immediately after the table name and before the optional closing bracket,
+        /// so <c>copilot_user</c> still does not match inside <c>copilot_user_count_log</c> - underscore
+        /// is a regex word character, which is what makes that work.
+        /// </para>
+        /// </summary>
+        private static bool IsPurgedInBatches(string cleanupScript, string table) =>
+            Regex.IsMatch(
+                StripSqlCommentsAndLiterals(cleanupScript),
+                @"delete\s+top\s*\(\s*@copilotBatch\s*\)\s+from\s+(?:\[?dbo\]?\s*\.\s*)?\[?"
+                    + Regex.Escape(table) + @"\b\]?",
+                RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Replaces every SQL line comment, block comment and single-quoted string literal with
+        /// whitespace, leaving only executable text (and preserving newlines so offsets stay readable).
+        /// <para>
+        /// Written as a single left-to-right scan rather than a set of regexes on purpose: applied
+        /// separately, a <c>--</c> inside a string literal would be mistaken for a comment, and a lone
+        /// apostrophe inside a comment would be mistaken for the start of a literal - either of which
+        /// would swallow the real statement that follows. T-SQL block comments nest, so depth is tracked.
+        /// </para>
+        /// </summary>
+        internal static string StripSqlCommentsAndLiterals(string sql)
+        {
+            var outp = new StringBuilder(sql.Length);
+            var i = 0;
+
+            while (i < sql.Length)
+            {
+                // Line comment: -- to end of line.
+                if (sql[i] == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+                {
+                    while (i < sql.Length && sql[i] != '\n') { outp.Append(' '); i++; }
+                    continue;
+                }
+
+                // Block comment, which nests in T-SQL.
+                if (sql[i] == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+                {
+                    var depth = 0;
+                    while (i < sql.Length)
+                    {
+                        if (sql[i] == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+                        {
+                            depth++; outp.Append("  "); i += 2; continue;
+                        }
+                        if (sql[i] == '*' && i + 1 < sql.Length && sql[i + 1] == '/')
+                        {
+                            depth--; outp.Append("  "); i += 2;
+                            if (depth == 0) break;
+                            continue;
+                        }
+                        outp.Append(sql[i] == '\n' ? '\n' : ' ');
+                        i++;
+                    }
+                    continue;
+                }
+
+                // Single-quoted string literal; '' is an escaped quote, not a terminator.
+                if (sql[i] == '\'')
+                {
+                    outp.Append(' '); i++;
+                    while (i < sql.Length)
+                    {
+                        if (sql[i] == '\'')
+                        {
+                            if (i + 1 < sql.Length && sql[i + 1] == '\'') { outp.Append("  "); i += 2; continue; }
+                            outp.Append(' '); i++; break;
+                        }
+                        outp.Append(sql[i] == '\n' ? '\n' : ' ');
+                        i++;
+                    }
+                    continue;
+                }
+
+                outp.Append(sql[i]);
+                i++;
+            }
+
+            return outp.ToString();
+        }
+
+        /// <summary>
+        /// The retention guards match executable SQL only. Without this, commenting out a purge - the
+        /// most likely way one ever actually gets disabled - would leave both guards green, which is the
+        /// same false-pass category they exist to close.
+        /// <para>
+        /// Tests the matcher directly against synthetic SQL rather than the real script, so it pins the
+        /// behaviour regardless of what the real script happens to contain today.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void RetentionGuard_IgnoresPurgesThatAreCommentedOutOrQuoted()
+        {
+            const string table = "copilot_usage_user_activity_log";
+            const string stmt = "delete top (@copilotBatch) from copilot_usage_user_activity_log where [date] < @d";
+
+            Assert.IsTrue(IsPurgedInBatches(stmt, table),
+                "The bare executable statement must be recognised, or the guard is useless.");
+
+            Assert.IsFalse(IsPurgedInBatches("-- " + stmt, table),
+                "A line-commented purge must NOT count as purging.");
+            Assert.IsFalse(IsPurgedInBatches("/* " + stmt + " */", table),
+                "A block-commented purge must NOT count as purging.");
+            Assert.IsFalse(IsPurgedInBatches("/* outer /* nested */ " + stmt + " */", table),
+                "T-SQL block comments nest; a purge inside a nested comment must NOT count.");
+            Assert.IsFalse(IsPurgedInBatches("PRINT '" + stmt + "'", table),
+                "A purge inside a string literal must NOT count as purging.");
+
+            // The scanner must not over-strip: a '--' or a quote inside one construct must not be
+            // mistaken for the start of another, swallowing the real statement that follows.
+            Assert.IsTrue(IsPurgedInBatches("PRINT 'note -- not a comment';\n" + stmt, table),
+                "A '--' inside a string literal must not start a comment and swallow the real purge.");
+            Assert.IsTrue(IsPurgedInBatches("-- don't be fooled by this apostrophe\n" + stmt, table),
+                "An apostrophe inside a line comment must not start a string literal and swallow the purge.");
+            Assert.IsTrue(IsPurgedInBatches("/* don't be fooled */\n" + stmt, table),
+                "An apostrophe inside a block comment must not start a string literal.");
         }
 
         // Resolves to <repoRoot>\src\Clean Old Data Data.sql relative to this source file (Tests.UnitTests\DataCleanupTests.cs).
@@ -275,37 +622,11 @@ namespace Tests.UnitTests
             };
             db.TeamMembershipLogs.Add(membership);
 
-            var addonDef = new Common.Entities.Teams.TeamAddOnDefinition
-            {
-                GraphID = "AddOnGraph-" + ticks,
-                Name = "AddOn-" + ticks,
-                AddOnType = 1,
-                PublishedState = "published"
-            };
-            db.TeamAddOns.Add(addonDef);
-
-            var addonLog = new Common.Entities.Teams.TeamAddOnLog
-            {
-                Team = team,
-                AddOn = addonDef,
-                Date = oneYearAgo
-            };
-            db.TeamAddOnLogs.Add(addonLog);
-
-            var userAppLog = new Common.Entities.Teams.UserAppsLog
-            {
-                AddOn = addonDef,
-                User = user,
-                Date = oneYearAgo
-            };
-            db.UserAppsLog.Add(userAppLog);
-
             var tabDef = new TeamTabDefinition
             {
                 GraphID = "TabGraph-" + ticks,
                 Name = "Tab-" + ticks,
-                WebUrl = "https://tab/" + ticks,
-                TeamAddOnDefinition = addonDef
+                WebUrl = "https://tab/" + ticks
             };
             db.TeamTabDefinitions.Add(tabDef);
 

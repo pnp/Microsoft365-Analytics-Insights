@@ -4,6 +4,7 @@ using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.Entities.UsageReports;
 using DataUtils;
 using DataUtils.AppInsights;
 using DataUtils.Health;
@@ -238,6 +239,34 @@ namespace Web.AnalyticsWeb.Models.Health
 
                     // Teams-being-tracked is a filtered count on a small table (thousands of rows) - cheap.
                     section.TeamsBeingTrackedCount = await db.Teams.Where(t => t.HasRefreshToken).CountAsync();
+
+                    // Latest Copilot usage-report import per report. One row per import on a tiny table, so
+                    // this is free. Without it the "tenant conceals user identities" case is invisible: the
+                    // import succeeds, stores nothing, and looks exactly like a tenant with no Copilot usage -
+                    // and a failed download looks like a recent healthy import.
+                    var latestCopilotImports = await db.CopilotUsageReportImportLogs
+                        .GroupBy(l => l.ReportName)
+                        .Select(g => g.OrderByDescending(l => l.ImportedUtc).FirstOrDefault())
+                        .ToListAsync();
+
+                    foreach (var import in latestCopilotImports.Where(i => i != null))
+                    {
+                        if (!section.CopilotUsageReportLastImportUtc.HasValue
+                            || import.ImportedUtc > section.CopilotUsageReportLastImportUtc.Value)
+                        {
+                            section.CopilotUsageReportLastImportUtc = import.ImportedUtc;
+                        }
+
+                        if (import.ReportName == CopilotUsageReportNames.UsageUserDetail && import.IsUpnObfuscated)
+                        {
+                            section.CopilotUsageReportsIdentitiesConcealed = true;
+                        }
+
+                        if (!string.IsNullOrEmpty(import.Error))
+                        {
+                            section.CopilotUsageReportErrors.Add($"{import.ReportName}: {import.Error}");
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -292,6 +321,17 @@ namespace Web.AnalyticsWeb.Models.Health
             var reasons = new List<string>();
             if (!string.IsNullOrEmpty(s.CountsError)) reasons.Add("Approximate counts unavailable: " + s.CountsError);
             if (!string.IsNullOrEmpty(s.RecentVolumeError)) reasons.Add("Recent-volume scan didn't complete: " + s.RecentVolumeError);
+            if (s.CopilotUsageReportsIdentitiesConcealed)
+            {
+                reasons.Add("Per-user Microsoft 365 Copilot usage from Graph is not being imported because this tenant conceals user identities in Microsoft 365 usage reports: "
+                    + "Graph returns a hash instead of each user principal name, which cannot be linked to a user. "
+                    + "Tenant-level Copilot user counts and the audit-log Copilot import are unaffected. "
+                    + "To enable it, turn off 'Display concealed user, group and site names in all reports' in the Microsoft 365 admin centre (Settings > Org settings > Reports).");
+            }
+            foreach (var copilotError in s.CopilotUsageReportErrors)
+            {
+                reasons.Add("Graph Copilot usage report import failed - " + copilotError);
+            }
 
             if (reasons.Count > 0)
             {
@@ -403,8 +443,8 @@ namespace Web.AnalyticsWeb.Models.Health
                     if (config.ImportJobSettings.Copilot) section.EnabledImports.Add("Copilot");
                     if (config.ImportJobSettings.ImportPowerPlatform) section.EnabledImports.Add("Power Platform");
                     if (config.ImportJobSettings.GraphUsersMetadata) section.EnabledImports.Add("User metadata");
-                    if (config.ImportJobSettings.GraphUserApps) section.EnabledImports.Add("User apps");
                     if (config.ImportJobSettings.GraphUsageReports) section.EnabledImports.Add("Usage reports");
+                    if (config.ImportJobSettings.GraphCopilotUsageReports) section.EnabledImports.Add("Copilot usage reports (Graph)");
                     if (config.ImportJobSettings.GraphTeams) section.EnabledImports.Add("Teams");
                     if (config.ImportJobSettings.WebTraffic) section.EnabledImports.Add("Web traffic");
                     if (config.ImportJobSettings.SentEmails) section.EnabledImports.Add("Sent emails");

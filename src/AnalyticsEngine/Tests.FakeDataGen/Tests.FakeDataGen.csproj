@@ -45,10 +45,18 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Copilot\CopilotActivityGenerator.cs" />
+    <Compile Include="Copilot\CopilotAdoptionPersonas.cs" />
+    <Compile Include="Copilot\CopilotAdoptionScenarioGenerator.cs" />
+    <Compile Include="Copilot\CopilotChatFactory.cs" />
+    <Compile Include="Copilot\CopilotEventDetailGenerator.cs" />
+    <Compile Include="Copilot\CopilotInteractionHistoryGenerator.cs" />
     <Compile Include="Copilot\CopilotActivityGeneratorConfig.cs" />
     <Compile Include="Copilot\CopilotLicenseManager.cs" />
     <Compile Include="Copilot\CopilotResourceGenerator.cs" />
     <Compile Include="Copilot\CopilotUserManager.cs" />
+    <Compile Include="Generation\ActivityTimestampGenerator.cs" />
+    <Compile Include="Office365\Office365ActivityGenerator.cs" />
+    <Compile Include="Office365\Office365ActivityGeneratorConfig.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Seeding\SeedDataCatalogue.cs" />

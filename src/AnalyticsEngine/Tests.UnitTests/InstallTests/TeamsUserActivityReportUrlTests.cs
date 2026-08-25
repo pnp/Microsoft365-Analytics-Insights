@@ -26,7 +26,10 @@ namespace Tests.UnitTests.InstallTests
             // Arrange: a Graph client whose transport captures the SDK-composed request URI and
             // returns an empty CSV report (200). This exercises the real Kiota URL composition -
             // where the bug lives - with no network call and no credentials.
-            var handler = new UriCapturingHandler("Report Refresh Date,User Principal Name\r\n");
+            var handler = new GraphReportResponseHandler(
+                HttpStatusCode.OK,
+                "Report Refresh Date,User Principal Name\r\n",
+                "application/octet-stream");
             var httpClient = new HttpClient(handler);
             var graphClient = new GraphServiceClient(httpClient, new BearerTokenAuthenticationProvider("test-token"));
 
@@ -43,17 +46,71 @@ namespace Tests.UnitTests.InstallTests
                 $"Period must not be double-quoted (issue #133). Actual URL: {url}");
         }
 
-        /// <summary>
-        /// Test transport that records the outgoing request URI and returns a stubbed 200 CSV
-        /// response, so the typed report call completes without hitting Microsoft Graph.
-        /// </summary>
-        private sealed class UriCapturingHandler : HttpMessageHandler
+        [TestMethod]
+        public async Task ReadTeamsUserActivityReport_RecognizesNestedUnknownTenantError()
         {
-            private readonly string _csvBody;
+            var responseBody =
+                "{\"error\":{\"code\":\"UnknownError\",\"message\":\"{\\\"error\\\":{\\\"code\\\":\\\"UnknownTenantId\\\",\\\"message\\\":\\\"We do not recognize this tenant ID 00000000-0000-0000-0000-000000000000.\\\"}}\"}}";
+            var handler = new GraphReportResponseHandler(HttpStatusCode.NotFound, responseBody, "application/json");
+            var graphClient = new GraphServiceClient(
+                new HttpClient(handler),
+                new BearerTokenAuthenticationProvider("test-token"));
 
-            public UriCapturingHandler(string csvBody)
+            var exception = await CaptureReportExceptionAsync(graphClient);
+
+            Assert.IsTrue(
+                SolutionInstallVerifier.IsGraphReportsUnknownTenant(exception),
+                $"Expected the nested Graph Reports error code to be recognized. Exception: {exception}");
+        }
+
+        [TestMethod]
+        public async Task ReadTeamsUserActivityReport_DoesNotClassifyPermissionFailureAsUnknownTenant()
+        {
+            var responseBody =
+                "{\"error\":{\"code\":\"Authorization_RequestDenied\",\"message\":\"Insufficient privileges to complete the operation.\"}}";
+            var handler = new GraphReportResponseHandler(HttpStatusCode.Forbidden, responseBody, "application/json");
+            var graphClient = new GraphServiceClient(
+                new HttpClient(handler),
+                new BearerTokenAuthenticationProvider("test-token"));
+
+            var exception = await CaptureReportExceptionAsync(graphClient);
+
+            Assert.IsFalse(
+                SolutionInstallVerifier.IsGraphReportsUnknownTenant(exception),
+                "A genuine authorization failure must retain the installer's permissions error.");
+        }
+
+        private static async Task<Exception> CaptureReportExceptionAsync(GraphServiceClient graphClient)
+        {
+            Exception exception = null;
+            try
             {
-                _csvBody = csvBody;
+                await SolutionInstallVerifier.ReadTeamsUserActivityReportAsync(graphClient);
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+
+            Assert.IsNotNull(exception, "Expected the stubbed Graph error response to throw.");
+            return exception;
+        }
+
+        /// <summary>
+        /// Test transport that records the outgoing request URI and returns a stubbed Graph response,
+        /// so the typed report call completes without hitting Microsoft Graph.
+        /// </summary>
+        private sealed class GraphReportResponseHandler : HttpMessageHandler
+        {
+            private readonly HttpStatusCode _statusCode;
+            private readonly string _body;
+            private readonly string _mediaType;
+
+            public GraphReportResponseHandler(HttpStatusCode statusCode, string body, string mediaType)
+            {
+                _statusCode = statusCode;
+                _body = body;
+                _mediaType = mediaType;
             }
 
             public Uri CapturedUri { get; private set; }
@@ -61,9 +118,9 @@ namespace Tests.UnitTests.InstallTests
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 CapturedUri = request.RequestUri;
-                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                var response = new HttpResponseMessage(_statusCode)
                 {
-                    Content = new StringContent(_csvBody, Encoding.UTF8, "application/octet-stream"),
+                    Content = new StringContent(_body, Encoding.UTF8, _mediaType),
                     RequestMessage = request,
                 };
                 return Task.FromResult(response);

@@ -114,6 +114,19 @@ namespace Web.AnalyticsWeb.Models.Health
         public DateTime? NewestHitUtc { get; set; }
         [JsonProperty("newestAuditEventUtc")]
         public DateTime? NewestAuditEventUtc { get; set; }
+        /// <summary>
+        /// True when the most recent Graph Copilot per-user usage-report import found the tenant's user
+        /// identities concealed (hashed), so that report was deliberately not imported. Surfaced because the
+        /// symptom otherwise looks identical to "this tenant has no Copilot usage".
+        /// </summary>
+        [JsonProperty("copilotUsageReportsIdentitiesConcealed")]
+        public bool CopilotUsageReportsIdentitiesConcealed { get; set; }
+        /// <summary>When the Graph Copilot usage reports were last imported, or null if they never have been.</summary>
+        [JsonProperty("copilotUsageReportLastImportUtc")]
+        public DateTime? CopilotUsageReportLastImportUtc { get; set; }
+        /// <summary>Errors from the most recent import of each Graph Copilot usage report, if any.</summary>
+        [JsonProperty("copilotUsageReportErrors")]
+        public List<string> CopilotUsageReportErrors { get; set; } = new List<string>();
         /// <summary>Set when the cheap DMV counts / DB size couldn't be read (e.g. no VIEW DATABASE STATE).</summary>
         [JsonProperty("countsError")]
         public string CountsError { get; set; }

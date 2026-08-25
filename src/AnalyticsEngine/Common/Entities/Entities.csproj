@@ -63,6 +63,8 @@
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.IdentityModel" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Net" />
     <Reference Include="System.Net.Http.WebRequest" />
     <Reference Include="System.Numerics" />
@@ -81,9 +83,27 @@
     <Compile Include="BuildConstants.cs" />
     <Compile Include="Config\AppConfig.cs" />
     <Compile Include="Config\AppConnectionStrings.cs" />
+    <Compile Include="CopilotAdoption\AdoptionBand.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionAgentModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionAnalysis.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionSummaryModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionUnlicensedModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionUserModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionWorkbook.cs" />
+    <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
+    <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
+    <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
+    <Compile Include="Entities\Copilot\CopilotInteractionHistory.cs" />
     <Compile Include="Entities\Email\EmailAddress.cs" />
     <Compile Include="Entities\Email\SentEmail.cs" />
     <Compile Include="Entities\Email\SentEmailRecipient.cs" />
@@ -109,7 +129,6 @@
     <Compile Include="LookupCaches\SPWebResolver.cs" />
     <Compile Include="LookupCaches\Discrete\StateOrProvinceCache.cs" />
     <Compile Include="LookupCaches\StreamLookupManager.cs" />
-    <Compile Include="LookupCaches\Discrete\TeamsAddOnCache.cs" />
     <Compile Include="LookupCaches\TeamsAndCallsDBLookupManager.cs" />
     <Compile Include="LookupCaches\Discrete\TeamsCache.cs" />
     <Compile Include="LookupCaches\Discrete\TeamsChannelCache.cs" />
@@ -162,8 +181,6 @@
     <Compile Include="Entities\Teams\ChannelStatsLog.cs" />
     <Compile Include="Entities\Teams\ChannelUserLog.cs" />
     <Compile Include="Entities\Teams\TeamDefinition.cs" />
-    <Compile Include="Entities\Teams\TeamAddOnLog.cs" />
-    <Compile Include="Entities\Teams\TeamAddOnDefinition.cs" />
     <Compile Include="Entities\Teams\TeamChannelDefinition.cs" />
     <Compile Include="Entities\Teams\TeamMembershipLog.cs" />
     <Compile Include="Entities\Teams\TeamOwners.cs" />
@@ -177,6 +194,7 @@
     <Compile Include="Entities\UsageReports\OutlookUsageActivityLog.cs" />
     <Compile Include="Entities\UsageReports\YammerActivityClasses.cs" />
     <Compile Include="Entities\UsageReports\TeamsUsageActivityClasses.cs" />
+    <Compile Include="Entities\UsageReports\CopilotUsageReportClasses.cs" />
     <Compile Include="Entities\TelemetryReport.cs" />
     <Compile Include="Entities\Web.cs" />
     <Compile Include="Entities\YammerGroup.cs" />
@@ -336,6 +354,38 @@
     <Compile Include="Migrations\202608131055001_IndexReportDateQueries.Designer.cs">
       <DependentUpon>202608131055001_IndexReportDateQueries.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202608190622001_CopilotDroppedAuditFields.cs" />
+    <Compile Include="Migrations\202608190622001_CopilotDroppedAuditFields.Designer.cs">
+      <DependentUpon>202608190622001_CopilotDroppedAuditFields.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608190725064_AddCopilotUsageReports.cs" />
+    <Compile Include="Migrations\202608190725064_AddCopilotUsageReports.Designer.cs">
+      <DependentUpon>202608190725064_AddCopilotUsageReports.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608191533567_DeprecateTeamsAddons.cs" />
+    <Compile Include="Migrations\202608191533567_DeprecateTeamsAddons.Designer.cs">
+      <DependentUpon>202608191533567_DeprecateTeamsAddons.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608200600001_AddCopilotInteractionHistory.cs" />
+    <Compile Include="Migrations\202608200600001_AddCopilotInteractionHistory.Designer.cs">
+      <DependentUpon>202608200600001_AddCopilotInteractionHistory.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.cs" />
+    <Compile Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.Designer.cs">
+      <DependentUpon>202608210700001_WidenCopilotAccessedResourceDedupIndex.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs" />
+    <Compile Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.Designer.cs">
+      <DependentUpon>202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.cs" />
+    <Compile Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.Designer.cs">
+      <DependentUpon>202608210700003_IndexCopilotInteractionsDedupWindow.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.cs" />
+    <Compile Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.Designer.cs">
+      <DependentUpon>202608250900001_IndexCopilotAccessedResourceFkColumns.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -376,6 +426,9 @@
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
     <Compile Include="ResourceProxy.cs" />
+    <Compile Include="Xlsx\XlsxChart.cs" />
+    <Compile Include="Xlsx\XlsxSheet.cs" />
+    <Compile Include="Xlsx\XlsxWriter.cs" />
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include=".NETFramework,Version=v4.5.2">
@@ -503,6 +556,30 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608131055001_IndexReportDateQueries.resx">
       <DependentUpon>202608131055001_IndexReportDateQueries.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608190622001_CopilotDroppedAuditFields.resx">
+      <DependentUpon>202608190622001_CopilotDroppedAuditFields.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608190725064_AddCopilotUsageReports.resx">
+      <DependentUpon>202608190725064_AddCopilotUsageReports.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608191533567_DeprecateTeamsAddons.resx">
+      <DependentUpon>202608191533567_DeprecateTeamsAddons.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608200600001_AddCopilotInteractionHistory.resx">
+      <DependentUpon>202608200600001_AddCopilotInteractionHistory.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608210700001_WidenCopilotAccessedResourceDedupIndex.resx">
+      <DependentUpon>202608210700001_WidenCopilotAccessedResourceDedupIndex.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608210700002_IndexCopilotInteractionKeywordsByKeyword.resx">
+      <DependentUpon>202608210700002_IndexCopilotInteractionKeywordsByKeyword.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608210700003_IndexCopilotInteractionsDedupWindow.resx">
+      <DependentUpon>202608210700003_IndexCopilotInteractionsDedupWindow.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202608250900001_IndexCopilotAccessedResourceFkColumns.resx">
+      <DependentUpon>202608250900001_IndexCopilotAccessedResourceFkColumns.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

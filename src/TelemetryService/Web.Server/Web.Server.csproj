@@ -11,12 +11,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Aggregation helpers are internal so they stay off the public surface, but they hold the
+         logic most worth testing (medians, settings parsing, freshness bucketing). -->
+    <InternalsVisibleTo Include="Tests.Unit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       Must be >= the transitive version pulled in via UsageReporting -> DataUtils (currently 1.21.0),
       otherwise NuGet raises NU1605 (package downgrade) and the resulting binding redirect mess
       surfaces as CS0433 (DefaultAzureCredential exists in both Azure.Core and Azure.Identity).
     -->
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
     <PackageReference Include="Microsoft.AspNetCore.SpaProxy">
       <Version>10.*-*</Version>

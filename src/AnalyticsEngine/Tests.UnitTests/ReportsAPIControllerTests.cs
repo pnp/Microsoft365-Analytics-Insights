@@ -1,9 +1,11 @@
 extern alias AnalyticsWeb;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using ReportAreaData = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportAreaData;
 using ReportChart = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportChart;
 using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
@@ -241,6 +243,104 @@ namespace Tests.UnitTests
                 }
             }
         }
+
+        #region Copilot prompt insight charts (issue #312)
+
+        [TestMethod]
+        public void KeyPhrasesQuery_AggregatesAndCapsInSql()
+        {
+            // copilot_interaction_keywords is ~10 rows per scored prompt, so a million prompts is ~10M
+            // rows. This MUST be a SQL-side TOP N aggregate - fetching rows to count them client-side
+            // would pull the whole link table into the web app.
+            var sql = ReportsAPIController.BuildCopilotKeyPhrasesQuery(top: 40);
+
+            StringAssert.Contains(sql, "TOP 40");
+            StringAssert.Contains(sql, "GROUP BY");
+            StringAssert.Contains(sql, "COUNT_BIG(*)");
+            StringAssert.Contains(sql, "dbo.copilot_interaction_keywords");
+            StringAssert.Contains(sql, "dbo.keywords");
+            StringAssert.Contains(sql, "OPTION (RECOMPILE)");
+
+            // Bounded by the reporting window, not the whole table.
+            StringAssert.Contains(sql, "i.created_utc >= @from");
+        }
+
+        [TestMethod]
+        public void SentimentQuery_ExcludesUnscoredPrompts()
+        {
+            // An unscored prompt is not a neutral prompt. Counting NULL as 0 would drag the average
+            // towards neutral in proportion to how much of the data was never scored.
+            var sql = ReportsAPIController.BuildCopilotSentimentQuery();
+
+            StringAssert.Contains(sql, "AVG(i.sentiment_score)");
+            StringAssert.Contains(sql, "i.sentiment_score IS NOT NULL");
+            StringAssert.Contains(sql, "i.created_utc >= @from");
+            StringAssert.Contains(sql, "OPTION (RECOMPILE)");
+        }
+
+        [TestMethod]
+        public void LanguagesQuery_IsBoundedAndIgnoresUndetected()
+        {
+            var sql = ReportsAPIController.BuildCopilotLanguagesQuery(top: 8);
+
+            StringAssert.Contains(sql, "TOP 8");
+            StringAssert.Contains(sql, "dbo.languages");
+            StringAssert.Contains(sql, "i.language_id IS NOT NULL");
+            StringAssert.Contains(sql, "i.created_utc >= @from");
+            StringAssert.Contains(sql, "OPTION (RECOMPILE)");
+        }
+
+        [TestMethod]
+        public void PromptInsightQueries_ReadInteractionHistoryNotTheAuditLog()
+        {
+            // These three are the ONLY Copilot charts sourced from the opt-in Graph interaction-history
+            // import. The rest of the tab reads copilot_chats/audit_events. Mixing them up would silently
+            // report on a different population.
+            var queries = new[]
+            {
+                ReportsAPIController.BuildCopilotKeyPhrasesQuery(),
+                ReportsAPIController.BuildCopilotSentimentQuery(),
+                ReportsAPIController.BuildCopilotLanguagesQuery(),
+            };
+
+            foreach (var sql in queries)
+            {
+                StringAssert.Contains(sql, "dbo.copilot_interactions");
+                Assert.IsFalse(sql.Contains("copilot_chats"),
+                    "Prompt insight charts must not read the audit-log Copilot tables.");
+                Assert.IsFalse(sql.Contains("audit_events"),
+                    "Prompt insight charts must not read the audit-log Copilot tables.");
+            }
+        }
+
+        [TestMethod]
+        public void CognitiveConfigured_IsSentToTheUiAsAJsonFlag()
+        {
+            // Issue #312 requires the three prompt-insight charts to be hidden WITH AN EXPLANATION when
+            // cognitive services are not configured. The controller omits the charts; this flag is what
+            // lets the page say why instead of three panels silently disappearing. The JSON name is a
+            // contract with ReportsPage.tsx, which reads data.cognitiveConfigured - renaming the property
+            // without the attribute would break the explanation and leave the original silent behaviour.
+            var json = JsonConvert.SerializeObject(new ReportAreaData
+            {
+                Area = "copilot",
+                Months = 3,
+                CognitiveConfigured = false,
+            });
+
+            StringAssert.Contains(json, "\"cognitiveConfigured\":false");
+
+            var round = JsonConvert.DeserializeObject<ReportAreaData>(json);
+            Assert.IsFalse(round.CognitiveConfigured);
+
+            // It must serialise when true as well - the UI distinguishes "configured but no data yet"
+            // (charts present, each carrying its own no-data warning) from "not configured at all".
+            StringAssert.Contains(
+                JsonConvert.SerializeObject(new ReportAreaData { Area = "copilot", CognitiveConfigured = true }),
+                "\"cognitiveConfigured\":true");
+        }
+
+        #endregion
 
         [TestMethod]
         public void QueryTimeoutDetection_RecognizesNestedTimeout()

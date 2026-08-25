@@ -508,6 +508,42 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        [Ignore]
+        public async Task UspCompileActivityWeek_CopilotSundayActivity_IsIncluded()
+        {
+            // KNOWN FAILING - kept deliberately as the reproduction for #300.
+            //
+            // This asserts correct behaviour: a Copilot interaction at 23:59 on the Sunday belongs to that
+            // Mon-Sun week. It currently fails, because profiling.usp_UpsertCopilot filters with
+            // `au.time_stamp <= @EndDate` and @EndDate is the Sunday at midnight - so only the first instant
+            // of the final day is kept and the rest of Sunday is dropped.
+            //
+            // The one-line fix (a half-open `< DATEADD(DAY, 1, @EndDate)` window) was reverted out of this
+            // release: it silently changes every weekly Copilot metric the proc produces, in a direction that
+            // depends on what callers pass as @EndDate, and it arrived with a test-data generator rather than
+            // as a considered profiling change. #300 tracks the proper fix - caller audit, the same treatment
+            // for the other workloads, before/after numbers, and a decision on recompiling history.
+            //
+            // Un-ignore this as part of #300; it is the assertion that change needs to satisfy.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(98);
+                var sundayLate = monday.AddDays(6).AddHours(23).AddMinutes(59);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+                await InsertCopilotChat(db, TEST_USER_ID, sundayLate, "Teams");
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                Assert.AreEqual(
+                    1,
+                    await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Chats"),
+                    "Copilot activity from the full Sunday must be included in the Mon-Sun week");
+            }
+        }
+
         // ---- usp_CompileUsageWeek / UsageWeekly - previously untested entirely ----
 
         [TestMethod]
