@@ -220,9 +220,22 @@ namespace App.ControlPanel.Engine.SPO.Auth
                 {
                     _logger.LogInformation("If your browser doesn't open automatically, sign in by pasting this address into it: " + url);
 
-                    // Same as MSAL's default: hand the URL to the OS so the admin's *default* browser opens it
-                    // (they may well already be signed in there). Don't force a specific browser.
-                    Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })?.Dispose();
+                    try
+                    {
+                        // Same as MSAL's default: hand the URL to the OS so the admin's *default* browser opens it
+                        // (they may well already be signed in there). Don't force a specific browser.
+                        Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Letting this propagate would fault AcquireTokenInteractive and tear down the loopback
+                        // listener, which defeats the point of logging the URL above - the admin would be told to
+                        // paste an address that nothing is listening for. Swallow it so MSAL keeps waiting for the
+                        // redirect until the sign-in timeout, and the pasted URL still completes the install.
+                        _logger.LogWarning($"Couldn't open a browser automatically ({ex.Message}). " +
+                            "Sign in by pasting the address above into a browser - the installer is still waiting.");
+                    }
+
                     return Task.CompletedTask;
                 },
 
