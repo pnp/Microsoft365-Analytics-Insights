@@ -8,18 +8,37 @@ Analytics Engine. The ASP.NET `Web` project serves it at the site root (`/`, via
 > server-rendered home page. It is built with **Vite + React 19 + TypeScript** and uses
 > **Fluent UI React v9** (`@fluentui/react-components`) for an Office 365 look & feel.
 
-## Pages
+## Areas and pages
+
+The portal is split into two areas so the two audiences it serves don't have to wade through
+each other's tooling. The area switcher sits in the header; each area has its own left nav.
+
+**Insights** — what the data says, for a business/adoption reader.
 
 | Route (hash) | Page | What it does |
 | --- | --- | --- |
-| `#/home` | **Home** | System status: data counts and configuration (SQL, Redis, Cognitive, Service Bus, calls webhook). The default page. |
-| `#/teams` | **Teams Permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token in Redis). Ported from the original app. |
-| `#/user-lookup` | **User Data Lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
-| `#/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
-| `#/install-log` | **Install Log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The most recent is the current configuration. |
+| `#/insights/overview` | **Overview** | Tracking-data overview: how much of each workload is in the database. The default page. |
+| `#/insights/reports` | **Reports** | In-app version of the Power BI reports: a sub-area per enabled workload, charting usage over a configurable window. |
+| `#/insights/copilot-adoption` | **Copilot Adoption** | Which licensed users aren't getting value from their licence, and which unlicensed heavy users have the strongest case for one. |
+
+**Administration** — running the service, for an IT operator.
+
+| Route (hash) | Page | What it does |
+| --- | --- | --- |
+| `#/admin/health` | **Service health** | System health: overview, import liveness, exceptions, component health, data overview and configuration, each lazily loaded from its own cached endpoint. |
+| `#/admin/install-log` | **Install log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The most recent is the current configuration. |
+| `#/admin/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
+| `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token in Redis). Ported from the original app. |
+| `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
 
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
 MVC route changes are needed to add pages.
+
+`src/navigation.tsx` is the single source of truth for both the router and the left nav, so
+the two cannot drift — adding a page means adding one entry to `ROUTES`.
+
+> The pre-split routes (`#/home`, `#/reports`, `#/teams`, `#/health`, ...) are **not**
+> redirected. Anything unrecognised falls back to the Insights overview.
 
 ## Authentication
 

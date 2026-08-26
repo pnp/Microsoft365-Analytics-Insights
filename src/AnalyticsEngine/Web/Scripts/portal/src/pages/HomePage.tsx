@@ -156,7 +156,7 @@ export default function HomePage() {
             </TableBody>
           </Table>
           <Body1>
-            Enable Teams analytics on the <Link href="#/teams">Teams Permissions</Link> page.
+            Enable Teams analytics on the <Link href="#/admin/teams-permissions">Teams permissions</Link> page.
           </Body1>
         </Card>
 

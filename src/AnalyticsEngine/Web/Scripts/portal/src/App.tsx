@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { Suspense, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   makeStyles,
@@ -7,21 +7,18 @@ import {
   TabList,
   Text,
   Button,
+  Hamburger,
+  NavDrawer,
+  NavDrawerBody,
+  NavItem,
+  NavSectionHeader,
+  Tooltip,
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { SignOut20Regular } from '@fluentui/react-icons';
 import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
-
-// Code-split the pages so each route is a separate chunk (smaller initial load).
-const HomePage = lazy(() => import('./pages/HomePage'));
-const ReportsPage = lazy(() => import('./pages/ReportsPage'));
-const CopilotAdoptionPage = lazy(() => import('./pages/CopilotAdoptionPage'));
-const TeamsPermissionsPage = lazy(() => import('./pages/TeamsPermissionsPage'));
-const UserLookupPage = lazy(() => import('./pages/UserLookupPage'));
-const ProfilingStatusPage = lazy(() => import('./pages/ProfilingStatusPage'));
-const InstallLogPage = lazy(() => import('./pages/InstallLogPage'));
-const HealthPage = lazy(() => import('./pages/HealthPage'));
+import { AREAS, DEFAULT_PATH, ROUTES, areaForPath, groupedRoutesForArea } from './navigation';
 
 const useStyles = makeStyles({
   header: {
@@ -40,45 +37,57 @@ const useStyles = makeStyles({
   signOut: {
     color: tokens.colorNeutralForegroundOnBrand,
   },
-  tabBar: {
+  areaBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
     backgroundColor: tokens.colorNeutralBackground1,
     paddingInline: '12px',
     boxShadow: tokens.shadow4,
   },
+  layout: {
+    display: 'flex',
+    alignItems: 'stretch',
+    // Fill the viewport below the 48px header and the ~44px area bar so the nav rail runs the
+    // full height of the page rather than only as far as the content happens to reach.
+    minHeight: 'calc(100vh - 92px)',
+  },
+  nav: {
+    height: 'auto',
+  },
   content: {
+    // min-width: 0 stops a wide page (tables, charts) forcing the flex row wider than the
+    // viewport and pushing the nav rail off-screen.
+    flexGrow: 1,
+    minWidth: 0,
     padding: '24px',
+  },
+  contentInner: {
     maxWidth: '1120px',
     marginInline: 'auto',
   },
 });
 
 /**
- * App shell: an Office 365-style brand header + a Fluent TabList for navigation. Uses HashRouter
- * so the whole SPA is served by a single MVC action (no IIS / MVC route changes to add pages).
+ * App shell: an Office 365-style brand header, an area switcher (Insights / Administration) and a
+ * per-area left nav. Uses HashRouter so the whole SPA is served by a single MVC action (no IIS /
+ * MVC route changes to add pages).
+ *
+ * Routing and navigation are both driven from the route table in ./navigation, so the two cannot
+ * drift and adding a page means adding one entry there.
  */
 export default function App() {
   const styles = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
+  const [navOpen, setNavOpen] = useState(true);
 
-  const selectedTab = location.pathname.startsWith('/reports')
-    ? 'reports'
-    : location.pathname.startsWith('/copilot-adoption')
-      ? 'copilot-adoption'
-      : location.pathname.startsWith('/teams')
-        ? 'teams'
-        : location.pathname.startsWith('/user-lookup')
-          ? 'user-lookup'
-          : location.pathname.startsWith('/profiling')
-            ? 'profiling'
-            : location.pathname.startsWith('/install-log')
-              ? 'install-log'
-              : location.pathname.startsWith('/health')
-                ? 'health'
-                : 'home';
+  const currentArea = areaForPath(location.pathname);
+  const navGroups = groupedRoutesForArea(currentArea);
 
-  const onTabSelect: SelectTabEventHandler = (_event, data) => {
-    navigate(`/${data.value}`);
+  const onAreaSelect: SelectTabEventHandler = (_event, data) => {
+    const area = AREAS.find((a) => a.id === data.value);
+    if (area) navigate(area.homePath);
   };
 
   return (
@@ -101,41 +110,62 @@ export default function App() {
         </Button>
       </header>
 
-      <div className={styles.tabBar}>
-        <TabList selectedValue={selectedTab} onTabSelect={onTabSelect} size="large">
-          <Tab value="home">Home</Tab>
-          <Tab value="reports">Reports</Tab>
-          <Tab value="copilot-adoption">Copilot Adoption</Tab>
-          <Tab value="teams">Teams Permissions</Tab>
-          <Tab value="user-lookup">User Data Lookup</Tab>
-          <Tab value="profiling">Profiling</Tab>
-          <Tab value="install-log">Install Log</Tab>
-          <Tab value="health">Health</Tab>
+      <div className={styles.areaBar}>
+        <Tooltip content={navOpen ? 'Collapse navigation' : 'Expand navigation'} relationship="label">
+          <Hamburger onClick={() => setNavOpen(!navOpen)} />
+        </Tooltip>
+        <TabList selectedValue={currentArea} onTabSelect={onAreaSelect} size="large">
+          {AREAS.map((area) => (
+            <Tab key={area.id} value={area.id}>
+              {area.label}
+            </Tab>
+          ))}
         </TabList>
       </div>
 
-      <main className={styles.content}>
-        <Suspense
-          fallback={
-            <div style={{ textAlign: 'center', padding: '32px' }}>
-              <Spinner size={80} label="Loading..." />
-            </div>
-          }
+      <div className={styles.layout}>
+        <NavDrawer
+          open={navOpen}
+          type="inline"
+          className={styles.nav}
+          selectedValue={location.pathname}
+          onNavItemSelect={(_event, data) => navigate(String(data.value))}
+          aria-label={`${AREAS.find((a) => a.id === currentArea)?.label} navigation`}
         >
-          <Routes>
-            <Route path="/" element={<Navigate to="/home" replace />} />
-            <Route path="/home" element={<HomePage />} />
-            <Route path="/reports" element={<ReportsPage />} />
-            <Route path="/copilot-adoption" element={<CopilotAdoptionPage />} />
-            <Route path="/teams" element={<TeamsPermissionsPage />} />
-            <Route path="/user-lookup" element={<UserLookupPage />} />
-            <Route path="/profiling" element={<ProfilingStatusPage />} />
-            <Route path="/install-log" element={<InstallLogPage />} />
-            <Route path="/health" element={<HealthPage />} />
-            <Route path="*" element={<Navigate to="/home" replace />} />
-          </Routes>
-        </Suspense>
-      </main>
+          <NavDrawerBody>
+            {navGroups.map((bucket, i) => (
+              <div key={bucket.group ?? `ungrouped-${i}`}>
+                {bucket.group && <NavSectionHeader>{bucket.group}</NavSectionHeader>}
+                {bucket.routes.map((route) => (
+                  <NavItem key={route.path} value={route.path} icon={route.icon}>
+                    {route.label}
+                  </NavItem>
+                ))}
+              </div>
+            ))}
+          </NavDrawerBody>
+        </NavDrawer>
+
+        <main className={styles.content}>
+          <div className={styles.contentInner}>
+            <Suspense
+              fallback={
+                <div style={{ textAlign: 'center', padding: '32px' }}>
+                  <Spinner size={80} label="Loading..." />
+                </div>
+              }
+            >
+              <Routes>
+                <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
+                {ROUTES.map((route) => (
+                  <Route key={route.path} path={route.path} element={route.element} />
+                ))}
+                <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
+              </Routes>
+            </Suspense>
+          </div>
+        </main>
+      </div>
     </>
   );
 }
