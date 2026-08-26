@@ -40,19 +40,15 @@ namespace App.ControlPanel
                     catch (FormatException)
                     {
                         InstallerLogs.AddToWindowsEventLog("Couldn't convert init param from base64; assuming the connection-string was sent in clear-text.");
-                        Console.Out.WriteLine("Couldn't convert init param from base64; assuming the connection-string was sent in clear-text.");
                         initInfo = new DatabaseUpgradeInfo() { ConnectionString = secondArgfullArgsString };
                     }
 
-                    // Attempt to upgrade/verify the DB is on the correct migration. Mirror every
-                    // log line to stdout so the parent installer process (which captures stdout)
-                    // can echo schema-upgrade progress live into the install log, instead of the
-                    // operator having to dig through Windows Event Viewer.
-                    DatabaseUpgrader.CheckDbUpgraded(initInfo, msg =>
-                    {
-                        InstallerLogs.AddToWindowsEventLog(msg);
-                        try { Console.Out.WriteLine(msg); } catch { /* no console attached — ignore */ }
-                    });
+                    // Attempt to upgrade/verify the DB is on the correct migration. Every log line is
+                    // mirrored to stdout so the parent installer process (which captures stdout) can echo
+                    // schema-upgrade progress live into the install log, instead of the operator having to
+                    // dig through Windows Event Viewer. AddToWindowsEventLog already writes to stdout, so
+                    // do NOT add a Console.Write here as well - that duplicated every line in the log.
+                    DatabaseUpgrader.CheckDbUpgraded(initInfo, msg => InstallerLogs.AddToWindowsEventLog(msg));
                     return;
                 }
                 else if (args.Contains(InstallerConstants.PARAM_REGISTERCONFIG))
