@@ -1,6 +1,7 @@
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.SPO.AppCatalog;
 using App.ControlPanel.Engine.SPO.Auth;
+using App.ControlPanel.Engine.SPO.Rest;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -286,12 +287,66 @@ namespace Tests.UnitTests.InstallTests
 
         #endregion
 
+        #region REST error classification
+
+        // The app-catalog preflight in SharePointWebComponentsInstallJob decides what to tell the admin from
+        // SpoRestException.Status: only a 404 means "this app catalog isn't there". These two tests pin that
+        // distinction down, because if a transport failure ever started reporting a status the installer would
+        // go back to telling admins to check a URL that was fine, then carry on as though the install worked.
+
+        [TestMethod]
+        public async Task TransportFailureLeavesStatusUnsetSoItIsNotMistakenForAMissingAppCatalog()
+        {
+            var handler = new FakeHandler(_ => throw new HttpRequestException("the network is down"));
+            using (var rest = new SpoRestClient(new FakeAuthenticator(), _logger, new HttpClient(handler)))
+            {
+                var ex = await Assert.ThrowsExceptionAsync<SpoRestException>(
+                    () => rest.GetAsync("https://contoso.sharepoint.com/sites/appcatalog/_api/web?$select=WebTemplate"));
+
+                Assert.IsNull(ex.Status, "A transport failure has no HTTP status, so it must not look like a 404.");
+                Assert.IsFalse(ex.IsAccessDenied);
+            }
+        }
+
+        [TestMethod]
+        public async Task MissingResourceIsReportedAs404SoItCanBeToldApartFromAnOutage()
+        {
+            var handler = new FakeHandler(_ => Respond(HttpStatusCode.NotFound, "{\"error\":{\"message\":\"Not found.\"}}"));
+            using (var rest = new SpoRestClient(new FakeAuthenticator(), _logger, new HttpClient(handler)))
+            {
+                var ex = await Assert.ThrowsExceptionAsync<SpoRestException>(
+                    () => rest.GetAsync("https://contoso.sharepoint.com/sites/appcatalog/_api/web?$select=WebTemplate"));
+
+                Assert.AreEqual(HttpStatusCode.NotFound, ex.Status);
+                Assert.IsFalse(ex.IsAccessDenied);
+            }
+        }
+
+        [TestMethod]
+        public async Task AccessDeniedIsDistinctFromBothMissingAndTransportFailures()
+        {
+            foreach (var code in new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden })
+            {
+                var handler = new FakeHandler(_ => Respond(code, "{\"error\":{\"message\":\"Access denied.\"}}"));
+                using (var rest = new SpoRestClient(new FakeAuthenticator(), _logger, new HttpClient(handler)))
+                {
+                    var ex = await Assert.ThrowsExceptionAsync<SpoRestException>(
+                        () => rest.GetAsync("https://contoso.sharepoint.com/sites/appcatalog/_api/web"));
+
+                    Assert.IsTrue(ex.IsAccessDenied, $"{code} should be reported as access denied.");
+                    Assert.AreNotEqual(HttpStatusCode.NotFound, ex.Status);
+                }
+            }
+        }
+
+        #endregion
+
         static HttpResponseMessage Respond(HttpStatusCode code, string content)
         {
             return new HttpResponseMessage(code) { Content = new StringContent(content) };
         }
 
-class FakeAuthenticator : ISpoAuthenticator
+        class FakeAuthenticator : ISpoAuthenticator
         {
             public Task<string> GetAccessTokenAsync(string siteUrl) => Task.FromResult("fake-token");
             public void Dispose() { }

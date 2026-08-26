@@ -84,18 +84,26 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     }
                     catch (SpoRestException ex)
                     {
-                        Console.WriteLine(ex);
                         if (ex.IsAccessDenied)
                         {
                             _logger.LogError($"Access denied to the app-catalog @ {sharePointInstallConfig.AppCatalogueURL}. " +
                                 "The signed-in account must be a SharePoint administrator. If you signed in as a guest (B2B) administrator, " +
                                 "set the target tenant on the SharePoint tab so you are signed in against the right directory.", true);
+                            return;
                         }
-                        else
+
+                        if (ex.Status == System.Net.HttpStatusCode.NotFound)
                         {
                             _logger.LogError($"Can't find SPO tenant app-catalog @ {sharePointInstallConfig.AppCatalogueURL}. Verify it exists and try again.", true);
+                            return;
                         }
-                        return;
+
+                        // Anything else - a timeout, a DNS or proxy failure, a 5xx, an unreadable response - is
+                        // not evidence that the app catalog is missing. Treating it as such told the admin to go
+                        // and check a URL that is probably fine, and the early return skipped the "perform step
+                        // manually" guidance below, so a transient network blip looked like a successful install.
+                        throw new SpoAppCatalogException(
+                            $"Couldn't check the app-catalog @ {sharePointInstallConfig.AppCatalogueURL}: {ex.Message}", ex);
                     }
 
                     var template = web["WebTemplate"]?.ToString();

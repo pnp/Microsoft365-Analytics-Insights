@@ -1,6 +1,8 @@
 ﻿using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
+using App.ControlPanel.Engine.SPO.AppCatalog;
+using App.ControlPanel.Engine.SPO.Auth;
 using Common.Entities.Installer;
 using DataUtils;
 using Microsoft.Extensions.Logging;
@@ -254,18 +256,57 @@ namespace App.ControlPanel.Frames
 
         private void HandleNestedException(Exception ex)
         {
-            Exception rootExceptions = CommonExceptionHandler.GetRootException(ex);
+            // GetRootException walks to the deepest inner exception. That is right for a raw infrastructure
+            // failure, but wrong for the SharePoint sign-in and app-catalog errors: those carry a message
+            // that tells the admin exactly what to do - grant consent, set the tenant, or re-run and use the
+            // sign-in URL from the log - wrapped around an MSAL or cancellation exception whose own message
+            // is just "operation cancelled". Because the worker blocks on the task, the chain also arrives
+            // wrapped in an AggregateException. Prefer the actionable exception wherever it sits.
+            Exception toShow = FindActionableException(ex) ?? CommonExceptionHandler.GetRootException(ex);
 
             if (ex is InvalidFormInputException)
             {
-                LogItemOnUIThread(new InstallLogLVI(rootExceptions));
+                LogItemOnUIThread(new InstallLogLVI(toShow));
             }
             else
             {
                 // Unexpected error
-                LogItemOnUIThread(new InstallLogLVI(rootExceptions), true);
+                LogItemOnUIThread(new InstallLogLVI(toShow), true);
             }
 
+        }
+
+        /// <summary>
+        /// Finds the first exception in the chain that was raised specifically to be shown to the admin,
+        /// looking through AggregateException branches. Returns null when there isn't one.
+        /// </summary>
+        static Exception FindActionableException(Exception ex)
+        {
+            while (ex != null)
+            {
+                if (ex is SpoAuthenticationException || ex is SpoAppCatalogException)
+                {
+                    return ex;
+                }
+
+                if (ex is AggregateException aggregate)
+                {
+                    foreach (var inner in aggregate.Flatten().InnerExceptions)
+                    {
+                        var found = FindActionableException(inner);
+                        if (found != null)
+                        {
+                            return found;
+                        }
+                    }
+
+                    return null;
+                }
+
+                ex = ex.InnerException;
+            }
+
+            return null;
         }
 
         public void LogItemOnUIThread(InstallLogLVI installLogLVI, bool fatalError)

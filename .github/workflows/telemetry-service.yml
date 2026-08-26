@@ -11,6 +11,11 @@ on:
   # produced the merge has already built and tested exactly that code, so a push-triggered run on
   # `dev` is a duplicate that competes for runners. Use `Run workflow` (workflow_dispatch) to build
   # `dev` on demand.
+  #
+  # Be aware that unlike the other workflows, a dispatch here does not just build. The `deploy` job
+  # below still accepts `dev` (see its `if:`), and `main` and `dev` share one App Service via
+  # `vars.TELEMETRY_APP_NAME` - so running this on `dev` publishes `dev` over whatever `main` last
+  # deployed. Previously every push to `dev` did that automatically; now it is at least deliberate.
   push:
     branches:
       - main
