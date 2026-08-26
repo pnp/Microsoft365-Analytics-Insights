@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.SPO.AppCatalog;
 using App.ControlPanel.Engine.SPO.Auth;
+using App.ControlPanel.Engine.SPO.Rest;
 using App.ControlPanel.Engine.SPO.SiteTrackerInstaller;
 using Microsoft.Extensions.Logging;
 using System;
@@ -73,19 +74,18 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 // A sign-in failure here is fatal - SpoAuthenticationException is deliberately not caught,
                 // so the whole SharePoint stage aborts instead of reporting a misleading success later.
-                using (var context = authenticator.GetContext(sharePointInstallConfig.AppCatalogueURL))
+                using (var rest = new SpoRestClient(authenticator, _logger))
                 {
                     // Test-load the web & check template
-                    var web = context.Web;
-                    context.Load(web);
+                    Newtonsoft.Json.Linq.JObject web;
                     try
                     {
-                        await context.ExecuteQueryAsync();
+                        web = await rest.GetAsync($"{sharePointInstallConfig.AppCatalogueURL.TrimEnd('/')}/_api/web?$select=WebTemplate");
                     }
-                    catch (System.Net.WebException ex)
+                    catch (SpoRestException ex)
                     {
                         Console.WriteLine(ex);
-                        if (SpoSiteInstallAdaptor.IsAccessDenied(ex))
+                        if (ex.IsAccessDenied)
                         {
                             _logger.LogError($"Access denied to the app-catalog @ {sharePointInstallConfig.AppCatalogueURL}. " +
                                 "The signed-in account must be a SharePoint administrator. If you signed in as a guest (B2B) administrator, " +
@@ -97,10 +97,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         }
                         return;
                     }
-                    if (web.WebTemplate != InstallerConstants.TEMPLATE_APPSTORE)
+
+                    var template = web["WebTemplate"]?.ToString();
+                    if (template != InstallerConstants.TEMPLATE_APPSTORE)
                     {
                         _logger.LogInformation($"Site-collection @ {sharePointInstallConfig.AppCatalogueURL} doesn't appear to be an app-catalog. " +
-                            $"Template for this this site is '{web.WebTemplate}' but expected '{InstallerConstants.TEMPLATE_APPSTORE}'", true);
+                            $"Template for this this site is '{template}' but expected '{InstallerConstants.TEMPLATE_APPSTORE}'", true);
                         return;
                     }
                 }

@@ -2,7 +2,6 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.SPO.AppCatalog;
 using App.ControlPanel.Engine.SPO.Auth;
 using Microsoft.Extensions.Logging;
-using Microsoft.SharePoint.Client;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -64,15 +63,14 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
-        public void InvalidSiteUrlIsRejectedBeforeAnySignIn()
+        public async Task InvalidSiteUrlIsRejectedBeforeAnySignIn()
         {
             using (var auth = new InteractiveSpoAuthenticator(clientId: null, tenantId: null, logger: _logger))
             {
-                Assert.ThrowsException<ArgumentException>(() => auth.GetContext(string.Empty));
-                Assert.ThrowsException<ArgumentException>(() => auth.GetContext("not-a-url"));
+                await Assert.ThrowsExceptionAsync<ArgumentException>(() => auth.GetAccessTokenAsync(string.Empty));
+                await Assert.ThrowsExceptionAsync<ArgumentException>(() => auth.GetAccessTokenAsync("not-a-url"));
             }
         }
-
         #endregion
 
         #region Optional-app-registration config validation
@@ -293,10 +291,9 @@ namespace Tests.UnitTests.InstallTests
             return new HttpResponseMessage(code) { Content = new StringContent(content) };
         }
 
-        class FakeAuthenticator : ISpoAuthenticator
+class FakeAuthenticator : ISpoAuthenticator
         {
             public Task<string> GetAccessTokenAsync(string siteUrl) => Task.FromResult("fake-token");
-            public ClientContext GetContext(string siteUrl) => throw new NotImplementedException();
             public void Dispose() { }
         }
 

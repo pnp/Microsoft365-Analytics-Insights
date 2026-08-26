@@ -53,13 +53,6 @@ namespace App.ControlPanel.Engine.SharePointModelBuilder.ValueLookups
             {
                 switch (lookupTypeElem.ToString())
                 {
-                    case IdValueFromAnotherListValueLookup.PROP_LOOKUP_TYPE_ID_LOOKUP:
-                        return true;
-
-                    case InsertValueIfNotExists.PROP_LOOKUP_TYPE_ID_LOOKUP:
-                        return true;
-                    case ThumbnailImageProvisionAndLookup.PROP_LOOKUP_TYPE_ID_LOOKUP:
-                        return true;
                     case JsonObjectToStringLookup.PROP_LOOKUP_TYPE_ID_LOOKUP:
                         return true;
                     default:
