@@ -104,7 +104,8 @@ namespace Common.Entities.CopilotAdoption
                     : "Not imported.");
             AddMeta(sheet, "Microsoft 365 usage reports", YesNo(summary.DataSources.M365UsageReportsAvailable),
                 summary.DataSources.M365UsageReportDate.HasValue
-                    ? $"Snapshot of {summary.DataSources.M365UsageReportDate.Value:yyyy-MM-dd}."
+                    ? $"Daily reports read across the whole period, up to {summary.DataSources.M365UsageReportDate.Value:yyyy-MM-dd}. "
+                      + "Per-user figures are an average across the days that user was active."
                     : "Not imported.");
             AddMeta(sheet, "User metadata", YesNo(summary.DataSources.UserMetadataAvailable),
                 "Supplies the licensed population and every department breakdown.");

@@ -120,11 +120,21 @@ export default function RadarChart({
   // read as tilted and costs the reader a moment working out which spoke is which.
   const angleFor = (i: number) => (i / axes.length) * 2 * Math.PI - Math.PI / 2;
 
-  const pointFor = (i: number, value: number) => {
-    const ratio = Math.max(0, Math.min(1, value / maxValue));
+  /**
+   * Position at an arbitrary fraction of the radius, NOT clamped to the plot area.
+   *
+   * Separate from pointFor because pointFor clamps to [0, 1] - correct for a data point, which must
+   * never be drawn outside the outermost ring, but fatal for the axis labels: asking pointFor for
+   * 1.19x the radius silently returned exactly 1x, so every axis label was drawn on its own outer
+   * vertex. On the vertical axis that put the label directly underneath the "100" ring label.
+   */
+  const pointAtRatio = (i: number, ratio: number) => {
     const angle = angleFor(i);
     return { x: centre + radius * ratio * Math.cos(angle), y: centre + radius * ratio * Math.sin(angle) };
   };
+
+  const pointFor = (i: number, value: number) =>
+    pointAtRatio(i, Math.max(0, Math.min(1, value / maxValue)));
 
   const polygonFor = (values: number[]) =>
     values.map((v, i) => { const p = pointFor(i, v); return `${p.x},${p.y}`; }).join(' ');
@@ -152,13 +162,16 @@ export default function RadarChart({
 
         {axes.map((axis, i) => {
           const outer = pointFor(i, maxValue);
-          const labelPoint = pointFor(i, maxValue * 1.19);
+          const labelPoint = pointAtRatio(i, 1.19);
+          // The ring labels run up the vertical axis from the centre, so a label sitting on the top
+          // spoke has to clear them: it is nudged further out and anchored to the end of its text.
+          const onVerticalAxis = Math.abs(labelPoint.x - centre) < 4;
           return (
             <g key={axis}>
               <line x1={centre} y1={centre} x2={outer.x} y2={outer.y} stroke={tokens.colorNeutralStroke2} />
               <text
                 x={labelPoint.x}
-                y={labelPoint.y + 4}
+                y={onVerticalAxis && labelPoint.y < centre ? labelPoint.y - 4 : labelPoint.y + 4}
                 textAnchor={labelPoint.x > centre + 4 ? 'start' : labelPoint.x < centre - 4 ? 'end' : 'middle'}
                 fontSize={12}
                 fill={tokens.colorNeutralForeground2}

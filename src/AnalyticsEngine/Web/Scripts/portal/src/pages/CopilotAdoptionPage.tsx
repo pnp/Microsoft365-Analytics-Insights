@@ -1530,7 +1530,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       how: `Four weighted signals: already using Copilot Chat without a licence (${o.opportunityUnlicensedCopilotWeight} points, the heaviest because it is evidence rather than inference), Teams collaboration (${o.opportunityCollaborationWeight}), email volume (${o.opportunityEmailWeight}) and document work (${o.opportunityDocumentWeight}). Each is a capped ratio against its own target, so no single workload can carry someone over the threshold alone.`,
       formula: `recommended when score >= ${o.opportunityRecommendScore}`,
       source:
-        'Disabled accounts are excluded. The Microsoft 365 activity signals come from the latest usage-report snapshot, which is a Microsoft-defined window rather than the period selected above - see the "Licence opportunities" tab for each candidate\u2019s justification.',
+        'Disabled accounts, and users with no recorded activity at all, are excluded. The Microsoft 365 activity signals are a per-active-day average across the period selected above, taken from Microsoft\u2019s daily usage reports - see the "Licence opportunities" tab for each candidate\u2019s justification.',
     },
   });
 
