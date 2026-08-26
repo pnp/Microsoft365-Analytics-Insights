@@ -30,6 +30,8 @@ declare global {
     o365AnalyticsCopilotAdoptionAPI: string;
     /** Endpoint for the system-health ("is it working?") API. */
     o365AnalyticsHealthAPI: string;
+    /** Endpoint for the "is there a newer release?" check. */
+    o365AnalyticsUpdateCheckAPI: string;
   }
 }
 
