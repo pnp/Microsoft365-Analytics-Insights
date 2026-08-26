@@ -13,6 +13,7 @@ import {
 } from '@fluentui/react-components';
 import { fetchHealthExceptions } from '../../api/healthApi';
 import { SectionFrame, buildHourBuckets, useHealthSection, useHealthStyles } from './healthShared';
+import { shortenProblemId } from './problemId';
 
 const useStyles = makeStyles({
   bigNumber: {
@@ -102,23 +103,32 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
             <Text className={shared.subHeading}>Top exception types</Text>
             {data.topExceptionTypes.length > 0 ? (
               <Table size="small" aria-label="Top exception types">
+                <colgroup>
+                  <col style={{ width: '30%' }} />
+                  <col />
+                  <col style={{ width: '90px' }} />
+                </colgroup>
                 <TableHeader>
                   <TableRow>
                     <TableHeaderCell>Type</TableHeaderCell>
                     <TableHeaderCell>Problem id</TableHeaderCell>
-                    <TableHeaderCell>Count</TableHeaderCell>
+                    <TableHeaderCell className={shared.numeric}>Count</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {data.topExceptionTypes.map((t, i) => (
                     <TableRow key={(t.type ?? '') + (t.problemId ?? '') + i}>
-                      <TableCell>
-                        <Text font="monospace">{t.type}</Text>
+                      <TableCell className={shared.breakAnywhere}>
+                        <Text font="monospace" size={200}>
+                          {t.type}
+                        </Text>
                       </TableCell>
-                      <TableCell>
-                        <Text size={200}>{t.problemId}</Text>
+                      <TableCell className={shared.breakAnywhere}>
+                        <Text size={200} title={t.problemId ?? undefined}>
+                          {shortenProblemId(t.problemId, t.type)}
+                        </Text>
                       </TableCell>
-                      <TableCell>{t.count.toLocaleString()}</TableCell>
+                      <TableCell className={shared.numeric}>{t.count.toLocaleString()}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

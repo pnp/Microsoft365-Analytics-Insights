@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState, type ComponentType } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Badge, Tab, TabList, Text, Title3, makeStyles, tokens, type SelectTabEventHandler } from '@fluentui/react-components';
 import { fetchHealthSummary } from '../api/healthApi';
 import { AUTO_REFRESH_MS, formatUtc, overallColor, useHealthSection } from '../components/health/healthShared';
@@ -7,7 +8,6 @@ import LivenessPanel from '../components/health/LivenessPanel';
 import ExceptionsPanel from '../components/health/ExceptionsPanel';
 import ComponentsPanel from '../components/health/ComponentsPanel';
 import DataPanel from '../components/health/DataPanel';
-import ConfigPanel from '../components/health/ConfigPanel';
 
 const useStyles = makeStyles({
   headerRow: {
@@ -42,11 +42,19 @@ const DETAIL_PANELS: { key: string; label: string; Panel: ComponentType<{ active
   { key: 'exceptions', label: 'Exceptions', Panel: ExceptionsPanel },
   { key: 'components', label: 'Component health', Panel: ComponentsPanel },
   { key: 'data', label: 'Data overview', Panel: DataPanel },
-  { key: 'config', label: 'Configuration', Panel: ConfigPanel },
 ];
+
+/**
+ * Summary sections that no longer have a tab here because they were consolidated into a page of
+ * their own. Their status still rolls up into the Overview grid; opening one navigates instead.
+ */
+const RELOCATED_SECTIONS: Record<string, string> = {
+  config: '/admin/configuration',
+};
 
 export default function HealthPage() {
   const styles = useStyles();
+  const navigate = useNavigate();
   const [selected, setSelected] = useState('overview');
   // Detail panels are mounted lazily on first open, then kept mounted (hidden) so switching back is
   // instant without re-fetching - but only the visible one auto-refreshes.
@@ -56,12 +64,22 @@ export default function HealthPage() {
   // header) and auto-refreshes only while Overview is on top.
   const summary = useHealthSection(fetchHealthSummary, selected === 'overview');
 
-  const openTab = useCallback((key: string) => {
-    setSelected(key);
-    if (key !== 'overview') {
-      setActivated((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
-    }
-  }, []);
+  const openTab = useCallback(
+    (key: string) => {
+      // Sections that moved to their own page navigate rather than selecting a (now absent) tab.
+      const relocated = RELOCATED_SECTIONS[key];
+      if (relocated) {
+        navigate(relocated);
+        return;
+      }
+
+      setSelected(key);
+      if (key !== 'overview') {
+        setActivated((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+      }
+    },
+    [navigate],
+  );
 
   const onTabSelect: SelectTabEventHandler = (_e, data) => openTab(String(data.value));
 

@@ -1,6 +1,6 @@
 /*
  * Global resets only. All component styling lives in Fluent UI's makeStyles/tokens so the
- * dashboard matches the admin app; there is deliberately no bespoke CSS here to drift from it.
+ * dashboard matches the portal; there is deliberately no bespoke CSS here to drift from it.
  */
 
 :root {

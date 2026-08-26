@@ -49,8 +49,8 @@ Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing
   is intentionally separate from the importer's `AppInsightsAPIClient` (which is coupled to the importer's
   response parsers) to avoid destabilising the importer; consolidating the two onto one client remains a
   future cleanup.
-- **Web Health tab (in the admin SPA)** — a `Health` tab in the React admin-app
-  (`Scripts/admin-app/src/pages/HealthPage.tsx` + `components/health/*` + `api/healthApi.ts` +
+- **Web Health section (in the portal)** — a `Service health` destination in the React portal SPA
+  (`Scripts/portal/src/pages/HealthPage.tsx` + `components/health/*` + `api/healthApi.ts` +
   `types/health.ts`, routed in `App.tsx`), backed by the `api/Health` controller (`HealthAPIController` →
   `Web/Models/Health/HealthService.cs` + `HealthModels.cs`). The page is split into **lazily-loaded
   sub-section tabs**, each backed by its own independently-cached endpoint
