@@ -48,7 +48,13 @@ host action. During that redirect the server captures the OAuth **refresh token*
 encrypted, httpOnly auth cookie. The SPA then gets a fresh Graph **access token** from
 `api/SiteTokenAPI` (which mints one from the cookie's refresh token). This works **without
 Redis** — Redis is only needed to persist Teams refresh tokens for the importer's deep
-analytics. If `SiteTokenAPI` can't return a token, the SPA falls back to client-side MSAL.
+analytics.
+
+There is **no client-side sign-in**. A client-side MSAL fallback used to exist for when
+`SiteTokenAPI` returned no token, but it was pinned to a hard-coded app registration that no
+longer resolves (`AADSTS5000224`), so it could not sign anyone in — it only replaced a clear
+failure with an opaque popup error, while adding `@azure/msal-browser` to the initial bundle for
+every page. The Teams permissions page now explains what to do instead when no token is available.
 
 ## Backend APIs used
 

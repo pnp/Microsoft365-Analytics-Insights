@@ -1,43 +1,47 @@
 import React from 'react';
 import { Title3, Subtitle1, Text, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import TeamList from '../components/teams/TeamList';
-import LoginControls from '../components/teams/LoginControls';
 import Spinner from '../components/Spinner';
-import { acquireGraphToken } from '../auth/Engine';
 import { GraphResponse } from '../types/GraphResponse';
-import { msalApp, fetchMsGraph, inIframe, GRAPH_ENDPOINTS } from '../auth/auth-utils';
-import type { AccountInfo, AuthenticationResult } from '@azure/msal-browser';
+import { fetchMsGraph, GRAPH_ENDPOINTS } from '../auth/graph';
+import type { GraphAccessToken } from '../types/graphToken';
 import type { User, Team } from '@microsoft/microsoft-graph-types';
 
 type TeamsPermissionsState = {
   loading: boolean;
-  accountFromMSAL: AccountInfo | null;
   error: string | null;
+  /** Set when the site couldn't mint a Graph token for this session - nothing can load without one. */
+  noToken: boolean;
   joinedTeams: Array<Team> | null;
   graphProfile: User | null;
-  serverSideToken: AuthenticationResult | null;
+  serverSideToken: GraphAccessToken | null;
 };
 
 /**
- * Authorise / de-authorise Teams for deep analytics. Ported from the original single-page
- * app. Works in two auth modes:
- *   1. Server-side: an AJAX call to a same-site web API returns an OAuth token (unintrusive).
- *   2. Client-side MSAL fallback if (1) is unavailable.
+ * Authorise / de-authorise Teams for deep analytics.
+ *
+ * Auth is entirely server-side: the user has already signed in to the site via the server's OIDC
+ * redirect, and `POST api/SiteTokenAPI` mints a fresh Graph access token from the refresh token
+ * held in the auth cookie. The browser then calls Graph directly with it.
+ *
+ * There used to be a second, client-side MSAL sign-in path for when that call failed. It was
+ * removed: it was pinned to a hard-coded app registration that no longer resolves, so it could
+ * not sign anyone in - it only replaced a clear failure with an opaque one.
  */
 export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermissionsState> {
   constructor(props: {}) {
     super(props);
     this.state = {
       loading: true,
-      accountFromMSAL: null,
       error: null,
+      noToken: false,
       joinedTeams: null,
       graphProfile: null,
       serverSideToken: null,
     };
   }
 
-  async loadTeamsData(tokenResponse: AuthenticationResult) {
+  async loadTeamsData(tokenResponse: GraphAccessToken) {
     // Save token for API call
     window.o365AnalyticsTeamsToken = tokenResponse;
 
@@ -54,31 +58,19 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
     return this.getJoinedTeams(tokenResponse.accessToken);
   }
 
-  errorCallback = (err: string) => {
-    this.setState({ error: err });
-  };
-
-  loggedInCallback = (tokenResponse: AuthenticationResult) => {
-    return this.loadTeamsData(tokenResponse);
-  };
-
   // React events
   async componentDidMount() {
-    // This component works with auth in two different modes.
-    // 1: We do an AJAX callback to a web API in the same website for an OAuth token, now we've logged in. Nice & unintrusive.
-    // 2: If #1 fails, we enable MSAL logins.
-
-    // Try and get server token from our ASP.Net API
+    // Ask the site for a Graph token for the signed-in admin.
     const serverSideTokenResponse = await fetch(window.o365AnalyticsTokenAPI, {
       method: 'POST',
       credentials: 'same-origin',
     }).catch((error) => {
-      // If we're building in react, this is normal as it's outside ASP.Net
+      // Expected when running the SPA outside ASP.NET (e.g. the Vite dev server).
       console.error("Couldn't get server-side OAuth token from website.");
       console.error(error);
     });
 
-    let serverSideToken: AuthenticationResult | null = null;
+    let serverSideToken: GraphAccessToken | null = null;
     if (serverSideTokenResponse && serverSideTokenResponse.ok) {
       serverSideToken = await serverSideTokenResponse.json().catch((error: unknown) => {
         console.error('Error deserialising server-side OAuth token:');
@@ -87,32 +79,12 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
     }
 
     if (!serverSideToken) {
-      console.log('No OAuth token from server. Enabling MSAL logins in JavaScript.');
-
-      // Get account code
-      const accounts = msalApp.getAllAccounts();
-      if (accounts.length > 0) {
-        const account = accounts[0];
-        this.setState({ accountFromMSAL: account });
-
-        if (account && !inIframe()) {
-          // Get OAuth code from account
-          const tokenResponse = await acquireGraphToken();
-
-          if (tokenResponse) {
-            console.log('Got pre-loaded OAuth token from MSAL JS');
-            return this.loadTeamsData(tokenResponse);
-          }
-        }
-      } else {
-        // No credentials either from server or MSAL. Can't load anything.
-        this.setState({ loading: false });
-      }
-    } else {
-      console.log('Got OAuth token from server.');
-      this.setState({ serverSideToken: serverSideToken });
-      return this.loadTeamsData(serverSideToken);
+      this.setState({ loading: false, noToken: true });
+      return;
     }
+
+    this.setState({ serverSideToken });
+    return this.loadTeamsData(serverSideToken);
   }
 
   async getJoinedTeams(accessToken: string) {
@@ -145,13 +117,15 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
           </div>
         ) : (
           <div>
-            {!this.state.serverSideToken && (
-              // No server-side auth done/possible. Inject client-side auth controls
-              <LoginControls
-                errorCallBack={this.errorCallback}
-                loggedInCallBack={this.loggedInCallback}
-                account={this.state.accountFromMSAL}
-              />
+            {this.state.noToken && (
+              <MessageBar intent="error" style={{ marginBlock: '12px' }}>
+                <MessageBarBody>
+                  The site couldn't get a Microsoft Graph token for your session, so your Teams can't be listed. This
+                  usually means the sign-in that captured your refresh token has expired or predates it - sign out and
+                  sign in again. If it keeps happening, check that the runtime app registration has the delegated Teams
+                  permissions and that the site's reply URL is registered.
+                </MessageBarBody>
+              </MessageBar>
             )}
 
             {this.state.error && (
@@ -178,7 +152,11 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
                   <TeamList teamsList={this.state.joinedTeams} />
                 </div>
               ) : (
-                <Text block>Click 'Sign-In' to see your Teams</Text>
+                <Text block>
+                  {this.state.noToken
+                    ? 'Your Teams will be listed here once the site can get a Graph token for your session.'
+                    : 'No Teams found for your account.'}
+                </Text>
               )}
             </section>
             <Text block size={200} style={{ marginTop: '12px', color: 'var(--colorNeutralForeground3)' }}>
