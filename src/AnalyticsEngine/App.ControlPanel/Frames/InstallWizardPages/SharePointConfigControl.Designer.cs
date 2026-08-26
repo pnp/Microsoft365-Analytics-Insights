@@ -1,4 +1,4 @@
-﻿namespace App.ControlPanel.Frames.InstallWizard
+namespace App.ControlPanel.Frames.InstallWizard
 {
     partial class SharePointConfigControl
     {
@@ -39,6 +39,12 @@
             this.lblGUIShareUninstallText = new System.Windows.Forms.Label();
             this.lblGUIShareAuthDesc = new System.Windows.Forms.Label();
             this.lblGUIShareAuthHeader = new System.Windows.Forms.Label();
+            this.lblGUIAuthClientId = new System.Windows.Forms.Label();
+            this.txtAuthClientId = new System.Windows.Forms.TextBox();
+            this.lblGUIAuthClientIdHelp = new System.Windows.Forms.Label();
+            this.lblGUIAuthIntro = new System.Windows.Forms.Label();
+            this.lblGUIAuthTenantId = new System.Windows.Forms.Label();
+            this.txtAuthTenantId = new System.Windows.Forms.TextBox();
             this.btnUninstall = new System.Windows.Forms.Button();
             this.pictureBox7 = new System.Windows.Forms.PictureBox();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox7)).BeginInit();
@@ -72,8 +78,8 @@
             this.lblGUISharePointTabDesc.Size = new System.Drawing.Size(395, 42);
             this.lblGUISharePointTabDesc.TabIndex = 105;
             this.lblGUISharePointTabDesc.Text = "Configure where the tracking JavaScript will be installed in SharePoint and/or si" +
-    "tes where audit-logs will be saved (if enabled). Credentials for this operation " +
-    "are set below.";
+    "tes where audit-logs will be saved (if enabled). You sign in to SharePoint furth" +
+    "er down this page.";
             // 
             // lblGUISharePointTabHeader
             // 
@@ -114,38 +120,6 @@
             this.lblGUISiteCollections.TabIndex = 101;
             this.lblGUISiteCollections.Text = "Site-collection root URLs (one per line):";
             // 
-            // lblGUIShareUninstallHeader
-            // 
-            this.lblGUIShareUninstallHeader.AutoSize = true;
-            this.lblGUIShareUninstallHeader.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblGUIShareUninstallHeader.Location = new System.Drawing.Point(4, 302);
-            this.lblGUIShareUninstallHeader.Name = "lblGUIShareUninstallHeader";
-            this.lblGUIShareUninstallHeader.Size = new System.Drawing.Size(69, 19);
-            this.lblGUIShareUninstallHeader.TabIndex = 108;
-            this.lblGUIShareUninstallHeader.Text = "Uninstall";
-            // 
-            // lblGUIShareUninstallText
-            // 
-            this.lblGUIShareUninstallText.AutoSize = true;
-            this.lblGUIShareUninstallText.Location = new System.Drawing.Point(5, 327);
-            this.lblGUIShareUninstallText.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.lblGUIShareUninstallText.Name = "lblGUIShareUninstallText";
-            this.lblGUIShareUninstallText.Size = new System.Drawing.Size(402, 13);
-            this.lblGUIShareUninstallText.TabIndex = 109;
-            this.lblGUIShareUninstallText.Text = "You can remove the tracker from the above listed sites by clicking the button bel" +
-    "ow.";
-            // 
-            // lblGUIShareAuthDesc
-            // 
-            this.lblGUIShareAuthDesc.AutoSize = true;
-            this.lblGUIShareAuthDesc.Location = new System.Drawing.Point(4, 249);
-            this.lblGUIShareAuthDesc.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.lblGUIShareAuthDesc.Name = "lblGUIShareAuthDesc";
-            this.lblGUIShareAuthDesc.Size = new System.Drawing.Size(435, 13);
-            this.lblGUIShareAuthDesc.TabIndex = 116;
-            this.lblGUIShareAuthDesc.Text = "Authentication to SharePoint Online sites is done with a web login launched by th" +
-    "e installer.";
-            // 
             // lblGUIShareAuthHeader
             // 
             this.lblGUIShareAuthHeader.AutoSize = true;
@@ -156,11 +130,99 @@
             this.lblGUIShareAuthHeader.TabIndex = 115;
             this.lblGUIShareAuthHeader.Text = "Authentication";
             // 
+            // lblGUIShareAuthDesc
+            // 
+            this.lblGUIShareAuthDesc.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblGUIShareAuthDesc.Location = new System.Drawing.Point(4, 249);
+            this.lblGUIShareAuthDesc.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
+            this.lblGUIShareAuthDesc.Name = "lblGUIShareAuthDesc";
+            this.lblGUIShareAuthDesc.Size = new System.Drawing.Size(460, 32);
+            this.lblGUIShareAuthDesc.TabIndex = 116;
+            this.lblGUIShareAuthDesc.Text = "The installer opens your web browser to sign in. Use an account that is a SharePo" +
+    "int administrator and a site-collection administrator on each site above.";
+            // 
+            // lblGUIAuthIntro
+            // 
+            this.lblGUIAuthIntro.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblGUIAuthIntro.Location = new System.Drawing.Point(4, 284);
+            this.lblGUIAuthIntro.Name = "lblGUIAuthIntro";
+            this.lblGUIAuthIntro.Size = new System.Drawing.Size(460, 32);
+            this.lblGUIAuthIntro.TabIndex = 117;
+            this.lblGUIAuthIntro.Text = "There is nothing to register: sign-in uses an app published by Microsoft. Only fi" +
+    "ll these in if your tenant blocks that app and you need to use your own.";
+            // 
+            // lblGUIAuthClientId
+            // 
+            this.lblGUIAuthClientId.Location = new System.Drawing.Point(4, 325);
+            this.lblGUIAuthClientId.Name = "lblGUIAuthClientId";
+            this.lblGUIAuthClientId.Size = new System.Drawing.Size(105, 20);
+            this.lblGUIAuthClientId.TabIndex = 118;
+            this.lblGUIAuthClientId.Text = "Sign-in app ID:";
+            // 
+            // txtAuthClientId
+            // 
+            this.txtAuthClientId.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.txtAuthClientId.Location = new System.Drawing.Point(117, 322);
+            this.txtAuthClientId.Name = "txtAuthClientId";
+            this.txtAuthClientId.Size = new System.Drawing.Size(347, 20);
+            this.txtAuthClientId.TabIndex = 119;
+            // 
+            // lblGUIAuthTenantId
+            // 
+            this.lblGUIAuthTenantId.Location = new System.Drawing.Point(4, 351);
+            this.lblGUIAuthTenantId.Name = "lblGUIAuthTenantId";
+            this.lblGUIAuthTenantId.Size = new System.Drawing.Size(105, 20);
+            this.lblGUIAuthTenantId.TabIndex = 120;
+            this.lblGUIAuthTenantId.Text = "Sign-in tenant:";
+            // 
+            // txtAuthTenantId
+            // 
+            this.txtAuthTenantId.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.txtAuthTenantId.Location = new System.Drawing.Point(117, 348);
+            this.txtAuthTenantId.Name = "txtAuthTenantId";
+            this.txtAuthTenantId.Size = new System.Drawing.Size(347, 20);
+            this.txtAuthTenantId.TabIndex = 121;
+            // 
+            // lblGUIAuthClientIdHelp
+            // 
+            this.lblGUIAuthClientIdHelp.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblGUIAuthClientIdHelp.Location = new System.Drawing.Point(117, 374);
+            this.lblGUIAuthClientIdHelp.Name = "lblGUIAuthClientIdHelp";
+            this.lblGUIAuthClientIdHelp.Size = new System.Drawing.Size(347, 18);
+            this.lblGUIAuthClientIdHelp.TabIndex = 122;
+            this.lblGUIAuthClientIdHelp.Text = "If you set an app ID, the tenant is required too.";
+            // 
+            // lblGUIShareUninstallHeader
+            // 
+            this.lblGUIShareUninstallHeader.AutoSize = true;
+            this.lblGUIShareUninstallHeader.Font = new System.Drawing.Font("Calibri", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.lblGUIShareUninstallHeader.Location = new System.Drawing.Point(4, 408);
+            this.lblGUIShareUninstallHeader.Name = "lblGUIShareUninstallHeader";
+            this.lblGUIShareUninstallHeader.Size = new System.Drawing.Size(69, 19);
+            this.lblGUIShareUninstallHeader.TabIndex = 108;
+            this.lblGUIShareUninstallHeader.Text = "Uninstall";
+            // 
+            // lblGUIShareUninstallText
+            // 
+            this.lblGUIShareUninstallText.AutoSize = true;
+            this.lblGUIShareUninstallText.Location = new System.Drawing.Point(5, 433);
+            this.lblGUIShareUninstallText.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
+            this.lblGUIShareUninstallText.Name = "lblGUIShareUninstallText";
+            this.lblGUIShareUninstallText.Size = new System.Drawing.Size(402, 13);
+            this.lblGUIShareUninstallText.TabIndex = 109;
+            this.lblGUIShareUninstallText.Text = "You can remove the tracker from the above listed sites by clicking the button bel" +
+    "ow.";
+            // 
             // btnUninstall
             // 
             this.btnUninstall.Image = global::App.ControlPanel.Properties.Resources.trash_can;
             this.btnUninstall.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft;
-            this.btnUninstall.Location = new System.Drawing.Point(9, 355);
+            this.btnUninstall.Location = new System.Drawing.Point(9, 453);
             this.btnUninstall.Name = "btnUninstall";
             this.btnUninstall.Size = new System.Drawing.Size(159, 30);
             this.btnUninstall.TabIndex = 114;
@@ -183,6 +245,12 @@
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.Controls.Add(this.lblGUIShareAuthDesc);
             this.Controls.Add(this.lblGUIShareAuthHeader);
+            this.Controls.Add(this.lblGUIAuthClientId);
+            this.Controls.Add(this.txtAuthClientId);
+            this.Controls.Add(this.lblGUIAuthIntro);
+            this.Controls.Add(this.lblGUIAuthClientIdHelp);
+            this.Controls.Add(this.lblGUIAuthTenantId);
+            this.Controls.Add(this.txtAuthTenantId);
             this.Controls.Add(this.btnUninstall);
             this.Controls.Add(this.txtSharePointAppCatalog);
             this.Controls.Add(this.lblGUIAppCatalog);
@@ -217,5 +285,11 @@
         private System.Windows.Forms.Button btnUninstall;
         private System.Windows.Forms.Label lblGUIShareAuthDesc;
         private System.Windows.Forms.Label lblGUIShareAuthHeader;
+        private System.Windows.Forms.Label lblGUIAuthClientId;
+        private System.Windows.Forms.TextBox txtAuthClientId;
+        private System.Windows.Forms.Label lblGUIAuthClientIdHelp;
+        private System.Windows.Forms.Label lblGUIAuthIntro;
+        private System.Windows.Forms.Label lblGUIAuthTenantId;
+        private System.Windows.Forms.TextBox txtAuthTenantId;
     }
 }

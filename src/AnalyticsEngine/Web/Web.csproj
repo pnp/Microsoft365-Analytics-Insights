@@ -23,7 +23,7 @@
     <UseGlobalApplicationHostFile />
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
-    <SpaRoot>Scripts\admin-app\</SpaRoot>
+    <SpaRoot>Scripts\portal\</SpaRoot>
     <TargetFrameworkProfile />
   </PropertyGroup>
   <PropertyGroup>
@@ -57,7 +57,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.ClientModel">
-      <Version>1.13.0</Version>
+      <Version>1.15.0</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.AspNet.Mvc">
       <Version>5.3.0</Version>
@@ -69,13 +69,13 @@
       <Version>5.3.0</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Configuration">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Hosting">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Graph.Core">
       <Version>4.0.1</Version>
@@ -96,25 +96,25 @@
       <Version>5.0.0</Version>
     </PackageReference>
     <PackageReference Include="System.Configuration.ConfigurationManager">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="System.Data.SqlClient">
       <Version>4.9.1</Version>
     </PackageReference>
     <PackageReference Include="System.Diagnostics.EventLog">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="System.Diagnostics.TraceSource">
       <Version>4.3.0</Version>
     </PackageReference>
     <PackageReference Include="System.IdentityModel.Tokens.Jwt">
-      <Version>8.18.0</Version>
+      <Version>8.22.0</Version>
     </PackageReference>
     <PackageReference Include="System.IO.Packaging">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="System.Memory.Data">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="System.Net.Http">
       <Version>4.3.4</Version>
@@ -123,26 +123,26 @@
       <Version>4.3.1</Version>
     </PackageReference>
     <PackageReference Include="System.Security.Cryptography.ProtectedData">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="System.Security.Cryptography.X509Certificates">
       <Version>4.3.2</Version>
     </PackageReference>
     <PackageReference Include="System.Security.Cryptography.Xml">
-      <Version>10.0.10</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="System.Text.Json">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
     <PackageReference Include="System.Threading.Tasks.Dataflow">
-      <Version>10.0.8</Version>
+      <Version>10.0.11</Version>
     </PackageReference>
   </ItemGroup>
   <PropertyGroup>
     <!-- File with mtime of last successful npm install -->
-    <NpmInstallStampFile>Scripts/admin-app/node_modules/.install-stamp</NpmInstallStampFile>
+    <NpmInstallStampFile>Scripts/portal/node_modules/.install-stamp</NpmInstallStampFile>
     <!-- Vite always emits index.html, so it is the marker for "the SPA bundle is up to date". -->
-    <SpaBuildOutputFile>Scripts/admin-app/build/index.html</SpaBuildOutputFile>
+    <SpaBuildOutputFile>Scripts/portal/build/index.html</SpaBuildOutputFile>
   </PropertyGroup>
   <ItemGroup>
     <!--
@@ -167,13 +167,13 @@
       <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
     </Exec>
     <Error Condition="'$(ErrorCode)' != '0'" Text="Node.js is required to build and run this project. To continue, please install Node.js from https://nodejs.org/, and then restart your command prompt or IDE." />
-    <Message Importance="high" Text="Restoring admin-app dependencies using 'npm'. This may take several minutes..." />
+    <Message Importance="high" Text="Restoring portal dependencies using 'npm'. This may take several minutes..." />
     <Exec Command="npm install" WorkingDirectory="$(SpaRoot)" />
     <Touch Files="$(NpmInstallStampFile)" AlwaysCreate="true" />
   </Target>
   <!-- The bundle itself. Re-runs whenever any SPA source file is newer than the emitted index.html. -->
   <Target Name="NpmBuildSpa" DependsOnTargets="NpmInstall" Inputs="@(SpaSourceFile)" Outputs="$(SpaBuildOutputFile)">
-    <Message Importance="high" Text="Building the admin SPA with 'npm run build'..." />
+    <Message Importance="high" Text="Building the portal SPA with 'npm run build'..." />
     <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
   </Target>
   <!--
@@ -224,6 +224,7 @@
     <Compile Include="Controllers\HealthAPIController.cs" />
     <Compile Include="Controllers\SystemStatusAPIController.cs" />
     <Compile Include="Controllers\TeamsAuthAPIController.cs" />
+    <Compile Include="Controllers\UpdateCheckAPIController.cs" />
     <Compile Include="Controllers\UserDataLookupAPIController.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
@@ -236,6 +237,9 @@
     <Compile Include="Models\Health\HealthModels.cs" />
     <Compile Include="Models\Health\HealthService.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
+    <Compile Include="Models\UpdateCheck\BuildVersion.cs" />
+    <Compile Include="Models\UpdateCheck\UpdateCheckApiModel.cs" />
+    <Compile Include="Models\UpdateCheck\UpdateChecker.cs" />
     <Compile Include="Models\TeamAuthStatusResponse.cs" />
     <Compile Include="Models\UserDataLookupModels.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -263,7 +267,7 @@
   </ItemGroup>
   <ItemGroup>
     <Folder Include="App_Data\" />
-    <Folder Include="Scripts\admin-app\build\" />
+    <Folder Include="Scripts\portal\build\" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj">

@@ -1,4 +1,4 @@
-﻿using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.Entities;
 using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
@@ -24,6 +24,8 @@ namespace App.ControlPanel.Frames.InstallWizard
                     sites,
                     txtSharePointAppCatalog.Text
                 );
+                spConfig.AuthClientId = txtAuthClientId.Text.Trim();
+                spConfig.AuthTenantId = txtAuthTenantId.Text.Trim();
 
                 return spConfig;
             }
@@ -32,6 +34,8 @@ namespace App.ControlPanel.Frames.InstallWizard
                 if (value != null)
                 {
                     txtSharePointAppCatalog.Text = value.AppCatalogueURL;
+                    txtAuthClientId.Text = value.AuthClientId;
+                    txtAuthTenantId.Text = value.AuthTenantId;
 
                     var targetSitesText = string.Empty;
                     foreach (var site in value.TargetSites)
@@ -44,6 +48,8 @@ namespace App.ControlPanel.Frames.InstallWizard
                 else
                 {
                     txtSharePointURLs.Text = String.Empty;
+                    txtAuthClientId.Text = String.Empty;
+                    txtAuthTenantId.Text = String.Empty;
                 }
             }
         }

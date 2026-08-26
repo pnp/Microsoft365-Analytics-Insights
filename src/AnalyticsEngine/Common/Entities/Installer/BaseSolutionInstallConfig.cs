@@ -21,7 +21,9 @@ namespace Common.Entities.Installer
         //          property is simply ignored.
         //          2.0.0 -> 2.1.0 added ImportTaskSettings.CopilotInteractionHistory (opt-in Copilot AI
         //          interaction history import).
-        const string CONFIG_VERSION = "2.1.0";
+        //          2.1.0 -> 2.2.0 added SharePointConfig.AuthClientId / AuthTenantId (optional Entra ID app
+        //          registration for the interactive SharePoint sign-in, replacing the old cookie web-login).
+        const string CONFIG_VERSION = "2.2.0";
 
         public BaseSolutionInstallConfig()
         {

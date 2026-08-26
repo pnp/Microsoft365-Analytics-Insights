@@ -1,7 +1,8 @@
-﻿using App.ControlPanel.Engine.SPO;
+using App.ControlPanel.Engine.SPO;
+using App.ControlPanel.Engine.SPO.Auth;
+using App.ControlPanel.Engine.SPO.Rest;
 using App.ControlPanel.Engine.SPO.SiteTrackerInstaller;
 using Microsoft.Extensions.Logging;
-using Microsoft.SharePoint.Client;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -57,12 +58,13 @@ namespace Tests.UnitTests
 
         public async Task SPOSiteInstallAdaptorTests()
         {
-            const string URL_SP = "https://moderncomms933270.sharepoint.com/sites/ProjectFalcon-UXtest";
+            const string URL_SP = "https://contoso.sharepoint.com/sites/ProjectFalcon-UXtest";
             const string URL_WEB_APP = "https://localhost:44307";
-            using (var adaptor = new SpoSiteInstallAdaptor(URL_SP, _logger))
+            using (var authenticator = new InteractiveSpoAuthenticator(clientId: null, tenantId: null, logger: _logger))
+            using (var adaptor = new SpoSiteInstallAdaptor(URL_SP, authenticator, _logger))
             {
                 var c = new TrackerInstallConfig("1232", "SPOInsights", System.Text.Encoding.UTF8.GetBytes("AITrackerUpload"));
-                var installer = new SiteAITrackerInstaller<Web>(adaptor, _logger);
+                var installer = new SiteAITrackerInstaller<SpoWeb>(adaptor, _logger);
 
                 await installer.InstallWebComponentsToSite(c, URL_WEB_APP);
                 await installer.InstallWebComponentsToSite(c, URL_WEB_APP);   // Overwrite

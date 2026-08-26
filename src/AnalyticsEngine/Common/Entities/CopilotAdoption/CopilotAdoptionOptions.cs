@@ -184,15 +184,15 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("opportunityCopilotTarget")]
         public double OpportunityCopilotTarget { get; set; } = 20;
 
-        /// <summary>Teams messages + meetings on the latest daily snapshot that score full marks.</summary>
+        /// <summary>Teams messages + meetings on a typical active day that score full marks.</summary>
         [JsonProperty("opportunityCollaborationTarget")]
         public double OpportunityCollaborationTarget { get; set; } = 60;
 
-        /// <summary>Emails sent + read on the latest daily snapshot that score full marks.</summary>
+        /// <summary>Emails sent + read on a typical active day that score full marks.</summary>
         [JsonProperty("opportunityEmailTarget")]
         public double OpportunityEmailTarget { get; set; } = 80;
 
-        /// <summary>Files viewed or edited on the latest daily snapshot that score full marks.</summary>
+        /// <summary>Files viewed or edited on a typical active day that score full marks.</summary>
         [JsonProperty("opportunityDocumentTarget")]
         public double OpportunityDocumentTarget { get; set; } = 40;
 

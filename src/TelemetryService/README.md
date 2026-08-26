@@ -96,8 +96,8 @@ actually referenced before investigating networking.
 ## Dashboard
 
 The SPA uses [Fluent UI v9](https://react.fluentui.dev/) and mirrors the look and
-feel of the in-product admin app
-(`src/AnalyticsEngine/Web/Scripts/admin-app`): brand header, `TabList`
+feel of the in-product portal
+(`src/AnalyticsEngine/Web/Scripts/portal`): brand header, `TabList`
 navigation and the same content width. Content is split across four tabs, each
 lazy-loaded as its own chunk:
 

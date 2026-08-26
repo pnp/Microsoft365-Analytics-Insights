@@ -35,7 +35,7 @@ This is a Windows-based .NET Framework solution. To build it you will need:
   *ASP.NET and web development*, and *Azure development* workloads — or a
   matching **MSBuild** install.
 * **Node.js** (LTS) — required to build the admin web app
-  (`src/AnalyticsEngine/Web/Scripts/admin-app`) and the SharePoint AI Tracker
+  (`src/AnalyticsEngine/Web/Scripts/portal`) and the SharePoint AI Tracker
   (`src/SPO/AITracker`).
 * A SQL Server **LocalDB** instance for running the unit tests.
 

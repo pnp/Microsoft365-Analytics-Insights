@@ -50,6 +50,7 @@ Tests.FakeDataGen/
 ├── Program.cs                # menu + dispatcher
 ├── App.config                # EF + Azure binding redirects
 ├── Copilot/                  # realistic Copilot data generators
+│   └── SQL/                  # hand-run scripts (see "Shaping an existing demo database")
 ├── Generation/               # shared synthetic activity helpers
 ├── Office365/                # O365 audit activity generator
 ├── Seeding/                  # shared user / license / lookup seed data
@@ -153,6 +154,47 @@ window, then generates both Copilot and O365 data with the same UTC window
 endpoint. Copilot runs first so a new database gets one user population with the
 requested Copilot-license distribution; the O365 generator reuses those users
 while adding SharePoint, OneDrive, Outlook, and Teams profiling sources.
+
+### Shaping an existing demo database
+
+`Copilot/SQL/ShapeCopilotAdoptionDemo.sql` does for a database that **already has
+data** what `CopilotAdoptionScenarioGenerator` does while one is being generated:
+it reshapes Copilot activity so every figure on the Copilot Adoption page tells one
+coherent story, with headline numbers you can dial. Use it to prepare a demo or a
+screenshot without regenerating the database.
+
+```
+sqlcmd -S <server> -d <demo database> -E -i ShapeCopilotAdoptionDemo.sql -b
+```
+
+It refuses to run until `@ConfirmDemoDatabase` is set to `1` — it rewrites licence
+assignments and audit-event timestamps, so it must never touch a customer database.
+Seat count, reporting window, band mix and the size of the unlicensed "proven
+demand" cohort are all parameters at the top of the file; everything else
+(departments, population, agents) is read from the target database, so the script
+is portable across demo tenants.
+
+Nothing is deleted. Existing interactions are re-dated into each user's own
+history — or pushed past the 365-day history horizon for the cohorts that must look
+untouched — so no child rows are orphaned, and planted rows are tagged with a
+distinctive `copilot_log_version` so a re-run replaces them rather than stacking a
+second cohort on top. At the defaults it produces 150 licences, 86% adoption, 61%
+habitual, 21 reclaimable licences, 18 unlicensed Copilot Chat users, an agent
+inventory containing all four health verdicts, and six-month trend series that rise
+towards the present.
+
+Targets are expressed in the three signals `CopilotAdoptionScoring` measures —
+distinct active dates, interactions per active date, and distinct `app_host` values
+— so the bands come out of the real scoring code. Keep the persona table in the
+script in step with `CopilotAdoptionOptions` if those weights or thresholds change.
+
+Two things to know when checking the result:
+
+- The KPI cards and the adoption funnel are built from the same
+  `CopilotAdoptionSummary`, so they cannot disagree. Two screenshots that look
+  inconsistent were taken with different values of the **period** drop-down.
+- `CopilotAdoptionAPIController` caches each analysis for 10 minutes, so recycle the
+  site or wait before taking screenshots.
 
 ## Stress tests
 
