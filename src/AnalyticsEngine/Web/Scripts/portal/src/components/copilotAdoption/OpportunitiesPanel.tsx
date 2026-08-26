@@ -85,6 +85,28 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: '2px',
   },
+  warnings: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    marginBottom: '12px',
+  },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: '10px',
+    maxWidth: '760px',
+    padding: '8px 0 4px',
+  },
+  emptyList: {
+    margin: 0,
+    paddingLeft: '20px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    color: tokens.colorNeutralForeground2,
+  },
 });
 
 const DEFAULT_FILTERS: OpportunityFilters = {
@@ -158,6 +180,19 @@ export default function OpportunitiesPanel({
   );
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+
+  const filtersActive =
+    filters.search !== '' ||
+    filters.department !== '' ||
+    filters.country !== '' ||
+    filters.recommendedOnly ||
+    filters.existingCopilotUsersOnly;
+
+  // Only the warnings that explain an empty or thin candidate list. The page header already carries
+  // the full set, and repeating all of them here would bury the one that answers "why is this empty?".
+  const relevantWarnings = (data?.warnings ?? []).filter(
+    (w) => w.toLowerCase().includes('licence opportunit') || w.toLowerCase().includes('usage report'),
+  );
 
   return (
     <Card>
@@ -241,6 +276,16 @@ export default function OpportunitiesPanel({
         </MessageBar>
       )}
 
+      {!loading && relevantWarnings.length > 0 && (
+        <div className={styles.warnings}>
+          {relevantWarnings.map((warning) => (
+            <MessageBar key={warning} intent="warning">
+              <MessageBarBody>{warning}</MessageBarBody>
+            </MessageBar>
+          ))}
+        </div>
+      )}
+
       {loading && (
         <div style={{ textAlign: 'center', padding: '28px' }}>
           <Spinner size={56} label="Ranking candidates..." />
@@ -248,7 +293,55 @@ export default function OpportunitiesPanel({
       )}
 
       {!loading && data && data.rows.length === 0 && (
-        <Text className={styles.muted}>No unlicensed users match these filters.</Text>
+        <div className={styles.emptyState}>
+          {filtersActive ? (
+            <>
+              <Text weight="semibold" block>
+                No licence candidates match these filters.
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                {data.total === 0
+                  ? 'Clear the filters to see every candidate found in this period.'
+                  : `${formatCount(data.total)} candidates were found in this period, but none of them match.`}
+              </Text>
+              <Button size="small" onClick={() => { setSearchDraft(''); setFilters(DEFAULT_FILTERS); }}>
+                Clear filters
+              </Button>
+            </>
+          ) : (
+            <>
+              <Text weight="semibold" block>
+                Nobody in this tenant qualifies as a licence candidate for the selected period.
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                A user is listed here when <strong>all</strong> of the following are true. This is a
+                shortlist for a paying seat, not a directory listing, so users with no recorded activity
+                at all are deliberately left out - there is no business case to make for them.
+              </Text>
+              <ul className={styles.emptyList}>
+                <li>
+                  <Text size={200}>They hold none of the SKUs classified as a Copilot licence.</Text>
+                </li>
+                <li>
+                  <Text size={200}>Their Entra ID account is enabled - a disabled account cannot use a seat.</Text>
+                </li>
+                <li>
+                  <Text size={200}>
+                    They show up in this period in <strong>either</strong> the Copilot audit log (they used
+                    Copilot Chat without a licence) <strong>or</strong> the Microsoft 365 usage reports for
+                    Teams, Outlook, SharePoint or OneDrive.
+                  </Text>
+                </li>
+              </ul>
+              <Text size={200} block className={styles.muted}>
+                An empty list almost always means the third point: the Microsoft 365 usage reports have not
+                been imported, so there is nothing to rank. Turn on the usage-report import in the installer
+                and check the Health page, then widen the period at the top of this page. Small test tenants
+                legitimately produce an empty list because hardly anyone is active in them.
+              </Text>
+            </>
+          )}
+        </div>
       )}
 
       {!loading && data && data.rows.length > 0 && (
@@ -273,7 +366,7 @@ export default function OpportunitiesPanel({
                           `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
                           `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}`,
                         source:
-                          'Copilot use comes from the Copilot audit import and covers this period exactly. The Teams, email and document figures come from the latest Microsoft 365 usage-report snapshot, which is a Microsoft-defined window rather than the period selected above. Hover any row for its four component scores.',
+                          'Copilot use comes from the Copilot audit import and covers this period exactly. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.',
                       }}
                     />
                   </span>
@@ -292,9 +385,9 @@ export default function OpportunitiesPanel({
                     />
                   </span>
                 </th>
-                <th className={`${table.th} ${table.thNumeric}`}>Teams</th>
-                <th className={`${table.th} ${table.thNumeric}`}>Email</th>
-                <th className={`${table.th} ${table.thNumeric}`}>Files</th>
+                <th className={`${table.th} ${table.thNumeric}`}>Teams (per day)</th>
+                <th className={`${table.th} ${table.thNumeric}`}>Email (per day)</th>
+                <th className={`${table.th} ${table.thNumeric}`}>Files (per day)</th>
                 <th className={table.th}>Last M365 activity</th>
                 <th className={table.th}>
                   <span className={styles.thWithInfo}>

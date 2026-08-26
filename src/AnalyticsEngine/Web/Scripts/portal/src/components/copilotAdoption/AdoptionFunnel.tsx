@@ -25,11 +25,20 @@ const useStyles = makeStyles({
   },
 });
 
-const W = 960;
+const W = 1030;
 const STAGE_H = 74;
 const GAP = 6;
 const LABEL_W = 190;
-const DROP_W = 190;
+const DROP_W = 170;
+/**
+ * The gutter kept clear between the funnel's widest possible edge and the drop-off column.
+ *
+ * A stage too narrow to hold its own labels moves them outside the shape, to the right - and the top
+ * stage is by definition full width, so without a reserved gutter its labels were drawn straight on
+ * top of the "baseline" text in the drop column. Deriving the funnel width from this constant makes
+ * the collision impossible by construction rather than by a clamp that has to be kept in step.
+ */
+const OUTSIDE_LABEL_W = 120;
 
 /**
  * Progressively deeper blues down the funnel, so the shape reads as one narrowing pipeline rather
@@ -61,7 +70,9 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
 
   const top = Math.max(stages[0]?.value ?? 0, 1);
   const height = stages.length * STAGE_H + (stages.length - 1) * GAP;
-  const funnelW = W - LABEL_W - DROP_W;
+  // The widest stage can only ever reach LABEL_W + funnelW, which leaves OUTSIDE_LABEL_W clear before
+  // the drop column starts - so labels pushed outside a narrow stage always have somewhere to go.
+  const funnelW = W - LABEL_W - DROP_W - OUTSIDE_LABEL_W;
   const centre = LABEL_W + funnelW / 2;
 
   // A near-empty stage still has to be visible, so the width is floored - but low enough that
