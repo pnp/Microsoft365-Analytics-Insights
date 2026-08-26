@@ -11,16 +11,11 @@
 
   <!--
     Runtime configuration injected for the SPA. The API URLs are derived from the current
-    host so the same build works in any environment. The clientId/authority are only used
-    for the client-side MSAL fallback when no server-side token is available.
+    host so the same build works in any environment.
   -->
   <script>
-    window.o365AnalyticsClientId = "f7f76557-7408-4870-b51d-7dc08770df7e";
-    window.o365AnalyticsAuthority = "https://login.microsoftonline.com/ffcdb539-892e-4eef-94f6-0d9851c479ba/";
-
     var getUrl = window.location;
     var baseUrl = getUrl.protocol + "//" + getUrl.host + "/";
-    window.o365AnalyticsRedirectUri = baseUrl;
 
     window.o365AnalyticsAuthAPI = baseUrl + "api/TeamsAuthAPI";
     window.o365AnalyticsTokenAPI = baseUrl + "api/SiteTokenAPI";
