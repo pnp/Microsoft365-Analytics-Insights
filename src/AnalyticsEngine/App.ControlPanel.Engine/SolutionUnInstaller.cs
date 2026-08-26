@@ -1,4 +1,5 @@
 ﻿
+using App.ControlPanel.Engine.SPO.Auth;
 using App.ControlPanel.Engine.SPO.SiteTrackerInstaller;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
@@ -20,8 +21,12 @@ namespace App.ControlPanel.Engine
         public async Task UninstallFromSharePoint(ILogger logger)
         {
             logger.LogInformation($"Uninstalling AITracker from {Config.SharePointConfig.TargetSites.Count} site-collections...");
-            var siteInstaller = new SpoSiteListInstaller(logger);
-            await siteInstaller.UninstallFromSites(Config.SharePointConfig.TargetSites, Config.SharePointConfig.DestinationDocLibTitle);
+
+            using (var authenticator = new InteractiveSpoAuthenticator(Config.SharePointConfig, logger))
+            {
+                var siteInstaller = new SpoSiteListInstaller(authenticator, logger);
+                await siteInstaller.UninstallFromSites(Config.SharePointConfig.TargetSites, Config.SharePointConfig.DestinationDocLibTitle);
+            }
 
             logger.LogInformation($"Uninstall complete. IMPORTANT: Please remember to uninstall the SPFx solution from '{Config.SharePointConfig.AppCatalogueURL}' manually.");
         }

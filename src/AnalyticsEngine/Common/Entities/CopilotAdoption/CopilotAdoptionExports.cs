@@ -303,11 +303,11 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicenceOpportunityRow>("Unlicensed Copilot active days", r => r.UnlicensedCopilotActiveDays),
                 new CsvColumn<LicenceOpportunityRow>("Last Copilot use (UTC)", r => r.LastCopilotInteractionUtc),
 
-                new CsvColumn<LicenceOpportunityRow>("Teams messages", r => r.TeamsMessages),
-                new CsvColumn<LicenceOpportunityRow>("Teams meetings", r => r.TeamsMeetings),
-                new CsvColumn<LicenceOpportunityRow>("Emails sent", r => r.EmailsSent),
-                new CsvColumn<LicenceOpportunityRow>("Emails read", r => r.EmailsRead),
-                new CsvColumn<LicenceOpportunityRow>("Files viewed or edited", r => r.FilesViewedOrEdited),
+                new CsvColumn<LicenceOpportunityRow>("Teams messages per active day", r => r.TeamsMessages),
+                new CsvColumn<LicenceOpportunityRow>("Teams meetings per active day", r => r.TeamsMeetings),
+                new CsvColumn<LicenceOpportunityRow>("Emails sent per active day", r => r.EmailsSent),
+                new CsvColumn<LicenceOpportunityRow>("Emails read per active day", r => r.EmailsRead),
+                new CsvColumn<LicenceOpportunityRow>("Files viewed or edited per active day", r => r.FilesViewedOrEdited),
                 new CsvColumn<LicenceOpportunityRow>("Last Microsoft 365 activity", r => r.LastM365ActivityUtc),
 
                 new CsvColumn<LicenceOpportunityRow>("Copilot demand score", r => r.CopilotDemandScore),

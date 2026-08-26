@@ -1,5 +1,6 @@
-﻿using Microsoft.Extensions.Logging;
-using Microsoft.SharePoint.Client;
+using App.ControlPanel.Engine.SPO.Auth;
+using App.ControlPanel.Engine.SPO.Rest;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -51,17 +52,21 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
     }
 
     /// <summary>
-    /// Installs AI tracker to list of SPO sites
+    /// Installs AI tracker to list of SPO sites. All sites share a single interactive sign-in, as a SharePoint
+    /// access token covers the whole tenant.
     /// </summary>
-    public class SpoSiteListInstaller : AbstractSiteListInstaller<Web>
+    public class SpoSiteListInstaller : AbstractSiteListInstaller<SpoWeb>
     {
-        public SpoSiteListInstaller(ILogger logger) : base(logger)
+        private readonly ISpoAuthenticator _authenticator;
+
+        public SpoSiteListInstaller(ISpoAuthenticator authenticator, ILogger logger) : base(logger)
         {
+            _authenticator = authenticator ?? throw new ArgumentNullException(nameof(authenticator));
         }
 
-        public override ISiteInstallAdaptor<Web> GetAdaptor(string siteUrl)
+        public override ISiteInstallAdaptor<SpoWeb> GetAdaptor(string siteUrl)
         {
-            return new SpoSiteInstallAdaptor(siteUrl, _logger);
+            return new SpoSiteInstallAdaptor(siteUrl, _authenticator, _logger);
         }
     }
 }

@@ -219,7 +219,10 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("copilotUsageReportPeriodDays")]
         public int CopilotUsageReportPeriodDays { get; set; }
 
-        /// <summary>The snapshot date the Microsoft 365 workload figures came from.</summary>
+        /// <summary>
+        /// The last daily Microsoft 365 usage report available. It bounds the period the workload
+        /// figures are averaged over; it is not the only day they are read from.
+        /// </summary>
         [JsonProperty("m365UsageReportDate")]
         public DateTime? M365UsageReportDate { get; set; }
 

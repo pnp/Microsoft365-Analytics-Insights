@@ -1,7 +1,9 @@
 ﻿using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.SPO.AppCatalog;
+using App.ControlPanel.Engine.SPO.Auth;
+using App.ControlPanel.Engine.SPO.Rest;
 using App.ControlPanel.Engine.SPO.SiteTrackerInstaller;
 using Microsoft.Extensions.Logging;
-using OfficeDevPnP.Core.ALM;
 using System;
 using System.IO;
 using System.Threading.Tasks;
@@ -47,70 +49,87 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 throw new UnexpectedInstallException("Can't find '" + InstallerConstants.AI_TRACKER_SPFX_FILE_TITLE + "' in downloaded package");
             }
 
-            // Upload SPFx solution
-            await ExecuteReportFailureAndThrowExceptionIfCritical("Upload SPFx solution",
-                        () => UploadApp(sharePointInstallConfig, aiTrackerSPFx.FullName));
+            // One interactive sign-in covers the app catalog & every target site - they're all in the same SPO tenant
+            using (var authenticator = new InteractiveSpoAuthenticator(sharePointInstallConfig, _logger))
+            {
+                // Upload SPFx solution
+                await ExecuteReportFailureAndThrowExceptionIfCritical("Upload SPFx solution",
+                            () => UploadApp(sharePointInstallConfig, aiTrackerSPFx.FullName, authenticator));
 
-            // Install into sites. Hard-code library name "SPOInsights" for now
-            var siteInstaller = new SpoSiteListInstaller(_logger);
-            await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString,
-                "SPOInsights", "https://" + _defaultHostName);
+                // Install into sites. Hard-code library name "SPOInsights" for now
+                var siteInstaller = new SpoSiteListInstaller(authenticator, _logger);
+                await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString,
+                    "SPOInsights", "https://" + _defaultHostName);
+            }
 
             _logger.LogInformation("Installed AITracker to target SharePoint sites via CSOM.");
         }
 
-        private async Task UploadApp(SharePointInstallConfig sharePointInstallConfig, string packagePath)
+        private async Task UploadApp(SharePointInstallConfig sharePointInstallConfig, string packagePath, ISpoAuthenticator authenticator)
         {
             _logger.LogInformation($"Installing SPFX solution to '{sharePointInstallConfig.AppCatalogueURL}'...");
 
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-
             bool success = false;
-            using (var context = authManager.GetWebLoginClientContext(sharePointInstallConfig.AppCatalogueURL))
+            try
             {
-                if (context == null)
+                // A sign-in failure here is fatal - SpoAuthenticationException is deliberately not caught,
+                // so the whole SharePoint stage aborts instead of reporting a misleading success later.
+                using (var rest = new SpoRestClient(authenticator, _logger))
                 {
-                    _logger.LogInformation($"Unsuccessful login to {sharePointInstallConfig.AppCatalogueURL}. Aborting SPFX install - please do this step manually", true);
-                    return;
-                }
+                    // Test-load the web & check template
+                    Newtonsoft.Json.Linq.JObject web;
+                    try
+                    {
+                        web = await rest.GetAsync($"{sharePointInstallConfig.AppCatalogueURL.TrimEnd('/')}/_api/web?$select=WebTemplate");
+                    }
+                    catch (SpoRestException ex)
+                    {
+                        if (ex.IsAccessDenied)
+                        {
+                            _logger.LogError($"Access denied to the app-catalog @ {sharePointInstallConfig.AppCatalogueURL}. " +
+                                "The signed-in account must be a SharePoint administrator. If you signed in as a guest (B2B) administrator, " +
+                                "set the target tenant on the SharePoint tab so you are signed in against the right directory.", true);
+                            return;
+                        }
 
-                // Test-load the web & check template
-                var web = context.Web;
-                context.Load(web);
-                try
-                {
-                    await context.ExecuteQueryAsync();
-                }
-                catch (System.Net.WebException ex)
-                {
-                    Console.WriteLine(ex);
-                    _logger.LogInformation($"Can't find SPO tenant app-catalog @ {sharePointInstallConfig.AppCatalogueURL}. Verify it exists and try again.", true);
-                    return;
-                }
-                if (web.WebTemplate != InstallerConstants.TEMPLATE_APPSTORE)
-                {
-                    _logger.LogInformation($"Site-collection @ {sharePointInstallConfig.AppCatalogueURL} doesn't appear to be an app-catalog. " +
-                        $"Template for this this site is '{web.WebTemplate}' but expected '{InstallerConstants.TEMPLATE_APPSTORE}'", true);
-                    return;
-                }
+                        if (ex.Status == System.Net.HttpStatusCode.NotFound)
+                        {
+                            _logger.LogError($"Can't find SPO tenant app-catalog @ {sharePointInstallConfig.AppCatalogueURL}. Verify it exists and try again.", true);
+                            return;
+                        }
 
-                var manager = new AppManager(context);
+                        // Anything else - a timeout, a DNS or proxy failure, a 5xx, an unreadable response - is
+                        // not evidence that the app catalog is missing. Treating it as such told the admin to go
+                        // and check a URL that is probably fine, and the early return skipped the "perform step
+                        // manually" guidance below, so a transient network blip looked like a successful install.
+                        throw new SpoAppCatalogException(
+                            $"Couldn't check the app-catalog @ {sharePointInstallConfig.AppCatalogueURL}: {ex.Message}", ex);
+                    }
+
+                    var template = web["WebTemplate"]?.ToString();
+                    if (template != InstallerConstants.TEMPLATE_APPSTORE)
+                    {
+                        _logger.LogInformation($"Site-collection @ {sharePointInstallConfig.AppCatalogueURL} doesn't appear to be an app-catalog. " +
+                            $"Template for this this site is '{template}' but expected '{InstallerConstants.TEMPLATE_APPSTORE}'", true);
+                        return;
+                    }
+                }
 
                 // Add modern UI package
-                AppMetadata addedModernUIApp = null;
-                try
+                using (var appCatalog = new TenantAppCatalogManager(authenticator, _logger))
                 {
-                    addedModernUIApp = manager.Add(packagePath, true);
-                    manager.Deploy(addedModernUIApp, true);
+                    var appId = await appCatalog.AddAsync(sharePointInstallConfig.AppCatalogueURL, packagePath);
+                    await appCatalog.DeployAsync(sharePointInstallConfig.AppCatalogueURL, appId);
                     success = true;
                 }
-                catch (Exception)
-                {
-                    // Perform step manually
-                    success = false;
-                }
-
             }
+            catch (SpoAppCatalogException ex)
+            {
+                // Recoverable: tell the admin what happened & let them do this step by hand.
+                _logger.LogError(ex.Message);
+                success = false;
+            }
+
             if (success)
             {
                 _logger.LogInformation($"Installed Modern UI extension to app-catalog {sharePointInstallConfig.AppCatalogueURL} & deployed to tenant.");

@@ -329,6 +329,7 @@ namespace Tests.UnitTests
 
                 var rows = Query<UnlicensedUserSignalRow>(db, sql,
                     new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@m365From", DateTime.UtcNow.Date.AddDays(-28)),
                     new SqlParameter("@m365ReportDate", snapshot),
                     new SqlParameter("@maxRows", 1000));
 
@@ -369,6 +370,69 @@ namespace Tests.UnitTests
                 Assert.IsFalse(
                     scored.Single(s => s.UserPrincipalName == "light@contoso.com").Recommended,
                     "A barely-active user must not be recommended for a paid seat.");
+            }
+        }
+
+        [TestMethod]
+        public void OpportunitiesQuery_FindsUsersWhoWereNotActiveOnTheLatestReportDate()
+        {
+            // The regression this covers: dbo.teams_user_activity_log and friends are Graph's DAILY
+            // user-detail reports, which return only the users who did something on that one day. The
+            // query used to seek a single [date], so the candidate list was "whoever happened to be
+            // active on the most recent settled report date" - a snapshot landing on a Saturday emptied
+            // the tab entirely, and anyone on leave that day was invisible however heavy a user they
+            // normally are. Reported as "despite there being other users, there's nothing in this
+            // screen" against a tenant whose newest Teams report date held exactly one row.
+            using (var db = ScratchDatabase.Create("CopilotAdoptOppWindow"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateM365UsageTables(db);
+
+                var snapshot = DateTime.UtcNow.Date.AddDays(-3);
+                var earlier = snapshot.AddDays(-10);
+                var alsoEarlier = snapshot.AddDays(-11);
+
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id)
+                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+
+                       INSERT INTO dbo.users (id, user_name, account_enabled)
+                           VALUES (1, N'onlatestday@contoso.com', 1),
+                                  (2, N'onleave@contoso.com', 1);
+
+                       -- Only user 1 appears on the newest report date. User 2 was active earlier in
+                       -- the window, across two days, and must still be ranked.
+                       INSERT INTO dbo.teams_user_activity_log
+                           (id, [date], user_id, last_activity_date, private_chat_count, team_chat_count,
+                            post_messages, reply_messages, meetings_attended_count, meetings_organized_count)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}',     1, '{snapshot:yyyy-MM-dd}',     10, 0, 0, 0, 0, 0),
+                              (2, '{earlier:yyyy-MM-dd}',      2, '{earlier:yyyy-MM-dd}',      30, 0, 0, 0, 4, 0),
+                              (3, '{alsoEarlier:yyyy-MM-dd}',  2, '{alsoEarlier:yyyy-MM-dd}',  50, 0, 0, 0, 2, 0);");
+
+                var rows = Query<UnlicensedUserSignalRow>(
+                    db,
+                    CopilotAdoptionSql.LicenceOpportunitiesSql(
+                        new[] { 1 }, CopilotAdoptionOptions.Default, includeCopilotAudit: false, includeM365Usage: true),
+                    new SqlParameter("@m365From", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@m365ReportDate", snapshot),
+                    new SqlParameter("@maxRows", 1000));
+
+                CollectionAssert.AreEquivalent(
+                    new[] { "onlatestday@contoso.com", "onleave@contoso.com" },
+                    rows.Select(r => r.UserPrincipalName).ToList(),
+                    "Every unlicensed user active anywhere in the period is a candidate, not only those "
+                    + "who appeared in the single most recent daily report.");
+
+                // Averaged per ACTIVE day, not per calendar day: the targets describe what a heavy user
+                // does on a working day, so weekends and leave must not dilute the figure.
+                var onLeave = rows.Single(r => r.UserPrincipalName == "onleave@contoso.com");
+                Assert.AreEqual(40, onLeave.TeamsMessages, "(30 + 50) messages over the 2 days they were active.");
+                Assert.AreEqual(3, onLeave.TeamsMeetings, "(4 + 2) meetings over the 2 days they were active.");
+                Assert.AreEqual(earlier, onLeave.LastM365ActivityUtc, "The most recent activity date in the period.");
+
+                var onLatest = rows.Single(r => r.UserPrincipalName == "onlatestday@contoso.com");
+                Assert.AreEqual(10, onLatest.TeamsMessages, "A single active day still reports that day's figure.");
             }
         }
 
