@@ -9,7 +9,6 @@ import {
   Body1,
   Badge,
   Button,
-  Link,
   Table,
   TableBody,
   TableRow,
@@ -34,6 +33,11 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     width: '260px',
     verticalAlign: 'top',
+  },
+  value: {
+    // Endpoints and connection targets are long unbroken tokens; let them wrap instead of
+    // overflowing the cell (Fluent's Table is table-layout: fixed).
+    overflowWrap: 'anywhere',
   },
 });
 
@@ -82,10 +86,14 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
 }
 
 /**
- * Home page: the system status that used to be the server-rendered home page, now part of the SPA.
- * Data comes from api/SystemStatus.
+ * Administration page: what this deployment is actually pointed at - the Azure resources behind
+ * the solution, whether the Teams calls import is on, and the state of the Graph call webhook
+ * (with a live validation POST to test it).
+ *
+ * Moved out of the old "Service Home" page, which mixed this operator detail with the record
+ * counts that now live on the Insights overview.
  */
-export default function HomePage() {
+export default function ServiceConfigurationPage() {
   const styles = useStyles();
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +106,7 @@ export default function HomePage() {
         if (!cancelled) setStatus(s);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load system status.');
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load the service configuration.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -124,7 +132,7 @@ export default function HomePage() {
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '32px' }}>
-        <Spinner size={100} label="Loading system status..." />
+        <Spinner size={100} label="Loading service configuration..." />
       </div>
     );
   }
@@ -132,42 +140,72 @@ export default function HomePage() {
   if (error || !status) {
     return (
       <MessageBar intent="error">
-        <MessageBarBody>{error ?? 'No status available.'}</MessageBarBody>
+        <MessageBarBody>{error ?? 'No configuration available.'}</MessageBarBody>
       </MessageBar>
     );
   }
 
   return (
     <div>
-      <Title3 block>Service Home - {status.buildLabel}</Title3>
+      <Title3 block>Service configuration{status.buildLabel ? ` - ${status.buildLabel}` : ''}</Title3>
 
       <div className={styles.cards}>
         <Card>
-          <CardHeader header={<Subtitle2>Tracking Data Overview</Subtitle2>} />
-          <Body1>Here's a summary of the data in your database:</Body1>
-          <Table aria-label="Tracking data overview" size="small">
+          <CardHeader header={<Subtitle2>Azure resources</Subtitle2>} />
+          <Body1>These are the resources this deployment is configured to use:</Body1>
+          <Table aria-label="Azure resources" size="small">
             <TableBody>
-              {status.dataCounts.map((c) => (
-                <TableRow key={c.name}>
-                  <TableCell className={styles.label}>{c.name}</TableCell>
-                  <TableCell>{c.count.toLocaleString()}</TableCell>
-                </TableRow>
-              ))}
+              <TableRow>
+                <TableCell className={styles.label}>SQL Server</TableCell>
+                <TableCell className={styles.value}>{status.webAppConfigSQL}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Redis SSL Endpoint</TableCell>
+                <TableCell className={styles.value}>{status.webAppConfigRedis}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Cognitive Services Endpoint</TableCell>
+                <TableCell className={styles.value}>{status.webAppConfigCognitive}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Cognitive Services Enabled</TableCell>
+                <TableCell className={styles.value}>
+                  {status.cognitiveServiceEnabled ? (
+                    <Text>Yes - cognitive analytics will be available</Text>
+                  ) : (
+                    <Text>No - cognitive analytics are disabled</Text>
+                  )}
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Service Bus</TableCell>
+                <TableCell className={styles.value}>{status.webAppConfigServiceBus}</TableCell>
+              </TableRow>
             </TableBody>
           </Table>
-          <Body1>
-            Enable Teams analytics on the <Link href="#/admin/teams-permissions">Teams permissions</Link> page.
-          </Body1>
         </Card>
 
         <Card>
-          <CardHeader header={<Subtitle2>System Configuration</Subtitle2>} />
-          <Body1>These are the basics of your system configuration:</Body1>
-          <Table aria-label="System configuration" size="small">
+          <CardHeader header={<Subtitle2>Teams calls</Subtitle2>} />
+          <Table aria-label="Teams calls configuration" size="small">
             <TableBody>
               <TableRow>
+                <TableCell className={styles.label}>Teams Calls Import</TableCell>
+                <TableCell className={styles.value}>
+                  {status.callsImportEnabled ? (
+                    <Badge appearance="tint" color="success">
+                      Enabled
+                    </Badge>
+                  ) : (
+                    <Badge appearance="tint" color="informative">
+                      Disabled - Teams call records are not being imported
+                    </Badge>
+                  )}
+                </TableCell>
+              </TableRow>
+              <TableRow>
                 <TableCell className={styles.label}>Graph Call Webhook Endpoint</TableCell>
-                <TableCell>
+                <TableCell className={styles.value}>
                   <Text>{status.webhookEndpointUrl}</Text>
                   {status.webhookEndpointUrl && (
                     <Button
@@ -181,50 +219,10 @@ export default function HomePage() {
                 </TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>Teams Calls Import</TableCell>
-                <TableCell>
-                  {status.callsImportEnabled ? (
-                    <Badge appearance="tint" color="success">
-                      Enabled
-                    </Badge>
-                  ) : (
-                    <Badge appearance="tint" color="informative">
-                      Disabled - Teams call records are not being imported
-                    </Badge>
-                  )}
-                </TableCell>
-              </TableRow>
-              <TableRow>
                 <TableCell className={styles.label}>Calls Webhook Subscription</TableCell>
-                <TableCell>
+                <TableCell className={styles.value}>
                   <WebhookSubscriptionBadge status={status} />
                 </TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>SQL Server</TableCell>
-                <TableCell>{status.webAppConfigSQL}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>Redis SSL Endpoint</TableCell>
-                <TableCell>{status.webAppConfigRedis}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>Cognitive Services Endpoint</TableCell>
-                <TableCell>{status.webAppConfigCognitive}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>Cognitive Services Enabled</TableCell>
-                <TableCell>
-                  {status.cognitiveServiceEnabled ? (
-                    <Text>Yes - cognitive analytics will be available</Text>
-                  ) : (
-                    <Text>No - cognitive analytics are disabled</Text>
-                  )}
-                </TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className={styles.label}>Service Bus</TableCell>
-                <TableCell>{status.webAppConfigServiceBus}</TableCell>
               </TableRow>
             </TableBody>
           </Table>

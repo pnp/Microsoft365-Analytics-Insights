@@ -8,11 +8,12 @@ import {
   Home20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
+  Settings20Regular,
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 
 // Code-split the pages so each route is a separate chunk (smaller initial load).
-const HomePage = lazy(() => import('./pages/HomePage'));
+const InsightsOverviewPage = lazy(() => import('./pages/InsightsOverviewPage'));
 const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazy(() => import('./pages/CopilotAdoptionPage'));
 const TeamsPermissionsPage = lazy(() => import('./pages/TeamsPermissionsPage'));
@@ -20,6 +21,7 @@ const UserLookupPage = lazy(() => import('./pages/UserLookupPage'));
 const ProfilingStatusPage = lazy(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazy(() => import('./pages/InstallLogPage'));
 const HealthPage = lazy(() => import('./pages/HealthPage'));
+const ServiceConfigurationPage = lazy(() => import('./pages/ServiceConfigurationPage'));
 
 /**
  * The portal is split into two areas so the two audiences it serves don't have to wade
@@ -69,7 +71,7 @@ export const ROUTES: PortalRoute[] = [
     path: '/insights/overview',
     label: 'Overview',
     icon: <Home20Regular />,
-    element: <HomePage />,
+    element: <InsightsOverviewPage />,
   },
   {
     area: 'insights',
@@ -125,6 +127,14 @@ export const ROUTES: PortalRoute[] = [
     group: 'Manage',
     icon: <DatabaseSearch20Regular />,
     element: <UserLookupPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/configuration',
+    label: 'Service configuration',
+    group: 'Manage',
+    icon: <Settings20Regular />,
+    element: <ServiceConfigurationPage />,
   },
 ];
 
