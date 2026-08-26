@@ -1,9 +1,9 @@
 {
-  "name": "admin-app",
+  "name": "portal",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Admin SPA for the Microsoft 365 Advanced Analytics Engine (Teams permission grants, user data lookup and more).",
+  "description": "Web portal for the Microsoft 365 Advanced Analytics Engine - Insights (reports, Copilot adoption) and Administration (service health, configuration, permissions).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

@@ -188,6 +188,20 @@ const useSharedStyles = makeStyles({
     paddingLeft: '20px',
   },
   loading: { textAlign: 'center', padding: '32px' },
+  /**
+   * Fluent's Table is `table-layout: fixed; width: 100%`, so a long unbroken token (a fully
+   * qualified type name, an endpoint, a URL) overflows its cell and paints over the next column
+   * instead of widening it. `anywhere` rather than `break-word` because it also reduces the
+   * element's intrinsic min-content width, so it keeps working in an auto-layout or flex context.
+   */
+  breakAnywhere: {
+    overflowWrap: 'anywhere',
+  },
+  /** Numeric column: right-aligned and never wrapped. */
+  numeric: {
+    textAlign: 'right',
+    whiteSpace: 'nowrap',
+  },
 });
 
 export function useHealthStyles() {
