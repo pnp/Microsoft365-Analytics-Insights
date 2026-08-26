@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Client;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,6 +38,12 @@ namespace App.ControlPanel.Engine.SPO.Auth
 
         /// <summary>Re-acquire a token this far ahead of its expiry so long installs don't fail mid-way.</summary>
         static readonly TimeSpan TOKEN_REFRESH_WINDOW = TimeSpan.FromMinutes(5);
+
+        /// <summary>
+        /// How long to wait for the admin to finish signing in before giving up. Without this the install
+        /// blocks forever if the browser never opened, or was closed before sign-in completed.
+        /// </summary>
+        public static readonly TimeSpan InteractiveSignInTimeout = TimeSpan.FromMinutes(10);
 
         readonly IPublicClientApplication _app;
         readonly ILogger _logger;
@@ -139,7 +146,9 @@ namespace App.ControlPanel.Engine.SPO.Auth
             _logger.LogInformation($"Opening your web browser to sign in to '{resourceUri}'. " +
                 "Use an account that is a SharePoint administrator (for the app catalog) and a site-collection administrator on each target site.");
 
-            var request = _app.AcquireTokenInteractive(scopes).WithUseEmbeddedWebView(false);
+            var request = _app.AcquireTokenInteractive(scopes)
+                .WithUseEmbeddedWebView(false)
+                .WithSystemWebViewOptions(BrowserPageOptions());
             if (account == null)
             {
                 // First sign-in of the run - let the admin pick which account, rather than silently
@@ -149,7 +158,18 @@ namespace App.ControlPanel.Engine.SPO.Auth
 
             try
             {
-                return await request.ExecuteAsync();
+                using (var timeout = new CancellationTokenSource(InteractiveSignInTimeout))
+                {
+                    return await request.ExecuteAsync(timeout.Token);
+                }
+            }
+            catch (OperationCanceledException ex)
+            {
+                throw new SpoAuthenticationException(
+                    $"Timed out after {InteractiveSignInTimeout.TotalMinutes:N0} minutes waiting for the SharePoint browser sign-in to finish, " +
+                    "so the SharePoint web components were not installed. This usually means the browser never opened, or the sign-in tab was " +
+                    "closed before it completed. Re-run the installer - everything created in Azure so far is left in place and will be reused - " +
+                    "and if no browser window appears, copy the sign-in URL from the log above into a browser manually.", ex);
             }
             catch (MsalClientException ex) when (ex.ErrorCode == MsalError.AuthenticationCanceledError)
             {
@@ -183,6 +203,50 @@ namespace App.ControlPanel.Engine.SPO.Auth
             var code = ex.Message ?? string.Empty;
             return code.Contains("AADSTS65001") || code.Contains("AADSTS7000112")
                 || code.Contains("AADSTS700016") || code.Contains("AADSTS50105");
+        }
+
+        /// <summary>
+        /// Replaces the pages MSAL shows in the browser once sign-in finishes, and makes sure the sign-in URL
+        /// is written to the install log. The stock success page warns against sharing the page or taking
+        /// screenshots, which reads alarmingly for what is a routine step in an install, and it doesn't say
+        /// what happens next. Logging the URL matters more: if the browser fails to launch, the admin would
+        /// otherwise have no way to complete sign-in and no way to recover a long-running install.
+        /// </summary>
+        SystemWebViewOptions BrowserPageOptions()
+        {
+            return new SystemWebViewOptions
+            {
+                OpenBrowserAsync = url =>
+                {
+                    _logger.LogInformation("If your browser doesn't open automatically, sign in by pasting this address into it: " + url);
+
+                    // Same as MSAL's default: hand the URL to the OS so the admin's *default* browser opens it
+                    // (they may well already be signed in there). Don't force a specific browser.
+                    Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })?.Dispose();
+                    return Task.CompletedTask;
+                },
+
+                HtmlMessageSuccess = Page(
+                    "Signed in",
+                    "<p>You're signed in to SharePoint. You can close this tab.</p>" +
+                    "<p>The installer is carrying on with the SharePoint setup &ndash; switch back to it to watch progress.</p>"),
+
+                HtmlMessageError = Page(
+                    "Sign-in didn't complete",
+                    "<p>SharePoint sign-in was not completed, so the installer could not continue with the SharePoint setup.</p>" +
+                    "<p>Close this tab and check the installer window &ndash; it will explain what to do next.</p>" +
+                    "<p style=\"color:#605e5c\">Details: {0} &ndash; {1}</p>")
+            };
+        }
+
+        static string Page(string heading, string bodyHtml)
+        {
+            return "<html><head><meta charset=\"utf-8\" /><title>" + heading + "</title></head>" +
+                   "<body style=\"font-family:Segoe UI,Arial,sans-serif;margin:3em auto;max-width:34em;color:#323130\">" +
+                   "<h2 style=\"font-weight:600\">" + heading + "</h2>" +
+                   bodyHtml +
+                   "<p style=\"color:#605e5c;font-size:.9em\">Microsoft 365 Advanced Analytics installer</p>" +
+                   "</body></html>";
         }
 
         public void Dispose()
