@@ -359,6 +359,7 @@
     <None Include="Resources\Azure Active Directory.png" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="Resources\Copilot.png" />
     <None Include="Resources\SharePoint.png" />
   </ItemGroup>
   <ItemGroup>
