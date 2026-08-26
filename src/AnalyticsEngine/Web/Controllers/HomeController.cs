@@ -15,7 +15,7 @@ namespace Web.AnalyticsWeb.Controllers
         // server-side now comes from api/SystemStatus.
         public ActionResult Index()
         {
-            return ServeAdminApp();
+            return ServePortalApp();
         }
 
         public ActionResult CredentialsInvalid()
@@ -35,22 +35,22 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// Serves the built admin SPA's index.html. The SPA's hashed JS/CSS assets referenced by
-        /// it are then loaded as ordinary static files under /Scripts/admin-app/build/.
+        /// Serves the built portal SPA's index.html. The SPA's hashed JS/CSS assets referenced by
+        /// it are then loaded as ordinary static files under /Scripts/portal/build/.
         /// </summary>
-        private ActionResult ServeAdminApp()
+        private ActionResult ServePortalApp()
         {
             var cache = MemoryCache.Default;
-            var fileContents = cache["adminAppIndexHtml"] as string;
+            var fileContents = cache["portalIndexHtml"] as string;
 
             if (fileContents == null)
             {
-                string indexFile = Server.MapPath("~/Scripts/admin-app/build/index.html");
+                string indexFile = Server.MapPath("~/Scripts/portal/build/index.html");
 
                 if (!System.IO.File.Exists(indexFile))
                 {
                     return new HttpStatusCodeResult(HttpStatusCode.NotFound,
-                        "The admin app has not been built. Run 'npm run build' in Scripts/admin-app (or build the Web project).");
+                        "The portal SPA has not been built. Run 'npm run build' in Scripts/portal (or build the Web project).");
                 }
 
                 // Fetch the file contents.

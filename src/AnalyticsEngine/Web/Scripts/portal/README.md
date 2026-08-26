@@ -1,9 +1,8 @@
-# Microsoft 365 Advanced Analytics - Admin SPA (`admin-app`)
+# Microsoft 365 Advanced Analytics - Web Portal (`portal`)
 
-A React single-page application that provides admin tooling for the Microsoft 365 Advanced
-Analytics Engine. It is the whole admin web experience: the ASP.NET `Web` project serves it
-at the site root (`/`, via `HomeController.Index`) and its built assets live under
-`/Scripts/admin-app/build/`.
+A React single-page application that is the whole web experience for the Microsoft 365 Advanced
+Analytics Engine. The ASP.NET `Web` project serves it at the site root (`/`, via
+`HomeController.Index`) and its built assets live under `/Scripts/portal/build/`.
 
 > This app replaces the old single-purpose `teams-permission-grant` sample and the old
 > server-rendered home page. It is built with **Vite + React 19 + TypeScript** and uses
@@ -61,6 +60,6 @@ client-side MSAL sign-in - that is expected outside the ASP.NET host.
 npm run build    # type-checks then emits ./build (served by the ASP.NET site)
 ```
 
-The Vite config sets `base = /Scripts/admin-app/build/` and `build.outDir = build`. The
+The Vite config sets `base = /Scripts/portal/build/` and `build.outDir = build`. The
 ASP.NET `Web.csproj` runs `npm install` + `npm run build` automatically and the
 `HomeController.Index` action serves the generated `build/index.html` at the site root.

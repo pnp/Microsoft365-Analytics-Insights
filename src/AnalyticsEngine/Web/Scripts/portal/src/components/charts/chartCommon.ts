@@ -1,5 +1,5 @@
 // Shared helpers for the lightweight SVG report charts. Kept dependency-free (no charting library)
-// so the admin SPA stays small and there is nothing extra to deploy.
+// so the portal stays small and there is nothing extra to deploy.
 
 /**
  * Categorical palette for chart series / bars. Saturated Fluent-family colours that read well on
