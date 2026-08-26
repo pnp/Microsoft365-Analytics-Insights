@@ -1,5 +1,8 @@
-﻿using Microsoft.Extensions.Logging;
+using App.ControlPanel.Engine.SharePointModelBuilder;
+using App.ControlPanel.Engine.SPO.Auth;
+using Microsoft.Extensions.Logging;
 using Microsoft.SharePoint.Client;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -10,25 +13,25 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
 {
     public class SpoSiteInstallAdaptor : ISiteInstallAdaptor<Web>
     {
-        private readonly ClientContext _clientContext;
+        private readonly ISpoAuthenticator _authenticator;
+        private ClientContext _clientContext;
         private readonly string _siteUrl;
         private readonly ILogger _logger;
         const string FILENAME = "AITracker.js";
 
-        public SpoSiteInstallAdaptor(string siteUrl, ILogger logger)
+        public SpoSiteInstallAdaptor(string siteUrl, ISpoAuthenticator authenticator, ILogger logger)
         {
-            var authManager = new OfficeDevPnP.Core.AuthenticationManager();
-            _clientContext = authManager.GetWebLoginClientContext(siteUrl);
+            _authenticator = authenticator ?? throw new ArgumentNullException(nameof(authenticator));
             _siteUrl = siteUrl;
             _logger = logger;
         }
 
         public async Task<bool> Init()
         {
-            if (_clientContext == null)
-            {
-                return false;
-            }
+            // A sign-in failure is fatal for the whole SharePoint stage, not a per-site problem, so let
+            // SpoAuthenticationException propagate rather than reporting this site as merely inaccessible.
+            _clientContext = _authenticator.GetContext(_siteUrl);
+
             _clientContext.RequestTimeout = Timeout.Infinite;
 
             // Load webs
@@ -40,11 +43,26 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             {
                 await _clientContext.ExecuteQueryAsync();
             }
-            catch (WebException)
+            catch (WebException ex)
             {
+                if (IsAccessDenied(ex))
+                {
+                    _logger.LogError($"Access denied to '{_siteUrl}'. The signed-in account must be a site collection administrator on this site.");
+                }
                 return false;
             }
             return true;
+        }
+
+        /// <summary>
+        /// Distinguishes "you can't get in" from "it isn't there", which otherwise both surface as a bare
+        /// WebException and get reported as a missing site.
+        /// </summary>
+        internal static bool IsAccessDenied(WebException ex)
+        {
+            var response = ex.Response as HttpWebResponse;
+            return response != null
+                && (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden);
         }
 
         public List<Web> SubWebs => _clientContext.Site.RootWeb.Webs.ToList();

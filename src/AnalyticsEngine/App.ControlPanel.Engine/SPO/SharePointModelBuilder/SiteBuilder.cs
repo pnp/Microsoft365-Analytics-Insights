@@ -3,94 +3,20 @@ using CloudInstallEngine.Models;
 using DataUtils;
 using Microsoft.SharePoint.Client;
 using Newtonsoft.Json.Linq;
-using OfficeDevPnP.Core.Framework.Provisioning.Model;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Field = OfficeDevPnP.Core.Framework.Provisioning.Model.Field;
-using View = OfficeDevPnP.Core.Framework.Provisioning.Model.View;
 
 namespace App.ControlPanel.Engine.SharePointModelBuilder
 {
     public class SiteBuilder
     {
-        public static ListInstance BuildGenericList(string name, string url, bool addToQuickLaunch, SPField[] fields)
-        {
-            return BuildList(name, url, false, addToQuickLaunch, fields);
-        }
-        public static ListInstance BuildDocLib(string name, string url, bool addToQuickLaunch)
-        {
-            return BuildList(name, url, true, addToQuickLaunch, new SPField[] { });
-        }
-        static ListInstance BuildList(string name, string url, bool isDocLib, bool addToQuickLaunch, SPField[] fields)
-        {
-            var listType = (Int32)ListTemplateType.GenericList;
-            if (isDocLib)
-            {
-                listType = (Int32)ListTemplateType.DocumentLibrary;
-            }
-            var list = new ListInstance()
-            {
-                Title = name,
-                Url = url,
-                TemplateType = listType,
-                EnableAttachments = !isDocLib,
-                OnQuickLaunch = addToQuickLaunch
-            };
-
-            // Add default fields
-            if (!isDocLib)
-            {
-                list.FieldRefs.Add(new FieldRef("LinkTitle"));
-            }
-            else
-            {
-                list.FieldRefs.Add(new FieldRef("DocIcon"));
-            }
-
-            foreach (var f in fields)
-            {
-                if (f.ID == Guid.Empty)
-                    throw new ArgumentException(nameof(f.ID), $"Invalid SPO schema - field '{f.Name}' has no ID set");
-
-                // Add field to list definition
-                list.Fields.Add(new Field { SchemaXml = f.ToXmlString() });
-                list.FieldRefs.Add(new FieldRef(f.Name));
-            }
-
-            if (!isDocLib)
-            {
-                var viewFieldsXml = string.Empty;
-                foreach (var f in fields)
-                {
-                    // Build view XML
-                    if (f.IncludeInDefaultView)
-                        viewFieldsXml += $"<FieldRef Name=\"{f.Name}\" />" + Environment.NewLine;
-                }
-
-                var view = new View()
-                {
-                    SchemaXml = "<View Name=\"{" + Guid.NewGuid().ToString().ToUpper() + "}\" DefaultView=\"TRUE\" MobileView=\"TRUE\" MobileDefaultView=\"TRUE\" Type=\"HTML\" DisplayName=\"All Items\" Url=\"{site}/" + url + "/AllItems.aspx\" Level=\"1\" BaseViewID=\"1\" ContentTypeID=\"0x\" ImageUrl=\"/_layouts/15/images/generic.png?rev=47\"> " +
-                                    "<Query><OrderBy><FieldRef Name=\"ID\" /></OrderBy></Query>" +
-                                    "<ViewFields>" + viewFieldsXml + "</ViewFields>" +
-                                    "<RowLimit Paged=\"TRUE\">100</RowLimit>" +
-                                    "<Aggregations Value=\"Off\" /><JSLink>clienttemplates.js</JSLink>" +
-                                    "<CustomFormatter />" +
-                                    "<ViewData />" +
-                                "</View>"
-                };
-                list.Views.Add(view);
-            }
-
-            return list;
-        }
-
         /// <summary>
         /// Insert unique list data from Json
         /// </summary>
         public static async Task<int> ApplyListData(string json, ClientContext clientContext, Guid listId)
         {
-            var list = clientContext.Web.GetListById(listId);
+            var list = clientContext.Web.Lists.GetById(listId);
             clientContext.Load(list, l => l.Title);
             await clientContext.ExecuteQueryAsync();
 
