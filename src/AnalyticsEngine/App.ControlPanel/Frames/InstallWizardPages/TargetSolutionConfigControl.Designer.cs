@@ -263,14 +263,15 @@
             // lblCopilotDesc
             // 
             this.lblCopilotDesc.ForeColor = System.Drawing.SystemColors.GrayText;
+            this.lblCopilotDesc.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
             this.lblCopilotDesc.Location = new System.Drawing.Point(356, 142);
             this.lblCopilotDesc.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.lblCopilotDesc.Name = "lblCopilotDesc";
-            this.lblCopilotDesc.Size = new System.Drawing.Size(320, 48);
+            this.lblCopilotDesc.Size = new System.Drawing.Size(328, 66);
             this.lblCopilotDesc.TabIndex = 29;
-            this.lblCopilotDesc.Text = "Interaction history stores prompt statistics only. Adding a Cognitive Services key" +
-    " also extracts key phrases, sentiment and language, which sends prompt text to Az" +
-    "ure AI Language.";
+            this.lblCopilotDesc.Text = "Stores prompt statistics only. Adding a Cognitive Services key also sends prompt t" +
+    "ext to Azure AI Language.";
             // 
             // chkCopilot
             // 
