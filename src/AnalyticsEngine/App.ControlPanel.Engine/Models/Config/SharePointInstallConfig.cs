@@ -1,4 +1,5 @@
 ﻿using Common.Entities.Installer;
+using System;
 using System.Collections.Generic;
 
 namespace App.ControlPanel.Engine.Entities
@@ -34,6 +35,19 @@ namespace App.ControlPanel.Engine.Entities
 
         public string AITrackerFileName { get; set; }
         public List<string> TargetSites { get; set; }
+
+        /// <summary>
+        /// Optional. Entra ID application (client) ID used for the interactive admin sign-in to SharePoint.
+        /// Blank uses Microsoft's built-in "SharePoint Online Management Shell" app, which needs no registration.
+        /// Set this only if your tenant blocks that app or you want your own consent record.
+        /// </summary>
+        public string AuthClientId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Optional. Entra ID tenant (directory) ID or domain to sign in against. Blank signs in against
+        /// "organizations", which works for any single-tenant admin.
+        /// </summary>
+        public string AuthTenantId { get; set; } = string.Empty;
 
 
         #endregion
@@ -107,6 +121,21 @@ namespace App.ControlPanel.Engine.Entities
             else
             {
                 errs.Add("Enter an AITracker filename.");
+            }
+
+            // Optional sign-in app registration
+            if (!string.IsNullOrWhiteSpace(this.AuthClientId))
+            {
+                if (!Guid.TryParse(this.AuthClientId.Trim(), out _))
+                {
+                    errs.Add("SharePoint sign-in application ID must be a valid GUID, or blank to use the SharePoint Online Management Shell app.");
+                }
+                else if (string.IsNullOrWhiteSpace(this.AuthTenantId))
+                {
+                    // Entra rejects the /organizations authority for single-tenant apps registered after
+                    // Oct 2018 (AADSTS50194), which is what a new app registration will be by default.
+                    errs.Add("Enter the sign-in tenant (directory ID or domain) when using your own SharePoint sign-in application ID.");
+                }
             }
 
             return errs;
