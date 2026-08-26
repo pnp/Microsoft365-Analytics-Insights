@@ -639,7 +639,14 @@ namespace Common.Entities.CopilotAdoption
                 { "@maxRows", _options.MaxOpportunityCandidates },
             };
             if (includeAudit) parameters["@from"] = windowStart;
-            if (includeM365) parameters["@m365ReportDate"] = summary.DataSources.M365UsageReportDate.Value;
+            if (includeM365)
+            {
+                // The Microsoft 365 figures are read across the whole window, not from one report date.
+                // Date-only column, so the bound is the window's first calendar day rather than the
+                // timestamp - otherwise the earliest day of the window is silently dropped.
+                parameters["@m365From"] = windowStart.Date;
+                parameters["@m365ReportDate"] = summary.DataSources.M365UsageReportDate.Value;
+            }
 
             analysis.Sql["licenceOpportunities"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 

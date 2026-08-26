@@ -665,9 +665,20 @@ namespace Tests.UnitTests
             // Disabled accounts cannot use a licence, so proposing one would discredit the whole list.
             StringAssert.Contains(sql, "u.account_enabled IS NULL OR u.account_enabled = 1");
 
-            // One snapshot date per workload = an equality seek on IX_date rather than a range scan.
+            // The Microsoft 365 tables are Graph's DAILY user-detail reports: one row per user per day
+            // they did something. Seeking a single [date] made the candidate list "whoever happened to
+            // be active last Tuesday" and emptied the tab whenever that day was a weekend. The window
+            // has to be read whole, and each table read exactly once.
             Assert.AreEqual(1, CountOccurrences(sql, "FROM dbo.teams_user_activity_log AS t"));
-            StringAssert.Contains(sql, "t.[date] = @m365ReportDate");
+            StringAssert.Contains(sql, "t.[date] >= @m365From AND t.[date] <= @m365ReportDate");
+            StringAssert.Contains(sql, "o.[date] >= @m365From AND o.[date] <= @m365ReportDate");
+            StringAssert.Contains(sql, "sp.[date] >= @m365From AND sp.[date] <= @m365ReportDate");
+            StringAssert.Contains(sql, "od.[date] >= @m365From AND od.[date] <= @m365ReportDate");
+            Assert.AreEqual(0, CountOccurrences(sql, "[date] = @m365ReportDate"),
+                "A single-date equality seek is exactly the bug this query shape replaced.");
+
+            // Averaged per active day, not summed, so the OpportunityXTarget values keep their units.
+            StringAssert.Contains(sql, "NULLIF(COUNT(DISTINCT CAST(t.[date] AS date)), 0)");
         }
 
         [TestMethod]
