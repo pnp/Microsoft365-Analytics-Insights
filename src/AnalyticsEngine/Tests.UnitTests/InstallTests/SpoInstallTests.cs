@@ -1,8 +1,8 @@
-﻿using App.ControlPanel.Engine.SPO;
+using App.ControlPanel.Engine.SPO;
 using App.ControlPanel.Engine.SPO.Auth;
+using App.ControlPanel.Engine.SPO.Rest;
 using App.ControlPanel.Engine.SPO.SiteTrackerInstaller;
 using Microsoft.Extensions.Logging;
-using Microsoft.SharePoint.Client;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -64,7 +64,7 @@ namespace Tests.UnitTests
             using (var adaptor = new SpoSiteInstallAdaptor(URL_SP, authenticator, _logger))
             {
                 var c = new TrackerInstallConfig("1232", "SPOInsights", System.Text.Encoding.UTF8.GetBytes("AITrackerUpload"));
-                var installer = new SiteAITrackerInstaller<Web>(adaptor, _logger);
+                var installer = new SiteAITrackerInstaller<SpoWeb>(adaptor, _logger);
 
                 await installer.InstallWebComponentsToSite(c, URL_WEB_APP);
                 await installer.InstallWebComponentsToSite(c, URL_WEB_APP);   // Overwrite

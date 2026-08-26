@@ -7,6 +7,9 @@ using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+// Azure.ResourceManager.AppService 1.5.0 added its own ManagedServiceIdentityType, which collides with
+// the ARM-wide one. ManagedServiceIdentity's constructor takes the ARM-wide type, so pin the alias to it.
+using ManagedServiceIdentityType = Azure.ResourceManager.Models.ManagedServiceIdentityType;
 
 namespace CloudInstallEngine.Azure.InstallTasks
 {

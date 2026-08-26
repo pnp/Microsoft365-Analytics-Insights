@@ -1,4 +1,4 @@
-﻿using App.ControlPanel.Engine;
+using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.InstallerTasks.Tasks;
@@ -13,7 +13,6 @@ using CloudInstallEngine.Models;
 using Common.Entities.Config;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
-using Microsoft.SharePoint.Client;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -594,23 +593,6 @@ namespace Tests.UnitTests
         [TestMethod]
         public void InstallModelsTests()
         {
-            var fNoExtension = new SPFileInfo("file");
-            Assert.IsTrue(fNoExtension.FileNameNoExtension == "file");
-            Assert.IsTrue(fNoExtension.Extension == "");
-            Assert.IsTrue(fNoExtension.ToString() == "file");
-
-
-            var fExtension1 = new SPFileInfo("file.doc");
-            Assert.IsTrue(fExtension1.FileNameNoExtension == "file");
-            Assert.IsTrue(fExtension1.Extension == "doc");
-            Assert.IsTrue(fExtension1.ToString() == "file.doc");
-
-            var fExtension2 = new SPFileInfo("whatever/file.doc");
-            Assert.IsTrue(fExtension2.FileNameNoExtension == "whatever/file");
-            Assert.IsTrue(fExtension2.Extension == "doc");
-            Assert.IsTrue(fExtension2.ToString() == "whatever/file.doc");
-
-
             var config = new SoftwareReleaseConfig();
             Assert.IsTrue(config.RepoOwner == SoftwareReleaseConfig.GITHUB_REPO_OWNER);
             Assert.IsTrue(config.RepoName == SoftwareReleaseConfig.GITHUB_REPO_NAME);

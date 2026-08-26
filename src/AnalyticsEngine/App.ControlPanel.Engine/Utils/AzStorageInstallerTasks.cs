@@ -17,7 +17,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var azStorageInfo = new AzureStorageInstallSourceInfo();
 
             // Find all components of a software installation; get latest versions
-            foreach (var blob in container.GetBlobs(BlobTraits.None, BlobStates.None, InstallerConstants.MasterBuildBlobPrefix))
+            // Azure.Storage.Blobs 12.29 dropped the default value for cancellationToken on this overload.
+            foreach (var blob in container.GetBlobs(BlobTraits.None, BlobStates.None, InstallerConstants.MasterBuildBlobPrefix, default))
             {
                 if (blob.Name.EndsWith(InstallerConstants.FILENAME_ZIP_WEBJOB_APPINSIGHTS))
                 {

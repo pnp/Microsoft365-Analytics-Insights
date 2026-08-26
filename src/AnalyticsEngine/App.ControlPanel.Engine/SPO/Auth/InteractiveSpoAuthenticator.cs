@@ -1,7 +1,6 @@
 using App.ControlPanel.Engine.Entities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Client;
-using Microsoft.SharePoint.Client;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,8 +14,8 @@ namespace App.ControlPanel.Engine.SPO.Auth
     ///
     /// Replaces OfficeDevPnP.Core's <c>GetWebLoginClientContext</c>, which used an embedded Internet Explorer
     /// popup and cookie authentication. That library only ever shipped a net461 build, so it blocked moving the
-    /// installer off .NET Framework; MSAL + the CSOM <see cref="ClientContext.ExecutingWebRequest"/> hook is
-    /// portable and works unchanged on modern .NET.
+    /// installer off .NET Framework; MSAL plus a bearer token on the SharePoint REST calls is portable and
+    /// works unchanged on modern .NET.
     ///
     /// One instance signs in once and is then reused for every target site and for the app catalog, because a
     /// SharePoint access token is scoped to the whole SPO tenant, not to an individual site collection.
@@ -184,29 +183,6 @@ namespace App.ControlPanel.Engine.SPO.Auth
             var code = ex.Message ?? string.Empty;
             return code.Contains("AADSTS65001") || code.Contains("AADSTS7000112")
                 || code.Contains("AADSTS700016") || code.Contains("AADSTS50105");
-        }
-
-        public ClientContext GetContext(string siteUrl)
-        {
-            // Acquire up-front so any sign-in failure surfaces here rather than inside a CSOM request.
-            RunSync(() => GetAccessTokenAsync(siteUrl));
-
-            var context = new ClientContext(siteUrl);
-            context.ExecutingWebRequest += (sender, args) =>
-            {
-                var token = RunSync(() => GetAccessTokenAsync(siteUrl));
-                args.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + token;
-            };
-            return context;
-        }
-
-        /// <summary>
-        /// Runs an async call from a synchronous CSOM callback. Task.Run detaches from the WinForms
-        /// synchronization context, which would otherwise deadlock on the await.
-        /// </summary>
-        static T RunSync<T>(Func<Task<T>> work)
-        {
-            return Task.Run(work).GetAwaiter().GetResult();
         }
 
         public void Dispose()
