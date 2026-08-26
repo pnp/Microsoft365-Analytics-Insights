@@ -7,10 +7,13 @@ name: Telemetry Service
 # Linux web app that deploys straight to App Service.
 
 on:
+  # Only main builds automatically. Merging to `dev` no longer re-runs this: the pull request that
+  # produced the merge has already built and tested exactly that code, so a push-triggered run on
+  # `dev` is a duplicate that competes for runners. Use `Run workflow` (workflow_dispatch) to build
+  # `dev` on demand.
   push:
     branches:
       - main
-      - dev
     paths:
       - src/TelemetryService/**
       - src/AnalyticsEngine/Common/UsageReporting/**
