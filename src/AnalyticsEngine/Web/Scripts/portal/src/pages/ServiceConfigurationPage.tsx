@@ -9,6 +9,7 @@ import {
   Text,
   Body1,
   Button,
+  Link,
   Table,
   TableBody,
   TableRow,
@@ -20,8 +21,10 @@ import {
 } from '@fluentui/react-components';
 import { fetchSystemStatus, testWebhook } from '../api/systemStatusApi';
 import { fetchHealthConfig } from '../api/healthApi';
+import { fetchUpdateCheck } from '../api/updateCheckApi';
 import type { SystemStatus } from '../types/systemStatus';
 import type { ConfigSection } from '../types/health';
+import type { UpdateCheck } from '../types/updateCheck';
 import { formatUtc } from '../components/health/healthShared';
 import Spinner from '../components/Spinner';
 
@@ -47,6 +50,16 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
     gap: '6px',
     marginTop: '4px',
+  },
+  updateRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    flexWrap: 'wrap',
+    marginTop: '8px',
+  },
+  muted: {
+    color: tokens.colorNeutralForeground3,
   },
 });
 
@@ -92,6 +105,121 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
     default:
       return <Text>Not applicable - Teams calls import is disabled</Text>;
   }
+}
+
+/**
+ * The "check for updates" card. Deliberately on demand: nothing is fetched until the admin presses
+ * the button, so a deployment that never opens this page never makes an outbound call to GitHub -
+ * which matters because plenty of these deployments have no outbound internet at all.
+ */
+function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<UpdateCheck | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const onCheck = async () => {
+    setChecking(true);
+    setFailure(null);
+    try {
+      setResult(await fetchUpdateCheck());
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : 'Update check failed.');
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader header={<Subtitle2>Software updates</Subtitle2>} />
+      <Body1>
+        Compares the build this site is running against the latest published release on GitHub. Nothing is
+        sent to GitHub until you press the button.
+      </Body1>
+
+      <div className={styles.updateRow}>
+        <Button appearance="primary" onClick={onCheck} disabled={checking}>
+          {checking ? 'Checking...' : 'Check for updates'}
+        </Button>
+        {result && (
+          <Text size={200} className={styles.muted}>
+            Checked {formatUtc(result.checkedAtUtc)}
+          </Text>
+        )}
+      </div>
+
+      {failure && (
+        <MessageBar intent="error">
+          <MessageBarBody>{failure}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {result && (
+        <>
+          <Table aria-label="Update check" size="small">
+            <TableBody>
+              <TableRow>
+                <TableCell className={styles.label}>This site is running</TableCell>
+                <TableCell className={styles.value}>{result.currentBuildLabel ?? 'Unknown'}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className={styles.label}>Latest published release</TableCell>
+                <TableCell className={styles.value}>
+                  {result.latestReleaseName ?? (result.latestBuild != null ? `Build ${result.latestBuild}` : 'Unknown')}
+                  {result.latestPublishedUtc && (
+                    <Text size={200} block className={styles.muted}>
+                      Published {formatUtc(result.latestPublishedUtc)}
+                    </Text>
+                  )}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+
+          {result.updateAvailable ? (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <strong>An update is available.</strong> This site is on build {result.currentBuild}; build{' '}
+                {result.latestBuild} has been released.{' '}
+                {result.latestReleaseUrl && (
+                  <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
+                    Open the release notes and downloads
+                  </Link>
+                )}
+                . Read the release notes before upgrading - they call out any database migrations and
+                configuration changes.
+              </MessageBarBody>
+            </MessageBar>
+          ) : result.checkError ? (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                {result.checkError}{' '}
+                {result.latestReleaseUrl && (
+                  <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
+                    Open the latest release
+                  </Link>
+                )}
+              </MessageBarBody>
+            </MessageBar>
+          ) : (
+            <MessageBar intent="success">
+              <MessageBarBody>
+                This site is up to date - no newer release has been published.
+                {result.latestReleaseUrl && (
+                  <>
+                    {' '}
+                    <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
+                      View the current release
+                    </Link>
+                  </>
+                )}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+        </>
+      )}
+    </Card>
+  );
 }
 
 /**
@@ -181,6 +309,8 @@ export default function ServiceConfigurationPage() {
       <Title3 block>Service configuration{status.buildLabel ? ` - ${status.buildLabel}` : ''}</Title3>
 
       <div className={styles.cards}>
+        <UpdateCheckCard styles={styles} />
+
         <Card>
           <CardHeader header={<Subtitle2>Azure resources</Subtitle2>} />
           <Body1>These are the resources this deployment is configured to use:</Body1>

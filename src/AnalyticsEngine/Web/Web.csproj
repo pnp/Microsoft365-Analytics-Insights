@@ -224,6 +224,7 @@
     <Compile Include="Controllers\HealthAPIController.cs" />
     <Compile Include="Controllers\SystemStatusAPIController.cs" />
     <Compile Include="Controllers\TeamsAuthAPIController.cs" />
+    <Compile Include="Controllers\UpdateCheckAPIController.cs" />
     <Compile Include="Controllers\UserDataLookupAPIController.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
@@ -236,6 +237,9 @@
     <Compile Include="Models\Health\HealthModels.cs" />
     <Compile Include="Models\Health\HealthService.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
+    <Compile Include="Models\UpdateCheck\BuildVersion.cs" />
+    <Compile Include="Models\UpdateCheck\UpdateCheckApiModel.cs" />
+    <Compile Include="Models\UpdateCheck\UpdateChecker.cs" />
     <Compile Include="Models\TeamAuthStatusResponse.cs" />
     <Compile Include="Models\UserDataLookupModels.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
