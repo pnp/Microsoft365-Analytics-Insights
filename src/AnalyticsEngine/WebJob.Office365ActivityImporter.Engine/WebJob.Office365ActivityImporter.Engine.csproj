@@ -65,6 +65,7 @@
     <Compile Include="ActivityAPI\ActivityImporter.cs" />
     <Compile Include="ActivityAPI\BlobCheckpoint\AzureTableProcessedBlobStore.cs" />
     <Compile Include="ActivityAPI\BlobCheckpoint\BlobCommitTracker.cs" />
+    <Compile Include="ActivityAPI\BlobCheckpoint\CheckpointTableClientFactory.cs" />
     <Compile Include="ActivityAPI\BlobCheckpoint\InMemoryProcessedBlobStore.cs" />
     <Compile Include="ActivityAPI\BlobCheckpoint\IProcessedBlobStore.cs" />
     <Compile Include="ActivityAPI\BlobCheckpoint\ProcessedBlobStoreFactory.cs" />

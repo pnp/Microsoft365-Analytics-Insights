@@ -34,6 +34,7 @@
     <Compile Include="PreInstallAdvisorTests.cs" />
     <Compile Include="ImportCadenceTests.cs" />
     <Compile Include="AppInsightsAuthTests.cs" />
+    <Compile Include="CheckpointTableClientFactoryTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />

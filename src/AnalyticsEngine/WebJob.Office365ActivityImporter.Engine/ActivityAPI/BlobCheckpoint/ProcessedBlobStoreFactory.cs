@@ -26,7 +26,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
             {
                 try
                 {
-                    var store = new AzureTableProcessedBlobStore(storageConn, retention, logger);
+                    var store = new AzureTableProcessedBlobStore(storageConn, retention, logger,
+                        config.TenantGUID == Guid.Empty ? null : config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
                     logger?.LogInformation("Blob checkpoint: durable Azure Table store initialised (processed blobs persist across restarts).");
                     (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Healthy,
                         "Durable Azure Table checkpoint active.");
@@ -44,8 +45,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
                         detail += " -> " + inner.Message;
                     logger?.LogError(ex, $"Blob checkpoint: could not initialise the Azure Table store ({ex.GetType().Name}: {detail}); " +
                         "falling back to in-memory (dedupes across cycles but only for the life of this process - lost on restart/redeploy). " +
-                        "Check the Storage connection string is valid and the account's Table service is reachable: " +
-                        "shared-key access enabled, and storage firewall / private endpoint / selected-networks not blocking the importer.");
+                        "Check the Storage connection string is valid and the account's Table service is reachable: storage firewall / " +
+                        "private endpoint / selected-networks not blocking the importer. If the account has shared-key access disabled " +
+                        "(allowSharedKeyAccess = false, giving '403 KeyBasedAuthenticationNotPermitted'), the importer authenticates with the " +
+                        "runtime service principal instead - that account needs the 'Storage Table Data Contributor' role on the storage " +
+                        "account ('Storage Blob Data Contributor' does NOT cover the Table service).");
                     // Surface the degraded (non-durable) checkpoint on the Health page instead of only in the log.
                     (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Degraded,
                         $"Azure Table init failed ({ex.GetType().Name}); using non-durable in-memory checkpoint (lost on restart). See importer error log.");
