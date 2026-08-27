@@ -1,3 +1,4 @@
+import { apiFetch } from './http';
 import type { ProfilingStatus, TraceLogPage } from '../types/profilingStatus';
 
 const baseUrl = (): string =>
@@ -5,9 +6,8 @@ const baseUrl = (): string =>
 
 /** Fetch profiling data-freshness (earliest/latest dates for the profiling & source tables). */
 export async function fetchProfilingStatus(): Promise<ProfilingStatus> {
-  const response = await fetch(baseUrl(), {
+  const response = await apiFetch(baseUrl(), {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 
@@ -21,9 +21,8 @@ export async function fetchProfilingStatus(): Promise<ProfilingStatus> {
 /** Fetch a page of profiling.TraceLogs (newest first). Page is zero-based. */
 export async function fetchTraceLogs(page: number, pageSize: number): Promise<TraceLogPage> {
   const url = `${baseUrl()}/tracelogs?page=${encodeURIComponent(page)}&pageSize=${encodeURIComponent(pageSize)}`;
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 

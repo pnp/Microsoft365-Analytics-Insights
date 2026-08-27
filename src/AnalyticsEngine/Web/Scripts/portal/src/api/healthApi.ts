@@ -1,3 +1,4 @@
+import { apiFetch } from './http';
 import type {
   HealthSummary,
   DataOverviewSection,
@@ -11,9 +12,8 @@ const baseUrl = (): string => window.o365AnalyticsHealthAPI ?? `${window.locatio
 
 /** GETs a Health sub-section and parses JSON, throwing a friendly error on a non-200. */
 async function getSection<T>(path: string, label: string): Promise<T> {
-  const response = await fetch(`${baseUrl()}/${path}`, {
+  const response = await apiFetch(`${baseUrl()}/${path}`, {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 
