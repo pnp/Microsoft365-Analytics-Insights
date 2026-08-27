@@ -4,6 +4,7 @@ import TeamList from '../components/teams/TeamList';
 import Spinner from '../components/Spinner';
 import { GraphResponse } from '../types/GraphResponse';
 import { fetchMsGraph, GRAPH_ENDPOINTS } from '../auth/graph';
+import { fetchGraphToken } from '../auth/siteToken';
 import type { GraphAccessToken } from '../types/graphToken';
 import type { User, Team } from '@microsoft/microsoft-graph-types';
 
@@ -14,7 +15,6 @@ type TeamsPermissionsState = {
   noToken: boolean;
   joinedTeams: Array<Team> | null;
   graphProfile: User | null;
-  serverSideToken: GraphAccessToken | null;
 };
 
 /**
@@ -27,6 +27,9 @@ type TeamsPermissionsState = {
  * There used to be a second, client-side MSAL sign-in path for when that call failed. It was
  * removed: it was pinned to a hard-coded app registration that no longer resolves, so it could
  * not sign anyone in - it only replaced a clear failure with an opaque one.
+ *
+ * Tokens are fetched at the point of use rather than cached on the page, because a Graph access
+ * token only lasts about an hour and this page is one an admin leaves open.
  */
 export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermissionsState> {
   constructor(props: {}) {
@@ -37,14 +40,10 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
       noToken: false,
       joinedTeams: null,
       graphProfile: null,
-      serverSideToken: null,
     };
   }
 
   async loadTeamsData(tokenResponse: GraphAccessToken) {
-    // Save token for API call
-    window.o365AnalyticsTeamsToken = tokenResponse;
-
     // Get profile
     const graphProfile: User = await fetchMsGraph(GRAPH_ENDPOINTS.ME, tokenResponse.accessToken).catch(() => {
       this.setState({ error: 'Unable to fetch Graph profile.' });
@@ -61,29 +60,13 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
   // React events
   async componentDidMount() {
     // Ask the site for a Graph token for the signed-in admin.
-    const serverSideTokenResponse = await fetch(window.o365AnalyticsTokenAPI, {
-      method: 'POST',
-      credentials: 'same-origin',
-    }).catch((error) => {
-      // Expected when running the SPA outside ASP.NET (e.g. the Vite dev server).
-      console.error("Couldn't get server-side OAuth token from website.");
-      console.error(error);
-    });
-
-    let serverSideToken: GraphAccessToken | null = null;
-    if (serverSideTokenResponse && serverSideTokenResponse.ok) {
-      serverSideToken = await serverSideTokenResponse.json().catch((error: unknown) => {
-        console.error('Error deserialising server-side OAuth token:');
-        console.error(error);
-      });
-    }
+    const serverSideToken = await fetchGraphToken();
 
     if (!serverSideToken) {
       this.setState({ loading: false, noToken: true });
       return;
     }
 
-    this.setState({ serverSideToken });
     return this.loadTeamsData(serverSideToken);
   }
 

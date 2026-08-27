@@ -1,3 +1,4 @@
+import { apiFetch } from './http';
 import type { ReportAreaData, ReportAreaKey, ReportAreas } from '../types/reports';
 
 const baseUrl = (): string =>
@@ -5,9 +6,8 @@ const baseUrl = (): string =>
 
 /** Which report areas are enabled for this deployment (drives the visible sub-tabs). */
 export async function fetchReportAreas(): Promise<ReportAreas> {
-  const response = await fetch(`${baseUrl()}/areas`, {
+  const response = await apiFetch(`${baseUrl()}/areas`, {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 
@@ -34,9 +34,8 @@ export async function fetchReportArea(
   if (options?.agentName) params.set('agentName', options.agentName);
 
   const url = `${baseUrl()}/${area}?${params.toString()}`;
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 

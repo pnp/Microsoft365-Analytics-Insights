@@ -56,6 +56,38 @@ longer resolves (`AADSTS5000224`), so it could not sign anyone in — it only re
 failure with an opaque popup error, while adding `@azure/msal-browser` to the initial bundle for
 every page. The Teams permissions page now explains what to do instead when no token is available.
 
+### Expired sessions
+
+Every call to the site's own API goes through `apiFetch` (`src/api/http.ts`) rather than raw
+`fetch`. That exists because of how an expired session used to surface: the OIDC middleware runs
+in Active mode, so it turns the 401 from an `[Authorize]`'d controller into a **302 to
+login.microsoftonline.com**. A top-level navigation follows that happily, but `fetch` follows it
+cross-origin, the login page carries no CORS headers, and the call rejects with an opaque
+`TypeError: Failed to fetch`. Leave the portal open long enough — or let the App Service recycle,
+so the new instance can't decrypt the old auth cookie — and every page started failing with a
+network-looking error that was really just "please sign in again".
+
+`Startup.ConfigureAuth` now suppresses that redirect for API requests (matched by the `/api` path
+or the `X-Requested-With: XMLHttpRequest` header `apiFetch` always sends) and returns a plain
+`401` carrying `X-Auth-Session-Expired: true`. `apiFetch` watches for that header and
+re-authenticates with a full-page navigation, which is the only thing that can complete the OIDC
+round-trip — and normally completes silently, because the user's Entra session outlives the
+site's. The current hash route is stashed first and restored by `restoreRouteAfterReauth()` in
+`main.tsx`, so the user lands back where they were, and a `sessionStorage` flag makes it one-shot
+so a session that can't be re-established fails loudly instead of looping.
+
+The header matters: a bare 401 is **not** enough to conclude the session is gone. `SiteTokenAPI`
+returns 401 to mean "you are signed in, but I have no Graph refresh token for you" — the server
+only sets the header when there is genuinely no authenticated user, so that case still shows the
+Teams page's specific message instead of bouncing through a pointless sign-in.
+
+Graph access tokens are fetched at the point of use (`src/auth/siteToken.ts`), never cached on a
+page, because they only last about an hour and the pages that need them are ones an admin leaves
+open. They are used for the SPA's **direct** calls to `graph.microsoft.com` (the Teams page's
+profile and joined-teams lookups). The Teams authorisation save does **not** send one:
+`TeamsAuthAPIController.Put` authorises each Team with the refresh token it already holds in the
+auth cookie, so a token in the request body would be ignored.
+
 ## Backend APIs used
 
 | Window var | Endpoint | Purpose |
@@ -77,8 +109,8 @@ npm run dev      # Vite dev server (http://localhost:5173)
 ```
 
 When running the Vite dev server in isolation the backend APIs are not available, so the
-Home and User Lookup pages will report an API error and the Teams page falls back to
-client-side MSAL sign-in - that is expected outside the ASP.NET host.
+Home and User Lookup pages will report an API error and the Teams page reports that no Graph
+token could be obtained - that is expected outside the ASP.NET host.
 
 ## Production build
 

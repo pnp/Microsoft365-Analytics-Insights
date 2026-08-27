@@ -1,11 +1,7 @@
-import type { GraphAccessToken } from './types/graphToken';
-
 // Runtime configuration injected by the host page (index.html / the ASP.NET site).
 // Centralised here so individual components don't each re-declare the Window shape.
 declare global {
   interface Window {
-    /** Graph token for the signed-in admin, stashed for the Teams auth PUT call. */
-    o365AnalyticsTeamsToken: GraphAccessToken;
     /** POST endpoint that returns the server-side delegated OAuth token. */
     o365AnalyticsTokenAPI: string;
     /** Endpoint for getting/setting Teams deep-analytics authorisation. */

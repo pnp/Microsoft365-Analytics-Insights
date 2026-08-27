@@ -1,3 +1,4 @@
+import { apiFetch } from './http';
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
@@ -12,9 +13,8 @@ const baseUrl = (): string =>
   window.o365AnalyticsCopilotAdoptionAPI ?? `${window.location.origin}/api/CopilotAdoption`;
 
 async function getJson<T>(path: string, what: string): Promise<T> {
-  const response = await fetch(`${baseUrl()}${path}`, {
+  const response = await apiFetch(`${baseUrl()}${path}`, {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 
