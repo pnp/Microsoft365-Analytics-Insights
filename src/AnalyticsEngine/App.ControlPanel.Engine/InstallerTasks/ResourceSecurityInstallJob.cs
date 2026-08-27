@@ -14,6 +14,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         private readonly RoleAssignmentTask _appInsightsReaderRoleTask;
         private readonly RoleAssignmentTask _storageBlobDataContributorRoleTask;
+        private readonly RoleAssignmentTask _storageTableDataContributorRoleTask;
         private readonly RoleAssignmentTask _redisCacheContributorRoleTask;
         private readonly RoleAssignmentTask _cognitiveServicesUserRoleTask;
         private readonly RoleAssignmentTask _serviceBusDataOwnerRoleTask;
@@ -41,6 +42,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _storageBlobDataContributorRoleTask = new RoleAssignmentTask(storageBlobContributorConfig, logger, Location, tagDic);
             this.AddTask(_storageBlobDataContributorRoleTask);
+
+            // Assign "Storage Table Data Contributor" to the runtime account for Table data-plane access.
+            // The audit-import blob checkpoint (ProcessedBlobStoreFactory / AzureTableProcessedBlobStore) lives in
+            // Azure Table storage. Accounts hardened with allowSharedKeyAccess = false - increasingly the default
+            // under enterprise governance policy - reject the connection-string client with
+            // "403 KeyBasedAuthenticationNotPermitted", so the importer falls back to RBAC via ClientSecretCredential.
+            // "Storage Blob Data Contributor" above does NOT cover the Table service, so without this role the
+            // fallback fails too and the checkpoint silently degrades to non-durable in-memory.
+            var storageTableContributorConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Storage Table Data Contributor")
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_ID, config.RuntimeAccountOffice365.ClientId)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_CLIENT_SECRET, config.RuntimeAccountOffice365.Secret)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_TENANT_ID, config.RuntimeAccountOffice365.DirectoryId)
+                .AddSetting(RoleAssignmentTask.CONFIG_KEY_PRINCIPAL_TYPE, "ServicePrincipal");
+
+            _storageTableDataContributorRoleTask = new RoleAssignmentTask(storageTableContributorConfig, logger, Location, tagDic);
+            this.AddTask(_storageTableDataContributorRoleTask);
 
             // Assign Redis Cache Contributor role to the runtime account for RBAC-based Redis access (when keys are disabled)
             var redisCacheContributorConfig = TaskConfig.GetConfigForPropAndVal(RoleAssignmentTask.CONFIG_KEY_ROLE_NAME, "Redis Cache Contributor")
@@ -89,6 +106,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         public RoleAssignmentResource AppInsightsReaderRole => GetTaskResult<RoleAssignmentResource>(_appInsightsReaderRoleTask);
         public RoleAssignmentResource StorageBlobDataContributorRole => GetTaskResult<RoleAssignmentResource>(_storageBlobDataContributorRoleTask);
+        public RoleAssignmentResource StorageTableDataContributorRole => GetTaskResult<RoleAssignmentResource>(_storageTableDataContributorRoleTask);
         public RoleAssignmentResource RedisCacheContributorRole => GetTaskResult<RoleAssignmentResource>(_redisCacheContributorRoleTask);
         public RoleAssignmentResource CognitiveServicesUserRole =>
             _cognitiveServicesUserRoleTask == null ? null : GetTaskResult<RoleAssignmentResource>(_cognitiveServicesUserRoleTask);
