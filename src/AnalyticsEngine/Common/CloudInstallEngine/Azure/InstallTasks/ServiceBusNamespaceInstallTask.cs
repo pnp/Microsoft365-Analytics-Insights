@@ -26,6 +26,24 @@ namespace CloudInstallEngine.Azure.InstallTasks
             + "(https://learn.microsoft.com/azure/service-bus-messaging/service-bus-migrate-standard-premium), "
             + "(b) keep public network access enabled on Service Bus, or (c) disable the Teams calls import.";
 
+        /// <summary>
+        /// The minimum TLS version every namespace must enforce.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately <c>Tls12</c> and NOT the near-identically named <c>Tls1_2</c>. In
+        /// Azure.ResourceManager.ServiceBus 1.2.0 the underscored members are deprecated aliases whose
+        /// underlying value is the EMPTY STRING, while the real API values ("1.0".."1.3") live on
+        /// <c>Tls10</c>..<c>Tls13</c>. Comparing against the empty alias made the "needs updating" test
+        /// true on every single run, so the installer logged "Updating service-bus namespace '...' to
+        /// enforce TLS 1.2 minimum..." and re-PUT the namespace forever - while sending
+        /// <c>minimumTlsVersion: ""</c>, so TLS 1.2 was never actually enforced either.
+        ///
+        /// The sibling Storage, Redis and App Service SDKs do not share the quirk, so only this task
+        /// was affected. ServiceBusNamespaceInstallTaskTests pins the value so an SDK upgrade (or a
+        /// well-meaning rename back to Tls1_2) can't silently reintroduce the bug.
+        /// </remarks>
+        public static readonly ServiceBusMinimumTlsVersion RequiredMinimumTlsVersion = ServiceBusMinimumTlsVersion.Tls12;
+
         public ServiceBusNamespaceInstallTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool requirePremiumSku = false, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
         {
             _requirePremiumSku = requirePremiumSku;
@@ -33,6 +51,16 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         public override string TaskName => "get/create Service-bus namespace";
+
+        /// <summary>
+        /// True when an existing namespace still needs its minimum TLS version raising to
+        /// <see cref="RequiredMinimumTlsVersion"/>. A namespace already at 1.2 must return false, or the
+        /// installer re-writes it on every run.
+        /// </summary>
+        public static bool NeedsMinimumTlsUpdate(ServiceBusMinimumTlsVersion? current)
+        {
+            return current == null || current.Value != RequiredMinimumTlsVersion;
+        }
 
         /// <summary>
         /// True when the namespace this task produced can host a private endpoint (i.e. it is Premium). False
@@ -61,7 +89,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Creating new service-bus namespace '{name}' at {skuLabel} SKU (public access: {(_allowPublicAccess ? "enabled" : "disabled")}). This may take several minutes...");
 
                 var newResourceData = new ServiceBusNamespaceData(AzureLocation);
-                newResourceData.MinimumTlsVersion = ServiceBusMinimumTlsVersion.Tls1_2;
+                newResourceData.MinimumTlsVersion = RequiredMinimumTlsVersion;
                 newResourceData.PublicNetworkAccess = desiredAccess;
                 if (_requirePremiumSku)
                 {
@@ -112,11 +140,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 updateData.MinimumTlsVersion = sbNS.Data.MinimumTlsVersion;
                 updateData.PublicNetworkAccess = sbNS.Data.PublicNetworkAccess;
 
+                // Carry the tags across. CreateOrUpdate is a PUT, so any tag missing from the payload is
+                // dropped - which is why the namespace was the only untagged resource in an otherwise
+                // fully tagged resource group. The read-back snapshot predates the EnsureTagsOnExisting
+                // PATCH above, so re-apply the configured tags on top of it as well.
+                foreach (var tag in sbNS.Data.Tags)
+                {
+                    updateData.Tags[tag.Key] = tag.Value;
+                }
+                base.EnsureTagsOnNew(updateData.Tags);
+
                 // Enforce TLS 1.2 minimum
-                if (sbNS.Data.MinimumTlsVersion == null || sbNS.Data.MinimumTlsVersion != ServiceBusMinimumTlsVersion.Tls1_2)
+                if (NeedsMinimumTlsUpdate(sbNS.Data.MinimumTlsVersion))
                 {
                     _logger.LogInformation($"Updating service-bus namespace '{sbNS.Data.Name}' to enforce TLS 1.2 minimum...");
-                    updateData.MinimumTlsVersion = ServiceBusMinimumTlsVersion.Tls1_2;
+                    updateData.MinimumTlsVersion = RequiredMinimumTlsVersion;
                     needsUpdate = true;
                 }
 
