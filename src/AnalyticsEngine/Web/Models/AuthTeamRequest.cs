@@ -11,8 +11,5 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("teamIdsToDeauth")]
         public List<string> TeamIdsToDeauth { get; set; }
-
-        [JsonProperty("token")]
-        public string Token { get; set; }
     }
 }

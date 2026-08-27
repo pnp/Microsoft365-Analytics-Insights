@@ -1,12 +1,12 @@
+import { apiFetch } from './http';
 import type { UserDataSummary, UserDataDetailResponse } from '../types/userData';
 
 const baseUrl = (): string =>
   window.o365AnalyticsUserLookupAPI ?? `${window.location.origin}/api/UserDataLookup`;
 
 async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 

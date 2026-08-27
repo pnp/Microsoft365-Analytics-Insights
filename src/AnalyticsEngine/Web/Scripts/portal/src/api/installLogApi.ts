@@ -1,3 +1,4 @@
+import { apiFetch } from './http';
 import type { InstallLogEntry } from '../types/installLog';
 
 const baseUrl = (): string =>
@@ -5,9 +6,8 @@ const baseUrl = (): string =>
 
 /** Fetch the install log (config history from sys_configs), newest first. */
 export async function fetchInstallLog(): Promise<InstallLogEntry[]> {
-  const response = await fetch(baseUrl(), {
+  const response = await apiFetch(baseUrl(), {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 
