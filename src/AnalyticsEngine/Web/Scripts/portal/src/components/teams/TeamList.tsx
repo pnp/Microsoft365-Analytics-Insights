@@ -12,6 +12,7 @@ import { TeamAuthStatusResponse, TeamAuthStatus, AuthTokenResponse } from '../..
 import ConfirmSelection from './ConfirmSelection';
 import type { Team } from '@microsoft/microsoft-graph-types';
 import toast from '../toast';
+import { apiFetch } from '../../api/http';
 
 type TeamListProps = {
   teamsList: Array<Team>;
@@ -192,9 +193,8 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
 
     // Is the ASP.Net API defined? If we're debugging from the react app only, it won't be.
     if (window.o365AnalyticsAuthAPI) {
-      const response = await fetch(window.o365AnalyticsAuthAPI, {
+      const response = await apiFetch(window.o365AnalyticsAuthAPI, {
         method: 'POST',
-        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -234,15 +234,15 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
   async authSelectedTeams() {
     this.setState({ isBusy: true });
 
+    // No Graph token is sent: the server authorises each Team with the refresh token it holds in
+    // the auth cookie (see TeamsAuthAPIController.Put), so a token in the body would be ignored.
     const body = {
       teamIdsToAuth: this.state.teamIdsToAuth,
       teamIdsToDeauth: this.state.teamIdsToDeauth,
-      token: window.o365AnalyticsTeamsToken.accessToken,
     };
 
-    fetch(window.o365AnalyticsAuthAPI, {
+    return apiFetch(window.o365AnalyticsAuthAPI, {
       method: 'PUT',
-      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
       },

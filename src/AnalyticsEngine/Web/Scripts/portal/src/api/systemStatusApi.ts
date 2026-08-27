@@ -1,3 +1,4 @@
+import { apiFetch } from './http';
 import type { SystemStatus } from '../types/systemStatus';
 
 const baseUrl = (): string =>
@@ -5,9 +6,8 @@ const baseUrl = (): string =>
 
 /** Fetch the system status (counts + configuration) shown on the Home page. */
 export async function fetchSystemStatus(): Promise<SystemStatus> {
-  const response = await fetch(baseUrl(), {
+  const response = await apiFetch(baseUrl(), {
     method: 'GET',
-    credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   });
 

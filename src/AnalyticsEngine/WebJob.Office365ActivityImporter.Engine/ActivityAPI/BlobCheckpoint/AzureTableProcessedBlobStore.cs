@@ -27,12 +27,27 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
         private readonly TimeSpan _retention;
         private readonly ILogger _logger;
 
-        public AzureTableProcessedBlobStore(string storageConnectionString, TimeSpan retention, ILogger logger, string tableName = DefaultTableName)
+        /// <summary>
+        /// Connects with shared key when the account allows it, otherwise with the runtime service principal
+        /// (see <see cref="CheckpointTableClientFactory"/>). Throws if neither works, so the factory falls back
+        /// to the in-memory store.
+        /// </summary>
+        public AzureTableProcessedBlobStore(string storageConnectionString, TimeSpan retention, ILogger logger,
+            string tenantId = null, string clientId = null, string clientSecret = null, string tableName = DefaultTableName)
+            : this(CheckpointTableClientFactory.CreateAndEnsureTable(storageConnectionString, tableName, tenantId, clientId, clientSecret, logger),
+                   retention, logger)
+        {
+        }
+
+        /// <summary>
+        /// Takes an already-authenticated client whose table is known to exist. Used by the connection-string
+        /// constructor and directly by tests.
+        /// </summary>
+        public AzureTableProcessedBlobStore(TableClient table, TimeSpan retention, ILogger logger)
         {
             _retention = retention > TimeSpan.Zero ? retention : TimeSpan.FromDays(8);
             _logger = logger;
-            _table = new TableClient(storageConnectionString, tableName);
-            _table.CreateIfNotExists(); // throws if the connection string is unusable -> factory falls back.
+            _table = table ?? throw new ArgumentNullException(nameof(table));
         }
 
         public async Task<ISet<string>> GetProcessedBlobIdsAsync()
