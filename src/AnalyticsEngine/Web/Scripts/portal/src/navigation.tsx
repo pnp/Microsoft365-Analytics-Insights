@@ -1,4 +1,3 @@
-import { lazy } from 'react';
 import type { ReactElement } from 'react';
 import {
   ChartMultiple20Regular,
@@ -12,16 +11,19 @@ import {
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 
-// Code-split the pages so each route is a separate chunk (smaller initial load).
-const InsightsOverviewPage = lazy(() => import('./pages/InsightsOverviewPage'));
-const ReportsPage = lazy(() => import('./pages/ReportsPage'));
-const CopilotAdoptionPage = lazy(() => import('./pages/CopilotAdoptionPage'));
-const TeamsPermissionsPage = lazy(() => import('./pages/TeamsPermissionsPage'));
-const UserLookupPage = lazy(() => import('./pages/UserLookupPage'));
-const ProfilingStatusPage = lazy(() => import('./pages/ProfilingStatusPage'));
-const InstallLogPage = lazy(() => import('./pages/InstallLogPage'));
-const HealthPage = lazy(() => import('./pages/HealthPage'));
-const ServiceConfigurationPage = lazy(() => import('./pages/ServiceConfigurationPage'));
+import { lazyWithReload } from './lazyWithReload';
+
+// Code-split the pages so each route is a separate chunk (smaller initial load). lazyWithReload
+// recovers from a stale chunk after a rebuild/redeploy instead of leaving the route blank.
+const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOverviewPage'));
+const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
+const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
+const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
+const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
+const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
+const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
+const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
+const ServiceConfigurationPage = lazyWithReload(() => import('./pages/ServiceConfigurationPage'));
 
 /**
  * The portal is split into two areas so the two audiences it serves don't have to wade
