@@ -160,15 +160,17 @@ export default function LicensedUsersPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
-    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds)
+    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal)
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load licensed users.');
+        if (cancelled || controller.signal.aborted) return;
+        setError(e instanceof Error ? e.message : 'Failed to load licensed users.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -176,6 +178,9 @@ export default function LicensedUsersPanel({
 
     return () => {
       cancelled = true;
+      // These requests poll while the analysis is building, so cleanup has to actually stop them -
+      // a bare `cancelled` flag would only suppress the state update and leave the loop running.
+      controller.abort();
     };
   }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey]);
 
