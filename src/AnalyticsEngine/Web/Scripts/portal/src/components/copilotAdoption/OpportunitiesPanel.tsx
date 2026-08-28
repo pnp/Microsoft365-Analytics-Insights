@@ -154,15 +154,17 @@ export default function OpportunitiesPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
-    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds)
+    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal)
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load licence opportunities.');
+        if (cancelled || controller.signal.aborted) return;
+        setError(e instanceof Error ? e.message : 'Failed to load licence opportunities.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -170,6 +172,9 @@ export default function OpportunitiesPanel({
 
     return () => {
       cancelled = true;
+      // These requests poll while the analysis is building, so cleanup has to actually stop them -
+      // a bare `cancelled` flag would only suppress the state update and leave the loop running.
+      controller.abort();
     };
   }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey]);
 

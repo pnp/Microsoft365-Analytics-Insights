@@ -57,8 +57,11 @@ namespace Common.Entities.CopilotAdoption
             IEnumerable<int> seatLicenceTypeIdOverride = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var nowUtc = DateTime.UtcNow;
-            var windowStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays);
+            // Ten sequential steps of up to 90 seconds each: if the caller has already given up there is
+            // no point starting, and no point continuing between steps either (see TimedAsync).
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var nowUtc = DateTime.UtcNow;            var windowStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays);
             var historyStart = CopilotAdoptionScoring.WindowStartUtc(
                 nowUtc, Math.Max(_options.WindowDays, _options.HistoryDays));
             var settled = nowUtc.Date.AddDays(-Math.Max(0, _options.UsageReportLagDays));
@@ -76,10 +79,18 @@ namespace Common.Entities.CopilotAdoption
             var licenceTypes = await SafeAsync(
                 () => QueryAsync<LicenceTypeRow>(CopilotAdoptionSql.LicenceTypesSql, cancellationToken),
                 summary.Warnings,
-                "licence types");
+                "licence types", cancellationToken);
 
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
+                if (licenceTypes == null)
+                {
+                    // The query FAILED, which is not the same as a tenant with no licence data. Without
+                    // this the page says "the analysis completed and found no users", which reads as a
+                    // finding rather than a fault.
+                    summary.MarkFiguresIncomplete("licence types");
+                }
+
                 summary.Warnings.Add(
                     "No licence information has been imported, so Copilot licences cannot be identified. "
                     + "Enable the user metadata import to use this tool.");
@@ -112,10 +123,15 @@ namespace Common.Entities.CopilotAdoption
             }
 
             // ----- 2. Availability probes -------------------------------------------------------
+            // Each of these decides whether a whole DATA SOURCE is used. A failure here degrades to the
+            // same value as a genuine absence ("this tenant has no audit data"), which silently removes
+            // entire sections and changes what the opportunities query is allowed to see. That is the
+            // issue #360 defect one level up, so every probe failure marks the figures incomplete.
             summary.DataSources.AuditAvailable = await SafeScalarAsync(
                 CopilotAdoptionSql.HasCopilotAuditDataSql,
                 summary.Warnings,
                 "Copilot audit data probe",
+                () => summary.MarkFiguresIncomplete("Copilot audit data"),
                 cancellationToken,
                 new SqlParameter("@from", windowStart)) == 1;
 
@@ -123,6 +139,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSql.LatestCopilotReportDateSql,
                 summary.Warnings,
                 "Copilot usage-report snapshot date",
+                () => summary.MarkFiguresIncomplete("Copilot usage report"),
                 cancellationToken,
                 new SqlParameter("@settled", settled));
             summary.DataSources.CopilotUsageReportAvailable = summary.DataSources.CopilotUsageReportDate.HasValue;
@@ -135,6 +152,10 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionSql.LatestCopilotReportPeriodSql,
                     summary.Warnings,
                     "Copilot usage-report snapshot period",
+                    // Failing to zero here does NOT disable the report join - it pins it to
+                    // report_period_days IS NULL, which no current row matches, so every licensed user
+                    // scores as unused while the page still claims the report was used.
+                    () => summary.MarkFiguresIncomplete("Copilot usage-report snapshot period"),
                     cancellationToken,
                     new SqlParameter("@copilotReportDate", summary.DataSources.CopilotUsageReportDate.Value),
                     new SqlParameter("@windowDays", _options.WindowDays));
@@ -144,6 +165,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSql.LatestM365ReportDateSql,
                 summary.Warnings,
                 "Microsoft 365 usage-report snapshot date",
+                () => summary.MarkFiguresIncomplete("Microsoft 365 usage reports"),
                 cancellationToken,
                 new SqlParameter("@settled", settled));
             summary.DataSources.M365UsageReportsAvailable = summary.DataSources.M365UsageReportDate.HasValue;
@@ -152,6 +174,11 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSql.CopilotReportObfuscatedSql,
                 summary.Warnings,
                 "Copilot usage-report anonymisation check",
+                // Left defaulting to "not obfuscated" on failure rather than failing closed: flipping it
+                // would silently discard the per-user report source, trading one invisible degradation
+                // for another. Flagging the figures incomplete is the honest signal, and matches how
+                // every other failure in this method is handled.
+                () => summary.MarkFiguresIncomplete("Copilot usage-report anonymisation check"),
                 cancellationToken) == 1;
 
             if (summary.DataSources.CopilotUsageReportObfuscated)
@@ -282,7 +309,7 @@ namespace Common.Entities.CopilotAdoption
             var rows = await SafeAsync(
                 () => QueryAsync<AgentUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
                 summary.Warnings,
-                "Copilot agent usage");
+                "Copilot agent usage", cancellationToken);
 
             if (rows == null) return;
 
@@ -310,7 +337,7 @@ namespace Common.Entities.CopilotAdoption
             var byDept = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(byDeptSql, cancellationToken, ToSqlParameters(byDeptParameters)),
                 summary.Warnings,
-                "agent usage by department");
+                "agent usage by department", cancellationToken);
 
             if (byDept != null)
             {
@@ -347,7 +374,7 @@ namespace Common.Entities.CopilotAdoption
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
                 summary.Warnings,
-                "unlicensed Copilot usage");
+                "unlicensed Copilot usage", cancellationToken);
 
             if (rows != null)
             {
@@ -373,7 +400,7 @@ namespace Common.Entities.CopilotAdoption
             var apps = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(appSql, cancellationToken, ToSqlParameters(appParameters)),
                 summary.Warnings,
-                "unlicensed Copilot usage by app");
+                "unlicensed Copilot usage by app", cancellationToken);
 
             if (apps != null)
             {
@@ -404,7 +431,7 @@ namespace Common.Entities.CopilotAdoption
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
                 analysis.Summary.Warnings,
-                "Copilot accessed resource types");
+                "Copilot accessed resource types", cancellationToken);
 
             if (rows == null) return;
 
@@ -436,7 +463,15 @@ namespace Common.Entities.CopilotAdoption
             var assignments = await SafeAsync(
                 () => QueryAsync<SeatAssignmentRow>(assignmentsSql, cancellationToken),
                 summary.Warnings,
-                "Copilot licence assignments") ?? new List<SeatAssignmentRow>();
+                "Copilot licence assignments", cancellationToken);
+
+            if (assignments == null)
+            {
+                // The seat count comes from here. Falling through with an empty list would report zero
+                // licensed users - indistinguishable from a tenant that genuinely has none.
+                summary.MarkFiguresIncomplete("Copilot licence assignments");
+                assignments = new List<SeatAssignmentRow>();
+            }
 
             var licencesByUser = assignments
                 .GroupBy(a => a.UserId)
@@ -455,7 +490,7 @@ namespace Common.Entities.CopilotAdoption
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
                 summary.Warnings,
-                "Cowork agent lookup") ?? new List<IntValueRow>();
+                "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var coworkIds = coworkAgentIds.Select(r => r.Value).ToList();
 
@@ -477,10 +512,14 @@ namespace Common.Entities.CopilotAdoption
             var rows = await SafeAsync(
                 () => QueryAsync<LicensedUserUsageRow>(detailSql, cancellationToken, ToSqlParameters(parameters)),
                 summary.Warnings,
-                "licensed user detail");
+                "licensed user detail", cancellationToken);
 
             if (rows == null)
             {
+                // Every rate, funnel stage, band and segment on the page is computed from this list. An
+                // empty one renders as "nobody uses Copilot", which is the most damaging thing this tool
+                // could say incorrectly.
+                summary.MarkFiguresIncomplete("licensed user detail");
                 return;
             }
 
@@ -532,7 +571,7 @@ namespace Common.Entities.CopilotAdoption
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
                 analysis.Summary.Warnings,
-                "Copilot usage by app");
+                "Copilot usage by app", cancellationToken);
 
             if (rows == null) return;
 
@@ -555,7 +594,7 @@ namespace Common.Entities.CopilotAdoption
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
                 analysis.Summary.Warnings,
-                "Cowork agent lookup") ?? new List<IntValueRow>();
+                "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(seatIds, coworkAgentIds.Select(r => r.Value));
             var parameters = new Dictionary<string, object> { { "@trendFrom", trendStart } };
@@ -564,7 +603,7 @@ namespace Common.Entities.CopilotAdoption
             var rows = await SafeAsync(
                 () => QueryAsync<NamedWeekRow>(sql, cancellationToken, ToSqlParameters(parameters)),
                 analysis.Summary.Warnings,
-                "weekly adoption trend");
+                "weekly adoption trend", cancellationToken);
 
             if (rows == null) return;
 
@@ -618,6 +657,9 @@ namespace Common.Entities.CopilotAdoption
                     unlicensedSql,
                     summary.Warnings,
                     "unlicensed Copilot users",
+                    // Published as a headline KPI, and zero is a meaningful answer here - so a failure that
+                    // reads as zero is indistinguishable from "nobody uses Copilot without a licence".
+                    () => summary.MarkFiguresIncomplete("unlicensed Copilot users"),
                     cancellationToken,
                     new SqlParameter("@from", windowStart));
             }
@@ -653,9 +695,16 @@ namespace Common.Entities.CopilotAdoption
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUserSignalRow>(sql, cancellationToken, ToSqlParameters(parameters)),
                 summary.Warnings,
-                "licence opportunities");
+                "licence opportunities", cancellationToken);
 
-            if (rows == null) return;
+            if (rows == null)
+            {
+                // RecommendedForLicence is published as a headline KPI and the opportunity list drives a
+                // whole tab and a CSV export. This is one of the queries that times out at the median on a
+                // large tenant, so a silent empty list here reads as "nobody is worth a licence".
+                summary.MarkFiguresIncomplete("licence opportunities");
+                return;
+            }
 
             if (!includeM365)
             {
@@ -1184,22 +1233,38 @@ namespace Common.Entities.CopilotAdoption
         private static async Task<List<T>> SafeAsync<T>(
             Func<Task<List<T>>> query,
             List<string> warnings,
-            string description)
+            string description,
+            CancellationToken cancellationToken)
         {
             try
             {
                 return await query();
             }
-            catch (OperationCanceledException)
-            {
-                // Cancellation is not a query failure and must not be degraded into a warning. The analysis
-                // is cached as a shared Task, so swallowing this would let an aborted run complete as a
-                // "successful" empty result and be served to every other caller until the entry expires.
-                // Letting it propagate faults the task, which the cache then evicts.
-                throw;
-            }
             catch (Exception ex)
             {
+                // Cancellation is decided by the TOKEN, not by the exception type. A token-triggered
+                // abort surfaces from EF6 / SqlClient as any of TaskCanceledException, SqlException
+                // ("Operation cancelled by user") or InvalidOperationException, so type-matching here
+                // misses cases. When the caller has cancelled, the analysis must NOT complete: it is
+                // cached as a shared Task, so degrading this to a warning would let an aborted run
+                // finish as a "successful" empty result and be served to every other caller until the
+                // entry expired. Faulting the task is what makes the cache evict it.
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    if (ex is OperationCanceledException) throw;
+
+                    throw new OperationCanceledException(
+                        $"Copilot adoption analysis was cancelled while loading {description}.",
+                        ex,
+                        cancellationToken);
+                }
+
+                // Not cancelled, so this is a genuine query failure - INCLUDING a TaskCanceledException
+                // nobody asked for. EF6 / SqlClient surface an async command timeout either as a
+                // SqlException ("The wait operation timed out") or as a TaskCanceledException,
+                // unpredictably. Rethrowing the latter faulted the whole analysis and returned a 500, so
+                // the same timeout produced a degraded page on one run and an error on the next - see
+                // issue #360.
                 warnings.Add($"Could not load {description}: {InnermostMessage(ex)}");
                 return null;
             }
@@ -1212,12 +1277,39 @@ namespace Common.Entities.CopilotAdoption
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)
         {
+            return await SafeScalarAsync(sql, warnings, description, null, cancellationToken, parameters);
+        }
+
+        /// <summary>
+        /// As <see cref="SafeScalarAsync(string, List{string}, string, CancellationToken, SqlParameter[])"/>,
+        /// but tells the caller when the query FAILED rather than legitimately returning zero.
+        /// </summary>
+        /// <remarks>
+        /// The distinction matters wherever zero is a meaningful answer. Collapsing a failure to zero is how
+        /// a timed-out query becomes an authoritative-looking headline figure - the defect issue #360 is
+        /// about. <paramref name="onFailure"/> lets the caller mark the affected figures incomplete.
+        /// </remarks>
+        private async Task<int> SafeScalarAsync(
+            string sql,
+            List<string> warnings,
+            string description,
+            Action onFailure,
+            CancellationToken cancellationToken,
+            params SqlParameter[] parameters)
+        {
             var rows = await SafeAsync(
                 () => QueryAsync<int?>(sql, cancellationToken, parameters),
                 warnings,
-                description);
+                description,
+                cancellationToken);
 
-            return rows?.FirstOrDefault() ?? 0;
+            if (rows == null)
+            {
+                onFailure?.Invoke();
+                return 0;
+            }
+
+            return rows.FirstOrDefault() ?? 0;
         }
 
         private async Task<DateTime?> SafeDateAsync(
@@ -1227,12 +1319,39 @@ namespace Common.Entities.CopilotAdoption
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)
         {
+            return await SafeDateAsync(sql, warnings, description, null, cancellationToken, parameters);
+        }
+
+        /// <summary>
+        /// As <see cref="SafeDateAsync(string, List{string}, string, CancellationToken, SqlParameter[])"/>,
+        /// but tells the caller when the query FAILED rather than legitimately finding no snapshot.
+        /// </summary>
+        /// <remarks>
+        /// These dates drive availability decisions: a null reads as "this tenant has no usage report",
+        /// which silently removes a whole data source from the analysis. That is the same
+        /// failure-looks-like-absence defect as issue #360, one level up.
+        /// </remarks>
+        private async Task<DateTime?> SafeDateAsync(
+            string sql,
+            List<string> warnings,
+            string description,
+            Action onFailure,
+            CancellationToken cancellationToken,
+            params SqlParameter[] parameters)
+        {
             var rows = await SafeAsync(
                 () => QueryAsync<DateTime?>(sql, cancellationToken, parameters),
                 warnings,
-                description);
+                description,
+                cancellationToken);
 
-            return rows?.FirstOrDefault();
+            if (rows == null)
+            {
+                onFailure?.Invoke();
+                return null;
+            }
+
+            return rows.FirstOrDefault();
         }
 
         private static SqlParameter[] ToSqlParameters(IDictionary<string, object> parameters)

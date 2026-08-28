@@ -133,6 +133,49 @@ namespace Common.Entities.CopilotAdoption
             "    WHERE au.time_stamp >= @from\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
 
+        #region Guest (external) accounts
+
+        /// <summary>
+        /// How an external guest is recognised. Entra writes guests into the directory with a UPN of the
+        /// form <c>someone_contoso.com#EXT#@tenant.onmicrosoft.com</c>, and the user import stores them
+        /// alongside members with nothing else to tell them apart - there is no <c>userType</c> column
+        /// anywhere in this schema, so the UPN marker is the only signal available.
+        /// </summary>
+        public const string GuestUserNamePattern = "'%#EXT#@%'";
+
+        /// <summary>
+        /// Excludes guests from a query that already has <c>dbo.users</c> joined as <paramref name="userAlias"/>.
+        /// </summary>
+        private static string ExcludeGuests(string userAlias)
+        {
+            return $"  AND {userAlias}.user_name NOT LIKE {GuestUserNamePattern}\r\n";
+        }
+
+        /// <summary>
+        /// Excludes guests from a query that only has a user id to hand.
+        /// <para>
+        /// Written as <c>NOT EXISTS</c> rather than a join so that a user id with no row in
+        /// <c>dbo.users</c> is KEPT, matching how <c>account_enabled</c> is treated: an account the
+        /// directory import has not caught up with must not silently vanish from the figures.
+        /// </para>
+        /// <para>
+        /// This must stay consistent across every query that feeds a SEAT DECISION. Excluding guests
+        /// from the ranked candidate list but not from the headline "unmet demand" count would let the
+        /// page report demand that cannot appear in the list it tells you to act on.
+        /// </para>
+        /// </summary>
+        private static string ExcludeGuestsByUserId(string userIdExpression, string indent)
+        {
+            return
+                $"{indent}AND NOT EXISTS (\r\n" +
+                $"{indent}    SELECT 1 FROM dbo.users AS guest_check\r\n" +
+                $"{indent}    WHERE guest_check.id = {userIdExpression}\r\n" +
+                $"{indent}      AND guest_check.user_name LIKE {GuestUserNamePattern}\r\n" +
+                $"{indent})\r\n";
+        }
+
+        #endregion
+
         #region Licensed users
 
         /// <summary>
@@ -600,6 +643,10 @@ namespace Common.Entities.CopilotAdoption
                 "WHERE NOT EXISTS (SELECT 1 FROM SeatUsers AS seats WHERE seats.user_id = u.id)\r\n" +
                 // A disabled account cannot use a licence, so proposing one would discredit the list.
                 "  AND (u.account_enabled IS NULL OR u.account_enabled = 1)\r\n" +
+                // Neither can an external guest. On a real tenant guests were a meaningful share of the
+                // directory, every one of them ranked as a licence candidate it is impossible to act on.
+                // See issue #360.
+                ExcludeGuests("u") +
                 $"ORDER BY RankScore DESC, u.id\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -641,6 +688,9 @@ namespace Common.Entities.CopilotAdoption
                 "          WHERE ul.user_id = au.user_id\r\n" +
                 $"            AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "      )\r\n" +
+                // Same population as the candidate list, which also excludes guests - otherwise this
+                // headline reports unmet demand that can never appear in the list it points you to.
+                ExcludeGuestsByUserId("au.user_id", "      ") +
                 ") AS unlicensed\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -795,6 +845,8 @@ namespace Common.Entities.CopilotAdoption
                 "          WHERE ul.user_id = au.user_id\r\n" +
                 $"            AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "      )\r\n" +
+                // Kept in step with UnlicensedActiveUsersSql - this is the detail behind that count.
+                ExcludeGuestsByUserId("au.user_id", "      ") +
                 "),\r\n" +
                 "Totals AS (\r\n" +
                 "    SELECT user_id, COUNT_BIG(*) AS Interactions, MAX(time_stamp) AS LastInteractionUtc\r\n" +
@@ -902,6 +954,8 @@ namespace Common.Entities.CopilotAdoption
                 "      WHERE ul.user_id = au.user_id\r\n" +
                 $"        AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "  )\r\n" +
+                // Kept in step with UnlicensedActiveUsersSql - this breaks that same population down by app.
+                ExcludeGuestsByUserId("au.user_id", "  ") +
                 "GROUP BY ISNULL(c.app_host, '(unknown)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -960,6 +1014,13 @@ namespace Common.Entities.CopilotAdoption
                 $"    SELECT {week} AS WeekStart,\r\n" +
                 "           au.user_id AS user_id,\r\n" +
                 "           MAX(CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END) AS IsLicensed,\r\n" +
+                // Carried as a flag rather than filtered in the WHERE clause: the licensed series must
+                // keep counting a guest that somehow holds a seat (that is a real licence being spent),
+                // while the unlicensed series must exclude guests to agree with the headline count and
+                // the candidate list. One LEFT JOIN on the users PK, so the single-pass shape that this
+                // query was rewritten into (see above) is preserved.
+                "           MAX(CASE WHEN guest_check.user_name LIKE " + GuestUserNamePattern +
+                " THEN 1 ELSE 0 END) AS IsGuest,\r\n" +
                 "           MAX(CASE WHEN seats.user_id IS NOT NULL\r\n" +
                 $"                     AND ({cowork}) THEN 1 ELSE 0 END) AS IsCowork,\r\n" +
                 "           MAX(CASE WHEN c.agent_id IS NOT NULL THEN 1 ELSE 0 END) AS UsedAgent,\r\n" +
@@ -968,6 +1029,7 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    " + AuditJoin + "\r\n" +
                 "    LEFT JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
+                "    LEFT JOIN dbo.users AS guest_check ON guest_check.id = au.user_id\r\n" +
                 "    WHERE au.time_stamp >= @trendFrom\r\n" +
                 "      AND au.user_id IS NOT NULL\r\n" +
                 $"    GROUP BY {week}, au.user_id\r\n" +
@@ -976,10 +1038,10 @@ namespace Common.Entities.CopilotAdoption
                 "    SELECT WeekStart,\r\n" +
                 "           SUM(IsLicensed) AS ActiveUsers,\r\n" +
                 "           SUM(IsCowork) AS CoworkUsers,\r\n" +
-                "           SUM(CASE WHEN IsLicensed = 0 THEN 1 ELSE 0 END) AS UnlicensedUsers,\r\n" +
+                "           SUM(CASE WHEN IsLicensed = 0 AND IsGuest = 0 THEN 1 ELSE 0 END) AS UnlicensedUsers,\r\n" +
                 "           SUM(UsedAgent) AS AgentUsers,\r\n" +
                 "           SUM(LicensedInteractions) AS LicensedInteractions,\r\n" +
-                "           SUM(UnlicensedInteractions) AS UnlicensedInteractions\r\n" +
+                "           SUM(CASE WHEN IsGuest = 0 THEN UnlicensedInteractions ELSE 0 END) AS UnlicensedInteractions\r\n" +
                 "    FROM WeekUser\r\n" +
                 "    GROUP BY WeekStart\r\n" +
                 ")\r\n" +

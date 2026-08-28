@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
 
 namespace Tests.UnitTests
@@ -651,6 +652,201 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void OpportunitiesQuery_ExcludesGuestsInEveryDataSourceCombination()
+        {
+            // The exclusion lives in the shared WHERE clause, but the query is assembled differently
+            // depending on which imports have data - so assert it survives every shape.
+            var combinations = new[]
+            {
+                new { Audit = true, M365 = true },
+                new { Audit = true, M365 = false },
+                new { Audit = false, M365 = true },
+            };
+
+            foreach (var c in combinations)
+            {
+                var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(
+                    new[] { 1 }, CopilotAdoptionOptions.Default, c.Audit, c.M365);
+
+                StringAssert.Contains(sql, "u.user_name NOT LIKE '%#EXT#@%'",
+                    $"Guests must be excluded with includeCopilotAudit={c.Audit}, includeM365Usage={c.M365}.");
+            }
+        }
+
+        [TestMethod]
+        public void UnlicensedQueries_ExcludeGuestsConsistentlyWithTheCandidateList()
+        {
+            // These all describe the SAME population: users with Copilot activity and no seat. The
+            // headline count is what the page calls proven unmet demand, and the candidate list is what
+            // it tells you to act on. Excluding guests from one and not the others would let the page
+            // report demand that can never appear in the list it points at.
+            var seatIds = new[] { 1 };
+            var queries = new Dictionary<string, string>
+            {
+                { "unlicensed active users (headline)", CopilotAdoptionSql.UnlicensedActiveUsersSql(seatIds) },
+                { "unlicensed usage rows (detail)", CopilotAdoptionSql.UnlicensedUsageRowsSql(seatIds) },
+                { "unlicensed usage by app", CopilotAdoptionSql.UnlicensedUsageByAppSql(seatIds) },
+            };
+
+            foreach (var q in queries)
+            {
+                StringAssert.Contains(q.Value, "guest_check.user_name LIKE '%#EXT#@%'",
+                    $"The {q.Key} query must exclude guests, like the candidate list does.");
+            }
+        }
+
+        [TestMethod]
+        public void UnlicensedGuestExclusion_KeepsUsersMissingFromTheDirectory()
+        {
+            // Written as NOT EXISTS rather than a join on purpose: a user id the directory import has
+            // not caught up with has no dbo.users row, and an inner join would silently drop it from the
+            // figures - re-creating the very class of invisible loss this change exists to remove.
+            var sql = CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 });
+
+            StringAssert.Contains(sql, "AND NOT EXISTS (");
+            StringAssert.Contains(sql, "FROM dbo.users AS guest_check");
+            Assert.IsFalse(sql.Contains("JOIN dbo.users AS guest_check"),
+                "A join would drop users with no directory row instead of keeping them.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrend_ExcludesGuestsFromTheUnlicensedSeriesOnly()
+        {
+            var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(new[] { 1 }, new int[0]);
+
+            // Unlicensed series: guests removed, so the trend agrees with the headline count.
+            StringAssert.Contains(sql, "SUM(CASE WHEN IsLicensed = 0 AND IsGuest = 0 THEN 1 ELSE 0 END) AS UnlicensedUsers");
+            StringAssert.Contains(sql, "SUM(CASE WHEN IsGuest = 0 THEN UnlicensedInteractions ELSE 0 END)");
+
+            // Licensed series: untouched. A guest that somehow holds a seat is a real licence being
+            // spent, so hiding it would understate what the tenant is paying for.
+            StringAssert.Contains(sql, "SUM(IsLicensed) AS ActiveUsers");
+            StringAssert.Contains(sql, "SUM(LicensedInteractions) AS LicensedInteractions");
+        }
+
+        [TestMethod]
+        public void AgentEstate_DoesNotExcludeGuests()
+        {
+            // The agent inventory is deliberately tenant-wide - an agent's value does not depend on the
+            // licence or account type of the people using it. Filtering guests here would understate
+            // real usage of an agent rather than correct a seat decision.
+            var sql = CopilotAdoptionSql.AgentUsageSql(new[] { 1 });
+
+            Assert.IsFalse(sql.Contains("#EXT#"),
+                "The agent estate counts all users on purpose; see the query's own remarks.");
+        }
+
+        #region Incomplete figures (issue #360)
+
+        [TestMethod]
+        public void Summary_IsNotIncompleteByDefault()
+        {
+            var summary = new CopilotAdoptionSummary();
+
+            Assert.IsFalse(summary.FiguresIncomplete);
+            Assert.AreEqual(0, summary.IncompleteReasons.Count);
+        }
+
+        [TestMethod]
+        public void MarkFiguresIncomplete_RecordsTheDatasetThatFailed()
+        {
+            var summary = new CopilotAdoptionSummary();
+
+            summary.MarkFiguresIncomplete("licensed user detail");
+
+            Assert.IsTrue(summary.FiguresIncomplete);
+            CollectionAssert.AreEqual(new[] { "licensed user detail" }, summary.IncompleteReasons.ToArray());
+        }
+
+        [TestMethod]
+        public void MarkFiguresIncomplete_DoesNotRepeatTheSameDataset()
+        {
+            // Both licensed-user queries can fail in the same run; the message must not say it twice.
+            var summary = new CopilotAdoptionSummary();
+
+            summary.MarkFiguresIncomplete("licensed user detail");
+            summary.MarkFiguresIncomplete("licensed user detail");
+            summary.MarkFiguresIncomplete("Copilot licence assignments");
+
+            Assert.AreEqual(2, summary.IncompleteReasons.Count);
+        }
+
+        [TestMethod]
+        public void MarkFiguresIncomplete_IgnoresABlankDatasetButStillFlags()
+        {
+            var summary = new CopilotAdoptionSummary();
+
+            summary.MarkFiguresIncomplete(null);
+            summary.MarkFiguresIncomplete("   ");
+
+            Assert.IsTrue(summary.FiguresIncomplete,
+                "The flag is what suppresses the figures; it must be set even without a description.");
+            Assert.AreEqual(0, summary.IncompleteReasons.Count);
+        }
+
+        [TestMethod]
+        public void IncompleteIsDistinctFromAWarning()
+        {
+            // A warning means "one chart is missing". Incomplete means "the population these numbers are
+            // derived from could not be loaded". Conflating them is what let a timed-out licence query
+            // render as a normal dashboard reporting almost no adoption.
+            var summary = new CopilotAdoptionSummary();
+            summary.Warnings.Add("Could not load Copilot agent usage: timeout");
+
+            Assert.IsFalse(summary.FiguresIncomplete,
+                "A degraded chart must not suppress the headline figures.");
+        }
+
+        [TestMethod]
+        public async Task AnalyseAsync_WhenEveryQueryFails_FlagsIncompleteRatherThanReportingZeroAdoption()
+        {
+            // The exact customer symptom behind issue #360: the queries fail (there, by timing out), every
+            // count degrades to zero, and the page then renders as though the tenant had never used
+            // Copilot. A failing context factory reproduces the failure path without needing a database -
+            // what matters is that a failure is DISTINGUISHABLE from a genuine zero.
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                () => throw new InvalidOperationException("simulated database failure"));
+
+            var analysis = await service.AnalyseAsync();
+            var summary = analysis.Summary;
+
+            Assert.IsTrue(summary.FiguresIncomplete,
+                "Every query failed, so the headline figures are not trustworthy and must say so.");
+            Assert.IsTrue(summary.Warnings.Count > 0, "Each failed dataset should also warn.");
+            Assert.AreEqual(0, summary.LicensedUsers,
+                "The count still reads zero - which is exactly why the flag has to exist.");
+        }
+
+        [TestMethod]
+        public async Task AnalyseAsync_WhenCancelled_FaultsInsteadOfReturningAnEmptyAnalysis()
+        {
+            // The analysis is shared between callers through a cached Task. If a cancellation were
+            // degraded into warnings, the aborted run would complete "successfully" with empty figures and
+            // be served to everyone else until the cache expired.
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                () => throw new InvalidOperationException("should not be reached"));
+
+            using (var cts = new CancellationTokenSource())
+            {
+                cts.Cancel();
+
+                try
+                {
+                    await service.AnalyseAsync(null, cts.Token);
+                    Assert.Fail("A cancelled analysis must not return a result.");
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected.
+                }
+            }
+        }
+
+        #endregion
+
+        [TestMethod]
         public void OpportunitiesQuery_IsDrivenFromActivityNotFromTheDirectory()
         {
             var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(
@@ -664,6 +860,11 @@ namespace Tests.UnitTests
 
             // Disabled accounts cannot use a licence, so proposing one would discredit the whole list.
             StringAssert.Contains(sql, "u.account_enabled IS NULL OR u.account_enabled = 1");
+
+            // Neither can an external guest, and there is no userType column to tell them apart - the
+            // '#EXT#' UPN marker Entra writes is the only signal available. On a real tenant guests were a
+            // meaningful share of the directory, every one of them ranked as an unactionable candidate.
+            StringAssert.Contains(sql, "u.user_name NOT LIKE '%#EXT#@%'");
 
             // The Microsoft 365 tables are Graph's DAILY user-detail reports: one row per user per day
             // they did something. Seeking a single [date] made the candidate list "whoever happened to
