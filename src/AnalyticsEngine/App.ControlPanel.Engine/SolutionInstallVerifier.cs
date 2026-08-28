@@ -6,6 +6,7 @@ using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
+using Common.Entities;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
@@ -20,6 +21,7 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
+using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using static App.ControlPanel.Engine.Models.AutodetectedSqlDetails;
@@ -565,8 +567,13 @@ namespace App.ControlPanel.Engine
 
         async Task VerifyRuntimeAccountAllAPIs()
         {
-            // Activity API test 
-            if (Config.SolutionConfig.ImportTaskSettings.ActivityLog)
+            // Activity API test. Mirrors the web-job's own run condition exactly, via
+            // ImportTaskSettings.UsesActivityApi (ActivityLog || Copilot): Copilot interactions are delivered
+            // through the same Management Activity API as the SharePoint audit log, so a Copilot-only tenant
+            // still depends on it. This used to test ActivityLog alone and told such tenants "audit-data not
+            // being targeted" - a statement that was actively wrong for the newest, most-demoed workload.
+            // Power Platform is deliberately NOT part of this condition; see UsesActivityApi for why.
+            if (Config.SolutionConfig.ImportTaskSettings.UsesActivityApi)
             {
                 await VerifyActivityAPIImport(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
             }
@@ -575,7 +582,97 @@ namespace App.ControlPanel.Engine
 
             // Teams & Groups enumeration (All Graph tests). Individual tests skipped below
             await VerifyTeamsAndUserActivityImport(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
+
+            // Finally, say out loud which enabled imports Test Configuration could NOT check, so an admin is
+            // never left assuming a green run proves every toggle is ready.
+            ReportUnverifiedEnabledImports();
         }
+
+        #region Import-toggle verification coverage
+
+        /// <summary>
+        /// Declares, for every <c>ImportTaskSettings</c> <c>[ImportProp]</c> toggle, whether Test Configuration
+        /// can verify it and - when it cannot - why not.
+        /// </summary>
+        /// <remarks>
+        /// This exists because toggles have three times now shipped with no Test Configuration check at all,
+        /// silently: the omission is invisible in the test output, so a green run reads as "everything is
+        /// ready" when it is not. A unit test asserts this table covers exactly the toggles that exist, so
+        /// adding a toggle without deciding how it is verified fails the build rather than shipping unnoticed.
+        /// It is not just documentation - <see cref="ReportUnverifiedEnabledImports"/> logs the unverifiable
+        /// ones so the admin sees the gap too.
+        /// </remarks>
+        public static readonly IReadOnlyList<ImportToggleCoverage> ImportToggleCoverages = new List<ImportToggleCoverage>
+        {
+            new ImportToggleCoverage(nameof(ImportTaskSettings.ActivityLog),
+                "Office 365 Management Activity API subscription read"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.Copilot),
+                "Office 365 Management Activity API subscription read (Copilot arrives on the Audit.General feed)"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.ImportPowerPlatform), null,
+                "Power Platform events arrive on the Audit.General feed, but the web-job's activity import "
+                + "does not currently run for this toggle on its own, so there is no permission check to make. "
+                + "If another Activity API workload is enabled the Office 365 Management API access is already "
+                + "verified by that check. (Known gap - do not enable extra workloads purely to work around it.)"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsageReports),
+                "Microsoft 365 usage reports via Reports.Read.All"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphCopilotUsageReports),
+                "Microsoft 365 usage reports via Reports.Read.All"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphTeams),
+                "Graph group enumeration and Teams channel read"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotInteractionHistory),
+                "AiEnterpriseInteraction.Read.All on the runtime app token"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.WebTraffic), null,
+                "there is no runtime API permission to check - page traffic is pushed to the web app by the "
+                + "in-page AI Tracker script, so correctness depends on the SharePoint deployment rather than "
+                + "on a Graph or Management API grant."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsersMetadata), null,
+                "no check exercises the Graph user-metadata read (User.Read.All); a missing grant would first "
+                + "appear at runtime."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.Calls), null,
+                "the Teams call-records import needs a Graph change-notification subscription pointed at the "
+                + "web app plus a Service Bus queue, neither of which exists until the install has finished."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.SentEmails), null,
+                "no check exercises the Graph mailbox read (Mail.Read); a missing grant would first appear at "
+                + "runtime."),
+        };
+
+        /// <summary>
+        /// The ENABLED import toggles that Test Configuration cannot verify. Pure, so it is unit-testable.
+        /// </summary>
+        internal static IReadOnlyList<ImportToggleCoverage> GetUnverifiedEnabledImports(ImportTaskSettings settings)
+        {
+            if (settings == null) return new List<ImportToggleCoverage>();
+
+            return ImportToggleCoverages
+                .Where(c => !c.IsVerified && settings.IsImportEnabled(c.PropertyName))
+                .ToList();
+        }
+
+        /// <summary>
+        /// Logs every ENABLED import toggle that Test Configuration cannot verify, so a clean run is never
+        /// mistaken for "every workload is proven ready". Disabled toggles are not mentioned - they are already
+        /// covered by the per-check "not being targeted" lines.
+        /// </summary>
+        void ReportUnverifiedEnabledImports()
+        {
+            foreach (var toggle in GetUnverifiedEnabledImports(Config.SolutionConfig.ImportTaskSettings))
+            {
+                _logger.LogWarning(
+                    $"No Test Configuration check exists for the '{toggle.PropertyName}' import: {toggle.NotVerifiedReason}");
+            }
+        }
+
+        #endregion
 
         async Task VerifyActivityAPIImport(string clientId, string tenantId, string clientSecret)
         {
@@ -604,8 +701,9 @@ namespace App.ControlPanel.Engine
             await auth.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(auth.Creds);
+            var manualGraphClient = new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, logger);
 
-            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, logger),
+            var teamsUserUsageLoader = new TeamsUserUsageLoader(manualGraphClient,
                 new NoUsersHaveGroupsUserGroupsCache(_logger),
                 new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
                 logger);
@@ -626,6 +724,118 @@ namespace App.ControlPanel.Engine
                 await VerifyTeamsImport(graphClient);
             }
             else _logger.LogInformation("Skipping verifying Graph API for Teams import as not being targeted");
+
+            // Copilot AI interaction history
+            if (Config.SolutionConfig.ImportTaskSettings.CopilotInteractionHistory)
+            {
+                await VerifyCopilotInteractionHistoryImport(auth, manualGraphClient);
+            }
+            else _logger.LogInformation("Skipping verifying Copilot AI interaction history import as not being targeted");
+        }
+
+        /// <summary>
+        /// Verifies the runtime app registration actually holds <c>AiEnterpriseInteraction.Read.All</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is the only import whose permission the installer does not grant - it needs separate, explicit
+        /// admin consent on the app registration - which makes it simultaneously the most likely toggle to be
+        /// misconfigured and, until now, the only one Test Configuration said nothing about.
+        /// </para>
+        /// <para>
+        /// The failure is silent by design at runtime: <c>CopilotInteractionHistoryImporter.ImportAsync</c>
+        /// logs a warning and returns, so a missing grant surfaces only as an empty table and a line buried in
+        /// web-job logs, hours after the install finished.
+        /// </para>
+        /// <para>
+        /// Deliberately reuses <c>GraphAiInteractionSourceLoader</c>'s permission check - the exact logic the
+        /// importer itself gates on - so a passing test guarantees the importer will actually run, which is a
+        /// stronger guarantee than most of the other checks give. It reads the <c>roles</c> claim off the app
+        /// token: one token acquisition, no Graph call, no tenant data read. The tri-state
+        /// <c>GetInteractionReadAccessAsync</c> is used rather than the importer's boolean form, so "could not
+        /// tell" is never reported to the admin as "definitely not granted".
+        /// </para>
+        /// </remarks>
+        async Task VerifyCopilotInteractionHistoryImport(
+            GraphAppIndentityOAuthContext auth,
+            WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient graphClient)
+        {
+            _logger.LogInformation("Verifying Copilot AI interaction history import permissions...");
+
+            if (auth == null)
+            {
+                // HasInteractionReadAccessAsync fails OPEN on a null identity, which is right for the importer
+                // (let the per-user calls report the truth) but wrong for a verifier, whose whole job is to
+                // prove the permission is there. Never report "couldn't determine" as a pass.
+                _logger.LogWarning(
+                    "Could not verify the Copilot AI interaction history permission: no runtime app identity was available.");
+                return;
+            }
+
+            InteractionReadAccess access;
+            try
+            {
+                var loader = new GraphAiInteractionSourceLoader(graphClient, auth, _logger);
+                access = await loader.GetInteractionReadAccessAsync();
+            }
+            catch (Exception ex)
+            {
+                // GetInteractionReadAccessAsync catches its own failures, so this is belt-and-braces against a
+                // future change; a verifier must never let an unexpected throw read as a pass.
+                _logger.LogWarning(
+                    $"Could not verify whether the runtime account holds 'AiEnterpriseInteraction.Read.All': {ex.Message}. " +
+                    "Confirm the grant by hand on the app registration before relying on the Copilot AI interaction history import.");
+                return;
+            }
+
+            var (level, message) = DescribeInteractionReadAccess(access);
+            _logger.Log(level, message);
+
+            if (access != InteractionReadAccess.Granted) return;
+
+            // Scope warning, only worth making once the permission is actually in place. UserGroupsFilter is
+            // an App Service application setting, not part of the installer config, so it cannot be checked
+            // here - but an unscoped run is a per-user Graph call for every enabled user in the tenant, and
+            // where Cognitive Services is configured it also sends their prompt text to Azure AI Language.
+            // Worth saying plainly at install time rather than after the first cycle.
+            _logger.LogWarning(
+                "Copilot AI interaction history is tenant-wide unless scoped. This import makes one Graph call PER USER per cycle, " +
+                "so on a large tenant it should be narrowed to a pilot group with the 'UserGroupsFilter' App Service application " +
+                "setting (it is not exposed in this wizard and must be set by hand on the web app).");
+        }
+
+        /// <summary>
+        /// Maps a permission-check outcome to the log level and message Test Configuration reports.
+        /// </summary>
+        /// <remarks>
+        /// Pure and separate from the check itself so the mapping is unit-testable. The levels are the point
+        /// of the whole exercise: only a token that was read successfully and lacks the role is an ERROR.
+        /// "Could not tell" must be a warning, or an admin is sent off to re-consent a permission they may
+        /// already hold; and it must not be silence either, because the check did not actually prove anything.
+        /// </remarks>
+        internal static (LogLevel level, string message) DescribeInteractionReadAccess(InteractionReadAccess access)
+        {
+            switch (access)
+            {
+                case InteractionReadAccess.Granted:
+                    return (LogLevel.Information,
+                        "Successfully verified 'AiEnterpriseInteraction.Read.All' for the Copilot AI interaction history import.");
+
+                case InteractionReadAccess.NotGranted:
+                    return (LogLevel.Error,
+                        "ERROR: the runtime account does not hold the 'AiEnterpriseInteraction.Read.All' application permission, " +
+                        "so the Copilot AI interaction history import will do nothing (it logs a warning and skips, rather than failing). " +
+                        "IMPORTANT: unlike every other import, the installer does NOT grant this permission - add it to the runtime " +
+                        "app registration as an APPLICATION permission and grant admin consent, then re-run these tests. " +
+                        "Note it also requires the M365_COPILOT_BUSINESS_CHAT service plan on each user you expect data for.");
+
+                default:
+                    // Unknown / NoIdentityToInspect. Not a failure of the grant itself, and not a pass either.
+                    return (LogLevel.Warning,
+                        "Could not confirm whether the runtime account holds 'AiEnterpriseInteraction.Read.All' - the check could " +
+                        "not read the app token's permissions. This is NOT a failure of the grant itself; verify it by hand on the " +
+                        "app registration. Note the installer does not grant this permission, so it does need explicit admin consent.");
+            }
         }
 
         async Task VerifyTeamsImport(Microsoft.Graph.GraphServiceClient graphClient)
@@ -841,6 +1051,44 @@ namespace App.ControlPanel.Engine
 
             _logger.LogInformation("Successfully verified user activity settings.");
         }
+    }
+
+    /// <summary>
+    /// Whether the installer's Test Configuration can verify one <c>ImportTaskSettings</c> import toggle, and
+    /// - when it cannot - the reason, so the gap is stated rather than silently absent from the test output.
+    /// </summary>
+    public class ImportToggleCoverage
+    {
+        public ImportToggleCoverage(string propertyName, string verifiedBy, string notVerifiedReason = null)
+        {
+            if (string.IsNullOrWhiteSpace(propertyName))
+                throw new ArgumentException("An import toggle needs a property name.", nameof(propertyName));
+
+            var isVerified = !string.IsNullOrWhiteSpace(verifiedBy);
+            if (isVerified == !string.IsNullOrWhiteSpace(notVerifiedReason))
+            {
+                // Exactly one must be supplied. Both would be contradictory; neither would let a toggle be
+                // registered as "covered" while saying nothing about how - the very gap this table exists for.
+                throw new ArgumentException(
+                    $"Import toggle '{propertyName}' must declare either what verifies it or why nothing can.",
+                    nameof(verifiedBy));
+            }
+
+            PropertyName = propertyName;
+            VerifiedBy = verifiedBy;
+            NotVerifiedReason = notVerifiedReason;
+        }
+
+        /// <summary>The <c>ImportTaskSettings</c> property name this covers, e.g. "CopilotInteractionHistory".</summary>
+        public string PropertyName { get; }
+
+        /// <summary>What Test Configuration checks for this toggle, or null when nothing can be checked.</summary>
+        public string VerifiedBy { get; }
+
+        /// <summary>Why nothing is checked. Set only when <see cref="VerifiedBy"/> is null.</summary>
+        public string NotVerifiedReason { get; }
+
+        public bool IsVerified => !string.IsNullOrWhiteSpace(VerifiedBy);
     }
 
     /// <summary>

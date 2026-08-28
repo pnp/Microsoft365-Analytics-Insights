@@ -136,6 +136,69 @@ namespace Common.Entities
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));
         }
 
+        /// <summary>
+        /// Every <see cref="ImportPropAttribute"/> toggle on this class, for callers that need to reason
+        /// about the whole set generically rather than naming toggles one at a time - such as the installer's
+        /// Test Configuration coverage check, which asserts no toggle ships without a verification decision.
+        /// </summary>
+        public static IReadOnlyList<PropertyInfo> GetImportPropertyInfos()
+        {
+            return typeof(ImportTaskSettings).GetProperties()
+                .Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)))
+                .ToList();
+        }
+
+        /// <summary>Names of every <see cref="ImportPropAttribute"/> toggle on this class.</summary>
+        public static IReadOnlyList<string> GetImportPropertyNames()
+        {
+            return GetImportPropertyInfos().Select(p => p.Name).ToList();
+        }
+
+        /// <summary>
+        /// Whether the named <see cref="ImportPropAttribute"/> toggle is enabled. Throws for an unknown name
+        /// rather than silently answering false, so a rename cannot quietly turn a check into a no-op.
+        /// </summary>
+        public bool IsImportEnabled(string importPropertyName)
+        {
+            var prop = GetImportPropertyInfos().SingleOrDefault(p => p.Name == importPropertyName)
+                ?? throw new ArgumentException($"'{importPropertyName}' is not an [ImportProp] on {nameof(ImportTaskSettings)}.", nameof(importPropertyName));
+
+            return (bool)prop.GetValue(this);
+        }
+
+        /// <summary>
+        /// Whether the web-job runs its Office 365 Management Activity API import for these settings.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The single source of truth for that question. It exists because the answer was previously spelled
+        /// out separately in the web-job's run condition and in the installer's Test Configuration, and the
+        /// two disagreed: a tenant that enabled only Copilot was told "audit-data not being targeted" while
+        /// the importer depended on exactly that API (issue #329).
+        /// </para>
+        /// <para>
+        /// <b><see cref="ImportPowerPlatform"/> is deliberately NOT included</b>, even though
+        /// <see cref="ToActivityApiContentTypesString"/> subscribes to Audit.General for it. That mismatch is
+        /// a real bug - a Power-Platform-only tenant subscribes to a feed nothing ever reads - but it cannot
+        /// be fixed by widening this condition alone: Audit.General also carries Microsoft 365 Copilot
+        /// interactions, and <c>AuditLogContentDispatcher</c> accepts <c>WORKLOAD_COPILOT</c> unconditionally,
+        /// so simply running the activity import for Power Platform would import Copilot data on a tenant that
+        /// never opted in to it. <c>DownloadActivityData</c> would also abort every cycle with a fatal error,
+        /// because it refuses to run when <c>org_urls</c> is empty - which a Power-Platform-only deployment
+        /// legitimately is. Tracked separately; do not widen this without fixing both.
+        /// </para>
+        /// <para>
+        /// Marked with both <c>JsonIgnore</c> attributes: this is derived state, not part of the persisted
+        /// config schema. Newtonsoft (which <c>SolutionInstallConfig.ToJson</c> uses) and System.Text.Json
+        /// both serialise public getters by default, so without these it would be written into every saved
+        /// installer <c>*.json</c> and into <c>sys_configs.ConfigJson</c> - a schema addition requiring a
+        /// <c>CONFIG_VERSION</c> bump, for a value that is recomputed on load and can never be authoritative.
+        /// </para>
+        /// </remarks>
+        [Newtonsoft.Json.JsonIgnore]
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool UsesActivityApi => ActivityLog || Copilot;
+
         public string ToSettingsString()
         {
             var s = string.Empty;
@@ -172,7 +235,6 @@ namespace Common.Entities
             if (ActivityLog) types.Add(CONTENT_TYPE_AUDIT_SHAREPOINT);
             return types.Count > 0 ? string.Join(SEP, types) : CONTENT_TYPE_AUDIT_SHAREPOINT;
         }
-
         public bool HaveSomethingToDo()
         {
             foreach (var p in GetImportProps())
