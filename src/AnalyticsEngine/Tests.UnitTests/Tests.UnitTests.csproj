@@ -263,6 +263,7 @@
     <Compile Include="InstallTests\ServiceBusNamespaceInstallTaskTests.cs" />
     <Compile Include="InstallTests\RbacPermissionProbeTests.cs" />
     <Compile Include="InstallTests\TeamsUserActivityReportUrlTests.cs" />
+    <Compile Include="InstallTests\SqlFirewallSelfHealTests.cs" />
     <Compile Include="InstallTests\SpoInstallTests.cs" />
     <Compile Include="InstallTests\SpoAuthAndAppCatalogTests.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

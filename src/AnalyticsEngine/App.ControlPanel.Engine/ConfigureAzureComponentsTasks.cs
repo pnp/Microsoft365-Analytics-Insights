@@ -7,7 +7,9 @@ using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Resources;
+using Azure.ResourceManager.Sql;
 using Azure.ResourceManager.Storage;
+using CloudInstallEngine.Azure;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
@@ -41,7 +43,8 @@ namespace App.ControlPanel.Engine
         public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
             RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
-            KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription)
+            KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
+            SqlServerResource sqlServer = null)
         {
             // Configure app-service connection-strings, etc
             await ConfigureWebApp(webApp, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
@@ -50,24 +53,87 @@ namespace App.ControlPanel.Engine
             // rejects deployments while the site resource is stopped.
             var solutionSources = await GetSolutionFromSource(subscription, automationAccount, downloadReleaseOnly: true);
 
-            // Stop the runtime while applying database changes so the existing website/WebJobs
-            // cannot use a partially upgraded schema.
-            if (this.Config.TasksConfig.InstallLatestSolutionContent)
+            // Prove SQL is reachable BEFORE taking the site offline, self-healing a stale firewall rule if
+            // that is what is blocking us. Previously the site was stopped first and the connectivity test ran
+            // inside the database step, so a firewall rejection left the customer's web app stopped with no
+            // attempt to restart it (issue #326). VerifySQL caches success, so the test inside the database
+            // step below becomes a no-op.
+            var repairFirewall = BuildFirewallRepairCallback(sqlServer);
+            var sqlReachable = await VerifySqlWithFirewallSelfHeal(dbInfo.ConnectionString, repairFirewall);
+
+            // Terminate here rather than carrying a "SQL is broken" flag through the rest of the method. The
+            // database step would fail anyway, but only after more work had been done, and the App Service
+            // would have been stopped for it - which is the outage this whole change exists to prevent.
+            if (!sqlReachable && (Config.TasksConfig.UpgradeSchema || Config.TasksConfig.RegisterConfig))
             {
-                _logger.LogInformation("Stopping app-service during database upgrade...");
-                await webApp.StopAsync();
+                throw new UnexpectedInstallException(
+                    "SQL Server is not reachable from this host, so the database upgrade cannot run. The App Service has " +
+                    "deliberately NOT been stopped, so the existing deployment keeps running on its current schema. " +
+                    "Fix the connectivity problem reported above and re-run the installer.");
             }
 
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
 
-            var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword, async (connectionString) => await VerifySQL(connectionString));
-            await sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents);
+            // Stop the runtime while applying database changes so the existing website/WebJobs
+            // cannot use a partially upgraded schema.
+            var stopAttempted = false;
+            Exception upgradeFailure = null;
+            try
+            {
+                if (this.Config.TasksConfig.InstallLatestSolutionContent)
+                {
+                    _logger.LogInformation("Stopping app-service during database upgrade...");
+
+                    // Set BEFORE awaiting: Azure can complete the stop server-side while the client sees a
+                    // timeout or transport error, so "the call threw" does not mean "the site is still up".
+                    // Assuming it stopped is the safe assumption - a redundant start is harmless.
+                    stopAttempted = true;
+                    await webApp.StopAsync();
+                }
+
+                var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword,
+                    async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
+                await sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents);
+            }
+            catch (Exception ex)
+            {
+                upgradeFailure = ex;
+            }
+
+            // Whatever happened above, bring the site back. A database step that turns out to be impossible
+            // must never leave the customer's web app stopped.
+            if (stopAttempted)
+            {
+                try
+                {
+                    await webApp.StartAsync();
+                    _logger.LogInformation("App Service started for SCM HTTPS deployment");
+                }
+                catch (Exception startEx)
+                {
+                    if (upgradeFailure == null)
+                    {
+                        // Nothing to mask, and the site is down - this must be fatal, not a swallowed warning,
+                        // or the install would carry on deploying content to a stopped site and report success.
+                        throw new UnexpectedInstallException(
+                            "The database step completed but the App Service could not be restarted afterwards: " +
+                            $"{startEx.Message}. Start the App Service in the Azure portal, then re-run the installer.");
+                    }
+
+                    _logger.LogError($"IMPORTANT: could not restart the App Service after the database step: {startEx.Message}. " +
+                        "Start it by hand in the Azure portal.");
+                }
+            }
+
+            if (upgradeFailure != null)
+            {
+                // Rethrow preserving the original stack, now that the site is back up.
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(upgradeFailure).Throw();
+            }
 
             if (this.Config.TasksConfig.InstallLatestSolutionContent)
             {
-                await webApp.StartAsync();
-                _logger.LogInformation("App Service started for SCM HTTPS deployment");
                 await InstallSolutionContent(solutionSources, subscription, automationAccount);
             }
 
@@ -86,6 +152,76 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation("Skipping SharePoint web components (AITracker / SPFx) install because 'Update solution with latest release' is not selected.");
                 }
             }
+        }
+
+        /// <summary>
+        /// Builds the delegate that repairs the installer's own SQL firewall rule for a given client IP, or
+        /// null when self-healing must not be attempted.
+        /// </summary>
+        /// <remarks>
+        /// Returns null on a private-only deployment: Azure rejects firewall edits there with
+        /// <c>DenyPublicEndpointEnabled</c>, and a public firewall rule is the wrong answer anyway - the
+        /// existing VNet guidance is what the operator needs. Also null when no ARM server resource was
+        /// supplied, so nothing changes for callers that have not been updated.
+        /// </remarks>
+        private Func<string, Task<bool>> BuildFirewallRepairCallback(SqlServerResource sqlServer)
+        {
+            if (sqlServer == null) return null;
+
+            if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+            {
+                _logger.LogInformation(
+                    "Public network access is disabled for this deployment, so the SQL Server firewall rule will not be " +
+                    "auto-repaired - Azure rejects firewall edits on a private-only server, and connectivity is expected " +
+                    "to come via the private endpoint.");
+                return null;
+            }
+
+            return async (clientIp) =>
+            {
+                try
+                {
+                    var rules = sqlServer.GetSqlFirewallRules();
+
+                    var existing = rules
+                        .Where(r => r.Data.Name == AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME)
+                        .Select(r => new SqlFirewallRuleRange(r.Data.Name, r.Data.StartIPAddress, r.Data.EndIPAddress))
+                        .SingleOrDefault();
+
+                    if (!SqlFirewallRules.CanSafelyReplaceWithSingleAddress(existing))
+                    {
+                        // An admin widened our rule into a range. Narrowing it to one address would revoke
+                        // access for every other address it covers - worse than the problem being fixed.
+                        _logger.LogError(
+                            $"SQL Server firewall rule '{AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME}' has been widened to the " +
+                            $"range {existing.StartIp} - {existing.EndIp}. The installer will NOT narrow it to {clientIp}, because " +
+                            "that would revoke access for every other address in that range. Extend the range to include " +
+                            $"{clientIp} (or add a separate rule for it) and re-run the installer.");
+                        return false;
+                    }
+
+                    await rules.CreateOrUpdateAsync(
+                        WaitUntil.Completed,
+                        AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME,
+                        new SqlFirewallRuleData
+                        {
+                            Name = AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME,
+                            StartIPAddress = clientIp,
+                            EndIPAddress = clientIp,
+                        });
+
+                    _logger.LogInformation(
+                        $"SQL Server firewall rule '{AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME}' updated to allow {clientIp}.");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        $"Could not update the SQL Server firewall rule to allow {clientIp}: {ex.Message}. " +
+                        $"Add a rule named '{AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME}' for {clientIp} by hand and re-run the installer.");
+                    return false;
+                }
+            };
         }
 
         FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo)
