@@ -1905,7 +1905,15 @@ BEGIN
           event_id
         FROM dbo.copilot_chats AS c
           JOIN dbo.audit_events AS au ON c.event_id = au.id
-        WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
+        -- Half-open window, NOT "<= @EndDate". au.time_stamp is a datetime carrying a real time of
+        -- day, while @EndDate is a DATE - so SQL Server widens @EndDate to midnight and "<= @EndDate"
+        -- keeps only events at exactly 00:00:00.000 on the last day, silently dropping the whole of
+        -- it. The only caller (usp_CompileActivityWeek) passes @Monday, @Sunday with Sunday
+        -- INCLUSIVE, so every weekly Copilot metric was under-counting by a full day. Measured on
+        -- synthetic data: 158,008 chats vs 184,364 for one week (-14.3%, i.e. exactly 1/7).
+        -- The other usp_Upsert* procs are unaffected: they read the daily *_user_activity_log tables,
+        -- whose "date" values are always midnight, so the same comparison is exact for them.
+        WHERE au.time_stamp >= @StartDate AND au.time_stamp < DATEADD(DAY, 1, @EndDate)
       ) t
       PIVOT (
         COUNT(event_id)
@@ -1977,7 +1985,9 @@ BEGIN
         JOIN dbo.audit_events AS au ON c.event_id = au.id
         LEFT JOIN dbo.copilot_event_files AS f ON c.event_id = f.copilot_chat_id
         LEFT JOIN dbo.copilot_event_meetings AS m ON c.event_id = m.copilot_chat_id
-      WHERE @StartDate <= au.time_stamp AND au.time_stamp <= @EndDate
+      -- Same half-open window as hosts_pivoted above; the two must agree or the per-host counts and
+      -- the chat/file/meeting counts would cover different windows for the same week.
+      WHERE au.time_stamp >= @StartDate AND au.time_stamp < DATEADD(DAY, 1, @EndDate)
     ),
     event_counts AS (
       SELECT
