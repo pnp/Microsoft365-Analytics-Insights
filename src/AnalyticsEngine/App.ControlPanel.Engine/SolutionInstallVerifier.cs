@@ -403,7 +403,18 @@ namespace App.ControlPanel.Engine
         private const string DNS_SUFFIX_STORAGE_BLOB = ".blob.core.windows.net";
         private const string DNS_SUFFIX_STORAGE_TABLE = ".table.core.windows.net";
         private const string DNS_SUFFIX_APP_SERVICE = ".azurewebsites.net";
-        private const string DNS_SUFFIX_REDIS = ".redis.cache.windows.net";
+
+        /// <summary>
+        /// Public DNS suffix for Azure Managed Redis (Redis Enterprise), which the installer provisions
+        /// by default. The full name is region-qualified: <c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c>.
+        /// </summary>
+        private const string DNS_SUFFIX_REDIS_MANAGED = ".redis.azure.net";
+
+        /// <summary>
+        /// Public DNS suffix for legacy classic Azure Cache for Redis. Only relevant when the installer
+        /// detects and reuses a pre-existing classic cache (see <c>RedisInstallTask</c>).
+        /// </summary>
+        private const string DNS_SUFFIX_REDIS_CLASSIC = ".redis.cache.windows.net";
         private const string DNS_SUFFIX_SERVICE_BUS = ".servicebus.windows.net";
         private const string DNS_SUFFIX_COGNITIVE = ".cognitiveservices.azure.com";
 
@@ -446,23 +457,34 @@ namespace App.ControlPanel.Engine
 
             foreach (var target in targets)
             {
-                var (ok, error) = await TryResolveHost(target.Fqdn);
+                // A target can carry more than one candidate hostname (Redis, where the same configured
+                // name is either Azure Managed Redis or a reused legacy classic cache). Resolving any one
+                // of them proves the resource is reachable, so only report a failure when all of them fail.
+                var (ok, resolvedHost, failureDetail) = await TryResolveAnyHost(target.Fqdns);
                 if (ok)
                 {
-                    _logger.LogInformation($"DNS OK: {target.Label} '{target.Fqdn}' resolved.");
+                    _logger.LogInformation($"DNS OK: {target.Label} '{resolvedHost}' resolved.");
                     continue;
                 }
+
+                // "hostname 'x' (reason)" for a single candidate; "hostname - tried 'x' (reason), 'y' (reason)"
+                // when there are several, so the admin can see every name that was attempted and why each failed.
+                var failureDescription = target.Fqdns.Count == 1
+                    ? $"hostname {failureDetail}"
+                    : $"hostname - tried {failureDetail}";
+
+                var hint = string.IsNullOrEmpty(target.FailureHint) ? string.Empty : " " + target.FailureHint;
 
                 if (!controlOk)
                 {
                     // Root cause already reported above; don't repeat the per-resource guidance.
-                    _logger.LogError($"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}).");
+                    _logger.LogError($"DNS check: could not resolve {target.Label} {failureDescription}.{hint}");
                 }
                 else if (privateOnly)
                 {
                     // Public access disabled: the host must be on the VNet to resolve the private endpoint IP.
                     _logger.LogError(
-                        $"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}). " +
+                        $"DNS check: could not resolve {target.Label} {failureDescription}.{hint} " +
                         PrivateNetworkGuidance.BuildVmOnVNetGuidance($"reaching the {target.Label}", Config.NetworkConfig?.VNetName));
                 }
                 else
@@ -470,7 +492,7 @@ namespace App.ControlPanel.Engine
                     // Public access path: if the resource already exists this is a real DNS / network problem
                     // that will break the install; if it has not been created yet, it is expected.
                     _logger.LogError(
-                        $"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}). " +
+                        $"DNS check: could not resolve {target.Label} {failureDescription}.{hint} " +
                         $"If this resource has not been created yet this is expected and can be ignored; " +
                         $"if it already exists, the installer host cannot reach it and data-plane steps " +
                         $"(e.g. Key Vault secret upload) will fail.");
@@ -481,8 +503,9 @@ namespace App.ControlPanel.Engine
         }
 
         /// <summary>
-        /// Build the list of (resource, public-FQDN) DNS targets for every resource that is both enabled
-        /// and has a name configured. Pure string logic so it is unit-testable without any network access.
+        /// Build the list of (resource, public-FQDN candidates) DNS targets for every resource that is both
+        /// enabled and has a name configured. Pure string logic so it is unit-testable without any network
+        /// access.
         /// </summary>
         public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config)
         {
@@ -504,7 +527,13 @@ namespace App.ControlPanel.Engine
             // private endpoint / DNS zone on private deployments - check it resolves too (see #207 / AzurePaaSInstallJob).
             Add("Storage account (table)", config.StorageAccountName, DNS_SUFFIX_STORAGE_TABLE);
             Add("App Service", config.AppServiceWebAppName, DNS_SUFFIX_APP_SERVICE);
-            Add("Redis cache", config.RedisName, DNS_SUFFIX_REDIS);
+
+            var redisTarget = BuildRedisDnsTarget(config.RedisName, config.AzureLocationName);
+            if (redisTarget != null)
+            {
+                targets.Add(redisTarget);
+            }
+
             if (config.ServiceBusEnabled)
             {
                 Add("Service Bus", config.ServiceBusName, DNS_SUFFIX_SERVICE_BUS);
@@ -515,6 +544,82 @@ namespace App.ControlPanel.Engine
             }
 
             return targets;
+        }
+
+        /// <summary>
+        /// Build the Redis DNS target. The installer provisions Azure Managed Redis
+        /// (<c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c>) but reuses a pre-existing legacy classic cache
+        /// (<c>&lt;name&gt;.redis.cache.windows.net</c>) when one already exists under the same name, and the
+        /// saved config does not record which kind was deployed. Both are therefore offered as candidates and
+        /// the check passes if either resolves - otherwise a perfectly healthy Managed Redis is reported as a
+        /// hard ERROR because the classic name genuinely does not exist in DNS (see issue #325).
+        /// Returns null when no cache name is configured.
+        /// </summary>
+        public static ResourceDnsTarget BuildRedisDnsTarget(string redisName, string azureLocationName)
+        {
+            if (string.IsNullOrWhiteSpace(redisName)) return null;
+
+            var name = redisName.Trim();
+            var candidates = new List<string>();
+
+            // Managed Redis first: it is what a current install deploys, so it is the name that should be
+            // reported when neither resolves. Needs the region, which older configs may not have.
+            var region = NormaliseAzureRegionForDns(azureLocationName);
+            if (region != null)
+            {
+                candidates.Add($"{name}.{region}{DNS_SUFFIX_REDIS_MANAGED}");
+            }
+
+            candidates.Add(name + DNS_SUFFIX_REDIS_CLASSIC);
+
+            // The managed name is region-qualified and the region is taken from this config, not from ARM. An
+            // existing cache that lives in a different region than the config now says would fail both
+            // candidates, so name that possibility rather than leaving the admin to guess.
+            var hint = region != null
+                ? $"The Azure Managed Redis hostname is built from the configured region '{region}'; " +
+                  $"if the cache exists in a different region, correct the region on the Azure tab."
+                : "No Azure region is configured, so only the legacy classic cache hostname could be checked. " +
+                  "Select the Azure region to also check the Azure Managed Redis hostname.";
+
+            return new ResourceDnsTarget("Redis cache", candidates, hint);
+        }
+
+        /// <summary>
+        /// Turn a configured Azure location into the region segment of an Azure Managed Redis FQDN, or null
+        /// when it cannot be one. <c>AzureLocationName</c> normally holds the short name already
+        /// (<c>westeurope</c>), but it is a free-text string on the config: it can hold the display name
+        /// ("West Europe" - same value once spaces are stripped), the installer's "no region selected"
+        /// placeholder, or nothing at all on an older config.
+        /// </summary>
+        static string NormaliseAzureRegionForDns(string azureLocationName)
+        {
+            if (string.IsNullOrWhiteSpace(azureLocationName)) return null;
+
+            var normalised = azureLocationName.Trim().Replace(" ", string.Empty).ToLowerInvariant();
+
+            // Every Azure region short name is lowercase alphanumeric (westeurope, uksouth, eastus2). Anything
+            // else - notably the "---" placeholder - is not a region and must not be baked into a hostname.
+            return System.Text.RegularExpressions.Regex.IsMatch(normalised, "^[a-z0-9]+$") ? normalised : null;
+        }
+
+        /// <summary>
+        /// Resolve the first host name that resolves out of <paramref name="hosts"/>. Returns
+        /// (true, the host that resolved, null) on success, and (false, null, detail) when none resolve -
+        /// where detail lists every candidate tried and why each failed, e.g.
+        /// <c>'a.redis.azure.net' (No such host is known), 'a.redis.cache.windows.net' (No such host is known)</c>.
+        /// Reporting only the last candidate's error would hide, say, a timeout on the name that actually
+        /// matters behind an NXDOMAIN on the legacy fallback. Never throws.
+        /// </summary>
+        static async Task<(bool ok, string resolvedHost, string failureDetail)> TryResolveAnyHost(IReadOnlyList<string> hosts)
+        {
+            var failures = new List<string>();
+            foreach (var host in hosts)
+            {
+                var (ok, error) = await TryResolveHost(host);
+                if (ok) return (true, host, null);
+                failures.Add($"'{host}' ({error})");
+            }
+            return (false, null, string.Join(", ", failures));
         }
 
         /// <summary>
@@ -844,21 +949,45 @@ namespace App.ControlPanel.Engine
     }
 
     /// <summary>
-    /// A configured Azure resource and the public hostname that must resolve for the installer / runtime
+    /// A configured Azure resource and the public hostname(s) that must resolve for the installer / runtime
     /// to reach it. Built by <see cref="SolutionInstallVerifier.BuildResourceDnsTargets"/>.
+    /// Most resources have exactly one candidate; Redis has two because the same configured name is either
+    /// Azure Managed Redis or a reused legacy classic cache, and the config does not record which.
     /// </summary>
     public class ResourceDnsTarget
     {
-        public ResourceDnsTarget(string label, string fqdn)
+        public ResourceDnsTarget(string label, string fqdn) : this(label, new List<string> { fqdn }, null)
         {
+        }
+
+        public ResourceDnsTarget(string label, IReadOnlyList<string> fqdns, string failureHint = null)
+        {
+            if (fqdns == null || fqdns.Count == 0)
+            {
+                throw new ArgumentException("A DNS target needs at least one candidate hostname.", nameof(fqdns));
+            }
+
             Label = label;
-            Fqdn = fqdn;
+            Fqdns = fqdns;
+            FailureHint = failureHint;
         }
 
         /// <summary>Human-readable resource description, e.g. "Key Vault".</summary>
         public string Label { get; }
 
-        /// <summary>Public fully-qualified hostname, e.g. "myvault.vault.azure.net".</summary>
-        public string Fqdn { get; }
+        /// <summary>
+        /// Candidate fully-qualified hostnames, in preference order. The resource is considered reachable
+        /// when any one of them resolves.
+        /// </summary>
+        public IReadOnlyList<string> Fqdns { get; }
+
+        /// <summary>
+        /// Optional resource-specific guidance appended to the failure message, for anything the generic
+        /// "the resource may not exist yet" wording cannot explain. Null when there is nothing extra to say.
+        /// </summary>
+        public string FailureHint { get; }
+
+        /// <summary>Primary (most likely) public fully-qualified hostname, e.g. "myvault.vault.azure.net".</summary>
+        public string Fqdn => Fqdns[0];
     }
 }
