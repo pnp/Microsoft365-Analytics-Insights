@@ -50,9 +50,10 @@ namespace Tests.UnitTests
         // WidenCopilotAccessedResourceDedupIndex / IndexCopilotInteractionKeywordsByKeyword /
         // IndexCopilotInteractionsDedupWindow are three further schema-only index migrations,
         // DenormaliseCopilotChatUserAndTime adds the denormalised user_id / time_stamp columns to
-        // copilot_chats, and ColumnstoreUsageReportMetrics is a schema-only index migration over the
-        // per-user usage-report tables.
-        private const string LatestId = "202608310800001_ColumnstoreUsageReportMetrics";
+        // copilot_chats, ColumnstoreUsageReportMetrics is a schema-only index migration over the
+        // per-user usage-report tables, and UniqueUrlsFullUrlIndex de-duplicates dbo.urls and makes
+        // IX_urls_full_url UNIQUE.
+        private const string LatestId = "202609010900001_UniqueUrlsFullUrlIndex";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
