@@ -62,8 +62,23 @@ SET @t = SYSUTCDATETIME();
 -- The staging columns are nvarchar(max) on purpose (see StagingClasses.cs): a bounded staging column
 -- makes InsertBatch drop the entire row, and losing a whole interaction because a thread id was long
 -- is worse than truncating the id.
-INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json, thread_id, client_region, copilot_log_version)
-SELECT event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json, thread_id, client_region, copilot_log_version
+--
+-- user_id / time_stamp are DENORMALISED copies of the parent audit event's columns. A Copilot
+-- interaction has no date of its own, so without them every Copilot report has to join
+-- copilot_chats -> audit_events, the largest table in the product and clustered on a random GUID.
+-- See migration DenormaliseCopilotChatUserAndTime for the measurements.
+--
+-- Sourced from dbo.audit_events rather than from the staging table because the staging table does not
+-- carry the user or the timestamp (see StagingClasses.cs), and because audit_events is the single
+-- source of truth - reading it here makes drift between the two copies impossible by construction.
+-- The audit event is always already present: copilot_chats.event_id has a FOREIGN KEY to
+-- audit_events.id, so a missing parent could not be inserted at all.
+--
+-- LEFT (not INNER) JOIN on purpose: an INNER JOIN would silently DROP a chat whose audit event was
+-- missing, turning a loud foreign-key violation into invisible data loss. With LEFT JOIN the row is
+-- still offered to the insert and the existing FK behaviour is preserved exactly.
+INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json, thread_id, client_region, copilot_log_version, user_id, time_stamp)
+SELECT event_id, app_host, agent_id, copilot_credit_estimate_total, copilot_credit_estimate_json, thread_id, client_region, copilot_log_version, user_id, time_stamp
 FROM (
     SELECT
         i.event_id,
@@ -74,10 +89,14 @@ FROM (
         LEFT(i.thread_id, 450) AS thread_id,
         LEFT(i.client_region, 50) AS client_region,
         LEFT(i.copilot_log_version, 50) AS copilot_log_version,
+        ae.user_id AS user_id,
+        ae.time_stamp AS time_stamp,
         ROW_NUMBER() OVER (PARTITION BY i.event_id ORDER BY (SELECT NULL)) AS rn
     FROM dbo.[${STAGING_TABLE_ACTIVITY}] AS i
     LEFT JOIN dbo.copilot_agents AS ca
         ON ca.agent_id = i.agent_id
+    LEFT JOIN dbo.audit_events AS ae
+        ON ae.id = i.event_id
     WHERE NOT EXISTS (
         SELECT 1
         FROM dbo.copilot_chats AS ec

@@ -317,6 +317,20 @@ namespace WebJob.Office365ActivityImporter
                     logger.LogInformation("Skipping Activity API import.");
                 }
 
+                // Repair any Copilot interactions left without their denormalised user_id / time_stamp
+                // (migration DenormaliseCopilotChatUserAndTime). Such rows are INVISIBLE to every Copilot
+                // report, because they all filter on copilot_chats.time_stamp - so this must be reached on
+                // every cycle, not only successful ones. Deliberately placed OUTSIDE the try/catch above and
+                // outside DownloadActivityData: an aborted cycle (e.g. a persistent Activity API auth
+                // failure), a cycle that downloaded nothing, and a cycle skipped for having no organisation
+                // URLs configured must all still heal the database, since the repair only needs SQL.
+                // Costs 4 logical reads when there is nothing to do, and never throws.
+                if (configuredSettings.ImportJobSettings.ActivityLog || configuredSettings.ImportJobSettings.Copilot)
+                {
+                    await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
+                        .RepairDenormalisedColumnsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
+                }
+
 #if DEBUG
                 runAgain = false; // Debug only runs once; release runs forever. 
 #endif

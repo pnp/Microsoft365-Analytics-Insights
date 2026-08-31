@@ -60,6 +60,41 @@ namespace Common.Entities.Entities.AuditLog
         [Column("copilot_log_version")]
         [MaxLength(50)]
         public string CopilotLogVersion { get; set; } = null;
+
+        /// <summary>
+        /// Denormalised copy of the parent audit event's <c>user_id</c>. See <see cref="TimeStampUtc"/>
+        /// for why this is duplicated rather than read through <see cref="BaseOfficeEvent.AuditEvent"/>.
+        /// </summary>
+        [Column("user_id")]
+        public int? UserId { get; set; }
+
+        /// <summary>
+        /// Denormalised copy of the parent audit event's <c>time_stamp</c>.
+        ///
+        /// <para>
+        /// A Copilot interaction has no date of its own: the timestamp and the user live on
+        /// <c>dbo.audit_events</c>. Every Copilot report therefore used to join
+        /// <c>copilot_chats -&gt; audit_events</c>, which is the single largest table in the product AND is
+        /// clustered on a random <c>uniqueidentifier</c>. Measured on a synthetic 200k-user tenant, the
+        /// optimiser did not use <c>IX_audit_events_time_stamp</c> at all for that join - it seeked
+        /// <c>IX_user_id</c> per licensed user and looked the timestamp up on the clustered index, which on a
+        /// real tenant enumerates EVERY audit event those users generated (SharePoint, Exchange, Teams) before
+        /// discarding the non-Copilot ones.
+        /// </para>
+        /// <para>
+        /// Carrying the two values here removes that join from every Copilot query. Measured on the
+        /// <c>LicensedUsers</c> query: 73.6s -&gt; 22.5s at a 28-day window and 98.2s -&gt; 41.4s at 90 days,
+        /// where 98.2s was already past the 90s command timeout. Full numbers are on the migration
+        /// <c>DenormaliseCopilotChatUserAndTime</c>.
+        /// </para>
+        /// <para>
+        /// Nullable, and deliberately so: a row whose audit event has been removed keeps NULL, and every
+        /// query filters on <c>time_stamp &gt;= @from</c>, which excludes NULLs. That is exactly the population
+        /// the previous <c>INNER JOIN dbo.audit_events</c> produced, so the semantics are unchanged.
+        /// </para>
+        /// </summary>
+        [Column("time_stamp")]
+        public DateTime? TimeStampUtc { get; set; }
     }
 
     /// <summary>

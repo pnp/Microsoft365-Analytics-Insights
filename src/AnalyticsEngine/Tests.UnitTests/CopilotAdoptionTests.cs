@@ -601,8 +601,17 @@ namespace Tests.UnitTests
             // One bounded scan of the audit history: the "in the window" and "before the window"
             // aggregates are CASE expressions over the same pass, not two joins.
             Assert.AreEqual(1, CountOccurrences(sql, "dbo.copilot_chats"),
-                "The Copilot audit history must be read exactly once - it is the most expensive join in the product.");
-            StringAssert.Contains(sql, "au.time_stamp >= @historyFrom");
+                "The Copilot audit history must be read exactly once - it is the most expensive read in the report.");
+
+            // Performance contract, not a style rule: this query must NOT touch dbo.audit_events.
+            // copilot_chats carries denormalised user_id / time_stamp precisely so it does not have to
+            // (migration DenormaliseCopilotChatUserAndTime). Re-introducing the join took this query from
+            // 22.5s to 91.0s at a 28-day window and from 41.4s to 117.8s at 90 days on the synthetic
+            // 200k-user bench - past the 90s command timeout, which is the failure in issue #360.
+            Assert.AreEqual(0, CountOccurrences(sql, "dbo.audit_events"),
+                "Copilot queries must read the denormalised columns on copilot_chats, never join audit_events.");
+
+            StringAssert.Contains(sql, "c.time_stamp >= @historyFrom");
             StringAssert.Contains(sql, "SUM(CASE WHEN c.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions");
             StringAssert.Contains(sql, "SUM(CASE WHEN c.time_stamp <  @from THEN 1 ELSE 0 END) AS PriorInteractions");
 
@@ -611,6 +620,40 @@ namespace Tests.UnitTests
             StringAssert.Contains(sql, "TOP (@maxRows)");
             StringAssert.Contains(sql, "ORDER BY u.id");
             StringAssert.Contains(sql, "OPTION (RECOMPILE)");
+        }
+
+        [TestMethod]
+        public void NoCopilotQueryJoinsAuditEvents()
+        {
+            // The whole point of migration DenormaliseCopilotChatUserAndTime: copilot_chats carries its own
+            // user_id and time_stamp, so nothing here needs dbo.audit_events - the largest table in the
+            // product, clustered on a random uniqueidentifier. Re-introducing that join anywhere brings back
+            // the timeouts in issue #360, and it is an easy mistake to make when adding a query because the
+            // old shape is all over the git history.
+            var seats = new[] { 1 };
+            var queries = new Dictionary<string, string>
+            {
+                { "HasCopilotAuditData", CopilotAdoptionSql.HasCopilotAuditDataSql },
+                { "LicensedUsers", CopilotAdoptionSql.LicensedUsersSql(seats, new int[0], includeCopilotReport: true) },
+                { "LicenceOpportunities", CopilotAdoptionSql.LicenceOpportunitiesSql(
+                    seats, CopilotAdoptionOptions.Default, includeCopilotAudit: true, includeM365Usage: true) },
+                { "UnlicensedActiveUsers", CopilotAdoptionSql.UnlicensedActiveUsersSql(seats) },
+                { "AgentUsage", CopilotAdoptionSql.AgentUsageSql(seats) },
+                { "AgentUsageByDepartment", CopilotAdoptionSql.AgentUsageByDepartmentSql() },
+                { "UnlicensedUsageRows", CopilotAdoptionSql.UnlicensedUsageRowsSql(seats) },
+                { "TopResourceTypes", CopilotAdoptionSql.TopResourceTypesSql() },
+                { "UsageByApp", CopilotAdoptionSql.UsageByAppSql(seats) },
+                { "UnlicensedUsageByApp", CopilotAdoptionSql.UnlicensedUsageByAppSql(seats) },
+                { "WeeklyAdoptionTrend", CopilotAdoptionSql.WeeklyAdoptionTrendSql(seats, new int[0]) },
+            };
+
+            foreach (var query in queries)
+            {
+                Assert.AreEqual(0, CountOccurrences(query.Value, "dbo.audit_events"),
+                    $"{query.Key} must read copilot_chats.user_id / .time_stamp, not join dbo.audit_events.");
+                Assert.AreEqual(0, CountOccurrences(query.Value, "AS au"),
+                    $"{query.Key} still aliases the audit-events table.");
+            }
         }
 
         [TestMethod]

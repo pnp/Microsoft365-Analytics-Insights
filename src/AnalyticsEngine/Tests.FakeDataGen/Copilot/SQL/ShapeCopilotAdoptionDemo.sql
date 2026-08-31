@@ -526,9 +526,11 @@ INSERT INTO dbo.audit_events (id, time_stamp, event_data, operation_id, user_id)
 SELECT id, ts, NULL, @op, user_id FROM #newchats;
 
 INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total,
-                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version)
+                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version,
+                               user_id, time_stamp)
 SELECT id, host, agent_id, NULL, NULL,
-       LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo'
+       LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo',
+       user_id, ts
 FROM #newchats;
 
 DECLARE @planted int = (SELECT COUNT(*) FROM #newchats);
@@ -568,8 +570,10 @@ INSERT INTO dbo.audit_events (id, time_stamp, event_data, operation_id, user_id)
 SELECT id, ts, NULL, @op, user_id FROM #dormtop;
 
 INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total,
-                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version)
-SELECT id, N'M365Chat', NULL, NULL, NULL, LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo'
+                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version,
+                               user_id, time_stamp)
+SELECT id, N'M365Chat', NULL, NULL, NULL, LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo',
+       user_id, ts
 FROM #dormtop;
 
 DECLARE @dormTopped int = (SELECT COUNT(DISTINCT user_id) FROM #dormtop);
@@ -617,9 +621,11 @@ INSERT INTO dbo.audit_events (id, time_stamp, event_data, operation_id, user_id)
 SELECT id, ts, NULL, @op, user_id FROM #cowork;
 
 INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total,
-                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version)
+                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version,
+                               user_id, time_stamp)
 SELECT id, N'cowork', @coworkAgent, NULL, NULL,
-       LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo'
+       LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo',
+       user_id, ts
 FROM #cowork;
 
 DECLARE @coworkUsers int = (SELECT COUNT(DISTINCT user_id) FROM #cowork);
@@ -663,8 +669,10 @@ INSERT INTO dbo.audit_events (id, time_stamp, event_data, operation_id, user_id)
 SELECT id, ts, NULL, @op, user_id FROM #newunlic;
 
 INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, copilot_credit_estimate_total,
-                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version)
-SELECT id, host, NULL, NULL, NULL, LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo'
+                               copilot_credit_estimate_json, thread_id, client_region, copilot_log_version,
+                               user_id, time_stamp)
+SELECT id, host, NULL, NULL, NULL, LOWER(CONVERT(varchar(36), id)), N'westeurope', N'1.0-demo',
+       user_id, ts
 FROM #newunlic;
 
 DECLARE @unlic      int = (SELECT COUNT(*) FROM #newunlic);
