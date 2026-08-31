@@ -41,6 +41,17 @@
 
 SET NOCOUNT ON;
 
+-- Self-guard: safe to call unconditionally, including on a database that has not been upgraded yet.
+-- The whole body is deferred through sp_executesql because T-SQL resolves column names for an entire
+-- batch at compile time - referencing copilot_chats.time_stamp directly would fail to compile (and abort
+-- the batch) on a pre-migration database, even inside an IF that would never execute.
+IF COL_LENGTH('dbo.copilot_chats', 'time_stamp') IS NULL
+BEGIN
+    SELECT CAST(0 AS bigint) AS RepairedRows;
+    RETURN;
+END
+
+DECLARE @body nvarchar(max) = N'
 DECLARE @batch int = 50000;
 DECLARE @maxBatches int = 20;     -- bound the work per import cycle; the rest drains on the next one
 DECLARE @batchNo int = 0;
@@ -61,4 +72,6 @@ BEGIN
     SET @batchNo += 1;
 END
 
-SELECT @total AS RepairedRows;
+SELECT @total AS RepairedRows;';
+
+EXEC sp_executesql @body;

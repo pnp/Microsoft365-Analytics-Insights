@@ -200,7 +200,15 @@ BEGIN
     EXEC sp_executesql @sql;
 END";
 
-            await db.Database.ExecuteSqlCommandAsync(sql, new SqlParameter("@tableName", qualifiedTableName));
+            await db.Database.ExecuteSqlCommandAsync(
+                // DoNotEnsureTransaction: index maintenance has no business inside a transaction. EF6's
+                // default (EnsureTransaction) would wrap a potentially long REORGANIZE in one, holding it
+                // open and growing the log for no benefit. (Verified that REORGANIZE does still succeed
+                // under EF's default behaviour on current SQL Server, so this is hardening rather than a
+                // bug fix - but there is no reason to run maintenance transactionally.)
+                TransactionalBehavior.DoNotEnsureTransaction,
+                sql,
+                new SqlParameter("@tableName", qualifiedTableName));
         }
 
         public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax, ISet<DateTime> datesToSkip = null)
