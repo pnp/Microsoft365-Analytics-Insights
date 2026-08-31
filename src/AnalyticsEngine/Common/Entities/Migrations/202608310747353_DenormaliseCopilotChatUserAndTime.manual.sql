@@ -18,8 +18,8 @@
      no matter how narrow the reporting window was. See issue #360.
 
    MEASURED IMPACT
-     Measured on a bench built to match a REAL customer tenant's shape (10.85M audit_events at ~1.7 KB
-     per row, 6.0M copilot_chats, Copilot = 55% of audit_events, 4.4 years retention). Medians of 3
+     Measured on a synthetic bench sized for a large tenant (~10M audit_events at ~1.7 KB per row,
+     ~6M copilot_chats, Copilot a large share of them, several years of retention). Medians of 3
      warm runs with the plan cache cleared. LicensedUsers query, 28-day window:
 
        baseline (joins audit_events)                  13.0 s

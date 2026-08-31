@@ -41,6 +41,43 @@ namespace Common.Entities.Migrations
     /// </para>
     ///
     /// <para>
+    /// <b>Two selectivities - the benefit GROWS with the window.</b> The same <c>TeamsUsage</c> aggregate,
+    /// re-run at both a narrow and a wide window on the same 13.2M-row table (medians of 3 warm runs, cold
+    /// run discarded, <c>DBCC FREEPROCCACHE</c> per run, <c>OPTION (RECOMPILE)</c>):
+    /// </para>
+    /// <code>
+    ///   window    | IX_date only (before) | + COLUMNSTORE | speed-up
+    ///   ----------+-----------------------+---------------+---------
+    ///    28 days  |   281 ms              |   128 ms      | 2.2x
+    ///   365 days  | 2,652 ms              |   389 ms      | 6.8x
+    /// </code>
+    /// <para>
+    /// There is no regression at either end, and the wide window - the expensive case, and the one an admin
+    /// reaching for a year of history actually hits - benefits most, because a scan grows with the range
+    /// while the columnstore aggregate stays close to flat. (These absolute numbers are lower than the table
+    /// above because that run carried <c>SET STATISTICS IO, TIME ON</c> and a colder buffer pool; the RATIOS
+    /// agree - 1.9x there against 2.2x here at 28 days - which is the claim being made.)
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Build time and storage - measured</b>, on the same 13.2M-row / 1,395 MB table, so an admin can size
+    /// the maintenance window. Both builds are OFFLINE on every edition (this migration does not attempt
+    /// <c>ONLINE</c>), so the table is locked for the duration:
+    /// </para>
+    /// <code>
+    ///   index built                | build time | resulting size | per 1M rows
+    ///   ---------------------------+------------+----------------+-------------------
+    ///   nonclustered COLUMNSTORE   | 40.6 s     |    86 MB       | ~3.1 s,  ~6.5 MB
+    ///   covering B-tree (fallback) | 24.3 s     |   883 MB       | ~1.8 s, ~67 MB
+    /// </code>
+    /// <para>
+    /// The columnstore takes ~1.7x longer to build but is <b>10x smaller</b> (86 MB against 883 MB). Repeat
+    /// build measured 44.7 s, so ~40-45 s is the stable figure. Scale roughly linearly and multiply by the
+    /// four tables. Note the fallback's 883 MB per table is precisely why Express is excluded below: four of
+    /// those would consume a third of an Express database's 10 GB ceiling.
+    /// </para>
+    ///
+    /// <para>
     /// <b>Availability, and why this is attempt-and-catch rather than a version check.</b> Nonclustered
     /// columnstore is available in ALL editions only from SQL Server 2016 <b>SP1</b>; 2016 RTM Standard and
     /// Express reject it, as do Azure SQL Database Basic / S0-S2 and elastic pools under 100 eDTU. Detecting
