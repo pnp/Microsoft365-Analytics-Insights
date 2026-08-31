@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
@@ -484,6 +485,79 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             _totalFilesCount = 0;
             _totalMeetingsCount = 0;
             _totalChatOnlyCount = 0;
+        }
+
+        /// <summary>
+        /// Repairs any <c>dbo.copilot_chats</c> rows that are missing the denormalised <c>user_id</c> /
+        /// <c>time_stamp</c> columns, copying them from the parent audit event.
+        ///
+        /// <para>
+        /// Migration <c>DenormaliseCopilotChatUserAndTime</c> backfills existing rows once and is then stamped,
+        /// but the columns stay NULLable - so a chat inserted by an OLDER importer during the upgrade window,
+        /// or into a clustered-key range the backfill had already passed, keeps NULL for ever. Every Copilot
+        /// report filters <c>c.time_stamp &gt;= @from</c>, and NULL fails that comparison, so such rows would be
+        /// silently missing from the figures. That is the defect class issue #360 was raised for, so the
+        /// importer heals them rather than relying on the upgrade being performed perfectly.
+        /// </para>
+        /// <para>
+        /// <b>Called once per import CYCLE from the web-job top level</b> (<c>Program.cs</c>, immediately after
+        /// the <c>DownloadActivityData</c> try/catch and OUTSIDE it), deliberately not from the merge SQL, not
+        /// per save batch, and not from <c>ActivityImporter.LoadReportsAndSave</c>. Each of those was tried and
+        /// each leaves a hole: the merge only runs when its staging queue has rows; the save path is skipped
+        /// when a cycle downloads nothing; and <c>LoadReportsAndSave</c> is skipped when the activity import
+        /// throws or when no organisation URLs are configured. The repair only needs SQL, so it must not be
+        /// gated on the import having succeeded.
+        /// </para>
+        /// <para>
+        /// Costs 4 logical reads when there is nothing to do (a seek to the head of
+        /// <c>IX_copilot_chats_time_stamp_user_id</c>, where NULLs sort first), measured on a 12M-row table.
+        /// Never allowed to fail an import: an import that saved its data is a success even if this
+        /// maintenance step could not run, and it is simply retried on the next cycle.
+        /// </para>
+        /// <para>
+        /// The command timeout is finite on purpose. <c>CommandTimeout = 0</c> would mean that if the UPDATE
+        /// were ever blocked on a lock it would wait for ever - and a hang is not an exception, so the
+        /// try/catch below could not rescue it and the web job's cycle would stall indefinitely. Timing out
+        /// and retrying on the next cycle is strictly safer for a best-effort maintenance step.
+        /// </para>
+        /// </summary>
+        public static async Task RepairDenormalisedColumnsAsync(string connectionString, ILogger logger)
+        {
+            if (string.IsNullOrEmpty(connectionString)) return;
+
+            // Generous enough for the bounded 1M-row drain (measured ~107s for 12M rows), but finite.
+            const int repairTimeoutSecs = 1800;
+
+            try
+            {
+                var rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+                var sql = rr.ReadResourceString(
+                    "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.repair_denormalised_copilot_columns.sql");
+
+                using (var con = new SqlConnection(connectionString))
+                {
+                    await con.OpenAsync();
+                    using (var cmd = new SqlCommand(sql, con) { CommandTimeout = repairTimeoutSecs })
+                    {
+                        var repaired = await cmd.ExecuteScalarAsync();
+                        var count = repaired == null || repaired == DBNull.Value ? 0L : Convert.ToInt64(repaired);
+                        if (count > 0)
+                        {
+                            logger.LogWarning(
+                                $"Repaired {count:n0} Copilot interaction(s) that were missing their denormalised "
+                                + "user/timestamp columns, and were therefore invisible to the Copilot Adoption "
+                                + "report. This is expected shortly after upgrading; if it keeps happening, an "
+                                + "older importer build is still writing to this database.");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Could not repair denormalised Copilot columns this cycle. The import itself succeeded; "
+                    + "any affected interactions stay hidden from Copilot reports until a later cycle repairs them.");
+            }
         }
 
         private string GetSql(string tempTableName, string workloadSpecificScriptName)

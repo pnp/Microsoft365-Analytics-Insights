@@ -271,6 +271,17 @@ export interface CopilotAdoptionSummary {
 
   options: CopilotAdoptionOptions;
   warnings: string[];
+
+  /**
+   * True when a query the headline figures are DERIVED FROM failed, so everything below describes an
+   * incomplete population. Distinct from `warnings`, which mean "one chart is missing" - this means the
+   * licensed-user population itself could not be loaded, and the rates, funnel and segments were computed
+   * from whatever did load. See issue #360.
+   */
+  figuresIncomplete: boolean;
+
+  /** Which datasets could not be loaded, for the message shown in place of the figures. */
+  incompleteReasons: string[];
 }
 
 /** One licensed user with the adoption maths applied. */

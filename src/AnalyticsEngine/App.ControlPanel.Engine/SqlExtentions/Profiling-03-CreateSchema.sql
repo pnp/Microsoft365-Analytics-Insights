@@ -1901,7 +1901,10 @@ BEGIN
         SELECT
           app_host,
           @StartDate AS "date",
-          "user_id",
+          -- Qualified explicitly: dbo.copilot_chats now carries a denormalised "user_id" of its own
+          -- (migration DenormaliseCopilotChatUserAndTime), so an unqualified reference here is ambiguous.
+          -- au."user_id" preserves the original semantics exactly - both columns hold the same value.
+          au."user_id",
           event_id
         FROM dbo.copilot_chats AS c
           JOIN dbo.audit_events AS au ON c.event_id = au.id
@@ -1968,7 +1971,9 @@ BEGIN
     ),
     events AS (
       SELECT
-        "user_id",
+        -- Qualified explicitly: see the note in host_activities above - copilot_chats now has its own
+        -- denormalised "user_id", so this reference would otherwise be ambiguous.
+        au."user_id",
         @StartDate AS "date",
         c.event_id AS chat_id,
         f.copilot_chat_id AS has_file,

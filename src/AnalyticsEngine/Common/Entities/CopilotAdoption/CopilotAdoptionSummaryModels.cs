@@ -458,6 +458,44 @@ namespace Common.Entities.CopilotAdoption
         public List<string> Warnings { get; set; } = new List<string>();
 
         /// <summary>
+        /// True when a query the headline figures are DERIVED FROM failed, so the adoption numbers below
+        /// describe an incomplete population and must not be read as fact.
+        /// </summary>
+        /// <remarks>
+        /// This is not the same as <see cref="Warnings"/>. A warning means "one chart is missing"; this
+        /// means "the licensed-user population itself could not be loaded, so every rate, funnel stage and
+        /// segment on this page was computed from whatever did load".
+        ///
+        /// It exists because the failure was previously indistinguishable from a real result. When the
+        /// licensed-user queries time out the analysis still completes: the seat count degrades to zero and
+        /// the user list to empty, and the page renders a normal-looking dashboard reporting almost no
+        /// adoption. On a tenant large enough for those queries to time out at the median, an admin could
+        /// reasonably act on that and start reclaiming licences that are in fact being used.
+        /// </remarks>
+        [JsonProperty("figuresIncomplete")]
+        public bool FiguresIncomplete { get; set; }
+
+        /// <summary>
+        /// Which specific datasets could not be loaded, for the message shown in place of the figures.
+        /// Compile-time descriptions only - never anything derived from tenant data.
+        /// </summary>
+        [JsonProperty("incompleteReasons")]
+        public List<string> IncompleteReasons { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Records that a dataset the headline figures depend on could not be loaded.
+        /// </summary>
+        public void MarkFiguresIncomplete(string dataset)
+        {
+            FiguresIncomplete = true;
+
+            if (!string.IsNullOrWhiteSpace(dataset) && !IncompleteReasons.Contains(dataset))
+            {
+                IncompleteReasons.Add(dataset);
+            }
+        }
+
+        /// <summary>
         /// How long the analysis took, per step. Emitted to App Insights so a tenant whose report is
         /// quietly degrading (queries timing out into warnings rather than errors) is visible to an
         /// operator instead of only to whoever happens to open the page.

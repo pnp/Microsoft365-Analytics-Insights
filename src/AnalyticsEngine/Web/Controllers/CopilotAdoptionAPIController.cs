@@ -3,12 +3,14 @@ using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.Caching;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
@@ -126,6 +128,131 @@ namespace Web.AnalyticsWeb.Controllers
             return Ok(model);
         }
 
+        /// <summary>
+        /// How long an HTTP request will wait for the analysis before answering "still building".
+        /// </summary>
+        /// <remarks>
+        /// Azure App Service terminates a request at around 230 seconds. On a large tenant this analysis
+        /// legitimately takes longer than that - measured well past it at the MEDIAN, not the tail - so a
+        /// request that simply awaited the task was killed by the platform and the caller saw a 500 with no
+        /// server-side exception to explain it (issue #360).
+        ///
+        /// The work itself is not tied to the request: it runs on the shared Task held in the cache. So the
+        /// request waits a bounded time, and if the analysis has not finished it returns 202 and lets the
+        /// caller poll. The analysis carries on and the next poll picks it up.
+        ///
+        /// Comfortably under the platform limit, and long enough that a small or warm tenant still answers
+        /// on the first request rather than being sent round a polling loop for no reason.
+        /// </remarks>
+        private static readonly TimeSpan FirstResponseBudget = TimeSpan.FromSeconds(20);
+
+        /// <summary>
+        /// How long an EXPORT waits for the analysis before giving up.
+        /// </summary>
+        /// <remarks>
+        /// Exports are <c>&lt;a href&gt;</c> navigations, not fetch() calls, so a browser cannot be sent
+        /// round a polling loop - it would simply render the 202 body as the "download". They therefore
+        /// wait, and the only question is what they do when the wait is hopeless.
+        /// <para>
+        /// Set below the ~230-second point at which Azure App Service abandons a request. Waiting
+        /// indefinitely (the previous behaviour) meant an export started against a cold cache - a direct
+        /// link, or a click after the 10-minute entry expired - ran past that limit and the platform
+        /// killed it, producing a 500 and a corrupt download with nothing logged. This is strictly
+        /// better: every export that used to succeed inside the limit still does, and the one that used
+        /// to die now returns something the operator can read and act on.
+        /// </para>
+        /// </remarks>
+        private static readonly TimeSpan ExportWaitBudget = TimeSpan.FromSeconds(150);
+
+        /// <summary>What the SPA is told to wait before polling again.</summary>
+        private const int RetryAfterSeconds = 5;
+
+        /// <summary>
+        /// Waits a bounded time for the analysis, returning null when it is still running.
+        /// </summary>
+        /// <remarks>
+        /// Task.WhenAny rather than a cancellable await: the analysis is shared between callers, so one
+        /// caller giving up must not cancel it for everyone else. The task is left running and observed on
+        /// completion by the continuation in <see cref="GetAnalysisAsync"/>.
+        /// </remarks>
+        private static async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
+            int windowDays, string seatLicenceTypeIds, CancellationToken cancellationToken)
+        {
+            return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, FirstResponseBudget, cancellationToken);
+        }
+
+        /// <summary>
+        /// As above, but with an explicit wait budget. Exports use a much longer one - see
+        /// <see cref="ExportWaitBudget"/>.
+        /// </summary>
+        private static async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
+            int windowDays, string seatLicenceTypeIds, TimeSpan budget, CancellationToken cancellationToken)
+        {
+            var task = GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+
+            if (task.IsCompleted)
+            {
+                return await task;   // rethrows a genuine failure, as before
+            }
+
+            var finished = await Task.WhenAny(task, Task.Delay(budget, cancellationToken));
+
+            return finished == task ? await task : null;
+        }
+
+        /// <summary>
+        /// The 202 body. Deliberately the same shape for every endpoint so the SPA has one thing to detect.
+        /// </summary>
+        private IHttpActionResult StillBuilding()
+        {
+            return ResponseMessage(StillBuildingResponse());
+        }
+
+        /// <summary>
+        /// The same 202, for the export endpoints - they return <see cref="HttpResponseMessage"/> directly
+        /// because they stream a file rather than a model.
+        /// </summary>
+        private HttpResponseMessage StillBuildingResponse()
+        {
+            var response = Request.CreateResponse(
+                HttpStatusCode.Accepted,
+                new
+                {
+                    status = "building",
+                    retryAfterSeconds = RetryAfterSeconds,
+                    message = "The Copilot adoption analysis is still running. This can take a few minutes the "
+                              + "first time on a large tenant; the page will refresh automatically.",
+                });
+
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(RetryAfterSeconds));
+            return response;
+        }
+
+        /// <summary>
+        /// What an EXPORT returns when the analysis did not finish inside <see cref="ExportWaitBudget"/>.
+        /// </summary>
+        /// <remarks>
+        /// Plain text, not JSON: this lands in a browser tab as the result of a download navigation, so
+        /// the person who clicked has to be able to read it. 503 + <c>Retry-After</c> is the honest
+        /// status - the report is temporarily unavailable and retrying later will work.
+        /// </remarks>
+        private HttpResponseMessage ExportNotReadyResponse()
+        {
+            var response = Request.CreateResponse(HttpStatusCode.ServiceUnavailable);
+
+            response.Content = new StringContent(
+                "The Copilot adoption analysis is still being prepared, so this export is not ready yet.\r\n\r\n"
+                + "This happens when the export is opened directly, or more than a few minutes after the "
+                + "page was last loaded. The analysis is still running in the background.\r\n\r\n"
+                + "Open the Copilot Adoption page, wait for it to finish loading, then use the export "
+                + "button there.",
+                Encoding.UTF8,
+                "text/plain");
+
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(RetryAfterSeconds));
+            return response;
+        }
+
         #endregion
 
         #region Summary and licence types
@@ -139,7 +266,8 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary);
         }
 
@@ -158,7 +286,8 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary.SeatLicenceTypes);
         }
 
@@ -171,7 +300,8 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding();
             return Ok(analysis.Sql);
         }
 
@@ -187,7 +317,8 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding();
 
             return Ok(new
             {
@@ -232,7 +363,8 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding();
 
             var query = BuildLicensedUserQuery(
                 search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
@@ -272,7 +404,13 @@ namespace Web.AnalyticsWeb.Controllers
             bool sortDesc = false,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
+            // would just render the JSON body as the "file". So an export WAITS - but only up to
+            // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
+            // download instead of an answer.
+            var analysis = await TryGetAnalysisAsync(
+                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildLicensedUserQuery(
                 search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
@@ -309,7 +447,8 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding();
 
             var query = BuildOpportunityQuery(
                 search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
@@ -342,7 +481,13 @@ namespace Web.AnalyticsWeb.Controllers
             bool sortDesc = true,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
+            // would just render the JSON body as the "file". So an export WAITS - but only up to
+            // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
+            // download instead of an answer.
+            var analysis = await TryGetAnalysisAsync(
+                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildOpportunityQuery(
                 search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
@@ -377,7 +522,13 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
+            // would just render the JSON body as the "file". So an export WAITS - but only up to
+            // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
+            // download instead of an answer.
+            var analysis = await TryGetAnalysisAsync(
+                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return ExportNotReadyResponse();
 
             byte[] bytes;
             try
@@ -456,6 +607,24 @@ namespace Web.AnalyticsWeb.Controllers
         /// that every other waiter is awaiting.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Analyses currently RUNNING, keyed the same way as the cache.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="MemoryCache"/> on purpose. The cache entry's absolute expiry starts when
+        /// the entry is INSERTED, which is before the analysis has run - so a 10-minute entry holding an
+        /// analysis that takes seven minutes is only reusable for three, and an analysis that takes longer
+        /// than the expiry would be evicted while still running. The next request would then start a SECOND
+        /// full analysis against an already-struggling database, and so on for as long as anyone kept
+        /// polling. Polling makes that far more likely to happen, so it has to be fixed here (issue #360).
+        ///
+        /// In-flight runs therefore live here, with no expiry, and only the finished RESULT is put in the
+        /// cache - with its lifetime starting at completion, which is what the 10 minutes was always meant
+        /// to mean.
+        /// </remarks>
+        private static readonly ConcurrentDictionary<string, Lazy<Task<CopilotAdoptionAnalysis>>> _inFlight =
+            new ConcurrentDictionary<string, Lazy<Task<CopilotAdoptionAnalysis>>>(StringComparer.Ordinal);
+
         private static Task<CopilotAdoptionAnalysis> GetAnalysisAsync(
             int windowDays,
             string seatLicenceTypeIds,
@@ -466,12 +635,14 @@ namespace Web.AnalyticsWeb.Controllers
             var cacheKey = CacheKeyPrefix + window + "::"
                            + (overrideIds.Count == 0 ? "auto" : string.Join(",", overrideIds.OrderBy(i => i)));
 
-            var existing = MemoryCache.Default.Get(cacheKey) as Lazy<Task<CopilotAdoptionAnalysis>>;
-            if (existing != null && !IsDead(existing))
+            // A completed result, still inside its 10 minutes.
+            var cached = MemoryCache.Default.Get(cacheKey) as CopilotAdoptionAnalysis;
+            if (cached != null)
             {
-                return existing.Value;
+                return Task.FromResult(cached);
             }
 
+            // A run already under way - join it rather than starting another.
             var candidate = new Lazy<Task<CopilotAdoptionAnalysis>>(() =>
             {
                 var options = CopilotAdoptionOptions.Default;
@@ -481,25 +652,61 @@ namespace Web.AnalyticsWeb.Controllers
                 return RunAndReportAsync(service, overrideIds, window);
             }, LazyThreadSafetyMode.ExecutionAndPublication);
 
-            // AddOrGetExisting is atomic. Because the Lazy has not been evaluated yet, the loser costs
-            // nothing at all - no query is issued for it.
-            var winner = MemoryCache.Default.AddOrGetExisting(
-                cacheKey, candidate, DateTimeOffset.UtcNow.AddMinutes(CacheMinutes)) as Lazy<Task<CopilotAdoptionAnalysis>>;
+            // GetOrAdd is atomic, and because the Lazy has not been evaluated yet the loser costs nothing -
+            // no query is issued for it.
+            var effective = _inFlight.GetOrAdd(cacheKey, candidate);
 
-            var effective = winner ?? candidate;
-            var task = effective.Value;
-
-            task.ContinueWith(
-                completed =>
+            if (ReferenceEquals(effective, candidate))
+            {
+                // We won the race to create the entry. Re-check the result cache BEFORE evaluating the Lazy:
+                // between the miss above and here, an earlier run could have completed and published its
+                // result, and starting a second multi-minute analysis on top of a perfectly good one is
+                // exactly what this whole mechanism exists to prevent.
+                var justPublished = MemoryCache.Default.Get(cacheKey) as CopilotAdoptionAnalysis;
+                if (justPublished != null)
                 {
-                    if (completed.IsFaulted || completed.IsCanceled)
-                    {
-                        MemoryCache.Default.Remove(cacheKey);
-                    }
-                },
-                TaskContinuationOptions.ExecuteSynchronously);
+                    RemoveInFlight(cacheKey, candidate);
+                    return Task.FromResult(justPublished);
+                }
 
-            return task;
+                var startedTask = effective.Value;
+
+                // Only the caller that actually started this run attaches the completion handling, so a
+                // hundred polls do not attach a hundred continuations to the same task.
+                startedTask.ContinueWith(
+                    completed =>
+                    {
+                        if (completed.IsFaulted)
+                        {
+                            // Reading .Exception is what actually OBSERVES the fault. Testing IsFaulted
+                            // alone leaves it unobserved if every caller has given up polling by now.
+                            var ignored = completed.Exception;
+                        }
+                        else if (!completed.IsCanceled)
+                        {
+                            // Publish BEFORE removing the in-flight entry, so there is no instant where the
+                            // key is absent from both stores and a concurrent caller would start again.
+                            MemoryCache.Default.Set(
+                                cacheKey, completed.Result, DateTimeOffset.UtcNow.AddMinutes(CacheMinutes));
+                        }
+
+                        // Generation-safe: ConcurrentDictionary's ICollection.Remove compares key AND value,
+                        // so this can only ever remove our own entry, never a newer run that replaced it.
+                        RemoveInFlight(cacheKey, candidate);
+                    },
+                    TaskContinuationOptions.ExecuteSynchronously);
+
+                return startedTask;
+            }
+
+            return effective.Value;
+        }
+
+        /// <summary>Removes an in-flight entry only if it is still the one we put there.</summary>
+        private static void RemoveInFlight(string cacheKey, Lazy<Task<CopilotAdoptionAnalysis>> ours)
+        {
+            var current = _inFlight as ICollection<KeyValuePair<string, Lazy<Task<CopilotAdoptionAnalysis>>>>;
+            current.Remove(new KeyValuePair<string, Lazy<Task<CopilotAdoptionAnalysis>>>(cacheKey, ours));
         }
 
         /// <summary>
@@ -513,11 +720,51 @@ namespace Web.AnalyticsWeb.Controllers
         private static async Task<CopilotAdoptionAnalysis> RunAndReportAsync(
             CopilotAdoptionService service, List<int> overrideIds, int windowDays)
         {
-            var analysis = await service.AnalyseAsync(
-                overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
+            try
+            {
+                var analysis = await service.AnalyseAsync(
+                    overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
 
-            TrackAnalysis(analysis, windowDays);
-            return analysis;
+                TrackAnalysis(analysis, windowDays);
+                return analysis;
+            }
+            catch (Exception ex)
+            {
+                // Previously TrackAnalysis sat after the await with no try/catch, so an analysis that threw
+                // reported NOTHING - no event, and no exception either, because the web application has no
+                // Application Insights request/exception collection of its own. That combination is what
+                // made issue #360 so hard to diagnose: a failing page with no telemetry at all.
+                TrackAnalysisFailure(ex, windowDays);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Reports an analysis that failed outright. Never throws: telemetry must not be the reason a
+        /// request behaves differently.
+        /// </summary>
+        private static void TrackAnalysisFailure(Exception ex, int windowDays)
+        {
+            try
+            {
+                var config = new AppConfig();
+                var logger = new AnalyticsLogger(
+                    config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
+
+                logger.TrackException(ex);
+                logger.LogError(
+                    $"Copilot adoption analysis failed for a {windowDays}-day window: "
+                    + $"{ex.GetBaseException().Message}");
+
+                // One shared analysis can have many requests awaiting it, and each will rethrow this very
+                // instance. Marking it here stops the Web API exception logger reporting the same
+                // failure once more per waiting request.
+                WebExceptionTelemetry.MarkReported(ex);
+            }
+            catch (Exception)
+            {
+                // Deliberately swallowed - see above.
+            }
         }
 
         /// <summary>
@@ -560,16 +807,6 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 // Swallowed on purpose - see the workbook endpoint for the same reasoning.
             }
-        }
-
-        /// <summary>A cached entry whose analysis already failed must not be served again.</summary>
-        private static bool IsDead(Lazy<Task<CopilotAdoptionAnalysis>> entry)
-        {
-            if (!entry.IsValueCreated)
-                return false;
-
-            var task = entry.Value;
-            return task.IsFaulted || task.IsCanceled;
         }
 
         #endregion

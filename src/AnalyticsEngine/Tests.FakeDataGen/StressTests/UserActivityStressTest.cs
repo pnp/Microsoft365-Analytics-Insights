@@ -622,6 +622,12 @@ namespace Tests.FakeDataGen.StressTests
             var chats = new DataTable();
             chats.Columns.Add("event_id", typeof(Guid));
             chats.Columns.Add("app_host", typeof(string));
+            // Denormalised copies of the audit event's user and timestamp. The real importer merge writes
+            // these (common_upsert_copilot_agents.sql); generated data must too, or everything this harness
+            // produces is invisible to the Copilot Adoption page, which filters on copilot_chats.time_stamp
+            // rather than joining dbo.audit_events.
+            chats.Columns.Add("user_id", typeof(int));
+            chats.Columns.Add("time_stamp", typeof(DateTime));
 
             long total = 0;
             long pending = 0;
@@ -656,7 +662,7 @@ namespace Tests.FakeDataGen.StressTests
 
                             var eventId = Guid.NewGuid();
                             audit.Rows.Add(eventId, ts, user.Id);
-                            chats.Rows.Add(eventId, CopilotAppHosts[random.Next(CopilotAppHosts.Length)]);
+                            chats.Rows.Add(eventId, CopilotAppHosts[random.Next(CopilotAppHosts.Length)], user.Id, ts);
                             pending++;
                             total++;
 
