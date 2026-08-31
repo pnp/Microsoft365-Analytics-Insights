@@ -74,18 +74,15 @@ namespace Common.Entities.Entities.AuditLog
         /// <para>
         /// A Copilot interaction has no date of its own: the timestamp and the user live on
         /// <c>dbo.audit_events</c>. Every Copilot report therefore used to join
-        /// <c>copilot_chats -&gt; audit_events</c>, which is the single largest table in the product AND is
-        /// clustered on a random <c>uniqueidentifier</c>. Measured on a synthetic 200k-user tenant, the
-        /// optimiser did not use <c>IX_audit_events_time_stamp</c> at all for that join - it seeked
-        /// <c>IX_user_id</c> per licensed user and looked the timestamp up on the clustered index, which on a
-        /// real tenant enumerates EVERY audit event those users generated (SharePoint, Exchange, Teams) before
-        /// discarding the non-Copilot ones.
+        /// <c>copilot_chats -&gt; audit_events</c>. Carrying the two values here removes that join.
         /// </para>
         /// <para>
-        /// Carrying the two values here removes that join from every Copilot query. Measured on the
-        /// <c>LicensedUsers</c> query: 73.6s -&gt; 22.5s at a 28-day window and 98.2s -&gt; 41.4s at 90 days,
-        /// where 98.2s was already past the 90s command timeout. Full numbers are on the migration
-        /// <c>DenormaliseCopilotChatUserAndTime</c>.
+        /// Measured on a bench matching a real customer's shape (10.85M audit_events at ~1.7 KB/row, 6.0M
+        /// copilot_chats, 55% Copilot): <c>LicensedUsers</c> at a 28-day window went 13.0s -&gt; 5.6s.
+        /// The duplication is structural rather than a tuning shortcut - an index key must be a column of
+        /// the table it indexes, so no index on <c>copilot_chats</c> can be date-ordered unless the date is
+        /// on <c>copilot_chats</c>. Full option comparison, including why an indexed view was rejected, is
+        /// on the migration <c>DenormaliseCopilotChatUserAndTime</c>.
         /// </para>
         /// <para>
         /// Nullable, and deliberately so: a row whose audit event has been removed keeps NULL, and every
