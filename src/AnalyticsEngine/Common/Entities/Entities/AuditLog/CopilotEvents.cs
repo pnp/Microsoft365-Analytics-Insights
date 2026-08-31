@@ -77,8 +77,9 @@ namespace Common.Entities.Entities.AuditLog
         /// <c>copilot_chats -&gt; audit_events</c>. Carrying the two values here removes that join.
         /// </para>
         /// <para>
-        /// Measured on a bench matching a real customer's shape (10.85M audit_events at ~1.7 KB/row, 6.0M
-        /// copilot_chats, 55% Copilot): <c>LicensedUsers</c> at a 28-day window went 13.0s -&gt; 5.6s.
+        /// Measured on a synthetic bench sized for a large tenant (~10M audit_events at ~1.7 KB/row, ~6M
+        /// copilot_chats, Copilot a large share of them): <c>LicensedUsers</c> at a 28-day window went
+        /// 13.0s -&gt; 5.6s.
         /// The duplication is structural rather than a tuning shortcut - an index key must be a column of
         /// the table it indexes, so no index on <c>copilot_chats</c> can be date-ordered unless the date is
         /// on <c>copilot_chats</c>. Full option comparison, including why an indexed view was rejected, is

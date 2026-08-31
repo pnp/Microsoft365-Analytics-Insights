@@ -18,19 +18,19 @@ namespace Common.Entities.Migrations
     /// <para>
     /// <b>An earlier explanation of this migration was WRONG and is withdrawn.</b> It claimed the optimiser
     /// seeked <c>IX_user_id</c> once per licensed user and dragged in every audit event those users ever
-    /// generated. A read-only diagnostic against a real customer tenant denied it: <c>IX_user_id</c> showed
-    /// 3 seeks against 230 on <c>IX_audit_events_time_stamp</c>, Copilot is 55% of <c>audit_events</c> (not a
-    /// small minority), and licensed users' audit activity is ~87% Copilot - so there is little non-Copilot
-    /// data to drag in. The structural argument above is the one that survived contact with real data; do not
-    /// reinstate the plan-shape story.
+    /// generated. Index-usage diagnostics denied it: <c>IX_user_id</c> is barely seeked compared with
+    /// <c>IX_audit_events_time_stamp</c>, Copilot interactions are a large share of <c>audit_events</c>
+    /// rather than a small minority, and licensed users' audit activity is overwhelmingly Copilot - so there
+    /// is little non-Copilot data to drag in. The structural argument above is the one that survived contact
+    /// with real data; do not reinstate the plan-shape story.
     /// </para>
     ///
     /// <para>
-    /// <b>Measured before / after.</b> The numbers below come from a bench built to match a REAL customer
-    /// tenant's measured shape - 10.85M <c>audit_events</c> at ~1.7 KB/row (a 19.9 GB clustered index,
-    /// because <c>event_data</c> holds the raw JSON), 6.0M <c>copilot_chats</c>, Copilot = 55% of
-    /// <c>audit_events</c>, 4.4 years of retention with 85% of Copilot activity inside the last year, and
-    /// licensed users whose audit activity is ~87% Copilot. Query text extracted from the compiled
+    /// <b>Measured before / after.</b> The numbers below come from a synthetic bench sized for a large
+    /// tenant - roughly 10M <c>audit_events</c> at ~1.7 KB/row (the bulk of it <c>event_data</c> holding raw
+    /// JSON, giving a multi-GB clustered index), roughly 6M <c>copilot_chats</c>, Copilot forming a large
+    /// share of <c>audit_events</c>, and several years of retention with most Copilot activity inside the
+    /// last year. Query text extracted from the compiled
     /// assembly, medians of 3 warm runs, cold run discarded, <c>DBCC FREEPROCCACHE</c> before each run,
     /// <c>OPTION (RECOMPILE)</c>. <c>LicensedUsers</c>, 28-day window:
     /// </para>
@@ -63,12 +63,13 @@ namespace Common.Entities.Migrations
     /// </para>
     ///
     /// <para>
-    /// <b>Honest limits of this evidence.</b> The bench reproduces the customer's data SHAPE but not their
-    /// environment: production is Azure SQL Database (tier-capped IOPS/CPU) with the importer running
-    /// concurrently, and their <c>copilot_chats</c> is ~7x wider than the synthetic one. The observed
-    /// production p50 for this step is ~90 s, whereas the same shape runs the un-migrated query in ~13 s on
-    /// the bench hardware - so the absolute production improvement is an EXTRAPOLATION from the 2.3x ratio,
-    /// not a measurement. The ratio is the defensible claim; "90 s becomes 39 s" is not.
+    /// <b>Honest limits of this evidence.</b> The bench reproduces a large tenant's data SHAPE but not a
+    /// production environment: production is typically Azure SQL Database (tier-capped IOPS/CPU) with the
+    /// importer running concurrently, and a real <c>copilot_chats</c> row can be several times wider than
+    /// the synthetic one. The reported production p50 for this step (see issue #360) is far above what the
+    /// same shape costs on bench hardware, so the absolute production improvement is an EXTRAPOLATION from
+    /// the 2.3x ratio, not a measurement. The ratio is the defensible claim; a specific
+    /// "N seconds becomes M seconds" is not.
     /// </para>
     ///
     /// <para>
