@@ -812,7 +812,16 @@ namespace Tests.UnitTests
                   CREATE TABLE dbo.copilot_chats (
                       event_id uniqueidentifier NOT NULL PRIMARY KEY,
                       app_host nvarchar(200) NULL,
-                      agent_id int NULL);
+                      agent_id int NULL,
+                      -- Denormalised copies of the parent audit event's columns; see migration
+                      -- DenormaliseCopilotChatUserAndTime. Every Copilot query reads these instead of
+                      -- joining dbo.audit_events.
+                      user_id int NULL,
+                      time_stamp datetime NULL);
+
+                  CREATE NONCLUSTERED INDEX IX_copilot_chats_time_stamp_user_id
+                      ON dbo.copilot_chats ([time_stamp], [user_id])
+                      INCLUDE ([app_host], [agent_id]);
 
                   CREATE TABLE dbo.copilot_agents (
                       id int NOT NULL PRIMARY KEY,
@@ -938,8 +947,13 @@ namespace Tests.UnitTests
             db.Execute(
                 $@"INSERT INTO dbo.audit_events (id, time_stamp, user_id)
                        VALUES ('{id}', '{when:yyyy-MM-dd HH:mm:ss}', {userId});
-                   INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id)
-                       VALUES ('{id}', N'{appHost}', {(agentId.HasValue ? agentId.Value.ToString() : "NULL")});");
+                   -- user_id / time_stamp are denormalised onto the chat row by the real importer merge
+                   -- (common_upsert_copilot_agents.sql), which sources them from the audit event it has
+                   -- just inserted. Seeded the same way here so these tests exercise the real read path.
+                   INSERT INTO dbo.copilot_chats (event_id, app_host, agent_id, user_id, time_stamp)
+                       SELECT '{id}', N'{appHost}', {(agentId.HasValue ? agentId.Value.ToString() : "NULL")},
+                              ae.user_id, ae.time_stamp
+                       FROM dbo.audit_events AS ae WHERE ae.id = '{id}';");
 
             return id;
         }

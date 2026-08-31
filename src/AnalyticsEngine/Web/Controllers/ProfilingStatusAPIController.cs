@@ -84,14 +84,18 @@ namespace Web.AnalyticsWeb.Controllers
                 .Select(t => GetRangeAsync(t.Key, t.Label, t.Table, "[date]"))
                 .ToList();
 
-            // Copilot interactions feed the compile too (usp_UpsertCopilot) but have no date column of
-            // their own - the runbook dates them by the joined audit event's time_stamp, so we mirror
-            // that. This join MIN/MAX is the heaviest of these queries on a big tenant (audit_events is
-            // large), which is exactly why the timeout above matters: it degrades to a per-row error.
+            // Copilot interactions feed the compile too (usp_UpsertCopilot). They used to have no date
+            // column of their own, so this had to join dbo.audit_events - and that made it the heaviest
+            // query on this page, because it scanned the largest table in the product just to find two
+            // dates. copilot_chats now carries a denormalised time_stamp (migration
+            // DenormaliseCopilotChatUserAndTime) indexed by IX_copilot_chats_time_stamp_user_id, so
+            // MIN/MAX are two seeks to the ends of that index and audit_events is not touched at all.
+            // Same answer: a chat with no audit event had no date before either, and MIN/MAX ignore NULLs
+            // exactly as the old INNER JOIN dropped those rows.
             var copilotTask = RunRangeAsync("copilot-interactions", "Copilot interactions",
-                "dbo.copilot_chats (via dbo.audit_events)",
-                "SELECT MIN(au.time_stamp) AS MinDate, MAX(au.time_stamp) AS MaxDate " +
-                "FROM dbo.copilot_chats AS c JOIN dbo.audit_events AS au ON c.event_id = au.id;");
+                "dbo.copilot_chats",
+                "SELECT MIN(c.time_stamp) AS MinDate, MAX(c.time_stamp) AS MaxDate " +
+                "FROM dbo.copilot_chats AS c;");
 
             await Task.WhenAll(compiledTasks.Concat(activityTasks).Concat(new[] { copilotTask }));
 

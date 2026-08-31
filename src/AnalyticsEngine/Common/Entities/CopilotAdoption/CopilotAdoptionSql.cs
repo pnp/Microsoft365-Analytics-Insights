@@ -16,13 +16,26 @@ namespace Common.Entities.CopilotAdoption
     ///
     /// <list type="bullet">
     ///   <item>Queries hit base tables, never the <c>vw*</c> views, matching the Reports area.</item>
+    ///   <item><b>No Copilot query joins <c>dbo.audit_events</c>.</b> A Copilot interaction used to have no
+    ///   date or user of its own - both lived on the parent audit event - so every query here began
+    ///   <c>copilot_chats INNER JOIN audit_events AS au ON c.event_id = au.id</c>. <c>copilot_chats</c> now
+    ///   carries denormalised <c>user_id</c> / <c>time_stamp</c> columns, written on the same row by the
+    ///   same statement that inserts the chat (<c>common_upsert_copilot_agents.sql</c>) and indexed by
+    ///   <c>IX_copilot_chats_time_stamp_user_id</c>.
+    ///   <br/>Measured on a bench matching a real customer's shape (10.85M audit_events at ~1.7 KB/row,
+    ///   6.0M copilot_chats, 55% Copilot): <c>LicensedUsers</c> at a 28-day window went 13.0s -&gt; 5.6s
+    ///   (2.3x). A covering index on <c>copilot_chats(event_id)</c> - which needs no duplication - only
+    ///   reached 10.4s, because an index key must be a column of the table it indexes, so no index on
+    ///   <c>copilot_chats</c> can be date-ordered unless the date is ON <c>copilot_chats</c>. See migration
+    ///   <c>DenormaliseCopilotChatUserAndTime</c> for the full option comparison and issue #360.
+    ///   <br/>Semantics are unchanged: the old <c>INNER JOIN</c> dropped any chat whose audit event was
+    ///   missing, and <c>NULL</c> fails <c>time_stamp &gt;= @from</c>, so the same rows are excluded.</item>
     ///   <item>The licensed population is derived from <c>user_license_type_lookups</c> filtered by
     ///   licence-type id. That table has a unique index on <c>(license_type_id, user_id)</c>, so this
     ///   is an index-only seek on the leading column - not a scan of <c>users</c>.</item>
-    ///   <item>The Copilot audit history is read <b>once</b> per report, over a bounded date range,
-    ///   with the window-versus-history split done by <c>CASE</c> inside a single aggregate. Running
-    ///   separate "in the window" and "ever" passes would double the cost of the most expensive join
-    ///   in the product.</item>
+    ///   <item>The Copilot audit history is read over a bounded date range, with the window-versus-history
+    ///   split done by <c>CASE</c> inside a single aggregate. Running separate "in the window" and "ever"
+    ///   passes would double the cost of the largest read in the report.</item>
     ///   <item>Microsoft 365 usage figures come from <b>one</b> snapshot date, resolved up-front, so
     ///   each usage table is an equality seek on its <c>IX_date</c> index rather than a range scan.</item>
     ///   <item>The unlicensed candidate list is driven <i>from the activity tables</i> and anti-joined
@@ -34,13 +47,6 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     public static class CopilotAdoptionSql
     {
-        /// <summary>
-        /// The join from <c>copilot_chats</c> to its audit event. Copilot interactions have no date of
-        /// their own; the audit event carries the timestamp and the user. Deliberately un-hinted: a
-        /// forced MERGE join was measured on this join in the Reports area and degraded to a full scan
-        /// of <c>audit_events</c> at every window. Do not add a hint here without re-measuring.
-        /// </summary>
-        public const string AuditJoin = "INNER JOIN dbo.audit_events AS au ON c.event_id = au.id";
 
         /// <summary>
         /// Microsoft 365 Copilot Cowork surfaces itself in the audit log as the app host "cowork" and,
@@ -129,9 +135,81 @@ namespace Common.Entities.CopilotAdoption
         public const string HasCopilotAuditDataSql =
             "SELECT CASE WHEN EXISTS (\r\n" +
             "    SELECT 1 FROM dbo.copilot_chats AS c\r\n" +
-            "    " + AuditJoin + "\r\n" +
-            "    WHERE au.time_stamp >= @from\r\n" +
+            "    WHERE c.time_stamp >= @from\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
+
+        /// <summary>
+        /// Whether any Copilot interaction is still missing its denormalised <c>time_stamp</c>, and could be
+        /// repaired from its audit event.
+        ///
+        /// <para>
+        /// Every query here filters <c>c.time_stamp &gt;= @from</c>, so a row that has not been backfilled yet
+        /// is invisible - it silently lowers every figure on the page. That can happen for a short while
+        /// after the upgrade: migration <c>DenormaliseCopilotChatUserAndTime</c> backfills existing rows, but
+        /// an OLD importer still running during the upgrade window can insert more NULLs behind it. The
+        /// importer repairs them on every commit (<c>repair_denormalised_copilot_columns.sql</c>), so this is
+        /// transient - but "transient" is not "invisible", and
+        /// reporting confident numbers that are quietly too low is the exact defect issue #360 was raised for.
+        /// </para>
+        /// <para>
+        /// Deliberately excludes orphans (a chat whose audit event no longer exists): they can never be
+        /// repaired, they were invisible to the previous <c>INNER JOIN</c> reports too, and counting them
+        /// would leave the page permanently claiming to be incomplete.
+        /// </para>
+        /// <para>
+        /// Cheap: NULLs sort first in <c>IX_copilot_chats_time_stamp_user_id</c>, so this is a seek to the
+        /// head of that index plus one primary-key probe, and it stops at the first row.
+        /// </para>
+        /// </summary>
+        public const string PendingCopilotBackfillSql =
+            "SELECT CASE WHEN EXISTS (\r\n" +
+            "    SELECT 1 FROM dbo.copilot_chats AS c\r\n" +
+            "    WHERE c.time_stamp IS NULL\r\n" +
+            "      AND EXISTS (SELECT 1 FROM dbo.audit_events AS ae WHERE ae.id = c.event_id)\r\n" +
+            ") THEN 1 ELSE 0 END AS Value;";
+
+        #region Guest (external) accounts
+
+        /// <summary>
+        /// How an external guest is recognised. Entra writes guests into the directory with a UPN of the
+        /// form <c>someone_contoso.com#EXT#@tenant.onmicrosoft.com</c>, and the user import stores them
+        /// alongside members with nothing else to tell them apart - there is no <c>userType</c> column
+        /// anywhere in this schema, so the UPN marker is the only signal available.
+        /// </summary>
+        public const string GuestUserNamePattern = "'%#EXT#@%'";
+
+        /// <summary>
+        /// Excludes guests from a query that already has <c>dbo.users</c> joined as <paramref name="userAlias"/>.
+        /// </summary>
+        private static string ExcludeGuests(string userAlias)
+        {
+            return $"  AND {userAlias}.user_name NOT LIKE {GuestUserNamePattern}\r\n";
+        }
+
+        /// <summary>
+        /// Excludes guests from a query that only has a user id to hand.
+        /// <para>
+        /// Written as <c>NOT EXISTS</c> rather than a join so that a user id with no row in
+        /// <c>dbo.users</c> is KEPT, matching how <c>account_enabled</c> is treated: an account the
+        /// directory import has not caught up with must not silently vanish from the figures.
+        /// </para>
+        /// <para>
+        /// This must stay consistent across every query that feeds a SEAT DECISION. Excluding guests
+        /// from the ranked candidate list but not from the headline "unmet demand" count would let the
+        /// page report demand that cannot appear in the list it tells you to act on.
+        /// </para>
+        /// </summary>
+        private static string ExcludeGuestsByUserId(string userIdExpression, string indent)
+        {
+            return
+                $"{indent}AND NOT EXISTS (\r\n" +
+                $"{indent}    SELECT 1 FROM dbo.users AS guest_check\r\n" +
+                $"{indent}    WHERE guest_check.id = {userIdExpression}\r\n" +
+                $"{indent}      AND guest_check.user_name LIKE {GuestUserNamePattern}\r\n" +
+                $"{indent})\r\n";
+        }
+
+        #endregion
 
         #region Licensed users
 
@@ -186,14 +264,13 @@ namespace Common.Entities.CopilotAdoption
                 "-- the aggregates need. The reporting window and the earlier history are separated with\r\n" +
                 "-- CASE rather than by running the join twice.\r\n" +
                 "CopilotWindow AS (\r\n" +
-                "    SELECT au.user_id AS user_id,\r\n" +
-                "           au.time_stamp AS time_stamp,\r\n" +
+                "    SELECT c.user_id AS user_id,\r\n" +
+                "           c.time_stamp AS time_stamp,\r\n" +
                 "           c.app_host AS app_host,\r\n" +
                 "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    " + AuditJoin + "\r\n" +
-                "    JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
-                "    WHERE au.time_stamp >= @historyFrom\r\n" +
+                "    JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
+                "    WHERE c.time_stamp >= @historyFrom\r\n" +
                 "),\r\n" +
                 "-- The counting totals: cheap, because none of them is a DISTINCT.\r\n" +
                 "CopilotTotals AS (\r\n" +
@@ -471,14 +548,13 @@ namespace Common.Entities.CopilotAdoption
                     "-- Copilot use by people who do not hold a seat: unlicensed Copilot Chat. The\r\n" +
                     "-- strongest possible signal, because it is evidence rather than inference.\r\n" +
                     "CopilotUsage AS (\r\n" +
-                    "    SELECT au.user_id AS user_id,\r\n" +
+                    "    SELECT c.user_id AS user_id,\r\n" +
                     "           COUNT_BIG(*) AS Interactions,\r\n" +
-                    "           COUNT(DISTINCT CAST(au.time_stamp AS date)) AS ActiveDays,\r\n" +
-                    "           MAX(au.time_stamp) AS LastInteractionUtc\r\n" +
+                    "           COUNT(DISTINCT CAST(c.time_stamp AS date)) AS ActiveDays,\r\n" +
+                    "           MAX(c.time_stamp) AS LastInteractionUtc\r\n" +
                     "    FROM dbo.copilot_chats AS c\r\n" +
-                    "    " + AuditJoin + "\r\n" +
-                    "    WHERE au.time_stamp >= @from AND au.user_id IS NOT NULL\r\n" +
-                    "    GROUP BY au.user_id\r\n" +
+                    "    WHERE c.time_stamp >= @from AND c.user_id IS NOT NULL\r\n" +
+                    "    GROUP BY c.user_id\r\n" +
                     ")");
             }
 
@@ -600,6 +676,10 @@ namespace Common.Entities.CopilotAdoption
                 "WHERE NOT EXISTS (SELECT 1 FROM SeatUsers AS seats WHERE seats.user_id = u.id)\r\n" +
                 // A disabled account cannot use a licence, so proposing one would discredit the list.
                 "  AND (u.account_enabled IS NULL OR u.account_enabled = 1)\r\n" +
+                // Neither can an external guest. On a real tenant guests were a meaningful share of the
+                // directory, every one of them ranked as a licence candidate it is impossible to act on.
+                // See issue #360.
+                ExcludeGuests("u") +
                 $"ORDER BY RankScore DESC, u.id\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -631,16 +711,18 @@ namespace Common.Entities.CopilotAdoption
             return
                 "SELECT COUNT(*) AS Value\r\n" +
                 "FROM (\r\n" +
-                "    SELECT DISTINCT au.user_id\r\n" +
+                "    SELECT DISTINCT c.user_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    " + AuditJoin + "\r\n" +
-                "    WHERE au.time_stamp >= @from\r\n" +
-                "      AND au.user_id IS NOT NULL\r\n" +
+                "    WHERE c.time_stamp >= @from\r\n" +
+                "      AND c.user_id IS NOT NULL\r\n" +
                 "      AND NOT EXISTS (\r\n" +
                 "          SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
-                "          WHERE ul.user_id = au.user_id\r\n" +
+                "          WHERE ul.user_id = c.user_id\r\n" +
                 $"            AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "      )\r\n" +
+                // Same population as the candidate list, which also excludes guests - otherwise this
+                // headline reports unmet demand that can never appear in the list it points you to.
+                ExcludeGuestsByUserId("c.user_id", "      ") +
                 ") AS unlicensed\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -673,14 +755,13 @@ namespace Common.Entities.CopilotAdoption
                 // See LicensedUsersSql for the full measurement.
                 "AgentUse AS (\r\n" +
                 "    SELECT c.agent_id AS agent_id,\r\n" +
-                "           au.user_id AS user_id,\r\n" +
-                "           au.time_stamp AS time_stamp,\r\n" +
+                "           c.user_id AS user_id,\r\n" +
+                "           c.time_stamp AS time_stamp,\r\n" +
                 "           ISNULL(c.app_host, '(unknown)') AS app_host,\r\n" +
                 "           CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END AS IsLicensed\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    " + AuditJoin + "\r\n" +
-                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
-                "    WHERE au.time_stamp >= @historyFrom\r\n" +
+                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
+                "    WHERE c.time_stamp >= @historyFrom\r\n" +
                 // Redundant against the inner join to copilot_agents below, but it lets the optimiser
                 // eliminate the (usually large) majority of Copilot interactions that carry no agent
                 // before it does any joining, rather than discovering it during the join.
@@ -754,10 +835,9 @@ namespace Common.Entities.CopilotAdoption
                 "SELECT TOP (@top) ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)') AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
-                "" + AuditJoin + "\r\n" +
-                "JOIN dbo.users AS u ON u.id = au.user_id\r\n" +
+                "JOIN dbo.users AS u ON u.id = c.user_id\r\n" +
                 "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
-                "WHERE au.time_stamp >= @from\r\n" +
+                "WHERE c.time_stamp >= @from\r\n" +
                 "  AND c.agent_id IS NOT NULL\r\n" +
                 "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
@@ -782,19 +862,20 @@ namespace Common.Entities.CopilotAdoption
                 // spool, and it ran for 131s against a 90s timeout. See LicensedUsersSql for the full
                 // measurement and the reasoning.
                 "WITH Unlicensed AS (\r\n" +
-                "    SELECT au.user_id AS user_id,\r\n" +
-                "           au.time_stamp AS time_stamp,\r\n" +
+                "    SELECT c.user_id AS user_id,\r\n" +
+                "           c.time_stamp AS time_stamp,\r\n" +
                 "           ISNULL(c.app_host, '(unknown)') AS app_host,\r\n" +
                 "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    " + AuditJoin + "\r\n" +
-                "    WHERE au.time_stamp >= @from\r\n" +
-                "      AND au.user_id IS NOT NULL\r\n" +
+                "    WHERE c.time_stamp >= @from\r\n" +
+                "      AND c.user_id IS NOT NULL\r\n" +
                 "      AND NOT EXISTS (\r\n" +
                 "          SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
-                "          WHERE ul.user_id = au.user_id\r\n" +
+                "          WHERE ul.user_id = c.user_id\r\n" +
                 $"            AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "      )\r\n" +
+                // Kept in step with UnlicensedActiveUsersSql - this is the detail behind that count.
+                ExcludeGuestsByUserId("c.user_id", "      ") +
                 "),\r\n" +
                 "Totals AS (\r\n" +
                 "    SELECT user_id, COUNT_BIG(*) AS Interactions, MAX(time_stamp) AS LastInteractionUtc\r\n" +
@@ -847,9 +928,8 @@ namespace Common.Entities.CopilotAdoption
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_event_accessed_resources AS ar\r\n" +
                 "JOIN dbo.copilot_chats AS c ON c.event_id = ar.copilot_chat_id\r\n" +
-                "" + AuditJoin + "\r\n" +
                 "LEFT JOIN dbo.copilot_event_accessed_resource_types AS rt ON rt.id = ar.resource_type_id\r\n" +
-                "WHERE au.time_stamp >= @from\r\n" +
+                "WHERE c.time_stamp >= @from\r\n" +
                 "GROUP BY ISNULL(rt.name, '(unknown)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -874,9 +954,8 @@ namespace Common.Entities.CopilotAdoption
                 "SELECT TOP (@top) ISNULL(c.app_host, '(unknown)') AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
-                "" + AuditJoin + "\r\n" +
-                "JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
-                "WHERE au.time_stamp >= @from\r\n" +
+                "JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
+                "WHERE c.time_stamp >= @from\r\n" +
                 "GROUP BY ISNULL(c.app_host, '(unknown)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -894,14 +973,15 @@ namespace Common.Entities.CopilotAdoption
                 "SELECT TOP (@top) ISNULL(c.app_host, '(unknown)') AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
-                "" + AuditJoin + "\r\n" +
-                "WHERE au.time_stamp >= @from\r\n" +
-                "  AND au.user_id IS NOT NULL\r\n" +
+                "WHERE c.time_stamp >= @from\r\n" +
+                "  AND c.user_id IS NOT NULL\r\n" +
                 "  AND NOT EXISTS (\r\n" +
                 "      SELECT 1 FROM dbo.user_license_type_lookups AS ul\r\n" +
-                "      WHERE ul.user_id = au.user_id\r\n" +
+                "      WHERE ul.user_id = c.user_id\r\n" +
                 $"        AND ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 "  )\r\n" +
+                // Kept in step with UnlicensedActiveUsersSql - this breaks that same population down by app.
+                ExcludeGuestsByUserId("c.user_id", "  ") +
                 "GROUP BY ISNULL(c.app_host, '(unknown)')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -939,7 +1019,7 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         public static string WeeklyAdoptionTrendSql(IEnumerable<int> seatLicenceTypeIds, IEnumerable<int> coworkAgentIds)
         {
-            var week = WeekBucket("au.time_stamp");
+            var week = WeekBucket("c.time_stamp");
             var cowork = CoworkPredicate(coworkAgentIds);
             var seats = IdList(seatLicenceTypeIds);
 
@@ -958,28 +1038,35 @@ namespace Common.Entities.CopilotAdoption
                 // flag is exactly the same answer, and the roll-up below is then a trivial SUM.
                 "WeekUser AS (\r\n" +
                 $"    SELECT {week} AS WeekStart,\r\n" +
-                "           au.user_id AS user_id,\r\n" +
+                "           c.user_id AS user_id,\r\n" +
                 "           MAX(CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END) AS IsLicensed,\r\n" +
+                // Carried as a flag rather than filtered in the WHERE clause: the licensed series must
+                // keep counting a guest that somehow holds a seat (that is a real licence being spent),
+                // while the unlicensed series must exclude guests to agree with the headline count and
+                // the candidate list. One LEFT JOIN on the users PK, so the single-pass shape that this
+                // query was rewritten into (see above) is preserved.
+                "           MAX(CASE WHEN guest_check.user_name LIKE " + GuestUserNamePattern +
+                " THEN 1 ELSE 0 END) AS IsGuest,\r\n" +
                 "           MAX(CASE WHEN seats.user_id IS NOT NULL\r\n" +
                 $"                     AND ({cowork}) THEN 1 ELSE 0 END) AS IsCowork,\r\n" +
                 "           MAX(CASE WHEN c.agent_id IS NOT NULL THEN 1 ELSE 0 END) AS UsedAgent,\r\n" +
                 "           COUNT_BIG(CASE WHEN seats.user_id IS NOT NULL THEN 1 END) AS LicensedInteractions,\r\n" +
                 "           COUNT_BIG(CASE WHEN seats.user_id IS NULL THEN 1 END) AS UnlicensedInteractions\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    " + AuditJoin + "\r\n" +
-                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = au.user_id\r\n" +
-                "    WHERE au.time_stamp >= @trendFrom\r\n" +
-                "      AND au.user_id IS NOT NULL\r\n" +
-                $"    GROUP BY {week}, au.user_id\r\n" +
+                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
+                "    LEFT JOIN dbo.users AS guest_check ON guest_check.id = c.user_id\r\n" +
+                "    WHERE c.time_stamp >= @trendFrom\r\n" +
+                "      AND c.user_id IS NOT NULL\r\n" +
+                $"    GROUP BY {week}, c.user_id\r\n" +
                 "),\r\n" +
                 "Weekly AS (\r\n" +
                 "    SELECT WeekStart,\r\n" +
                 "           SUM(IsLicensed) AS ActiveUsers,\r\n" +
                 "           SUM(IsCowork) AS CoworkUsers,\r\n" +
-                "           SUM(CASE WHEN IsLicensed = 0 THEN 1 ELSE 0 END) AS UnlicensedUsers,\r\n" +
+                "           SUM(CASE WHEN IsLicensed = 0 AND IsGuest = 0 THEN 1 ELSE 0 END) AS UnlicensedUsers,\r\n" +
                 "           SUM(UsedAgent) AS AgentUsers,\r\n" +
                 "           SUM(LicensedInteractions) AS LicensedInteractions,\r\n" +
-                "           SUM(UnlicensedInteractions) AS UnlicensedInteractions\r\n" +
+                "           SUM(CASE WHEN IsGuest = 0 THEN UnlicensedInteractions ELSE 0 END) AS UnlicensedInteractions\r\n" +
                 "    FROM WeekUser\r\n" +
                 "    GROUP BY WeekStart\r\n" +
                 ")\r\n" +
