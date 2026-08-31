@@ -18,17 +18,16 @@ namespace Common.Entities.CopilotAdoption
     ///   <item>Queries hit base tables, never the <c>vw*</c> views, matching the Reports area.</item>
     ///   <item><b>No Copilot query joins <c>dbo.audit_events</c>.</b> A Copilot interaction used to have no
     ///   date or user of its own - both lived on the parent audit event - so every query here began
-    ///   <c>copilot_chats INNER JOIN audit_events AS au ON c.event_id = au.id</c>. That is the single
-    ///   largest table in the product AND is clustered on a random <c>uniqueidentifier</c>; measured at
-    ///   synthetic 200k-user scale the optimiser never used <c>IX_audit_events_time_stamp</c> for it,
-    ///   seeking <c>IX_user_id</c> per licensed user instead, which on a real tenant enumerates every audit
-    ///   event those users generated before discarding the non-Copilot ones. <c>copilot_chats</c> now
+    ///   <c>copilot_chats INNER JOIN audit_events AS au ON c.event_id = au.id</c>. <c>copilot_chats</c> now
     ///   carries denormalised <c>user_id</c> / <c>time_stamp</c> columns, written on the same row by the
     ///   same statement that inserts the chat (<c>common_upsert_copilot_agents.sql</c>) and indexed by
-    ///   <c>IX_copilot_chats_time_stamp_user_id</c>. <c>LicensedUsers</c> measured 73,589 ms -&gt;
-    ///   22,525 ms at 28 days and 98,165 ms -&gt; 41,399 ms at 90 days, the latter having previously
-    ///   exceeded the 90-second command timeout. See migration
-    ///   <c>DenormaliseCopilotChatUserAndTime</c> and issue #360.
+    ///   <c>IX_copilot_chats_time_stamp_user_id</c>.
+    ///   <br/>Measured on a bench matching a real customer's shape (10.85M audit_events at ~1.7 KB/row,
+    ///   6.0M copilot_chats, 55% Copilot): <c>LicensedUsers</c> at a 28-day window went 13.0s -&gt; 5.6s
+    ///   (2.3x). A covering index on <c>copilot_chats(event_id)</c> - which needs no duplication - only
+    ///   reached 10.4s, because an index key must be a column of the table it indexes, so no index on
+    ///   <c>copilot_chats</c> can be date-ordered unless the date is ON <c>copilot_chats</c>. See migration
+    ///   <c>DenormaliseCopilotChatUserAndTime</c> for the full option comparison and issue #360.
     ///   <br/>Semantics are unchanged: the old <c>INNER JOIN</c> dropped any chat whose audit event was
     ///   missing, and <c>NULL</c> fails <c>time_stamp &gt;= @from</c>, so the same rows are excluded.</item>
     ///   <item>The licensed population is derived from <c>user_license_type_lookups</c> filtered by

@@ -19,10 +19,24 @@
      messages) before discarding the non-Copilot ones. That is why the Copilot Adoption page timed out.
      See issue #360.
 
-   MEASURED IMPACT (synthetic 200k-user bench; medians of 3 warm runs, plan cache cleared)
-     LicensedUsers query,  28-day window:  73,589 ms -> 20,333 ms   reads 1,374,520 -> 742,100
-     LicensedUsers query,  90-day window:  98,165 ms -> 35,389 ms   reads 1,387,552 -> 796,821
-     The 90-day figure previously exceeded the 90-second command timeout outright.
+   MEASURED IMPACT
+     Measured on a bench built to match a REAL customer tenant's shape (10.85M audit_events at ~1.7 KB
+     per row, 6.0M copilot_chats, Copilot = 55% of audit_events, 4.4 years retention). Medians of 3
+     warm runs with the plan cache cleared. LicensedUsers query, 28-day window:
+
+       baseline (joins audit_events)                  13.0 s
+       + covering index on copilot_chats(event_id)    10.4 s   (no duplication - barely helps)
+       + indexed view over the join                    6.7 s   (but +95% on every audit insert)
+       THIS migration (denormalised columns)           5.6 s
+
+     An index key must be a column of the table it indexes. The date lives on audit_events, so no
+     index on copilot_chats can be date-ordered unless the date is ON copilot_chats - which is why
+     the non-duplicating covering index barely moves and this does.
+
+     NOTE ON EXTRAPOLATION: the bench reproduces the customer's data SHAPE, not their environment
+     (Azure SQL Database, tier-capped, importer running concurrently). Observed production p50 for
+     this step is ~90 s while the same shape runs in ~13 s on bench hardware, so the 2.3x RATIO is
+     the defensible claim - not any particular absolute production figure.
 
    HOW LONG IT TAKES / DOWNTIME
      * Adding the two NULLable columns is metadata-only (measured 0 ms) - not a table rewrite.
