@@ -22,8 +22,9 @@ namespace Common.Entities.CopilotAdoption
     ///   carries denormalised <c>user_id</c> / <c>time_stamp</c> columns, written on the same row by the
     ///   same statement that inserts the chat (<c>common_upsert_copilot_agents.sql</c>) and indexed by
     ///   <c>IX_copilot_chats_time_stamp_user_id</c>.
-    ///   <br/>Measured on a bench matching a real customer's shape (10.85M audit_events at ~1.7 KB/row,
-    ///   6.0M copilot_chats, 55% Copilot): <c>LicensedUsers</c> at a 28-day window went 13.0s -&gt; 5.6s
+    ///   <br/>Measured on a synthetic bench sized for a large tenant (~10M audit_events at ~1.7 KB/row,
+    ///   ~6M copilot_chats, Copilot a large share of them): <c>LicensedUsers</c> at a 28-day window went
+    ///   13.0s -&gt; 5.6s
     ///   (2.3x). A covering index on <c>copilot_chats(event_id)</c> - which needs no duplication - only
     ///   reached 10.4s, because an index key must be a column of the table it indexes, so no index on
     ///   <c>copilot_chats</c> can be date-ordered unless the date is ON <c>copilot_chats</c>. See migration
