@@ -9,14 +9,20 @@ namespace Common.Entities.Migrations
     ///
     /// <para>
     /// <b>Why.</b> A Copilot interaction has no date of its own: the timestamp and the user live on
-    /// <c>dbo.audit_events</c>, which is the single largest table in the product AND is clustered on a random
-    /// <c>uniqueidentifier</c>. Every Copilot query therefore ran
-    /// <c>copilot_chats INNER JOIN audit_events</c>. Measured on a synthetic 200k-user tenant, the optimiser
-    /// never used <c>IX_audit_events_time_stamp</c> for that join at all - it seeked <c>IX_user_id</c> once per
-    /// licensed user and looked the timestamp up on the clustered index. On a real tenant that enumerates
-    /// EVERY audit event those users generated (SharePoint opens, mail sends, Teams messages) across the
-    /// 365-day history window before discarding the non-Copilot ones, which is why the page timed out at the
-    /// median. See issue #360.
+    /// <c>dbo.audit_events</c>. Every Copilot query therefore ran
+    /// <c>copilot_chats INNER JOIN audit_events</c>, and no index could make that read date-selective,
+    /// because an index key must be a column of the table being indexed and the date is on the OTHER table.
+    /// See issue #360, and the option comparison below for what was measured instead of assumed.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>An earlier explanation of this migration was WRONG and is withdrawn.</b> It claimed the optimiser
+    /// seeked <c>IX_user_id</c> once per licensed user and dragged in every audit event those users ever
+    /// generated. A read-only diagnostic against a real customer tenant denied it: <c>IX_user_id</c> showed
+    /// 3 seeks against 230 on <c>IX_audit_events_time_stamp</c>, Copilot is 55% of <c>audit_events</c> (not a
+    /// small minority), and licensed users' audit activity is ~87% Copilot - so there is little non-Copilot
+    /// data to drag in. The structural argument above is the one that survived contact with real data; do not
+    /// reinstate the plan-shape story.
     /// </para>
     ///
     /// <para>
@@ -206,8 +212,10 @@ DECLARE @canOnline bit = CASE WHEN @edition IN (3, 5, 8) THEN 1 ELSE 0 END;
 --    NOTE: this migration is stamped once and never runs again, but the columns stay NULLable, so a chat
 --    inserted by an OLD importer during the upgrade window would keep NULL for ever and be invisible to
 --    every report. The importer therefore runs a bounded self-healing repair
---    (repair_denormalised_copilot_columns.sql, called unconditionally from
---    CopilotAuditEventManager.CommitAllChanges) for exactly that case. Do not remove one without the other.
+--    (repair_denormalised_copilot_columns.sql, called once per cycle from the web-job top level in
+--    Program.cs, OUTSIDE the DownloadActivityData try/catch) for exactly that case. Do not remove one
+--    without the other, and do not move that call inside the import - see the header of that script for
+--    the three placements that were tried and each left a hole.
 -------------------------------------------------------------------------------------------------
 IF EXISTS (SELECT 1 FROM dbo.copilot_chats WHERE time_stamp IS NULL)
 BEGIN

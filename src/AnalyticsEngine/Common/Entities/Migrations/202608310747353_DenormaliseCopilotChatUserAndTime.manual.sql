@@ -13,11 +13,9 @@
      dbo.audit_events, and indexes them - so no Copilot report has to join dbo.audit_events any more.
 
      A Copilot interaction has no date of its own: the timestamp and the user live on the parent audit
-     event. dbo.audit_events is the largest table in the product and is clustered on a random
-     uniqueidentifier, and the optimiser was resolving that join by seeking IX_user_id once per licensed
-     user - enumerating every audit event those users ever generated (SharePoint opens, mail sends, Teams
-     messages) before discarding the non-Copilot ones. That is why the Copilot Adoption page timed out.
-     See issue #360.
+     event. No index could make that read date-selective, because an index key must be a column of the
+     table being indexed and the date is on the OTHER table - so every Copilot report paid for the join
+     no matter how narrow the reporting window was. See issue #360.
 
    MEASURED IMPACT
      Measured on a bench built to match a REAL customer tenant's shape (10.85M audit_events at ~1.7 KB
@@ -137,8 +135,10 @@ DECLARE @canOnline bit = CASE WHEN @edition IN (3, 5, 8) THEN 1 ELSE 0 END;
 --    NOTE: this migration is stamped once and never runs again, but the columns stay NULLable, so a chat
 --    inserted by an OLD importer during the upgrade window would keep NULL for ever and be invisible to
 --    every report. The importer therefore runs a bounded self-healing repair
---    (repair_denormalised_copilot_columns.sql, called unconditionally from
---    CopilotAuditEventManager.CommitAllChanges) for exactly that case. Do not remove one without the other.
+--    (repair_denormalised_copilot_columns.sql, called once per cycle from the web-job top level in
+--    Program.cs, OUTSIDE the DownloadActivityData try/catch) for exactly that case. Do not remove one
+--    without the other, and do not move that call inside the import - see the header of that script for
+--    the three placements that were tried and each left a hole.
 -------------------------------------------------------------------------------------------------
 IF EXISTS (SELECT 1 FROM dbo.copilot_chats WHERE time_stamp IS NULL)
 BEGIN
@@ -252,6 +252,53 @@ GO
    ===================================================================================================== */
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608310747353_DenormaliseCopilotChatUserAndTime')
 BEGIN
+    /* ---------------------------------------------------------------------------------------------
+       Refuse to stamp unless the schema work above actually completed.
+
+       This script is split into GO batches, and by default sqlcmd/SSMS CONTINUE to the next batch after
+       a statement fails - a severity-16 error aborts its own batch, not the script. Without this check an
+       interrupted or partially failed run (out of disk, log full, killed session, cancelled index build)
+       would fall through to the stamp and record the migration as applied when it is not.
+
+       That is worse than the original error: EF would then believe the schema is at this version,
+       DatabaseUpgrader would skip the migration for ever, and - because every Copilot report now filters
+       on copilot_chats.time_stamp - the un-backfilled interactions would be silently INVISIBLE rather
+       than merely missing. Stamping is the one step that must never happen optimistically.
+
+       Run with sqlcmd -b (or SSMS SQLCMD mode with :on error exit) as well; this guard is the backstop,
+       not a substitute for stopping at the first error.
+       --------------------------------------------------------------------------------------------- */
+    DECLARE @missing nvarchar(max) = N'';
+
+    IF COL_LENGTH('dbo.copilot_chats', 'user_id') IS NULL    SET @missing += N'column copilot_chats.user_id; ';
+    IF COL_LENGTH('dbo.copilot_chats', 'time_stamp') IS NULL SET @missing += N'column copilot_chats.time_stamp; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                   WHERE object_id = OBJECT_ID('dbo.copilot_chats')
+                     AND name = 'IX_copilot_chats_time_stamp_user_id')
+        SET @missing += N'index IX_copilot_chats_time_stamp_user_id; ';
+
+    -- The backfill is part of the migration, not an optional extra: a chat left without a timestamp is
+    -- invisible to every report. Only rows that CAN be repaired count - a chat whose audit event no
+    -- longer exists never had a timestamp and was invisible before this migration too.
+    IF COL_LENGTH('dbo.copilot_chats', 'time_stamp') IS NOT NULL
+    BEGIN
+        DECLARE @unbackfilled bigint;
+        EXEC sp_executesql
+            N'SELECT @n = COUNT_BIG(*) FROM dbo.copilot_chats AS c
+              WHERE c.time_stamp IS NULL
+                AND EXISTS (SELECT 1 FROM dbo.audit_events AS ae WHERE ae.id = c.event_id);',
+            N'@n bigint OUTPUT', @n = @unbackfilled OUTPUT;
+
+        IF @unbackfilled > 0
+            SET @missing += N'backfill incomplete (' + CAST(@unbackfilled AS nvarchar(20)) + N' repairable row(s) still NULL); ';
+    END
+
+    IF @missing <> N''
+    BEGIN
+        RAISERROR('DenormaliseCopilotChatUserAndTime: NOT stamped - the schema work did not complete: %s Re-run this script (it is idempotent and resumable) and check the Messages tab for the original error.', 16, 1, @missing) WITH NOWAIT;
+        RETURN;
+    END
+
     IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608250900001_IndexCopilotAccessedResourceFkColumns')
     BEGIN
         DECLARE @model varbinary(max);

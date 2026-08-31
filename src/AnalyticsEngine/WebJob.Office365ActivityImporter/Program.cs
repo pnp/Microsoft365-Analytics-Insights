@@ -320,16 +320,17 @@ namespace WebJob.Office365ActivityImporter
                 // Repair any Copilot interactions left without their denormalised user_id / time_stamp
                 // (migration DenormaliseCopilotChatUserAndTime). Such rows are INVISIBLE to every Copilot
                 // report, because they all filter on copilot_chats.time_stamp - so this must be reached on
-                // every cycle, not only successful ones. Deliberately placed OUTSIDE the try/catch above and
-                // outside DownloadActivityData: an aborted cycle (e.g. a persistent Activity API auth
-                // failure), a cycle that downloaded nothing, and a cycle skipped for having no organisation
-                // URLs configured must all still heal the database, since the repair only needs SQL.
-                // Costs 4 logical reads when there is nothing to do, and never throws.
-                if (configuredSettings.ImportJobSettings.ActivityLog || configuredSettings.ImportJobSettings.Copilot)
-                {
-                    await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
-                        .RepairDenormalisedColumnsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
-                }
+                // every cycle. Deliberately OUTSIDE the try/catch above, outside DownloadActivityData, AND
+                // outside the import feature gate: an aborted cycle, a cycle that downloaded nothing, a
+                // cycle skipped for having no organisation URLs, and a tenant that has since DISABLED both
+                // import toggles must all still heal the database. The Copilot Adoption page can be viewed
+                // with the audit import switched off (it also runs on the Graph usage reports), so gating
+                // this on the importer would leave those rows invisible indefinitely.
+                //
+                // The script self-guards on the columns existing, so it is a no-op on a database that has
+                // not been upgraded yet. Costs 4 logical reads when there is nothing to do, and never throws.
+                await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
+                    .RepairDenormalisedColumnsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
 
 #if DEBUG
                 runAgain = false; // Debug only runs once; release runs forever. 

@@ -436,6 +436,14 @@ FROM aged;
 UPDATE au SET au.time_stamp = h.new_ts
 FROM dbo.audit_events au JOIN #hist h ON h.id = au.id;
 
+-- The denormalised copy on copilot_chats must move with it. Every Copilot report now filters
+-- copilot_chats.time_stamp rather than joining dbo.audit_events, so re-dating only the audit event
+-- would leave the chat stranded at its original date - and because the stale value is NOT NULL, the
+-- importer's self-healing repair would never correct it. The whole point of this step is to move
+-- interactions into and out of the reporting windows, so both copies have to be updated together.
+UPDATE c SET c.time_stamp = h.new_ts
+FROM dbo.copilot_chats c JOIN #hist h ON h.id = c.event_id;
+
 DECLARE @rehomed int = (SELECT COUNT(*) FROM #hist);
 PRINT CONCAT('Historic Copilot interactions re-dated: ', @rehomed);
 
