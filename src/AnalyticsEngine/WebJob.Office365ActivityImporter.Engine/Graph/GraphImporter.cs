@@ -552,6 +552,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 _logger.LogInformation($"{this.GetType().Name} read {abstractActivityLoader.LoadedReportPages.SelectMany(p => p.Value).Count().ToString("N0")} {thingWeAreImporting} records from Graph API");
                 await abstractActivityLoader.SaveLoadedReportsToSql(userEmailToDbIdCache, DBLookupCache<TLookupType>.Create<CACHETYPE>(db));
+
+                // Keep the columnstore index (ColumnstoreUsageReportMetrics) compacted. The upserts above
+                // land in the rowstore delta store, which is scanned uncompressed, so without this the
+                // licence-opportunity report gets slower every cycle. A no-op where no columnstore exists.
+                // Never allowed to fail the import: this is maintenance, not data.
+                try
+                {
+                    await abstractActivityLoader.CompactColumnstoreAsync(db);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning($"{thingWeAreImporting}: could not compact the columnstore index "
+                        + $"({ex.Message}). The import succeeded; the licence-opportunity report may be "
+                        + "slower until this is compacted.");
+                }
             }
 
             var total = abstractActivityLoader.LoadedReportPages.SelectMany(r => r.Value).Count();

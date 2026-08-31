@@ -155,6 +155,62 @@ SELECT CAST(CASE WHEN EXISTS (
                 .SingleAsync();
         }
 
+        /// <summary>
+        /// Compacts this report table's columnstore delta rowgroups, if it has a columnstore index.
+        ///
+        /// <para>
+        /// <see cref="SaveLoadedReportsToSql"/> writes per-(date, user) upserts row by row, and only a bulk
+        /// load of 102,400+ rows compresses straight into a compressed rowgroup - everything else lands in
+        /// the rowstore delta store, which is scanned uncompressed. Left alone, the delta store grows every
+        /// import cycle and the columnstore's advantage decays back towards the full-scan behaviour the
+        /// <c>ColumnstoreUsageReportMetrics</c> migration exists to remove.
+        /// </para>
+        /// <para>
+        /// Plain <c>REORGANIZE</c> rather than <c>WITH (COMPRESS_ALL_ROW_GROUPS = ON)</c>: it merges and
+        /// compresses CLOSED delta rowgroups and removes deleted rows, which is the cheap, safe operation to
+        /// run on every cycle. Forcing the currently-open rowgroup to compress as well would rewrite the
+        /// trailing day's rows on every single import for very little gain.
+        /// </para>
+        /// <para>
+        /// A no-op (single metadata read) when the table has no columnstore index - which is the case on any
+        /// server where the migration's columnstore attempt fell back to a B-tree, or was skipped entirely.
+        /// </para>
+        /// </summary>
+        internal async Task CompactColumnstoreAsync(AnalyticsEntitiesContext db)
+        {
+            var table = typeof(TReportDbType).GetCustomAttribute<TableAttribute>();
+            if (table == null)
+            {
+                return;
+            }
+
+            var qualifiedTableName = $"{table.Schema ?? "dbo"}.{table.Name}";
+
+            // i.type = 6 is NONCLUSTERED COLUMNSTORE.
+            const string sql = @"
+DECLARE @ix sysname = (
+    SELECT TOP (1) i.name
+    FROM sys.indexes AS i
+    WHERE i.object_id = OBJECT_ID(@tableName) AND i.type = 6 AND i.is_disabled = 0);
+
+IF @ix IS NOT NULL
+BEGIN
+    DECLARE @sql nvarchar(max) =
+        N'ALTER INDEX ' + QUOTENAME(@ix) + N' ON ' + @tableName + N' REORGANIZE;';
+    EXEC sp_executesql @sql;
+END";
+
+            await db.Database.ExecuteSqlCommandAsync(
+                // DoNotEnsureTransaction: index maintenance has no business inside a transaction. EF6's
+                // default (EnsureTransaction) would wrap a potentially long REORGANIZE in one, holding it
+                // open and growing the log for no benefit. (Verified that REORGANIZE does still succeed
+                // under EF's default behaviour on current SQL Server, so this is hardening rather than a
+                // bug fix - but there is no reason to run maintenance transactionally.)
+                TransactionalBehavior.DoNotEnsureTransaction,
+                sql,
+                new SqlParameter("@tableName", qualifiedTableName));
+        }
+
         public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax, ISet<DateTime> datesToSkip = null)
         {
             daysBackMax = ClampDaysBack(daysBackMax);

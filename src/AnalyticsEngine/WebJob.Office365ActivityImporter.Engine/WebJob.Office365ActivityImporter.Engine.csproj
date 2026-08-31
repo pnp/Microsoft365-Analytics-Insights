@@ -239,6 +239,7 @@
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_sp_copilot_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_teams_copilot_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\common_upsert_copilot_agents.sql" />
+    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\repair_denormalised_copilot_columns.sql" />
     <None Include="ActivityAPI\Copilot\SQL\copilot_merge_step_timings.sql" />
     <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_activity_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_events_from_staging_table.sql" />

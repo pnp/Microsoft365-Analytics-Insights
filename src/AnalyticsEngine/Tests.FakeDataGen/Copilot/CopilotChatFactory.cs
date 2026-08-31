@@ -83,6 +83,13 @@ namespace Tests.FakeDataGen.Copilot
                 AppHost = appHost,
                 CopilotCreditEstimateTotal = _random.Next(1, 50),
 
+                // Denormalised copies of the audit event's user and timestamp. The real importer merge
+                // (common_upsert_copilot_agents.sql) writes these from the audit event it has just
+                // inserted; generated data must carry them too or every Copilot report reads as empty,
+                // because they are what the reports filter on now instead of joining dbo.audit_events.
+                UserId = user.ID,
+                TimeStampUtc = timestampUtc,
+
                 // Fields the importer parses but used to discard. Generating them keeps any report built
                 // over them honest - an empty column looks the same as a working report on no data.
                 ThreadId = NextThreadId(user.ID),
