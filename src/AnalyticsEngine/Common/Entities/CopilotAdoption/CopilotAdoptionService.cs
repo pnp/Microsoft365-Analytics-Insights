@@ -135,6 +135,29 @@ namespace Common.Entities.CopilotAdoption
                 cancellationToken,
                 new SqlParameter("@from", windowStart)) == 1;
 
+            // Every Copilot query filters on copilot_chats.time_stamp, so an interaction whose denormalised
+            // columns have not been written yet is simply missing from the figures. Migration
+            // DenormaliseCopilotChatUserAndTime backfills existing rows, and the importer merge repairs any
+            // the upgrade window left behind - but until that has caught up the page would report numbers
+            // that are quietly too low. Say so rather than presenting them as fact: that is the whole
+            // lesson of issue #360.
+            var backfillPending = await SafeScalarAsync(
+                CopilotAdoptionSql.PendingCopilotBackfillSql,
+                summary.Warnings,
+                "Copilot interaction backfill probe",
+                () => summary.MarkFiguresIncomplete("Copilot interaction backfill check"),
+                cancellationToken) == 1;
+
+            if (backfillPending)
+            {
+                summary.MarkFiguresIncomplete("Copilot interactions awaiting backfill");
+                summary.Warnings.Add(
+                    "Some Copilot interactions have not finished being upgraded to the new reporting format, "
+                    + "so every Copilot figure below is currently too low. This repairs itself automatically "
+                    + "on the next few import cycles - re-run this report once the importer has caught up. "
+                    + "If it persists, check that the Office 365 activity importer web job is running.");
+            }
+
             summary.DataSources.CopilotUsageReportDate = await SafeDateAsync(
                 CopilotAdoptionSql.LatestCopilotReportDateSql,
                 summary.Warnings,
