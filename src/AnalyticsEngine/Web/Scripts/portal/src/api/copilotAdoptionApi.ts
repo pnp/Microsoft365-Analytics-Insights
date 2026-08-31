@@ -12,17 +12,79 @@ import type {
 const baseUrl = (): string =>
   window.o365AnalyticsCopilotAdoptionAPI ?? `${window.location.origin}/api/CopilotAdoption`;
 
-async function getJson<T>(path: string, what: string): Promise<T> {
-  const response = await apiFetch(`${baseUrl()}${path}`, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
+/**
+ * HTTP 202 from any adoption endpoint means "the analysis is still running, poll me".
+ *
+ * The analysis is a single shared, cached computation on the server, and on a large tenant it can
+ * legitimately take longer than the ~230s at which Azure App Service kills a request - so the server
+ * answers 202 rather than holding the connection open until the platform drops it. See issue #360.
+ */
+const STILL_BUILDING = 202;
+
+/** Fallback poll interval when the server doesn't say. The server normally supplies one. */
+const DEFAULT_RETRY_SECONDS = 5;
+
+/**
+ * How long the client keeps polling before giving up. Generous, because the first analysis on a large
+ * tenant is genuinely slow, but bounded so a permanently broken backend cannot spin for ever.
+ */
+const POLL_CEILING_MS = 10 * 60 * 1000;
+
+const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 
-  if (!response.ok) {
-    throw new Error(`Couldn't load ${what} (${response.status}).`);
-  }
+async function getJson<T>(path: string, what: string, signal?: AbortSignal): Promise<T> {
+  const giveUpAt = Date.now() + POLL_CEILING_MS;
 
-  return response.json() as Promise<T>;
+  for (;;) {
+    const response = await apiFetch(`${baseUrl()}${path}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+
+    if (response.status === STILL_BUILDING) {
+      // Deliberately NOT treated as success: 202 is 2xx, so `response.ok` is true and parsing it as the
+      // model would hand the page a "building" envelope where it expected data.
+      const body = (await response.json().catch(() => null)) as { retryAfterSeconds?: number } | null;
+      const waitMs = (body?.retryAfterSeconds ?? DEFAULT_RETRY_SECONDS) * 1000;
+
+      if (Date.now() + waitMs >= giveUpAt) {
+        throw new Error(
+          `The Copilot adoption analysis is taking longer than expected and hasn't finished yet. ` +
+            `It is still running on the server - reload the page in a few minutes.`,
+        );
+      }
+
+      // Abortable, so unmounting the page or changing the period actually STOPS the loop. A plain
+      // `cancelled` flag would only suppress the state update and leave this polling for ten minutes.
+      await delay(waitMs, signal);
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Couldn't load ${what} (${response.status}).`);
+    }
+
+    return response.json() as Promise<T>;
+  }
 }
 
 /** Common query parameters: every endpoint is scoped by the window and the seat-licence selection. */
@@ -67,20 +129,24 @@ export function fetchAdoptionAvailability(): Promise<CopilotAdoptionAvailability
 export function fetchAdoptionSummary(
   windowDays: number,
   seatLicenceTypeIds?: number[],
+  signal?: AbortSignal,
 ): Promise<CopilotAdoptionSummary> {
   return getJson<CopilotAdoptionSummary>(
     `/summary?${scopeParams(windowDays, seatLicenceTypeIds)}`,
     'the Copilot adoption summary',
+    signal,
   );
 }
 
 export function fetchAdoptionFilters(
   windowDays: number,
   seatLicenceTypeIds?: number[],
+  signal?: AbortSignal,
 ): Promise<AdoptionFilterOptions> {
   return getJson<AdoptionFilterOptions>(
     `/filters?${scopeParams(windowDays, seatLicenceTypeIds)}`,
     'the Copilot adoption filters',
+    signal,
   );
 }
 
@@ -90,12 +156,13 @@ export function fetchLicensedUsers(
   skip: number,
   take: number,
   seatLicenceTypeIds?: number[],
+  signal?: AbortSignal,
 ): Promise<LicensedUserPage> {
   const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'the licensed Copilot users');
+  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'the licensed Copilot users', signal);
 }
 
 export function fetchOpportunities(
@@ -104,21 +171,24 @@ export function fetchOpportunities(
   skip: number,
   take: number,
   seatLicenceTypeIds?: number[],
+  signal?: AbortSignal,
 ): Promise<LicenceOpportunityPage> {
   const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'the Copilot licence opportunities');
+  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'the Copilot licence opportunities', signal);
 }
 
 export function fetchAdoptionSql(
   windowDays: number,
   seatLicenceTypeIds?: number[],
+  signal?: AbortSignal,
 ): Promise<Record<string, string>> {
   return getJson<Record<string, string>>(
     `/sql?${scopeParams(windowDays, seatLicenceTypeIds)}`,
     'the Copilot adoption queries',
+    signal,
   );
 }
 

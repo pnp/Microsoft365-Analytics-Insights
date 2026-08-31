@@ -134,6 +134,20 @@ namespace Tests.UnitTests
 
         public bool IndexExists(string table, string index) => IndexColumnCount(table, index) > 0;
 
+        /// <summary>Runs a scalar query. Returns <c>null</c> for <c>DBNULL</c>.</summary>
+        public object Scalar(string sql)
+        {
+            using (var connection = new SqlConnection(ConnectionString))
+            {
+                connection.Open();
+                using (var command = new SqlCommand(sql, connection) { CommandTimeout = 0 })
+                {
+                    var value = command.ExecuteScalar();
+                    return value == DBNull.Value ? null : value;
+                }
+            }
+        }
+
         private static void ExecuteOn(string connectionString, string sql)
         {
             using (var connection = new SqlConnection(connectionString))

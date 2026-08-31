@@ -218,15 +218,21 @@ export default function CopilotAdoptionPage() {
     }
 
     let cancelled = false;
+    const controller = new AbortController();
+    // Clear the previous period's summary immediately. Leaving it in place kept the Excel button enabled
+    // against a stale analysis while its URL already pointed at the new period, so a click could sit
+    // waiting out a whole cold run - which is the request length the platform kills.
+    setSummary(null);
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal)
       .then((s) => {
         if (!cancelled) setSummary(s);
       })
       .catch((e) => {
-        if (!cancelled) setSummaryError(e instanceof Error ? e.message : 'Failed to load the adoption summary.');
+        if (cancelled || controller.signal.aborted) return;
+        setSummaryError(e instanceof Error ? e.message : 'Failed to load the adoption summary.');
       })
       .finally(() => {
         if (!cancelled) setSummaryLoading(false);
@@ -234,13 +240,13 @@ export default function CopilotAdoptionPage() {
 
     // The filter lists and the SQL come from the same cached analysis, so these are cheap follow-ups
     // rather than extra work. Their failure is not worth surfacing - the page works without them.
-    fetchAdoptionFilters(windowDays)
+    fetchAdoptionFilters(windowDays, undefined, controller.signal)
       .then((f) => {
         if (!cancelled) setFilterOptions(f);
       })
       .catch(() => undefined);
 
-    fetchAdoptionSql(windowDays)
+    fetchAdoptionSql(windowDays, undefined, controller.signal)
       .then((s) => {
         if (!cancelled) setSql(s);
       })
@@ -248,6 +254,10 @@ export default function CopilotAdoptionPage() {
 
     return () => {
       cancelled = true;
+      // Aborting matters now that a 202 makes these poll: a bare `cancelled` flag would only suppress
+      // the state update and leave three polling loops running for up to ten minutes after the period
+      // changed or the page unmounted.
+      controller.abort();
     };
   }, [availability, windowDays]);
 
@@ -290,13 +300,21 @@ export default function CopilotAdoptionPage() {
           {availability?.available && (
             <Tooltip
               relationship="description"
-              content="The whole report - every figure, table and chart - as an Excel workbook with live, editable charts. Run it before and after an enablement programme to compare like for like."
+              content={
+                summary
+                  ? 'The whole report - every figure, table and chart - as an Excel workbook with live, editable charts. Run it before and after an enablement programme to compare like for like.'
+                  : 'Available once the analysis has finished loading.'
+              }
             >
+              {/* Disabled until the summary is in. The export is an <a href> download, so it cannot poll:
+                  clicking it before the analysis is cached makes the browser wait out the whole run, which
+                  on a large tenant is longer than the platform allows. See issue #360. */}
               <Button
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={workbookExportUrl(windowDays)}
+                href={summary ? workbookExportUrl(windowDays) : undefined}
+                disabled={!summary}
               >
                 Excel report
               </Button>
@@ -363,6 +381,22 @@ export default function CopilotAdoptionPage() {
 
           {!summaryLoading && summary && (
             <div className={styles.stack}>
+              {summary.figuresIncomplete && (
+                <MessageBar intent="error">
+                  <MessageBarBody>
+                    <strong>These figures are incomplete and should not be relied on.</strong>{' '}
+                    {summary.incompleteReasons.length > 0 && (
+                      <>
+                        The following could not be loaded, so the numbers below were calculated without them:{' '}
+                        {summary.incompleteReasons.join(', ')}.{' '}
+                      </>
+                    )}
+                    This is usually a query timing out on a large tenant rather than a lack of adoption. Try a
+                    shorter period, or re-run once the database is less busy.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
               {summary.warnings.length > 0 && (
                 <MessageBar intent="warning">
                   <MessageBarBody>
@@ -376,7 +410,10 @@ export default function CopilotAdoptionPage() {
               )}
 
               {tab === 'overview' &&
-                (summary.licensedUsers === 0 ? (
+                (summary.licensedUsers === 0 && !summary.figuresIncomplete ? (
+                  // Only a GENUINE zero means "nothing set up yet". When the licence queries timed out the
+                  // count also degrades to zero, and showing the first-run screen then tells a tenant with
+                  // thousands of seats that it has none at all.
                   <FirstRunState summary={summary} />
                 ) : (
                   <OverviewTab summary={summary} sql={sql} onDrillToAction={drillToAction} />

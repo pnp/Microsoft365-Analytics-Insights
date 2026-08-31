@@ -48,8 +48,11 @@ namespace Tests.UnitTests
         // DeprecateTeamsAddons drops the Teams add-on tables when they are empty,
         // AddCopilotInteractionHistory adds the Copilot interaction-history tables, and
         // WidenCopilotAccessedResourceDedupIndex / IndexCopilotInteractionKeywordsByKeyword /
-        // IndexCopilotInteractionsDedupWindow are three further schema-only index migrations.
-        private const string LatestId = "202608250900001_IndexCopilotAccessedResourceFkColumns";
+        // IndexCopilotInteractionsDedupWindow are three further schema-only index migrations,
+        // DenormaliseCopilotChatUserAndTime adds the denormalised user_id / time_stamp columns to
+        // copilot_chats, and ColumnstoreUsageReportMetrics is a schema-only index migration over the
+        // per-user usage-report tables.
+        private const string LatestId = "202608310800001_ColumnstoreUsageReportMetrics";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
