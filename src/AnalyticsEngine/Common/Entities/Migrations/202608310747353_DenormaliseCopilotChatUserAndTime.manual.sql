@@ -237,6 +237,59 @@ END
 ELSE
     RAISERROR('DenormaliseCopilotChatUserAndTime: IX_copilot_chats_time_stamp_user_id already exists; skipping.', 0, 1) WITH NOWAIT;
 
+-------------------------------------------------------------------------------------------------
+-- 4. Mop-up pass: rows inserted by a still-running OLD importer while section 2 was running.
+--
+--    dbo.copilot_chats is clustered on event_id - a GUID taken from the audit event, so effectively
+--    RANDOM rather than ascending. A chat inserted while section 2 walks that key upward therefore has
+--    roughly a 50% chance of landing BELOW the watermark that has already passed, and section 2 will
+--    never revisit it. On a busy tenant that reliably strands a few hundred rows, which is not a
+--    failure - it is the documented reason the importer ships a self-healing repair.
+--
+--    This is cheap to do now, and only now: IX_copilot_chats_time_stamp_user_id exists and sorts NULLs
+--    first, so 'WHERE time_stamp IS NULL' is a seek to the head of the index - not the full-table
+--    rescan per batch that made this form unusable for the bulk backfill in section 2 (measured there
+--    at 792,908 ms against 106,700 ms for the watermark walk).
+--
+--    Deliberately BOUNDED. If the importer is still inserting, this loop is not required to win the
+--    race; whatever it misses is healed by repair_denormalised_copilot_columns.sql on the next import
+--    cycle. Losing the race must not block the stamp - see the note in the stamp guard below.
+-------------------------------------------------------------------------------------------------
+IF COL_LENGTH('dbo.copilot_chats', 'time_stamp') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM sys.indexes
+               WHERE object_id = OBJECT_ID('dbo.copilot_chats')
+                 AND name = 'IX_copilot_chats_time_stamp_user_id')
+BEGIN
+    DECLARE @mopBatch  int    = 50000;
+    DECLARE @mopPasses int    = 0;
+    DECLARE @mopRows   bigint = 0;
+    DECLARE @mopThis   int    = 1;
+
+    SET @stepStart = SYSUTCDATETIME();
+
+    WHILE @mopThis > 0 AND @mopPasses < 20
+    BEGIN
+        UPDATE TOP (@mopBatch) c
+        SET c.user_id    = ae.user_id,
+            c.time_stamp = ae.time_stamp
+        FROM dbo.copilot_chats AS c
+        INNER JOIN dbo.audit_events AS ae ON ae.id = c.event_id
+        WHERE c.time_stamp IS NULL;
+
+        SET @mopThis   = @@ROWCOUNT;
+        SET @mopRows  += @mopThis;
+        SET @mopPasses += 1;
+    END
+
+    IF @mopRows > 0
+    BEGIN
+        SET @msg = @migration + N': mop-up backfilled ' + CAST(@mopRows AS nvarchar(20))
+                 + N' row(s) that were inserted while the main backfill was running ('
+                 + CAST(DATEDIFF(MILLISECOND, @stepStart, SYSUTCDATETIME()) AS nvarchar(20)) + N'ms).';
+        RAISERROR(@msg, 0, 1) WITH NOWAIT;
+    END
+END
+
 GO
 
 /* =====================================================================================================
@@ -280,17 +333,27 @@ BEGIN
     -- The backfill is part of the migration, not an optional extra: a chat left without a timestamp is
     -- invisible to every report. Only rows that CAN be repaired count - a chat whose audit event no
     -- longer exists never had a timestamp and was invisible before this migration too.
+    --
+    -- A residual count here is NOT a failure and must NOT block the stamp. dbo.copilot_chats is
+    -- clustered on a random GUID, so an importer that is still running will keep landing new rows
+    -- behind both the section 2 watermark and the section 4 mop-up for as long as it runs. Those rows
+    -- are healed automatically by repair_denormalised_copilot_columns.sql on the next import cycle -
+    -- that repair exists precisely for this case.
+    --
+    -- Refusing to stamp for them was a real defect: it stranded a customer mid-upgrade over a few
+    -- hundred rows out of several million (far below 0.01%), with the schema work fully complete, and
+    -- because the columnstore
+    -- script refuses to run until this migration is stamped it blocked the REST of the upgrade too.
+    -- Warn, and stamp. Only genuinely missing schema (columns, index) may block.
+    DECLARE @unbackfilled bigint = 0;
+
     IF COL_LENGTH('dbo.copilot_chats', 'time_stamp') IS NOT NULL
     BEGIN
-        DECLARE @unbackfilled bigint;
         EXEC sp_executesql
             N'SELECT @n = COUNT_BIG(*) FROM dbo.copilot_chats AS c
               WHERE c.time_stamp IS NULL
                 AND EXISTS (SELECT 1 FROM dbo.audit_events AS ae WHERE ae.id = c.event_id);',
             N'@n bigint OUTPUT', @n = @unbackfilled OUTPUT;
-
-        IF @unbackfilled > 0
-            SET @missing += N'backfill incomplete (' + CAST(@unbackfilled AS nvarchar(20)) + N' repairable row(s) still NULL); ';
     END
 
     IF @missing <> N''
@@ -298,6 +361,9 @@ BEGIN
         RAISERROR('DenormaliseCopilotChatUserAndTime: NOT stamped - the schema work did not complete: %s Re-run this script (it is idempotent and resumable) and check the Messages tab for the original error.', 16, 1, @missing) WITH NOWAIT;
         RETURN;
     END
+
+    IF @unbackfilled > 0
+        RAISERROR('DenormaliseCopilotChatUserAndTime: WARNING - %I64d row(s) were inserted during the upgrade and still have NULL user_id / time_stamp. The schema change itself is COMPLETE, so the migration is being stamped. The importer repairs these rows automatically on its next cycle (or re-run this script with the importer stopped to clear them now). Until then they are absent from Copilot reports.', 0, 1, @unbackfilled) WITH NOWAIT;
 
     IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608250900001_IndexCopilotAccessedResourceFkColumns')
     BEGIN

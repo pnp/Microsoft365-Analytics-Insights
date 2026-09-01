@@ -34,14 +34,14 @@ namespace Common.Entities.CopilotAdoption
         public const int TrendMonths = 6;
 
         private readonly CopilotAdoptionOptions _options;
-        private readonly Func<AnalyticsEntitiesContext> _contextFactory;
+        private readonly IAnalyticsDbContextFactory _contextFactory;
 
         public CopilotAdoptionService(
             CopilotAdoptionOptions options = null,
-            Func<AnalyticsEntitiesContext> contextFactory = null)
+            IAnalyticsDbContextFactory contextFactory = null)
         {
             _options = options ?? CopilotAdoptionOptions.Default;
-            _contextFactory = contextFactory ?? (() => new AnalyticsEntitiesContext());
+            _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
         }
 
         public CopilotAdoptionOptions Options => _options;
@@ -1242,7 +1242,7 @@ namespace Common.Entities.CopilotAdoption
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)
         {
-            using (var db = _contextFactory())
+            using (var db = _contextFactory.Create())
             {
                 db.Database.CommandTimeout = QueryTimeoutSecs;
                 return await db.Database.SqlQuery<T>(sql, parameters).ToListAsync(cancellationToken);
