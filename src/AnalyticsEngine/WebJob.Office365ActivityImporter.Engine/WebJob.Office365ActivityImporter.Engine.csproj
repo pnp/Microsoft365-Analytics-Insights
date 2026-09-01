@@ -71,6 +71,7 @@
     <Compile Include="ActivityAPI\BlobCheckpoint\ProcessedBlobStoreFactory.cs" />
     <Compile Include="ActivityAPI\AuditTraceConfig.cs" />
     <Compile Include="ActivityAPI\Copilot\CopilotAuditEventManager.cs" />
+    <Compile Include="ActivityAPI\Copilot\ICopilotStagingWriter.cs" />
     <Compile Include="ActivityAPI\Copilot\CostEstimate\CopilotCreditEstimation.cs" />
     <Compile Include="ActivityAPI\Copilot\CostEstimate\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\GraphCaches.cs" />
@@ -79,6 +80,7 @@
     <Compile Include="ActivityAPI\Copilot\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\StagingClasses.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
+    <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\StagingClasses.cs" />
     <Compile Include="ActivityAPI\Interfaces.cs" />
