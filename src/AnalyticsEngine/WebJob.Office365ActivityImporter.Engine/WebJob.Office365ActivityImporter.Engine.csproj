@@ -180,6 +180,7 @@
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportRequest.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportSource.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageReportPolicy.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailParser.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportParser.cs" />
