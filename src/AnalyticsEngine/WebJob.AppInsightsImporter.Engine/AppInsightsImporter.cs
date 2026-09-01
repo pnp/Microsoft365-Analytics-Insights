@@ -33,14 +33,11 @@ namespace WebJob.AppInsightsImporter.Engine
         public async Task ImportAndSave(bool saveRestResponses, int? daysBeforeOverride)
         {
 
-            DateTime? scanFromDateOverride = null;
-            if (daysBeforeOverride.HasValue)
-            {
-                // App Insights timestamps are UTC, so the scan window must be UTC too. Using local
-                // DateTime.Now on a non-UTC host shifts the day boundaries and the per-day KQL filter,
-                // missing or duplicating edge hits near midnight.
-                scanFromDateOverride = _clock.UtcNow.AddDays(daysBeforeOverride.Value * -1);
-            }
+            // App Insights timestamps are UTC, so the scan window must be UTC too. Using local
+            // DateTime.Now on a non-UTC host shifts the day boundaries and the per-day KQL filter,
+            // missing or duplicating edge hits near midnight. The rule itself lives in
+            // AppInsightsImportWindow so it can be tested without a database or the wall clock (#374).
+            var scanFromDateOverride = AppInsightsImportWindow.ResolveOverrideStartUtc(daysBeforeOverride, _clock.UtcNow);
 
             var sw = Stopwatch.StartNew();
             using (var db = new AnalyticsEntitiesContext())
@@ -55,12 +52,11 @@ namespace WebJob.AppInsightsImporter.Engine
 
                 var newestHit = await db.hits.OrderByDescending(h => h.hit_timestamp).Take(1).FirstOrDefaultAsync();
 
-                // Figure out when to start. Either the debug override, or last hit (if there is one), or 31 days ago.
-                // hit_timestamp is stored in UTC; DateTime.UtcNow keeps the fallback on the same clock.
-                var startDate = scanFromDateOverride.HasValue ? scanFromDateOverride.Value : newestHit?.hit_timestamp ?? _clock.UtcNow.AddDays(-31);
-
-                // Rewind start-date a wee bit just to make sure we get edge hits...
-                startDate = startDate.AddMinutes(-1);
+                // Figure out when to start. Either the debug override, or last hit (if there is one), or 31 days ago,
+                // rewound a little to catch edge hits. hit_timestamp is stored in UTC; the clock keeps the
+                // fallback on the same clock. See AppInsightsImportWindow (#374).
+                var startDate = AppInsightsImportWindow.ResolveStartDateUtc(
+                    scanFromDateOverride, newestHit?.hit_timestamp, _clock.UtcNow);
 
                 var jobTimer = new JobTimer(_logger, "Hits import");
                 if (newestHit != null)
@@ -82,7 +78,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
                     // UTC to match App Insights' UTC timestamps (see startDate above).
                     var endDate = _clock.UtcNow;
-                    var daysToRead = startDate.EachDay(endDate).ToList();
+                    var daysToRead = AppInsightsImportWindow.EnumerateDays(startDate, endDate);
                     _logger.LogInformation($"Importing hits for {daysToRead.Count} days...");
                     var totalDays = 0;
                     var totalPageViews = 0;
