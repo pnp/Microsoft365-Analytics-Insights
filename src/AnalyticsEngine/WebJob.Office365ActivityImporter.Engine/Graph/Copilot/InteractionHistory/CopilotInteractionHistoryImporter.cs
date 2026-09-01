@@ -104,7 +104,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         private readonly IInteractionCognitiveEnricher _cognitiveEnricher;
         private readonly IPilotGroupMemberResolver _pilotGroupResolver;
         private readonly UserGroupsFilterModel _userGroupsFilter;
-        private readonly Func<AnalyticsEntitiesContext> _dbContextFactory;
+        private readonly IAnalyticsDbContextFactory _dbContextFactory;
+        private readonly IClock _clock;
         private readonly int _userChunkSize;
         private readonly int _graphLoadParallelism;
 
@@ -115,16 +116,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             IInteractionCognitiveEnricher cognitiveEnricher,
             IPilotGroupMemberResolver pilotGroupResolver,
             UserGroupsFilterModel userGroupsFilter,
-            Func<AnalyticsEntitiesContext> dbContextFactory = null,
+            IAnalyticsDbContextFactory dbContextFactory = null,
             int userChunkSize = DefaultUserChunkSize,
-            int graphLoadParallelism = DefaultGraphLoadParallelism)
+            int graphLoadParallelism = DefaultGraphLoadParallelism,
+            IClock clock = null)
             : base(logger, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
             _cognitiveEnricher = cognitiveEnricher ?? NullInteractionCognitiveEnricher.Instance;
             _pilotGroupResolver = pilotGroupResolver;
             _userGroupsFilter = userGroupsFilter ?? new UserGroupsFilterModel();
-            _dbContextFactory = dbContextFactory ?? (() => new AnalyticsEntitiesContext());
+            _dbContextFactory = dbContextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
+            _clock = clock ?? SystemClock.Instance;
             _userChunkSize = userChunkSize > 0 ? userChunkSize : DefaultUserChunkSize;
             _graphLoadParallelism = graphLoadParallelism > 0 ? graphLoadParallelism : DefaultGraphLoadParallelism;
         }
@@ -148,7 +151,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 return null;
             }
 
-            var runLog = new CopilotInteractionImportLog { RunStartedUtc = DateTime.UtcNow };
+            var runLog = new CopilotInteractionImportLog { RunStartedUtc = _clock.UtcNow };
 
             try
             {
@@ -238,7 +241,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         /// </remarks>
         private async Task<List<UserImportState>> SelectDueUsersAsync(CopilotInteractionImportLog runLog)
         {
-            var now = DateTime.UtcNow;
+            var now = _clock.UtcNow;
             var cap = _settings.CopilotInteractionHistoryMaxUsersPerCycle > 0
                 ? _settings.CopilotInteractionHistoryMaxUsersPerCycle
                 : AppConfig.DefaultCopilotInteractionHistoryMaxUsersPerCycle;
@@ -326,7 +329,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             }
 
             var candidates = new List<UserImportState>();
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 foreach (var upnChunk in ChunkStrings(memberUpns.ToList()))
                 {
@@ -371,7 +374,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         private async Task<List<UserImportState>> SelectDueUsersAcrossDirectoryAsync(
             CopilotInteractionImportLog runLog, DateTime now, int cap)
         {
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 var eligible = db.users
                     .Where(u => u.UserPrincipalName != null && u.UserPrincipalName != ""
@@ -430,7 +433,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 // re-reads a few interactions. Enriching those again would re-send the same prompt text to
                 // Azure AI Language on every single cycle - a recurring bill, and a needless repeat exposure
                 // of the prompt to an external service - for rows we are about to discard anyway.
-                using (var db = _dbContextFactory())
+                using (var db = _dbContextFactory.Create())
                 {
                     await RemoveAlreadyImportedAsync(db, withData);
                 }
@@ -442,7 +445,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             {
                 runLog.CognitiveDocsScored += await EnrichChunkAsync(withData);
 
-                using (var db = _dbContextFactory())
+                using (var db = _dbContextFactory.Create())
                 {
                     runLog.InteractionsSaved += await SaveChunkAsync(db, withData);
                 }
@@ -588,7 +591,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
         private async Task<UserLoadResult> LoadSingleUserAsync(UserImportState state)
         {
-            var toUtc = DateTime.UtcNow;
+            var toUtc = _clock.UtcNow;
             var fromUtc = GetWindowStart(state.Watermark, toUtc, _settings.CopilotInteractionHistoryMaxDaysBackOnFirstRun);
 
             var loadResult = await _sourceLoader.LoadInteractionsForUserAsync(state.User, fromUtc, toUtc);
@@ -977,9 +980,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         /// </summary>
         private async Task UpdateWatermarksAsync(List<UserLoadResult> loaded, CopilotInteractionImportLog runLog)
         {
-            var now = DateTime.UtcNow;
+            var now = _clock.UtcNow;
 
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 // Load every watermark for the chunk in one batched query rather than one query per user -
                 // a per-row query inside a loop is exactly the pattern this codebase avoids, and at the
@@ -1110,9 +1113,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         private async Task<CopilotInteractionImportLog> FinishRunAsync(CopilotInteractionImportLog runLog, Stopwatch sw)
         {
             sw.Stop();
-            runLog.RunFinishedUtc = DateTime.UtcNow;
+            runLog.RunFinishedUtc = _clock.UtcNow;
 
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 db.CopilotInteractionImportLogs.Add(runLog);
                 await db.SaveChangesAsync();

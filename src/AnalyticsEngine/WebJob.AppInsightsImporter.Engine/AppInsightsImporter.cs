@@ -21,11 +21,13 @@ namespace WebJob.AppInsightsImporter.Engine
     {
         private readonly AppConfig _importConfig;
         private readonly AnalyticsLogger _logger;
+        private readonly IClock _clock;
 
-        public AppInsightsImporter(AppConfig importConfig, AnalyticsLogger logger)
+        public AppInsightsImporter(AppConfig importConfig, AnalyticsLogger logger, IClock clock = null)
         {
             _importConfig = importConfig;
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _clock = clock ?? SystemClock.Instance;
         }
 
         public async Task ImportAndSave(bool saveRestResponses, int? daysBeforeOverride)
@@ -37,7 +39,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 // App Insights timestamps are UTC, so the scan window must be UTC too. Using local
                 // DateTime.Now on a non-UTC host shifts the day boundaries and the per-day KQL filter,
                 // missing or duplicating edge hits near midnight.
-                scanFromDateOverride = DateTime.UtcNow.AddDays(daysBeforeOverride.Value * -1);
+                scanFromDateOverride = _clock.UtcNow.AddDays(daysBeforeOverride.Value * -1);
             }
 
             var sw = Stopwatch.StartNew();
@@ -55,7 +57,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
                 // Figure out when to start. Either the debug override, or last hit (if there is one), or 31 days ago.
                 // hit_timestamp is stored in UTC; DateTime.UtcNow keeps the fallback on the same clock.
-                var startDate = scanFromDateOverride.HasValue ? scanFromDateOverride.Value : newestHit?.hit_timestamp ?? DateTime.UtcNow.AddDays(-31);
+                var startDate = scanFromDateOverride.HasValue ? scanFromDateOverride.Value : newestHit?.hit_timestamp ?? _clock.UtcNow.AddDays(-31);
 
                 // Rewind start-date a wee bit just to make sure we get edge hits...
                 startDate = startDate.AddMinutes(-1);
@@ -79,7 +81,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
 
                     // UTC to match App Insights' UTC timestamps (see startDate above).
-                    var endDate = DateTime.UtcNow;
+                    var endDate = _clock.UtcNow;
                     var daysToRead = startDate.EachDay(endDate).ToList();
                     _logger.LogInformation($"Importing hits for {daysToRead.Count} days...");
                     var totalDays = 0;
