@@ -509,23 +509,15 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        [Ignore]
         public async Task UspCompileActivityWeek_CopilotSundayActivity_IsIncluded()
         {
-            // KNOWN FAILING - kept deliberately as the reproduction for #300.
+            // The reproduction for #300, now fixed. A Copilot interaction at 23:59 on the Sunday belongs to
+            // that Mon-Sun week.
             //
-            // This asserts correct behaviour: a Copilot interaction at 23:59 on the Sunday belongs to that
-            // Mon-Sun week. It currently fails, because profiling.usp_UpsertCopilot filters with
-            // `au.time_stamp <= @EndDate` and @EndDate is the Sunday at midnight - so only the first instant
-            // of the final day is kept and the rest of Sunday is dropped.
-            //
-            // The one-line fix (a half-open `< DATEADD(DAY, 1, @EndDate)` window) was reverted out of this
-            // release: it silently changes every weekly Copilot metric the proc produces, in a direction that
-            // depends on what callers pass as @EndDate, and it arrived with a test-data generator rather than
-            // as a considered profiling change. #300 tracks the proper fix - caller audit, the same treatment
-            // for the other workloads, before/after numbers, and a decision on recompiling history.
-            //
-            // Un-ignore this as part of #300; it is the assertion that change needs to satisfy.
+            // It used to fail because profiling.usp_UpsertCopilot filtered with `au.time_stamp <= @EndDate`.
+            // audit_events.time_stamp is a datetime carrying a real time of day, while @EndDate is a DATE, so
+            // SQL Server widened @EndDate to midnight and the predicate kept only the first instant of the
+            // final day - dropping the rest of Sunday from every weekly Copilot metric.
             using (var db = new AnalyticsEntitiesContext())
             {
                 var monday = TEST_MONDAY.AddDays(98);
@@ -541,6 +533,64 @@ namespace Tests.UnitTests
                     1,
                     await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Chats"),
                     "Copilot activity from the full Sunday must be included in the Mon-Sun week");
+            }
+        }
+
+        [TestMethod]
+        public async Task UspCompileActivityWeek_CopilotActivityAfterTheWeek_IsExcluded()
+        {
+            // The other half of the #300 fix, and the risk the issue called out: if @EndDate had been an
+            // EXCLUSIVE end (the following Monday), the half-open window would double-count a day instead of
+            // fixing an under-count. The only caller (usp_CompileActivityWeek) passes @Monday, @Sunday with
+            // Sunday inclusive, so the window must stop at the instant the next Monday begins - not a day
+            // later. Asserted from both sides so neither boundary can drift again.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(105);
+                var nextMondayMidnight = monday.AddDays(7);            // 00:00:00 - the first instant of the NEXT week
+                var nextMondayLater = monday.AddDays(7).AddHours(9);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+                await InsertCopilotChat(db, TEST_USER_ID, nextMondayMidnight, "Teams");
+                await InsertCopilotChat(db, TEST_USER_ID, nextMondayLater, "Teams");
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                Assert.AreEqual(
+                    0,
+                    await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Chats"),
+                    "Activity on the following Monday belongs to the NEXT week, not this one.");
+            }
+        }
+
+        [TestMethod]
+        public async Task UspCompileActivityWeek_CopilotWholeWeekBoundaries_AreCounted()
+        {
+            // Every boundary instant of the Mon-Sun window in one assertion, so a future edit to either end
+            // of the predicate is caught immediately.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var monday = TEST_MONDAY.AddDays(112);
+
+                await EnsureTestUserExists(db, TEST_USER_ID);
+                await CleanupTestData(db, monday);
+
+                // First instant of the week, an ordinary mid-week time, and the last minute of Sunday.
+                await InsertCopilotChat(db, TEST_USER_ID, monday, "Teams");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(3).AddHours(14), "Teams");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(6).AddHours(23).AddMinutes(59), "Teams");
+
+                // Just outside, both ends.
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddSeconds(-1), "Teams");
+                await InsertCopilotChat(db, TEST_USER_ID, monday.AddDays(7), "Teams");
+
+                await ExecuteStoredProcedure(db, "profiling.usp_CompileActivityWeek", monday);
+
+                Assert.AreEqual(
+                    3,
+                    await GetActivityMetricSum(db, monday, TEST_USER_ID, "Copilot Chats"),
+                    "Exactly the three in-week interactions should be counted.");
             }
         }
 
