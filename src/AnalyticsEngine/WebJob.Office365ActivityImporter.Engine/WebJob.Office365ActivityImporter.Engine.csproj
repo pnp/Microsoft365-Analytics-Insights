@@ -197,12 +197,15 @@
     <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
+    <Compile Include="Graph\User\IUserLicenseStore.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
+    <Compile Include="Graph\User\SqlUserLicenseStore.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
     <Compile Include="Graph\User\UserGroupsCache.cs" />
     <Compile Include="Graph\User\UserInsertProcessor.cs" />
+    <Compile Include="Graph\User\UserLicenseAssignmentDelta.cs" />
     <Compile Include="Graph\User\UserLicenseProcessor.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
