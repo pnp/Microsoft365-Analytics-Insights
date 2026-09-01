@@ -88,6 +88,9 @@
     <Compile Include="Sql\Models\HitUpdate.cs" />
     <Compile Include="Sql\PageClicksSaveExtension.cs" />
     <Compile Include="Sql\PageViewsSaveExtension.cs" />
+    <Compile Include="Sql\Rules\ClickEventRules.cs" />
+    <Compile Include="Sql\Rules\PageViewStagingRules.cs" />
+    <Compile Include="Sql\Rules\SearchTermRules.cs" />
     <Compile Include="Sql\PageUpdatesSaveExtension.cs" />
     <Compile Include="Sql\SearchesSaveExtension.cs" />
   </ItemGroup>

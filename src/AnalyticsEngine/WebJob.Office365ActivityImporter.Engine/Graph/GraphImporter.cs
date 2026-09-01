@@ -37,9 +37,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         // them (and logging a 404) on every cycle. Must be process-lifetime, hence injected.
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
 
-        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
+        private readonly IClock _clock;
+
+        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null, IClock clock = null)
             : base(logger, settings)
         {
+            _clock = clock ?? SystemClock.Instance;
             _userGroupsCache = userGroupsCache;
             _graphAppIndentityOAuthContext = graphAppIndentityOAuthContext;
             _graphClient = graphClient;
@@ -85,7 +88,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var force = _settings.ForceGraphMetadataImport;
             var lastRun = await _lastRunStore.GetLastRunUtc(key);
 
-            if (!ImportCadenceGate.ShouldRun(lastRun, intervalHours, force, DateTime.UtcNow))
+            if (!ImportCadenceGate.ShouldRun(lastRun, intervalHours, force, _clock.UtcNow))
             {
                 _logger.LogInformation($"Skipping {sectionName}: ran recently ({lastRun:u} UTC). " +
                     $"Next run after {lastRun?.AddHours(intervalHours):u} UTC (interval {intervalHours}h). " +
@@ -118,7 +121,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // when gating is active (interval > 0).
             if (intervalHours > 0 && succeeded)
             {
-                await _lastRunStore.SetLastRunUtc(key, DateTime.UtcNow);
+                await _lastRunStore.SetLastRunUtc(key, _clock.UtcNow);
             }
         }
 

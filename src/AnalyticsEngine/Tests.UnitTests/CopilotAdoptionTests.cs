@@ -1,6 +1,7 @@
 extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
+using UnitTests.FakeLoaderClasses;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
@@ -849,7 +850,7 @@ namespace Tests.UnitTests
             // what matters is that a failure is DISTINGUISHABLE from a genuine zero.
             var service = new CopilotAdoptionService(
                 CopilotAdoptionOptions.Default,
-                () => throw new InvalidOperationException("simulated database failure"));
+                new ThrowingAnalyticsDbContextFactory("simulated database failure"));
 
             var analysis = await service.AnalyseAsync();
             var summary = analysis.Summary;
@@ -869,7 +870,7 @@ namespace Tests.UnitTests
             // be served to everyone else until the cache expired.
             var service = new CopilotAdoptionService(
                 CopilotAdoptionOptions.Default,
-                () => throw new InvalidOperationException("should not be reached"));
+                new ThrowingAnalyticsDbContextFactory("should not be reached"));
 
             using (var cts = new CancellationTokenSource())
             {

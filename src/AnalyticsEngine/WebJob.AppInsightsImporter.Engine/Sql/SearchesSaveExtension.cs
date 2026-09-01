@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.Properties;
+using WebJob.AppInsightsImporter.Engine.Sql.Rules;
 
 namespace WebJob.AppInsightsImporter.Engine.Sql
 {
@@ -22,12 +23,29 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             }
 
             var searches = new List<SearchEventAppInsightsQueryResult>();
+            var skipped = 0;
             foreach (var r in eventList.Rows)
             {
                 if (r is SearchEventAppInsightsQueryResult)
                 {
-                    searches.Add((SearchEventAppInsightsQueryResult)r);
+                    var search = (SearchEventAppInsightsQueryResult)r;
+
+                    // Pure rule - see issue #369. The old code went straight to searchTerm.Length, so a
+                    // null SearchText threw a NullReferenceException that took the whole section down.
+                    if (SearchTermRules.ShouldStage(search))
+                    {
+                        searches.Add(search);
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
                 }
+            }
+
+            if (skipped > 0)
+            {
+                logger.LogWarning($"Skipped {skipped:n0} search event(s) with no search text.");
             }
 
             if (searches.Count == 0)
@@ -59,17 +77,13 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
                     var pSessionId = cmd.Parameters.Add("@p0", SqlDbType.NVarChar, 100);
                     var pUserName = cmd.Parameters.Add("@p1", SqlDbType.NVarChar, 250);
-                    var pSearchTerm = cmd.Parameters.Add("@p2", SqlDbType.NVarChar, 250);
+                    var pSearchTerm = cmd.Parameters.Add("@p2", SqlDbType.NVarChar, SearchTermRules.MaxSearchTermLength);
                     var pDateTime = cmd.Parameters.Add("@p3", SqlDbType.DateTime);
                     cmd.Prepare();
 
                     foreach (var customEvent in searches)
                     {
-                        string searchTerm = customEvent.CustomProperties.SearchText;
-                        if (searchTerm.Length > 250)
-                        {
-                            searchTerm = searchTerm.Substring(0, 247) + "...";
-                        }
+                        var searchTerm = SearchTermRules.Truncate(customEvent.CustomProperties.SearchText);
 
                         pSessionId.Value = (object)customEvent.CustomProperties.SessionId ?? DBNull.Value;
                         pUserName.Value = (object)customEvent.Username ?? DBNull.Value;

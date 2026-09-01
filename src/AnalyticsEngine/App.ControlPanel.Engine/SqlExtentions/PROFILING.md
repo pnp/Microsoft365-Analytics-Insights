@@ -181,6 +181,45 @@ counts chats/files/meetings via `dbo.copilot_event_files` / `dbo.copilot_event_m
   **does not re-raise**. So a failed week is logged but the run still returns success. The
   Profiling tab / `TraceLogs` are the only place failures show up.
 - **Idempotent installer, idempotent compile** (via the row-existence guards). Re-running is safe.
+- **Date predicates: watch the column type.** All the `usp_Upsert*` procs take `@StartDate DATE,
+  @EndDate DATE` and are called with `@Monday, @Sunday` — an **inclusive** Sunday. Most of them
+  read a daily `*_user_activity_log` table whose `"date"` column, although declared `datetime`,
+  only ever holds midnight values, so `"date" <= @EndDate` is exact. **`usp_UpsertCopilot` is the
+  exception**: it aggregates raw `dbo.audit_events`, whose `time_stamp` carries a real time of day.
+  There, `time_stamp <= @EndDate` compares against the Sunday widened to `00:00:00.000` and keeps
+  only the first instant of the day — it must use a half-open
+  `time_stamp < DATEADD(DAY, 1, @EndDate)` window. This was a live bug (issue #300): every weekly
+  Copilot metric under-counted by a full day (~1/7). If you add another proc that filters a
+  timestamped table, use the half-open form.
+
+---
+
+## 6a. Recompiling history after an aggregation fix
+
+There is no update path — a week is compiled once and never revisited — so a change to *how* a week
+is aggregated does **not** correct weeks already written. Until history is recompiled, a fix shows up
+as a step change in the middle of every trend chart.
+
+To recompile, delete the affected weeks and let the next run refill them, or force a full recompile:
+
+```sql
+-- Recompile every retained week from scratch (@All = 1 starts from the retention date).
+EXEC profiling.usp_CompileWeekly @WeeksToKeep = 53, @All = 1;
+```
+
+`@All = 1` only moves the *start* date back; the row-existence guard still skips weeks that already
+have rows, so the existing rows must be removed first for the recompile to take effect:
+
+```sql
+DELETE FROM profiling.ActivitiesWeekly       WHERE MetricDate >= @FromMonday;
+DELETE FROM profiling.ActivitiesWeeklyColumns WHERE "date"    >= @FromMonday;
+DELETE FROM profiling.UsageWeekly            WHERE "date"     >= @FromMonday;
+```
+
+Recompilation is only as good as the retained raw data: `usp_CompileWeekly` reads
+`dbo.audit_events` and the `*_user_activity_log` tables, so weeks whose raw rows have already been
+aged out cannot be corrected. Recompile in a maintenance window — it re-aggregates every retained
+week in one pass.
 
 ---
 

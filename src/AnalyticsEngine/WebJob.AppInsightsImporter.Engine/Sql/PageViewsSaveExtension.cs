@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.Properties;
 using WebJob.AppInsightsImporter.Engine.Sql.Models;
+using WebJob.AppInsightsImporter.Engine.Sql.Rules;
 
 namespace WebJob.AppInsightsImporter.Engine.Sql
 {
@@ -24,45 +25,22 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             // Hack to change/ensure correct DB schema. Needs moving to a migration
             await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
-            // HashSet for O(1) duplicate lookups instead of O(n) List.Contains
-            var pageRequestIdProcessed = new HashSet<Guid>();
-            var duplicateCount = 0;
-            var outOfScopeCount = 0;
+            // Which rows to stage, and why the rest were dropped. Pure decision logic - see issue #369.
+            var plan = PageViewStagingRules.Plan(pageViews, filterUrls);
 
             var logsToInsert = new EFInsertBatch<HitTempEntity>(database, logger);
-            foreach (var pv in pageViews.Rows.Where(p => p.CustomProperties?.PageRequestId != null))
-            {
-                var hitIsNew = pv.CustomProperties.PageRequestId != Guid.Empty && pageRequestIdProcessed.Add(pv.CustomProperties.PageRequestId.Value);
+            logsToInsert.Rows.AddRange(plan.RowsToStage);
 
-                if (hitIsNew)
-                {
-                    // Filter URLs based on org_urls table 
-                    if (!filterUrls.UrlInScope(pv.CustomProperties.SiteUrl, pv.Url))
-                    {
-                        outOfScopeCount++;
-                    }
-                    else
-                    {
-                        // URL is in scope. Add to staging table. 
-                        logsToInsert.Rows.Add(new HitTempEntity(pv));
-                    }
-                }
-                else
-                {
-                    duplicateCount++;
-                }
+            if (plan.OutOfScopeUrls > 0)
+            {
+                logger.LogInformation($"Filtered {plan.OutOfScopeUrls} out-of-scope URLs.");
+            }
+            if (plan.DuplicatePageRequestIds > 0)
+            {
+                logger.LogInformation($"Skipped {plan.DuplicatePageRequestIds} duplicate page-request IDs.");
             }
 
-            if (outOfScopeCount > 0)
-            {
-                logger.LogInformation($"Filtered {outOfScopeCount} out-of-scope URLs.");
-            }
-            if (duplicateCount > 0)
-            {
-                logger.LogInformation($"Skipped {duplicateCount} duplicate page-request IDs.");
-            }
-
-            logger.LogInformation($"Staging {logsToInsert.Rows.Count:n0} hits for SQL import (filtered from {pageViews.Rows.Count:n0} raw page-views in {sw.Elapsed.TotalSeconds:N1}s)...");
+            logger.LogInformation($"Staging {plan.RowsToStage.Count:n0} hits for SQL import (filtered from {plan.RawPageViews:n0} raw page-views in {sw.Elapsed.TotalSeconds:N1}s)...");
 
             sw.Restart();
             const int MAX_HITS_PER_THREAD = 1000;
