@@ -145,6 +145,7 @@
     <Compile Include="FakeLoaderClasses\InMemoryStagingWriters.cs" />
     <Compile Include="PowerPlatformAuditEventManagerStagingTests.cs" />
     <Compile Include="ClockAndContextFactoryTests.cs" />
+    <Compile Include="CopilotUsageReportPolicyTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
