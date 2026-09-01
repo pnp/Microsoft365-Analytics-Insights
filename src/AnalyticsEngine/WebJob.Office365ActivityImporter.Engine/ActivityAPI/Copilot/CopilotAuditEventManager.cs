@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
@@ -23,37 +23,51 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
     /// </summary>
     public class CopilotAuditEventManager : IDisposable
     {
-        // Chunk size for the staging-table inserts. ParallelListProcessor spreads the batch across one
-        // connection per chunk (capped at its own max), so a smaller chunk => more parallel inserts. The
-        // default (10000) meant a single thread for every realistic Copilot batch (<= a couple thousand rows),
-        // serializing every row's insert round-trip. On Azure SQL those round-trips are network-latency-bound,
-        // so parallelizing them is a large win; on LocalDB (no latency) it's a no-op. Kept modest so we don't
-        // open an excessive number of connections for the shared global temp table.
-        private const int STAGING_INSERTS_PER_THREAD = 200;
-
         private readonly ICopilotMetadataLoader _copilotEventAdaptor;
         private readonly ILogger _logger;
         private readonly bool _resolveResourceMetadata;
-        private readonly InsertBatch<SPCopilotLogTempEntity> _copilotInsertsSP;
-        private readonly InsertBatch<TeamsCopilotLogTempEntity> _copilotInsertsTeams;
-        private readonly InsertBatch<ChatOnlyCopilotLogTempEntity> _copilotInsertsChatsNoContext;
-        private readonly ProjectResourceReader _rr;
+        private readonly ICopilotStagingWriter _stagingWriter;
 
         // Batch-level totals (across all processed events since last commit)
         private int _totalMeetingsCount;
         private int _totalFilesCount;
         private int _totalChatOnlyCount;
 
+        /// <summary>
+        /// Production entry point: builds the SQL staging writer from a connection string. Kept as a thin
+        /// overload so SaveSession.Init() and every other existing call site is unchanged. See issue #367.
+        /// </summary>
         public CopilotAuditEventManager(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
+            : this(BuildSqlStagingWriter(connectionString, copilotEventAdaptor, logger), copilotEventAdaptor, logger, resolveResourceMetadata)
+        {
+        }
+
+        /// <summary>
+        /// Validates in the original order - connection string, then adaptor, then logger - before building
+        /// the writer. A constructor initialiser runs before the constructor body, so without this the
+        /// writer's own logger check would fire first and change the ParamName reported when more than one
+        /// argument is null.
+        /// </summary>
+        private static ICopilotStagingWriter BuildSqlStagingWriter(string connectionString, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger)
         {
             if (string.IsNullOrEmpty(connectionString)) throw new ArgumentException($"'{nameof(connectionString)}' cannot be null or empty.", nameof(connectionString));
+            if (copilotEventAdaptor == null) throw new ArgumentNullException(nameof(copilotEventAdaptor));
+            if (logger == null) throw new ArgumentNullException(nameof(logger));
+
+            return new SqlCopilotStagingWriter(connectionString, logger);
+        }
+
+        /// <summary>
+        /// Testable entry point: the adaptation rules run against any <see cref="ICopilotStagingWriter"/>,
+        /// so the context-priority order, agent-metadata-only mode and the null-record guard can all be
+        /// asserted with no database.
+        /// </summary>
+        internal CopilotAuditEventManager(ICopilotStagingWriter stagingWriter, ICopilotMetadataLoader copilotEventAdaptor, ILogger logger, bool resolveResourceMetadata = true)
+        {
+            _stagingWriter = stagingWriter ?? throw new ArgumentNullException(nameof(stagingWriter));
             _copilotEventAdaptor = copilotEventAdaptor ?? throw new ArgumentNullException(nameof(copilotEventAdaptor));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _resolveResourceMetadata = resolveResourceMetadata;
-            _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
-            _copilotInsertsSP = new InsertBatch<SPCopilotLogTempEntity>(connectionString, logger);
-            _copilotInsertsTeams = new InsertBatch<TeamsCopilotLogTempEntity>(connectionString, logger);
-            _copilotInsertsChatsNoContext = new InsertBatch<ChatOnlyCopilotLogTempEntity>(connectionString, logger);
         }
 
         /// <summary>
@@ -164,7 +178,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     MeetingName = meetingInfo?.Subject,
                 };
                 PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
-                _copilotInsertsTeams.Rows.Add(row);
+                _stagingWriter.StageTeams(row);
                 return true; // staged regardless of meetingInfo retrieval success
             }
             catch (Exception ex)
@@ -212,7 +226,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     UrlBase = spFileInfo?.SiteUrl,
                 };
                 PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
-                _copilotInsertsSP.Rows.Add(row);
+                _stagingWriter.StageSharePoint(row);
                 return true; // staged regardless
             }
             catch (Exception ex)
@@ -265,7 +279,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         {
             var row = new ChatOnlyCopilotLogTempEntity();
             PopulateCommonStagingFields(row, auditRecord, baseOfficeEvent);
-            _copilotInsertsChatsNoContext.Rows.Add(row);
+            _stagingWriter.StageChatOnly(row);
         }
 
         /// <summary>
@@ -448,40 +462,24 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// </summary>
         public async Task CommitAllChanges()
         {
-            var docsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_SP, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_sp_copilot_events_from_staging_table.sql");
-            var teamsMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_TEAMS, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.insert_teams_copilot_events_from_staging_table.sql");
-            var chatOnlyMergeSql = GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_CHATONLY, null);
-
             _logger.LogDebug($"Committing batch: {_totalFilesCount} file(s), {_totalMeetingsCount} meeting(s), {_totalChatOnlyCount} chat-only event(s) to SQL.");
 
-            // Per-staging-table timing. Each of the three Copilot staging tables runs the shared
-            // accessed-resource / agents merge (common_upsert_copilot_agents.sql), which on Copilot-heavy
-            // tenants is the dominant save cost - so time each separately to see which workload's merge is
-            // expensive (the chat-only path carries accessed resources too, so it is often the largest).
-            var swSp = System.Diagnostics.Stopwatch.StartNew();
-            await _copilotInsertsSP.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, docsMergeSql);
-            swSp.Stop();
-            var swTeams = System.Diagnostics.Stopwatch.StartNew();
-            await _copilotInsertsTeams.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, teamsMergeSql);
-            swTeams.Stop();
-            var swChat = System.Diagnostics.Stopwatch.StartNew();
-            await _copilotInsertsChatsNoContext.SaveToStagingTable(STAGING_INSERTS_PER_THREAD, chatOnlyMergeSql);
-            swChat.Stop();
+            // The staging tables, merge scripts and per-table timing now live in the writer (see #367).
+            // The timings come back so this trace keeps interleaving them with the per-workload event
+            // counts, which only the manager knows.
+            var timings = await _stagingWriter.CommitAllChanges();
 
-            var copilotTimingMsg = $"Copilot commit timing: SP-docs {(swSp.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalFilesCount.ToString("n0")} file event(s)), " +
-                $"Teams {(swTeams.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalMeetingsCount.ToString("n0")} meeting event(s)), " +
-                $"chat-only {(swChat.Elapsed.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalChatOnlyCount.ToString("n0")} chat-only event(s)).";
+            var copilotTimingMsg = $"Copilot commit timing: SP-docs {(timings.SharePoint.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalFilesCount.ToString("n0")} file event(s)), " +
+                $"Teams {(timings.Teams.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalMeetingsCount.ToString("n0")} meeting event(s)), " +
+                $"chat-only {(timings.ChatOnly.TotalMilliseconds / 1000.0).ToString("n1")}s ({_totalChatOnlyCount.ToString("n0")} chat-only event(s)).";
             // Surface a slow Copilot merge (the usual bottleneck) at Information so it stands out in the traces;
             // keep routine fast batches at Debug to avoid per-batch noise.
-            if (swSp.Elapsed.TotalMilliseconds + swTeams.Elapsed.TotalMilliseconds + swChat.Elapsed.TotalMilliseconds >= 5000)
+            if (timings.Total.TotalMilliseconds >= 5000)
                 _logger.LogInformation(copilotTimingMsg);
             else
                 _logger.LogDebug(copilotTimingMsg);
 
-            // Clear lists & counters for next batch
-            _copilotInsertsSP.Rows.Clear();
-            _copilotInsertsTeams.Rows.Clear();
-            _copilotInsertsChatsNoContext.Rows.Clear();
+            // Clear counters for next batch. The staged rows are cleared by the writer.
             _totalFilesCount = 0;
             _totalMeetingsCount = 0;
             _totalChatOnlyCount = 0;
@@ -558,17 +556,6 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                     "Could not repair denormalised Copilot columns this cycle. The import itself succeeded; "
                     + "any affected interactions stay hidden from Copilot reports until a later cycle repairs them.");
             }
-        }
-
-        private string GetSql(string tempTableName, string workloadSpecificScriptName)
-        {
-            var commonMergeSql = _rr.ReadResourceString("WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.common_upsert_copilot_agents.sql")
-                .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName);
-
-            var workloadSpecificSql = workloadSpecificScriptName != null
-                ? _rr.ReadResourceString(workloadSpecificScriptName).Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName)
-                : string.Empty;
-            return commonMergeSql + Environment.NewLine + workloadSpecificSql;
         }
 
         public void Dispose()
