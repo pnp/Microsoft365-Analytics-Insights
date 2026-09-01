@@ -111,7 +111,7 @@ namespace Tests.FakeDataGen.StressTests
                     appConfig,
                     fakeLoader,
                     sentimentScorer,
-                    dbFactory);
+                    new ConnectionStringAnalyticsDbContextFactory(connectionString));
 
                 Console.WriteLine($"\nRunning sent emails import pass #1 against {seededUsers:N0} seeded users...");
                 var pass1Sw = Stopwatch.StartNew();
