@@ -99,6 +99,7 @@
     <Compile Include="Models\Config\AppRegistrationCredentials.cs" />
     <Compile Include="Models\Base64Serialisable.cs" />
     <Compile Include="Models\DatabaseUpgradeInfo.cs" />
+    <Compile Include="Models\OrgUrlStore.cs" />
     <Compile Include="Models\Enums.cs" />
     <Compile Include="Models\AppServicePublishInfo.cs" />
     <Compile Include="Models\InstallLogEventArgs.cs" />
