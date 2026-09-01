@@ -37,7 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
         private readonly ISentEmailSourceLoader _sourceLoader;
         private readonly ISentEmailSentimentScorer _sentimentScorer;
-        private readonly Func<AnalyticsEntitiesContext> _dbContextFactory;
+        private readonly IAnalyticsDbContextFactory _dbContextFactory;
         private readonly int _userChunkSize;
         private readonly int _graphLoadParallelism;
         private readonly ISentEmailMailboxSkipList _mailboxSkipList;
@@ -64,7 +64,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             AppConfig settings,
             ISentEmailSourceLoader sourceLoader,
             ISentEmailSentimentScorer sentimentScorer,
-            Func<AnalyticsEntitiesContext> dbContextFactory = null,
+            IAnalyticsDbContextFactory dbContextFactory = null,
             int userChunkSize = DefaultUserChunkSize,
             int graphLoadParallelism = DefaultGraphLoadParallelism,
             ISentEmailMailboxSkipList mailboxSkipList = null,
@@ -73,7 +73,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
             _sentimentScorer = sentimentScorer ?? NullSentEmailSentimentScorer.Instance;
-            _dbContextFactory = dbContextFactory ?? (() => new AnalyticsEntitiesContext());
+            _dbContextFactory = dbContextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             _userChunkSize = userChunkSize > 0 ? userChunkSize : DefaultUserChunkSize;
             _graphLoadParallelism = graphLoadParallelism > 0 ? graphLoadParallelism : DefaultGraphLoadParallelism;
             _mailboxSkipList = mailboxSkipList;
@@ -293,7 +293,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             // address would each see "doesn't exist" and then collide on the unique index.
             swPhase.Restart();
             Dictionary<string, int> addressIds;
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
                 db.Configuration.ValidateOnSaveEnabled = false;
@@ -311,7 +311,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 .ToList();
 
             HashSet<string> existingKeys;
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
                 existingKeys = await FindExistingKeysAsync(db, allKeys);
@@ -462,7 +462,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             if (work.Count == 0)
                 return;
 
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 var conn = db.Database.Connection;
                 if (conn.State != System.Data.ConnectionState.Open)
@@ -677,7 +677,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
         private async Task<List<Common.Entities.User>> LoadUsersWithMailAsync()
         {
-            using (var db = _dbContextFactory())
+            using (var db = _dbContextFactory.Create())
             {
                 return await db.users.Where(u => u.Mail != null && u.Mail != "").ToListAsync();
             }
