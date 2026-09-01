@@ -380,6 +380,26 @@ namespace Common.Entities.CopilotAdoption
             /// <summary>Datasets this step could not complete. Merged through MarkFiguresIncomplete.</summary>
             public List<string> IncompleteReasons { get; } = new List<string>();
 
+            /// <summary>
+            /// Whether any query in this step failed or timed out.
+            /// </summary>
+            /// <remarks>
+            /// Recorded separately from the warnings because a step's warnings are not all failures -
+            /// "the agent inventory was capped" is informational - and because SafeAsync turns a failed
+            /// query into a warning and returns null, which means the step's own try/catch never sees an
+            /// exception. Without this, a query that timed out was reported in the diagnostics as having
+            /// succeeded, indistinguishable from one that was simply fast. That is not academic: during
+            /// development a syntactically broken query showed up in the performance harness as a step
+            /// that got 6.5x faster, because it failed instantly and the failure was invisible.
+            /// </remarks>
+            public bool QueryFailed { get; private set; }
+
+            /// <summary>Records that a query in this step failed. See <see cref="QueryFailed"/>.</summary>
+            public void MarkQueryFailed()
+            {
+                QueryFailed = true;
+            }
+
             /// <summary>Buffered equivalent of <see cref="CopilotAdoptionSummary.MarkFiguresIncomplete"/>.</summary>
             public void MarkIncomplete(string dataset)
             {
@@ -462,6 +482,12 @@ namespace Common.Entities.CopilotAdoption
             {
                 watch.Stop();
                 step.DurationMs = watch.ElapsedMilliseconds;
+
+                // A query that failed or timed out was degraded to a warning by SafeAsync rather than
+                // thrown, so the catch above never fires for it. Without this the diagnostics would
+                // report the step as successful - see StepOutput.QueryFailed.
+                if (step.Output.QueryFailed) step.Failed = true;
+
                 gate.Release();
             }
         }
@@ -505,7 +531,7 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<AgentUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                output.Warnings,
+                output,
                 "Copilot agent usage", cancellationToken);
 
             if (rows == null) return;
@@ -533,7 +559,7 @@ namespace Common.Entities.CopilotAdoption
 
             var byDept = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(byDeptSql, cancellationToken, ToSqlParameters(byDeptParameters)),
-                output.Warnings,
+                output,
                 "agent usage by department", cancellationToken);
 
             if (byDept != null)
@@ -571,7 +597,7 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                output.Warnings,
+                output,
                 "unlicensed Copilot usage", cancellationToken);
 
             if (rows != null)
@@ -597,7 +623,7 @@ namespace Common.Entities.CopilotAdoption
 
             var apps = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(appSql, cancellationToken, ToSqlParameters(appParameters)),
-                output.Warnings,
+                output,
                 "unlicensed Copilot usage by app", cancellationToken);
 
             if (apps != null)
@@ -629,7 +655,7 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                output.Warnings,
+                output,
                 "Copilot accessed resource types", cancellationToken);
 
             if (rows == null) return;
@@ -662,7 +688,7 @@ namespace Common.Entities.CopilotAdoption
 
             var assignments = await SafeAsync(
                 () => QueryAsync<SeatAssignmentRow>(assignmentsSql, cancellationToken),
-                output.Warnings,
+                output,
                 "Copilot licence assignments", cancellationToken);
 
             if (assignments == null)
@@ -689,7 +715,7 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
-                output.Warnings,
+                output,
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var coworkIds = coworkAgentIds.Select(r => r.Value).ToList();
@@ -711,7 +737,7 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<LicensedUserUsageRow>(detailSql, cancellationToken, ToSqlParameters(parameters)),
-                output.Warnings,
+                output,
                 "licensed user detail", cancellationToken);
 
             if (rows == null)
@@ -771,7 +797,7 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                output.Warnings,
+                output,
                 "Copilot usage by app", cancellationToken);
 
             if (rows == null) return;
@@ -795,7 +821,7 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
-                output.Warnings,
+                output,
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(seatIds, coworkAgentIds.Select(r => r.Value));
@@ -804,7 +830,7 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<NamedWeekRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                output.Warnings,
+                output,
                 "weekly adoption trend", cancellationToken);
 
             if (rows == null) return;
@@ -858,7 +884,7 @@ namespace Common.Entities.CopilotAdoption
 
                 summary.UnlicensedActiveUsers = await SafeScalarAsync(
                     unlicensedSql,
-                    output.Warnings,
+                    output,
                     "unlicensed Copilot users",
                     // Published as a headline KPI, and zero is a meaningful answer here - so a failure that
                     // reads as zero is indistinguishable from "nobody uses Copilot without a licence".
@@ -897,7 +923,7 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUserSignalRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                output.Warnings,
+                output,
                 "licence opportunities", cancellationToken);
 
             if (rows == null)
@@ -1473,6 +1499,23 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
+        /// <summary>
+        /// As above, for a step running in the concurrent phase: also records that the query failed, so
+        /// the step's diagnostics say so instead of reporting a silent degradation as a success.
+        /// </summary>
+        private static async Task<List<T>> SafeAsync<T>(
+            Func<Task<List<T>>> query,
+            StepOutput output,
+            string description,
+            CancellationToken cancellationToken)
+        {
+            // SafeAsync returns null exactly when it swallowed a failure, which is what makes this work
+            // without every call site having to remember to report it.
+            var rows = await SafeAsync(query, output.Warnings, description, cancellationToken);
+            if (rows == null) output.MarkQueryFailed();
+            return rows;
+        }
+
         private async Task<int> SafeScalarAsync(
             string sql,
             List<string> warnings,
@@ -1481,6 +1524,27 @@ namespace Common.Entities.CopilotAdoption
             params SqlParameter[] parameters)
         {
             return await SafeScalarAsync(sql, warnings, description, null, cancellationToken, parameters);
+        }
+
+        /// <summary>Step-scoped <see cref="SafeScalarAsync(string, List{string}, string, Action, CancellationToken, SqlParameter[])"/>.</summary>
+        private async Task<int> SafeScalarAsync(
+            string sql,
+            StepOutput output,
+            string description,
+            Action onFailure,
+            CancellationToken cancellationToken,
+            params SqlParameter[] parameters)
+        {
+            var rows = await SafeAsync(
+                () => QueryAsync<int?>(sql, cancellationToken, parameters), output, description, cancellationToken);
+
+            if (rows == null)
+            {
+                onFailure?.Invoke();
+                return 0;
+            }
+
+            return rows.FirstOrDefault() ?? 0;
         }
 
         /// <summary>

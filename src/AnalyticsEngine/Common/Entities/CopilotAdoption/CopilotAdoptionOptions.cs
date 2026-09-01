@@ -148,9 +148,25 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("agentHistoryDays")]
         public int AgentHistoryDays { get; set; } = 120;
 
-        /// <summary>How many agents the inventory query returns.</summary>
+        /// <summary>
+        /// How many agents the inventory query returns.
+        /// </summary>
+        /// <remarks>
+        /// Was 500, which was chosen when <see cref="CopilotAdoptionSql.AgentUsageSql"/> was expensive
+        /// enough to time out. That query now reads the interaction table once rather than four times and
+        /// completes in a few seconds, so the cap no longer buys anything - and it was actively harmful:
+        /// a tenant with more agents than this had its inventory, its "agents to retire" count and its
+        /// health breakdown all silently reduced to whichever agents happened to be busiest. Those are
+        /// exactly the figures an agent clean-up is run from, and a clean-up driven from a third of the
+        /// estate leaves the other two thirds in place.
+        /// <para>
+        /// Still capped rather than unbounded, because every returned agent is scored in C# and held in
+        /// the cached analysis - but at a level a real tenant is unlikely to reach. When it IS reached
+        /// the page says so explicitly rather than quietly truncating.
+        /// </para>
+        /// </remarks>
         [JsonProperty("maxAgents")]
-        public int MaxAgents { get; set; } = 500;
+        public int MaxAgents { get; set; } = 5000;
 
         /// <summary>How many unlicensed Copilot users are pulled in to describe that population.</summary>
         [JsonProperty("maxUnlicensedUsersScored")]
@@ -216,9 +232,31 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("maxLicensedUsersScored")]
         public int MaxLicensedUsersScored { get; set; } = 50000;
 
-        /// <summary>How many unlicensed candidates the database ranks and returns for the opportunity list.</summary>
+        /// <summary>
+        /// How many unlicensed candidates the database ranks and returns for the opportunity list.
+        /// </summary>
+        /// <remarks>
+        /// Raised from 5,000 to match its sibling caps. At 5,000 this was the binding constraint on a
+        /// real tenant rather than a safety valve, and the failure mode was particularly poor: the
+        /// "recommended for a licence" headline is a COUNT of this list, so a tenant with more
+        /// candidates than the cap saw a headline KPI that was simply the cap value - a number that
+        /// looks like a finding and is actually a limit. Since this list is what a licence-purchase
+        /// case is built from, understating it understates the spend being justified.
+        /// <para>
+        /// This is not free. On a synthetic 200k-user tenant the opportunity query roughly doubled
+        /// (5,242ms -&gt; 12,146ms) because it now returns ten times the rows. That bench is a worst case -
+        /// it has far more unlicensed candidates than a real tenant - and the step has ample headroom
+        /// since the interaction-table fixes landed, so a correct headline is worth the cost.
+        /// </para>
+        /// <para>
+        /// The better fix, deferred: take the headline COUNT from its own cheap aggregate (as
+        /// <c>UnlicensedActiveUsersSql</c> already does for the sibling KPI) and leave the returned LIST
+        /// capped at something a human would act on. Then the number is always true and the list stays
+        /// small. That is a wiring change across the summary and the API, not a constant.
+        /// </para>
+        /// </remarks>
         [JsonProperty("maxOpportunityCandidates")]
-        public int MaxOpportunityCandidates { get; set; } = 5000;
+        public int MaxOpportunityCandidates { get; set; } = 50000;
 
         /// <summary>
         /// Microsoft publishes the usage reports a couple of days in arrears and keeps back-filling a

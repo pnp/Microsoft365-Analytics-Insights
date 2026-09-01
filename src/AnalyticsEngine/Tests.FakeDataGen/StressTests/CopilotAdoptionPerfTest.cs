@@ -183,8 +183,8 @@ namespace Tests.FakeDataGen.StressTests
             var options = CopilotAdoptionOptions.Default;
             options.WindowDays = windowDays;
 
-            Func<AnalyticsEntitiesContext> contextFactory =
-                () => new AnalyticsEntitiesContext(connectionString, true, false);
+            IAnalyticsDbContextFactory contextFactory =
+                new NoMigrateContextFactory(connectionString);
 
             try
             {
@@ -222,7 +222,7 @@ namespace Tests.FakeDataGen.StressTests
         /// </summary>
         private static CopilotAdoptionDiagnostics RunOnce(
             CopilotAdoptionOptions options,
-            Func<AnalyticsEntitiesContext> contextFactory,
+            IAnalyticsDbContextFactory contextFactory,
             int concurrent,
             int maxConcurrentSteps)
         {
@@ -258,6 +258,31 @@ namespace Tests.FakeDataGen.StressTests
             var diagnostics = analysis?.Summary?.Diagnostics ?? new CopilotAdoptionDiagnostics();
             diagnostics.TotalMs = totalMs;
             return diagnostics;
+        }
+
+        /// <summary>
+        /// Creates contexts against the benchmark database WITHOUT enabling automatic migration.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not <see cref="ConnectionStringAnalyticsDbContextFactory"/>, which passes
+        /// <c>autoUpdate: true</c> and therefore installs
+        /// <c>MigrateDatabaseToLatestVersion</c>. A measurement harness must never alter the schema of
+        /// the database it is measuring - the numbers would describe a database nobody has, and pointing
+        /// this test at a restored copy of a customer database would silently start migrating it.
+        /// </remarks>
+        private sealed class NoMigrateContextFactory : IAnalyticsDbContextFactory
+        {
+            private readonly string _connectionString;
+
+            public NoMigrateContextFactory(string connectionString)
+            {
+                _connectionString = connectionString;
+            }
+
+            public AnalyticsEntitiesContext Create()
+            {
+                return new AnalyticsEntitiesContext(_connectionString, true, false);
+            }
         }
 
         private static WindowResult Summarise(int windowDays, List<CopilotAdoptionDiagnostics> runs)
