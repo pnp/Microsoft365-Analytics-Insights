@@ -123,6 +123,9 @@
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
+    <Compile Include="AppInsightsClickRulesTests.cs" />
+    <Compile Include="AppInsightsPageViewRulesTests.cs" />
+    <Compile Include="AppInsightsSearchRulesTests.cs" />
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
     <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
