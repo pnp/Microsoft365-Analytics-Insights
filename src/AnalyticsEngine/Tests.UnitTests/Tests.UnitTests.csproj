@@ -135,6 +135,9 @@
     <Compile Include="HitImportFanoutTests.cs" />
     <Compile Include="InsertBatchOverWidthTests.cs" />
     <Compile Include="AppInsightsImportTests.cs" />
+    <Compile Include="CopilotAuditEventManagerStagingTests.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryStagingWriters.cs" />
+    <Compile Include="PowerPlatformAuditEventManagerStagingTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
