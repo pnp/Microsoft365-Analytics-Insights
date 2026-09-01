@@ -123,22 +123,63 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             try
             {
-                // /subscribedSkus typically returns a small number of rows (<=100) so a single
-                // GET is enough. We materialise into a List<T> so callers don't need to know
-                // about Kiota response wrappers.
                 var page = await _graphServiceClient.SubscribedSkus.GetAsync();
-                return page?.Value ?? new List<SubscribedSku>();
+
+                if (page?.Value == null)
+                {
+                    // A 200 with no `value` collection is NOT the same answer as "this tenant has no
+                    // SKUs". The licence refresh treats the SKU list as the authority on who holds
+                    // what, so a spuriously empty list would have it remove every licence in the
+                    // tenant. Throw rather than returning null: null is the signal for the *403
+                    // permissions* case below, which routes into the per-user fallback - and that
+                    // fallback loads every user's licence lookups and makes one Graph call per user,
+                    // which at 200k users is both enormously slow and documented as OOM-prone. A
+                    // missing `value` on a 200 is transient, so failing the cycle and retrying is
+                    // both cheaper and safer. See issue #392.
+                    throw new InvalidOperationException(
+                        "User import - the tenant SKU response contained no 'value' collection. Aborting rather than treating it as 'this tenant has no SKUs', which would delete every licence assignment in the database.");
+                }
+
+                // /subscribedSkus is a paginated collection. Reading only the first page would hand
+                // the refresh a SKU list that silently omits everything on page 2 onwards, and every
+                // assignment for those licence types would then be deleted - the same failure as an
+                // empty list, just partial. Walk every page and refuse to return an incomplete one.
+                var allSkus = new List<SubscribedSku>();
+                var iterator = PageIterator<SubscribedSku, SubscribedSkuCollectionResponse>
+                    .CreatePageIterator(_graphServiceClient, page, sku =>
+                    {
+                        allSkus.Add(sku);
+                        return true;
+                    });
+
+                await iterator.IterateAsync();
+
+                if (iterator.State != PagingState.Complete)
+                {
+                    throw new InvalidOperationException(
+                        $"User import - could not read the complete list of tenant SKUs (paging ended in state '{iterator.State}' after {allSkus.Count.ToString("N0")} SKU(s)). Aborting rather than reconciling licences against a partial SKU list, which would delete every assignment for the SKUs that were missed.");
+                }
+
+                return allSkus;
             }
             catch (ODataError ex)
             {
-                if (ex.ResponseStatusCode == (int)System.Net.HttpStatusCode.Forbidden)
+                if (ex.ResponseStatusCode != (int)System.Net.HttpStatusCode.Forbidden)
                 {
-                    _logger.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
-                }
-                else
-                {
+                    // Only a 403 justifies the per-user fallback: that is a persistent consent
+                    // problem ('Organization.Read.All' not granted) where per-user licence calls are
+                    // the only way to make progress. Anything else - 429 throttling, 500, 503 - is
+                    // transient, and falling back would turn one cheap failed request into one Graph
+                    // call per user (200k on a large tenant, while we are already being throttled),
+                    // down a path whose own comment warns it can run out of memory. Fail the cycle
+                    // and retry instead; the delta token is not committed, so nothing is lost. This
+                    // also keeps first-page failures consistent with page 2+, which throw
+                    // ServiceException from the PageIterator and already abort. See issue #392.
                     _logger.LogError(ex, $"User import - couldn't load SKUs for org - {ex.Message}");
+                    throw;
                 }
+
+                _logger.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
 
                 // If we can't get tenant SKUs to find all users by, we can get SKUs per user instead, but this can be very slow.
                 _logger.LogWarning($"User import - will load SKUs directly from each user instead. This will be slow.");
@@ -150,7 +191,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             // Per-iteration safety cap: at 200k-user scale a runaway nextLink could allocate
             // memory until OOM. 1M users per SKU is comfortably above any real tenant we expect
-            // to see and will trip a warning instead of silently filling memory forever.
+            // to see and will fail the import rather than silently filling memory forever.
             const int MAX_USERS_PER_SKU = 1_000_000;
             var allUsersWithSku = new List<Microsoft.Graph.Models.User>();
 
@@ -160,25 +201,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 rc.QueryParameters.Filter = $"assignedLicenses/any(u:u/skuId eq {skuId})";
             });
 
+            // The licence refresh removes any assignment this list does not report, so an
+            // incomplete answer must NEVER be passed off as a complete one - it would delete
+            // licences that users still hold. Fail the import instead: the delta token is only
+            // committed on success, so the next cycle retries with nothing destroyed. Issue #392.
             if (firstPage == null)
             {
-                return allUsersWithSku;
+                throw new InvalidOperationException(
+                    $"User import - Graph returned no response listing users for SKU {skuId}. Aborting rather than treating it as 'nobody holds this SKU', which would delete every assignment for it.");
             }
 
             int loaded = 0;
             var iterator = PageIterator<Microsoft.Graph.Models.User, UserCollectionResponse>
                 .CreatePageIterator(_graphServiceClient, firstPage, user =>
                 {
+                    // Check BEFORE adding, so a result of exactly MAX_USERS_PER_SKU is a complete
+                    // result rather than a false "truncated" that would fail every cycle forever.
+                    // Pausing here means a genuine (cap + 1)th user exists.
+                    if (loaded >= MAX_USERS_PER_SKU)
+                    {
+                        return false;
+                    }
                     allUsersWithSku.Add(user);
                     loaded++;
-                    return loaded < MAX_USERS_PER_SKU;
+                    return true;
                 });
 
             await iterator.IterateAsync();
 
             if (iterator.State == PagingState.Paused)
             {
-                _logger.LogWarning($"User import - hit MAX_USERS_PER_SKU ({MAX_USERS_PER_SKU:N0}) walking users for SKU {skuId}. Returning partial result of {allUsersWithSku.Count:N0} users.");
+                throw new InvalidOperationException(
+                    $"User import - hit MAX_USERS_PER_SKU ({MAX_USERS_PER_SKU:N0}) walking users for SKU {skuId}; the result is truncated at {allUsersWithSku.Count:N0} users. Aborting rather than reconciling against a partial list, which would delete the licences of every user past the cap.");
             }
 
             _logger.LogDebug($"SKU {skuId} loaded {allUsersWithSku.Count:N0} users");
@@ -194,7 +248,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     rc.QueryParameters.Select = new[] { "skuPartNumber", "skuId" };
                 });
-                return page?.Value ?? new List<LicenseDetails>();
+
+                if (page?.Value == null)
+                {
+                    // Same trap as the tenant SKU list, one user at a time: ProcessUserLicenses
+                    // deletes this user's existing lookups and re-adds from whatever comes back, so
+                    // treating a missing 'value' collection as "this user holds no licences" quietly
+                    // deletes their licences. Returning null is the established "couldn't read it"
+                    // signal that ProcessUserLicenses already skips on, so their existing licences
+                    // are retained. Note this does NOT force a re-read: the import still commits the
+                    // /users/delta token, so a user whose licence call failed keeps their previous
+                    // (now possibly stale) licences until they next appear in a delta or the delta
+                    // token is cleared. Stale beats deleted - that is the whole point of #392 - but
+                    // it is not self-correcting on the next cycle.
+                    _logger.LogError($"User import - the licence-details response for user ID '{userId}' contained no 'value' collection. Keeping that user's existing licences rather than treating it as 'no licences'; they will not be re-read until the user next changes in Graph.");
+                    return null;
+                }
+
+                return page.Value;
             }
             catch (ODataError ex)
             {

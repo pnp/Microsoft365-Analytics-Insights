@@ -273,19 +273,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 //
                 // IMPORTANT: this MUST cover every user in the database, not just
                 // the users returned by the current Graph delta response. The
-                // licence refresh step deletes user_license_type_lookups rows
-                // for the supplied users and re-creates them from the per-SKU
-                // Graph queries; any user not in the supplied list keeps their
-                // stale rows forever and any new licence assignment for them is
-                // never written. When the delta token is persisted (Redis) the
-                // delta response shrinks to only users with metadata changes,
-                // so scoping the licence refresh to delta users causes the
-                // tenant-wide licence counts to drift downward over time.
+                // licence refresh step reconciles user_license_type_lookups rows
+                // for the supplied users against the per-SKU Graph queries; any
+                // user not in the supplied list keeps their stale rows forever and
+                // any new licence assignment for them is never written. When the
+                // delta token is persisted (Redis) the delta response shrinks to
+                // only users with metadata changes, so scoping the licence refresh
+                // to delta users causes the tenant-wide licence counts to drift
+                // downward over time.
+                //
+                // The supplied list is also the ONLY set of users whose licence rows
+                // the refresh is allowed to delete, so passing the whole population
+                // is what makes removals correct as well as additions.
                 //
                 // We build the list from allDbUsers (every existing DB user
                 // loaded at the start of this run) plus insertedDbUsers (users
                 // freshly created in this run), de-duplicated by primary key
-                // because AddSkuForUsers turns it into a UPN-keyed dictionary.
+                // because the refresh turns it into a UPN-keyed dictionary.
                 List<Common.Entities.User> allDbUsersForLicenseRefresh = null;
                 if (skus != null)
                 {
@@ -318,9 +322,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
                 if (skus != null)
                 {
-                    // No re-attach loop needed: AddSkuForUsers now uses FK IDs (UserId)
-                    // instead of the User navigation property, so the entities do not
-                    // need to be tracked by EF.
+                    // No re-attach loop needed: the licence refresh works in FK IDs
+                    // (UserId / LicenseTypeId) rather than navigation properties, so
+                    // the entities do not need to be tracked by EF.
                     await _licenseProcessor.ProcessSKUsForAllUsers(skus, allDbUsersForLicenseRefresh, db);
                     _logger.LogInformation($"User import - updated user license information from {skus.Count.ToString("N0")} tenant SKUs");
 
