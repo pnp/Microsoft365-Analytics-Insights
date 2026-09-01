@@ -126,8 +126,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             // Asked for v2 but got v1? Every prompt and active-usage-day column will be NULL, which looks like
             // "nobody prompted" unless we say so out loud.
-            var concealedCount = parsed.Count(r => r.IsIdentityConcealed);
-            if (concealedCount == parsed.Count)
+            // The concealment decision itself is a pure rule - see CopilotUsageReportPolicy (#370).
+            var concealment = CopilotUsageReportPolicy.EvaluateConcealment(parsed);
+            var concealedCount = concealment.ConcealedCount;
+            if (concealment.Outcome == ConcealedIdentityOutcome.AbortImport)
             {
                 importLog.IsUpnObfuscated = true;
                 await SaveImportLog(db, importLog);
@@ -145,7 +147,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 _logger.LogWarning($"Copilot per-user usage report {request}: {concealedCount} of {parsed.Count} row(s) had a concealed (hashed) user identity and were skipped; the rest imported normally.");
             }
 
-            var importable = concealedCount == 0 ? parsed : parsed.Where(r => !r.IsIdentityConcealed).ToList();
+            // Same list instance on the ImportAll path - NOT a copy. SaveAsync drops unkeyable rows with
+            // an in-place RemoveAll, and the closing log reads parsed.Count, so copying here would both
+            // allocate a second 200k-element array and change that operator-facing count.
+            var importable = concealment.Importable;
 
             // Checked after concealment, so a concealed tenant still gets its diagnostic rather than this
             // warning. Microsoft hasn't published the beta JSON schema for version 2, so an absent set of v2
