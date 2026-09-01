@@ -123,6 +123,7 @@
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
+    <Compile Include="AppInsightsImportWindowTests.cs" />
     <Compile Include="AppInsightsClickRulesTests.cs" />
     <Compile Include="AppInsightsPageViewRulesTests.cs" />
     <Compile Include="AppInsightsSearchRulesTests.cs" />
