@@ -431,6 +431,7 @@
     <Compile Include="Redis\ClaimsRedisManager.cs" />
     <Compile Include="Redis\TeamsRedisManager.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
+    <Compile Include="IAnalyticsDbContextFactory.cs" />
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
     <Compile Include="ResourceProxy.cs" />
