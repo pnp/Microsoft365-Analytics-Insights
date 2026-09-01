@@ -103,7 +103,16 @@ namespace Tests.FakeDataGen.StressTests
                 "Simultaneous callers per measurement (proves the shared-analysis cache dedupes; 1 = off)",
                 1, 1, 50, "COPILOTPERF_CONCURRENT");
 
+            // The steps are independent, so they can overlap - but they all queue on the same database, so
+            // overlapping them does not automatically make the page faster. 1 reproduces the old strictly
+            // sequential behaviour, which is what this has to be measured against.
+            int maxConcurrentSteps = GetIntegerInput(
+                "Analysis steps allowed to query at once (1 = strictly sequential, the pre-parallel behaviour)",
+                CopilotAdoptionService.MaxConcurrentSteps, 1, 16, "COPILOTPERF_MAXSTEPS");
+
             var windows = allWindows ? DefaultWindows : new[] { 28 };
+
+            Console.WriteLine($"Step concurrency: {maxConcurrentSteps}");
 
             _memoryMonitor.Start();
             var overallWatch = Stopwatch.StartNew();
@@ -112,7 +121,7 @@ namespace Tests.FakeDataGen.StressTests
 
             foreach (var windowDays in windows)
             {
-                var result = MeasureWindow(connectionString, windowDays, repeats, concurrent);
+                var result = MeasureWindow(connectionString, windowDays, repeats, concurrent, maxConcurrentSteps);
                 if (result == null)
                 {
                     return new StressTestResult
@@ -166,7 +175,8 @@ namespace Tests.FakeDataGen.StressTests
         /// medians. Medians rather than means because a single scheduling hiccup on a shared dev box
         /// otherwise dominates the number, which is also why the repo's SQL benchmarks are medians.
         /// </summary>
-        private WindowResult MeasureWindow(string connectionString, int windowDays, int repeats, int concurrent)
+        private WindowResult MeasureWindow(
+            string connectionString, int windowDays, int repeats, int concurrent, int maxConcurrentSteps)
         {
             Console.WriteLine($"--- {windowDays}-day window ---");
 
@@ -181,14 +191,14 @@ namespace Tests.FakeDataGen.StressTests
                 // Cold run, discarded: it pays for the EF model build, the connection pool and a cold
                 // buffer pool, none of which a user on a warm site experiences.
                 Console.Write("  cold run (discarded)... ");
-                var cold = RunOnce(options, contextFactory, concurrent);
+                var cold = RunOnce(options, contextFactory, concurrent, maxConcurrentSteps);
                 Console.WriteLine($"{cold.TotalMs:N0} ms");
 
                 var timed = new List<CopilotAdoptionDiagnostics>();
                 for (var i = 1; i <= repeats; i++)
                 {
                     Console.Write($"  run {i}/{repeats}... ");
-                    var diagnostics = RunOnce(options, contextFactory, concurrent);
+                    var diagnostics = RunOnce(options, contextFactory, concurrent, maxConcurrentSteps);
                     timed.Add(diagnostics);
                     Console.WriteLine($"{diagnostics.TotalMs:N0} ms");
                 }
@@ -213,13 +223,14 @@ namespace Tests.FakeDataGen.StressTests
         private static CopilotAdoptionDiagnostics RunOnce(
             CopilotAdoptionOptions options,
             Func<AnalyticsEntitiesContext> contextFactory,
-            int concurrent)
+            int concurrent,
+            int maxConcurrentSteps)
         {
             var watch = Stopwatch.StartNew();
 
             if (concurrent <= 1)
             {
-                var single = new CopilotAdoptionService(options, contextFactory)
+                var single = new CopilotAdoptionService(options, contextFactory, maxConcurrentSteps)
                     .AnalyseAsync(null, CancellationToken.None)
                     .GetAwaiter().GetResult();
 
@@ -228,7 +239,7 @@ namespace Tests.FakeDataGen.StressTests
             }
 
             var tasks = Enumerable.Range(0, concurrent)
-                .Select(_ => new CopilotAdoptionService(options, contextFactory)
+                .Select(_ => new CopilotAdoptionService(options, contextFactory, maxConcurrentSteps)
                     .AnalyseAsync(null, CancellationToken.None))
                 .ToArray();
 
@@ -323,9 +334,18 @@ namespace Tests.FakeDataGen.StressTests
             var worst = runs.OrderByDescending(r => r.TotalMedianMs).FirstOrDefault();
             if (worst != null)
             {
-                Console.WriteLine($"The steps run sequentially, so the total is their sum: optimise"
-                                  + $" '{worst.SlowestStepName}' first ({worst.SlowestStepMs:N0} ms at"
-                                  + $" {worst.WindowDays} days).\n");
+                // Steps overlap, so the shares above are shares of WALL CLOCK and can sum to well over
+                // 100%. That gap is the useful number: sum-of-steps is how much database work the report
+                // costs, while the total is how long the person waited. Printing both stops a reader
+                // concluding that overlapping the steps removed work when it only hid it - and if the two
+                // are close, the steps are not actually overlapping and the database is the constraint.
+                var stepSum = worst.Steps.Sum(s => s.MedianMs);
+                var overlap = worst.TotalMedianMs > 0 ? (double)stepSum / worst.TotalMedianMs : 0;
+
+                Console.WriteLine($"Worst window {worst.WindowDays}d: waited {worst.TotalMedianMs:N0} ms for"
+                                  + $" {stepSum:N0} ms of step time ({overlap:F2}x overlap).");
+                Console.WriteLine($"Optimise '{worst.SlowestStepName}' first ({worst.SlowestStepMs:N0} ms) -"
+                                  + " it alone sets the floor for the whole page.\n");
             }
 
             if (runs.Any(r => r.Steps.Any(s => s.LooksLikeTimeout || s.Failed)))

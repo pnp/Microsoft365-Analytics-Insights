@@ -30,18 +30,54 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public const int QueryTimeoutSecs = 90;
 
+        /// <summary>
+        /// How many analysis steps may query the database at once.
+        /// </summary>
+        /// <remarks>
+        /// The steps are independent, so overlapping them makes the page cost the slowest step rather than
+        /// the sum of all of them. That is worth much less than it sounds, because they all queue on the
+        /// same database - overlapping work does not create capacity. Measured on a synthetic
+        /// customer-shaped bench over a 28-day window, all else equal:
+        /// <list type="table">
+        /// <item><description>1 (sequential): 14,674ms total, slowest step 5,483ms</description></item>
+        /// <item><description>2:              12,945ms total (-12%), slowest step 11,267ms</description></item>
+        /// <item><description>4:              12,470ms total (-15%), slowest step 12,099ms</description></item>
+        /// </list>
+        /// Both the gain and the per-step inflation have saturated by 2: going to 4 buys another 3% for
+        /// twice the concurrent load on a database this report shares with the importer and every other
+        /// page. Hence 2.
+        /// <para>
+        /// The inflation is the reason this is not set higher. Overlapping makes each individual step
+        /// about twice as slow, which moves every step twice as close to
+        /// <see cref="QueryTimeoutSecs"/> - and a step that hits that timeout does not fail the page, it
+        /// degrades to a warning and silently drops a whole section. Trading a complete report for a
+        /// slightly faster incomplete one is the wrong way round for a tool used to justify licence spend.
+        /// </para>
+        /// <para>
+        /// Note the bench cannot see the whole picture: its data is entirely in the buffer pool (zero
+        /// physical reads), so it measures the CPU-bound worst case for overlapping. A tenant whose fact
+        /// tables do not fit in memory has I/O waits to overlap and should do better than these figures,
+        /// which is why this is a constructor parameter rather than a hard-coded constant - it can be
+        /// raised for a specific deployment once measured there.
+        /// </para>
+        /// </remarks>
+        public const int MaxConcurrentSteps = 2;
+
         /// <summary>How far back the weekly trend chart looks. Long enough to show whether an enablement push worked.</summary>
         public const int TrendMonths = 6;
 
         private readonly CopilotAdoptionOptions _options;
         private readonly IAnalyticsDbContextFactory _contextFactory;
+        private readonly int _maxConcurrentSteps;
 
         public CopilotAdoptionService(
             CopilotAdoptionOptions options = null,
-            IAnalyticsDbContextFactory contextFactory = null)
+            IAnalyticsDbContextFactory contextFactory = null,
+            int? maxConcurrentSteps = null)
         {
             _options = options ?? CopilotAdoptionOptions.Default;
             _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
+            _maxConcurrentSteps = Math.Max(1, maxConcurrentSteps ?? MaxConcurrentSteps);
         }
 
         public CopilotAdoptionOptions Options => _options;
@@ -57,8 +93,9 @@ namespace Common.Entities.CopilotAdoption
             IEnumerable<int> seatLicenceTypeIdOverride = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Ten sequential steps of up to 90 seconds each: if the caller has already given up there is
-            // no point starting, and no point continuing between steps either (see TimedAsync).
+            // The heavy steps run concurrently and each can take up to QueryTimeoutSecs, so if the caller
+            // has already given up there is no point starting - and no point continuing between the
+            // sequential probes either (see RunStepsAsync).
             cancellationToken.ThrowIfCancellationRequested();
 
             var nowUtc = DateTime.UtcNow;            var windowStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays);
@@ -76,10 +113,19 @@ namespace Common.Entities.CopilotAdoption
             summary.Options = _options;
 
             // ----- 1. Which licence types count as a Copilot seat -------------------------------
+            var licenceTypesWatch = System.Diagnostics.Stopwatch.StartNew();
             var licenceTypes = await SafeAsync(
                 () => QueryAsync<LicenceTypeRow>(CopilotAdoptionSql.LicenceTypesSql, cancellationToken),
                 summary.Warnings,
                 "licence types", cancellationToken);
+            licenceTypesWatch.Stop();
+
+            // Recorded before the early return below, so a tenant whose analysis stops here still reports
+            // where its time went. This step and the probes that follow used to have names in
+            // CopilotAdoptionSteps but no timing at all, which quietly understated every other step's
+            // share of the total and left the first two database round trips invisible to an operator.
+            summary.Diagnostics.Record(
+                CopilotAdoptionSteps.LicenceTypes, licenceTypesWatch.ElapsedMilliseconds, licenceTypes == null);
 
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
@@ -123,6 +169,8 @@ namespace Common.Entities.CopilotAdoption
             }
 
             // ----- 2. Availability probes -------------------------------------------------------
+            var probeWatch = System.Diagnostics.Stopwatch.StartNew();
+
             // Each of these decides whether a whole DATA SOURCE is used. A failure here degrades to the
             // same value as a genuine absence ("this tenant has no audit data"), which silently removes
             // entire sections and changes what the opportunities query is allowed to see. That is the
@@ -204,6 +252,13 @@ namespace Common.Entities.CopilotAdoption
                 () => summary.MarkFiguresIncomplete("Copilot usage-report anonymisation check"),
                 cancellationToken) == 1;
 
+            probeWatch.Stop();
+
+            // Six sequential round trips, each of which can gate a whole section of the report. Left
+            // sequential on purpose: they are cheap existence probes, and the licensed-user and
+            // opportunity queries below cannot be shaped until their answers are known.
+            summary.Diagnostics.Record(CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds);
+
             if (summary.DataSources.CopilotUsageReportObfuscated)
             {
                 summary.Warnings.Add(
@@ -228,34 +283,45 @@ namespace Common.Entities.CopilotAdoption
                     + "rather than the period selected here, and excludes unlicensed Copilot Chat use entirely.");
             }
 
-            // ----- 3. Licensed users ------------------------------------------------------------
+            // ----- 3-5. The heavy steps ---------------------------------------------------------
+            // These run CONCURRENTLY. Every one of them depends only on the seat ids and the data-source
+            // probes resolved above, and each writes to its own part of the result, so there is no order
+            // between them - but they used to run one after another, which made the page cost their SUM.
+            // With each step allowed up to QueryTimeoutSecs that is a worst case of ten times the timeout;
+            // a tenant where several steps were slow spent minutes on the page and then failed, because
+            // the client gave up before the sum finished. Run together, the cost is the SLOWEST step
+            // rather than the total, and a step that degrades to a warning no longer delays the rest.
+            var steps = new List<AnalysisStep>();
+
             if (seatIds.Count > 0)
             {
-                await TimedAsync(analysis, CopilotAdoptionSteps.LicensedUsers,
-                    () => BuildLicensedUsersAsync(analysis, seatIds, windowStart, historyStart, nowUtc, cancellationToken));
-                await TimedAsync(analysis, CopilotAdoptionSteps.UsageByApp,
-                    () => BuildUsageByAppAsync(analysis, seatIds, windowStart, cancellationToken));
-                await TimedAsync(analysis, CopilotAdoptionSteps.WeeklyTrend,
-                    () => BuildWeeklyTrendAsync(analysis, seatIds, trendStart, cancellationToken));
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.LicensedUsers,
+                    output => BuildLicensedUsersAsync(analysis, output, seatIds, windowStart, historyStart, nowUtc, cancellationToken)));
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.UsageByApp,
+                    output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, cancellationToken)));
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.WeeklyTrend,
+                    output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, cancellationToken)));
             }
 
-            // ----- 4. Licence opportunities -----------------------------------------------------
-            await TimedAsync(analysis, CopilotAdoptionSteps.LicenceOpportunities,
-                () => BuildOpportunitiesAsync(analysis, seatIds, windowStart, cancellationToken));
+            // Deliberately not gated on seatIds.Count - see BuildOpportunitiesAsync.
+            steps.Add(new AnalysisStep(CopilotAdoptionSteps.LicenceOpportunities,
+                output => BuildOpportunitiesAsync(analysis, output, seatIds, windowStart, cancellationToken)));
 
-            // ----- 5. The populations Microsoft's own reporting cannot see ----------------------
-            // Agents and unlicensed Copilot Chat are reported in their own right, not merely as inputs
-            // to the seat decision: an agent estate has its own retirement problem, and unlicensed
-            // Chat use is the one Copilot population that is invisible in Microsoft's usage reports.
+            // The populations Microsoft's own reporting cannot see. Agents and unlicensed Copilot Chat are
+            // reported in their own right, not merely as inputs to the seat decision: an agent estate has
+            // its own retirement problem, and unlicensed Chat use is the one Copilot population that is
+            // invisible in Microsoft's usage reports.
             if (summary.DataSources.AuditAvailable)
             {
-                await TimedAsync(analysis, CopilotAdoptionSteps.AgentEstate,
-                    () => BuildAgentEstateAsync(analysis, seatIds, windowStart, nowUtc, cancellationToken));
-                await TimedAsync(analysis, CopilotAdoptionSteps.UnlicensedPopulation,
-                    () => BuildUnlicensedPopulationAsync(analysis, seatIds, windowStart, cancellationToken));
-                await TimedAsync(analysis, CopilotAdoptionSteps.ResourceTypes,
-                    () => BuildResourceTypesAsync(analysis, windowStart, cancellationToken));
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.AgentEstate,
+                    output => BuildAgentEstateAsync(analysis, output, seatIds, windowStart, nowUtc, cancellationToken)));
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.UnlicensedPopulation,
+                    output => BuildUnlicensedPopulationAsync(analysis, output, seatIds, windowStart, cancellationToken)));
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.ResourceTypes,
+                    output => BuildResourceTypesAsync(analysis, output, windowStart, cancellationToken)));
             }
+
+            await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
 
             var scoringWatch = System.Diagnostics.Stopwatch.StartNew();
             FinaliseSummary(analysis);
@@ -266,30 +332,137 @@ namespace Common.Entities.CopilotAdoption
             return analysis;
         }
 
-        /// <summary>
-        /// Runs one step of the analysis and records how long it took.
-        ///
-        /// Timed in a finally block on purpose: a step that threw, or that a query timeout degraded into
-        /// a warning, is precisely the one an operator needs to see the duration of. Recording only
-        /// successful steps would hide the 90-second failures that this instrumentation exists to expose.
-        /// </summary>
-        private static async Task TimedAsync(CopilotAdoptionAnalysis analysis, string step, Func<Task> work)
+        /// <summary>One independent step of the analysis, and the work that produces it.</summary>
+        private sealed class AnalysisStep
         {
+            public AnalysisStep(string name, Func<StepOutput, Task> work)
+            {
+                Name = name;
+                Work = work;
+                Output = new StepOutput();
+            }
+
+            public string Name { get; }
+            public Func<StepOutput, Task> Work { get; }
+            public StepOutput Output { get; }
+            public long DurationMs { get; set; }
+            public bool Failed { get; set; }
+        }
+
+        /// <summary>
+        /// The shared side-effects of one step, buffered rather than written straight to the analysis.
+        /// </summary>
+        /// <remarks>
+        /// Steps run concurrently, and <see cref="CopilotAdoptionSummary.Warnings"/>, its incomplete-data
+        /// reasons and <see cref="CopilotAdoptionAnalysis.Sql"/> are a plain <c>List</c> and
+        /// <c>Dictionary</c> - concurrent writers would corrupt them outright.
+        /// <para>
+        /// Buffering rather than locking is the deliberate choice. A lock would make the writes safe but
+        /// leave their ORDER decided by whichever query happened to finish first, so the same tenant would
+        /// get its caveats in a different order on every load. The workbook export exists to be run before
+        /// and after an enablement programme and diffed, and that comparison must not fill up with
+        /// reordering noise. Merging these buffers in step order instead reproduces exactly the order the
+        /// old sequential implementation produced.
+        /// </para>
+        /// <para>
+        /// Everything else a step writes is a property it alone owns (its own rows, its own chart, its own
+        /// counters), so those stay direct writes to the analysis.
+        /// </para>
+        /// </remarks>
+        private sealed class StepOutput
+        {
+            /// <summary>Warnings raised by this step, in the order it raised them.</summary>
+            public List<string> Warnings { get; } = new List<string>();
+
+            /// <summary>The queries this step ran, for the SQL tab.</summary>
+            public Dictionary<string, string> Sql { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            /// <summary>Datasets this step could not complete. Merged through MarkFiguresIncomplete.</summary>
+            public List<string> IncompleteReasons { get; } = new List<string>();
+
+            /// <summary>Buffered equivalent of <see cref="CopilotAdoptionSummary.MarkFiguresIncomplete"/>.</summary>
+            public void MarkIncomplete(string dataset)
+            {
+                if (!string.IsNullOrWhiteSpace(dataset) && !IncompleteReasons.Contains(dataset))
+                {
+                    IncompleteReasons.Add(dataset);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Runs the independent steps concurrently, then merges their buffered side-effects in step order.
+        /// </summary>
+        /// <remarks>
+        /// Bounded by <see cref="MaxConcurrentSteps"/>. Unbounded concurrency would fire every heavy query
+        /// at the database at once, which on a tier-capped Azure SQL database is a good way to turn one
+        /// slow report into a whole-database stall that also hits the importer and every other page.
+        /// <para>
+        /// The merge happens even when a step throws. Only a cancellation or an outright bug gets this far
+        /// (a query failure is already degraded to a warning by SafeAsync), but if one step faults the
+        /// warnings the others produced are still the honest description of what was gathered.
+        /// </para>
+        /// </remarks>
+        private static async Task RunStepsAsync(
+            CopilotAdoptionAnalysis analysis, List<AnalysisStep> steps, int maxConcurrency, CancellationToken cancellationToken)
+        {
+            if (steps.Count == 0) return;
+
+            using (var gate = new SemaphoreSlim(Math.Min(Math.Max(1, maxConcurrency), steps.Count)))
+            {
+                var running = steps.Select(step => RunOneStepAsync(step, gate, cancellationToken)).ToArray();
+
+                try
+                {
+                    await Task.WhenAll(running);
+                }
+                finally
+                {
+                    // In step order, NOT completion order - see StepOutput.
+                    foreach (var step in steps)
+                    {
+                        analysis.Summary.Diagnostics.Record(step.Name, step.DurationMs, step.Failed);
+
+                        foreach (var warning in step.Output.Warnings)
+                        {
+                            analysis.Summary.Warnings.Add(warning);
+                        }
+
+                        foreach (var reason in step.Output.IncompleteReasons)
+                        {
+                            analysis.Summary.MarkFiguresIncomplete(reason);
+                        }
+
+                        foreach (var entry in step.Output.Sql)
+                        {
+                            analysis.Sql[entry.Key] = entry.Value;
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Runs and times one step, holding a slot in the concurrency gate while it works.</summary>
+        private static async Task RunOneStepAsync(
+            AnalysisStep step, SemaphoreSlim gate, CancellationToken cancellationToken)
+        {
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
             var watch = System.Diagnostics.Stopwatch.StartNew();
-            var failed = false;
             try
             {
-                await work();
+                await step.Work(step.Output);
             }
             catch (Exception)
             {
-                failed = true;
+                step.Failed = true;
                 throw;
             }
             finally
             {
                 watch.Stop();
-                analysis.Summary.Diagnostics.Record(step, watch.ElapsedMilliseconds, failed);
+                step.DurationMs = watch.ElapsedMilliseconds;
+                gate.Release();
             }
         }
 
@@ -304,6 +477,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         private async Task BuildAgentEstateAsync(
             CopilotAdoptionAnalysis analysis,
+            StepOutput output,
             List<int> seatIds,
             DateTime windowStart,
             DateTime nowUtc,
@@ -327,11 +501,11 @@ namespace Common.Entities.CopilotAdoption
                 { "@historyFrom", agentHistoryStart },
                 { "@maxRows", _options.MaxAgents },
             };
-            analysis.Sql["agents"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+            output.Sql["agents"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
                 () => QueryAsync<AgentUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                summary.Warnings,
+                output.Warnings,
                 "Copilot agent usage", cancellationToken);
 
             if (rows == null) return;
@@ -344,7 +518,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (analysis.Agents.Count >= _options.MaxAgents)
             {
-                summary.Warnings.Add(
+                output.Warnings.Add(
                     $"The agent inventory was capped at {_options.MaxAgents} agents, so the agent figures are "
                     + "a floor rather than a total.");
             }
@@ -355,11 +529,11 @@ namespace Common.Entities.CopilotAdoption
                 { "@from", windowStart },
                 { "@top", _options.TopSegments },
             };
-            analysis.Sql["agentsByDepartment"] = CopilotAdoptionSql.ForDisplay(byDeptSql, byDeptParameters);
+            output.Sql["agentsByDepartment"] = CopilotAdoptionSql.ForDisplay(byDeptSql, byDeptParameters);
 
             var byDept = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(byDeptSql, cancellationToken, ToSqlParameters(byDeptParameters)),
-                summary.Warnings,
+                output.Warnings,
                 "agent usage by department", cancellationToken);
 
             if (byDept != null)
@@ -380,6 +554,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         private async Task BuildUnlicensedPopulationAsync(
             CopilotAdoptionAnalysis analysis,
+            StepOutput output,
             List<int> seatIds,
             DateTime windowStart,
             CancellationToken cancellationToken)
@@ -392,11 +567,11 @@ namespace Common.Entities.CopilotAdoption
                 { "@from", windowStart },
                 { "@maxRows", _options.MaxUnlicensedUsersScored },
             };
-            analysis.Sql["unlicensedUsage"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+            output.Sql["unlicensedUsage"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                summary.Warnings,
+                output.Warnings,
                 "unlicensed Copilot usage", cancellationToken);
 
             if (rows != null)
@@ -406,7 +581,7 @@ namespace Common.Entities.CopilotAdoption
 
                 if (summary.Unlicensed.Truncated)
                 {
-                    summary.Warnings.Add(
+                    output.Warnings.Add(
                         $"Unlicensed Copilot usage was capped at {_options.MaxUnlicensedUsersScored} users, so "
                         + "those figures are a floor rather than a total.");
                 }
@@ -418,11 +593,11 @@ namespace Common.Entities.CopilotAdoption
                 { "@from", windowStart },
                 { "@top", _options.TopSegments },
             };
-            analysis.Sql["unlicensedUsageByApp"] = CopilotAdoptionSql.ForDisplay(appSql, appParameters);
+            output.Sql["unlicensedUsageByApp"] = CopilotAdoptionSql.ForDisplay(appSql, appParameters);
 
             var apps = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(appSql, cancellationToken, ToSqlParameters(appParameters)),
-                summary.Warnings,
+                output.Warnings,
                 "unlicensed Copilot usage by app", cancellationToken);
 
             if (apps != null)
@@ -440,6 +615,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         private async Task BuildResourceTypesAsync(
             CopilotAdoptionAnalysis analysis,
+            StepOutput output,
             DateTime windowStart,
             CancellationToken cancellationToken)
         {
@@ -449,11 +625,11 @@ namespace Common.Entities.CopilotAdoption
                 { "@from", windowStart },
                 { "@top", _options.TopSegments },
             };
-            analysis.Sql["resourceTypes"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+            output.Sql["resourceTypes"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                analysis.Summary.Warnings,
+                output.Warnings,
                 "Copilot accessed resource types", cancellationToken);
 
             if (rows == null) return;
@@ -469,6 +645,7 @@ namespace Common.Entities.CopilotAdoption
 
         private async Task BuildLicensedUsersAsync(
             CopilotAdoptionAnalysis analysis,
+            StepOutput output,
             List<int> seatIds,
             DateTime windowStart,
             DateTime historyStart,
@@ -481,18 +658,18 @@ namespace Common.Entities.CopilotAdoption
             // only way to name every seat SKU a user holds (a user can hold more than one), and it
             // gives an exact licensed-user count that is not subject to the detail query's row cap.
             var assignmentsSql = CopilotAdoptionSql.SeatAssignmentsSql(seatIds);
-            analysis.Sql["seatAssignments"] = assignmentsSql;
+            output.Sql["seatAssignments"] = assignmentsSql;
 
             var assignments = await SafeAsync(
                 () => QueryAsync<SeatAssignmentRow>(assignmentsSql, cancellationToken),
-                summary.Warnings,
+                output.Warnings,
                 "Copilot licence assignments", cancellationToken);
 
             if (assignments == null)
             {
                 // The seat count comes from here. Falling through with an empty list would report zero
                 // licensed users - indistinguishable from a tenant that genuinely has none.
-                summary.MarkFiguresIncomplete("Copilot licence assignments");
+                output.MarkIncomplete("Copilot licence assignments");
                 assignments = new List<SeatAssignmentRow>();
             }
 
@@ -512,7 +689,7 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
-                summary.Warnings,
+                output.Warnings,
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var coworkIds = coworkAgentIds.Select(r => r.Value).ToList();
@@ -530,11 +707,11 @@ namespace Common.Entities.CopilotAdoption
                 parameters["@copilotReportPeriodDays"] = summary.DataSources.CopilotUsageReportPeriodDays;
             }
 
-            analysis.Sql["licensedUsers"] = CopilotAdoptionSql.ForDisplay(detailSql, parameters);
+            output.Sql["licensedUsers"] = CopilotAdoptionSql.ForDisplay(detailSql, parameters);
 
             var rows = await SafeAsync(
                 () => QueryAsync<LicensedUserUsageRow>(detailSql, cancellationToken, ToSqlParameters(parameters)),
-                summary.Warnings,
+                output.Warnings,
                 "licensed user detail", cancellationToken);
 
             if (rows == null)
@@ -542,13 +719,13 @@ namespace Common.Entities.CopilotAdoption
                 // Every rate, funnel stage, band and segment on the page is computed from this list. An
                 // empty one renders as "nobody uses Copilot", which is the most damaging thing this tool
                 // could say incorrectly.
-                summary.MarkFiguresIncomplete("licensed user detail");
+                output.MarkIncomplete("licensed user detail");
                 return;
             }
 
             if (rows.Count >= _options.MaxLicensedUsersScored)
             {
-                summary.Warnings.Add(
+                output.Warnings.Add(
                     $"Only the first {_options.MaxLicensedUsersScored:N0} licensed users were analysed. "
                     + "The figures below therefore describe that subset, not the whole tenant.");
             }
@@ -574,6 +751,7 @@ namespace Common.Entities.CopilotAdoption
 
         private async Task BuildUsageByAppAsync(
             CopilotAdoptionAnalysis analysis,
+            StepOutput output,
             List<int> seatIds,
             DateTime windowStart,
             CancellationToken cancellationToken)
@@ -589,11 +767,11 @@ namespace Common.Entities.CopilotAdoption
                 { "@from", windowStart },
                 { "@top", _options.TopSegments },
             };
-            analysis.Sql["usageByApp"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+            output.Sql["usageByApp"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                analysis.Summary.Warnings,
+                output.Warnings,
                 "Copilot usage by app", cancellationToken);
 
             if (rows == null) return;
@@ -605,6 +783,7 @@ namespace Common.Entities.CopilotAdoption
 
         private async Task BuildWeeklyTrendAsync(
             CopilotAdoptionAnalysis analysis,
+            StepOutput output,
             List<int> seatIds,
             DateTime trendStart,
             CancellationToken cancellationToken)
@@ -616,16 +795,16 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
-                analysis.Summary.Warnings,
+                output.Warnings,
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(seatIds, coworkAgentIds.Select(r => r.Value));
             var parameters = new Dictionary<string, object> { { "@trendFrom", trendStart } };
-            analysis.Sql["weeklyTrend"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+            output.Sql["weeklyTrend"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
                 () => QueryAsync<NamedWeekRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                analysis.Summary.Warnings,
+                output.Warnings,
                 "weekly adoption trend", cancellationToken);
 
             if (rows == null) return;
@@ -660,6 +839,7 @@ namespace Common.Entities.CopilotAdoption
 
         private async Task BuildOpportunitiesAsync(
             CopilotAdoptionAnalysis analysis,
+            StepOutput output,
             List<int> seatIds,
             DateTime windowStart,
             CancellationToken cancellationToken)
@@ -673,16 +853,16 @@ namespace Common.Entities.CopilotAdoption
             if (summary.DataSources.AuditAvailable)
             {
                 var unlicensedSql = CopilotAdoptionSql.UnlicensedActiveUsersSql(seatIds);
-                analysis.Sql["unlicensedActiveUsers"] = CopilotAdoptionSql.ForDisplay(
+                output.Sql["unlicensedActiveUsers"] = CopilotAdoptionSql.ForDisplay(
                     unlicensedSql, new Dictionary<string, object> { { "@from", windowStart } });
 
                 summary.UnlicensedActiveUsers = await SafeScalarAsync(
                     unlicensedSql,
-                    summary.Warnings,
+                    output.Warnings,
                     "unlicensed Copilot users",
                     // Published as a headline KPI, and zero is a meaningful answer here - so a failure that
                     // reads as zero is indistinguishable from "nobody uses Copilot without a licence".
-                    () => summary.MarkFiguresIncomplete("unlicensed Copilot users"),
+                    () => output.MarkIncomplete("unlicensed Copilot users"),
                     cancellationToken,
                     new SqlParameter("@from", windowStart));
             }
@@ -692,7 +872,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (!includeAudit && !includeM365)
             {
-                summary.Warnings.Add(
+                output.Warnings.Add(
                     "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage "
                     + "reports. Neither has data, so no candidates can be identified.");
                 return;
@@ -713,11 +893,11 @@ namespace Common.Entities.CopilotAdoption
                 parameters["@m365ReportDate"] = summary.DataSources.M365UsageReportDate.Value;
             }
 
-            analysis.Sql["licenceOpportunities"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+            output.Sql["licenceOpportunities"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUserSignalRow>(sql, cancellationToken, ToSqlParameters(parameters)),
-                summary.Warnings,
+                output.Warnings,
                 "licence opportunities", cancellationToken);
 
             if (rows == null)
@@ -725,13 +905,13 @@ namespace Common.Entities.CopilotAdoption
                 // RecommendedForLicence is published as a headline KPI and the opportunity list drives a
                 // whole tab and a CSV export. This is one of the queries that times out at the median on a
                 // large tenant, so a silent empty list here reads as "nobody is worth a licence".
-                summary.MarkFiguresIncomplete("licence opportunities");
+                output.MarkIncomplete("licence opportunities");
                 return;
             }
 
             if (!includeM365)
             {
-                summary.Warnings.Add(
+                output.Warnings.Add(
                     "The Microsoft 365 usage reports are not available, so licence candidates are ranked only "
                     + "on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot "
                     + "will not appear.");

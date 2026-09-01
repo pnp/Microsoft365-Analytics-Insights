@@ -1017,6 +1017,20 @@ namespace Common.Entities.CopilotAdoption
         /// missing week is ambiguous between "no data" and "no usage" - but that is a reporting decision,
         /// not something to slip in with a performance fix.
         /// </para>
+        /// <para>
+        /// The seat and guest lookups are joined AFTER the aggregate, not per chat row. Both answer a
+        /// question about the user rather than the interaction, so per-row evaluation recomputed the same
+        /// answer for every interaction a user had in the week. Measured on a synthetic customer-shaped
+        /// bench, at a step concurrency of 1, comparing the two shapes over the same data:
+        /// <list type="table">
+        /// <item><description>6-month window:  5,551ms -&gt; 2,322ms elapsed (2.4x), CPU 21.1s -&gt; 12.5s</description></item>
+        /// <item><description>12-month window: 11,523ms -&gt; 4,643ms elapsed (2.5x), CPU 44.7s -&gt; 24.7s</description></item>
+        /// </list>
+        /// Logical reads are unchanged (within 1%) because the same index pages are read either way - the
+        /// saving is join and aggregation CPU, which is the resource that actually runs out on a
+        /// tier-capped database. Verified row-for-row identical against the previous query with EXCEPT in
+        /// both directions.
+        /// </para>
         /// </remarks>
         public static string WeeklyAdoptionTrendSql(IEnumerable<int> seatLicenceTypeIds, IEnumerable<int> coworkAgentIds)
         {
@@ -1037,28 +1051,45 @@ namespace Common.Entities.CopilotAdoption
                 // that spool, and it ran for 315s against a 90s timeout. Grouping by (week, user) once
                 // removes every distinct: a user is licensed or not for the whole week, so MAX() over the
                 // flag is exactly the same answer, and the roll-up below is then a trivial SUM.
-                "WeekUser AS (\r\n" +
+                //
+                // This first pass touches NOTHING but copilot_chats. Whether a user holds a seat and
+                // whether they are a guest are properties of the USER, not of the interaction, so joining
+                // those two lookups here - as this query used to - evaluated them once per chat row to
+                // produce an answer that is identical for every row the user appears in. The joins moved
+                // below the aggregate instead, where they run once per (week, user).
+                "ChatWeekUser AS (\r\n" +
                 $"    SELECT {week} AS WeekStart,\r\n" +
                 "           c.user_id AS user_id,\r\n" +
-                "           MAX(CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END) AS IsLicensed,\r\n" +
-                // Carried as a flag rather than filtered in the WHERE clause: the licensed series must
-                // keep counting a guest that somehow holds a seat (that is a real licence being spent),
-                // while the unlicensed series must exclude guests to agree with the headline count and
-                // the candidate list. One LEFT JOIN on the users PK, so the single-pass shape that this
-                // query was rewritten into (see above) is preserved.
-                "           MAX(CASE WHEN guest_check.user_name LIKE " + GuestUserNamePattern +
-                " THEN 1 ELSE 0 END) AS IsGuest,\r\n" +
-                "           MAX(CASE WHEN seats.user_id IS NOT NULL\r\n" +
-                $"                     AND ({cowork}) THEN 1 ELSE 0 END) AS IsCowork,\r\n" +
+                $"           MAX(CASE WHEN ({cowork}) THEN 1 ELSE 0 END) AS CoworkRow,\r\n" +
                 "           MAX(CASE WHEN c.agent_id IS NOT NULL THEN 1 ELSE 0 END) AS UsedAgent,\r\n" +
-                "           COUNT_BIG(CASE WHEN seats.user_id IS NOT NULL THEN 1 END) AS LicensedInteractions,\r\n" +
-                "           COUNT_BIG(CASE WHEN seats.user_id IS NULL THEN 1 END) AS UnlicensedInteractions\r\n" +
+                "           COUNT_BIG(*) AS Interactions\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
-                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
-                "    LEFT JOIN dbo.users AS guest_check ON guest_check.id = c.user_id\r\n" +
                 "    WHERE c.time_stamp >= @trendFrom\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
                 $"    GROUP BY {week}, c.user_id\r\n" +
+                "),\r\n" +
+                // The per-user lookups, now once per (week, user) instead of once per interaction.
+                "WeekUser AS (\r\n" +
+                "    SELECT wu.WeekStart AS WeekStart,\r\n" +
+                "           CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END AS IsLicensed,\r\n" +
+                // Carried as a flag rather than filtered in the WHERE clause: the licensed series must
+                // keep counting a guest that somehow holds a seat (that is a real licence being spent),
+                // while the unlicensed series must exclude guests to agree with the headline count and
+                // the candidate list.
+                "           CASE WHEN guest_check.user_name LIKE " + GuestUserNamePattern +
+                " THEN 1 ELSE 0 END AS IsGuest,\r\n" +
+                // Cowork is "a licensed user who used Cowork". Licensing is constant across the week, so
+                // ANDing it after the aggregate gives the same answer as testing it on every row.
+                "           CASE WHEN seats.user_id IS NOT NULL\r\n" +
+                "                 AND wu.CoworkRow = 1 THEN 1 ELSE 0 END AS IsCowork,\r\n" +
+                "           wu.UsedAgent AS UsedAgent,\r\n" +
+                // Likewise the two interaction counts: the old conditional COUNT_BIGs tested a condition
+                // that is the same for every row of the group, so they are just the group's count or zero.
+                "           CASE WHEN seats.user_id IS NOT NULL THEN wu.Interactions ELSE 0 END AS LicensedInteractions,\r\n" +
+                "           CASE WHEN seats.user_id IS NULL THEN wu.Interactions ELSE 0 END AS UnlicensedInteractions\r\n" +
+                "    FROM ChatWeekUser AS wu\r\n" +
+                "    LEFT JOIN SeatUsers AS seats ON seats.user_id = wu.user_id\r\n" +
+                "    LEFT JOIN dbo.users AS guest_check ON guest_check.id = wu.user_id\r\n" +
                 "),\r\n" +
                 "Weekly AS (\r\n" +
                 "    SELECT WeekStart,\r\n" +
