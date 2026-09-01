@@ -123,11 +123,15 @@
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
+    <Compile Include="AppInsightsClickRulesTests.cs" />
+    <Compile Include="AppInsightsPageViewRulesTests.cs" />
+    <Compile Include="AppInsightsSearchRulesTests.cs" />
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
     <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
+    <Compile Include="FakeLoaderClasses\FixedClock.cs" />
     <Compile Include="GraphFileMetadataLoaderTests.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
@@ -138,6 +142,7 @@
     <Compile Include="CopilotAuditEventManagerStagingTests.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryStagingWriters.cs" />
     <Compile Include="PowerPlatformAuditEventManagerStagingTests.cs" />
+    <Compile Include="ClockAndContextFactoryTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
