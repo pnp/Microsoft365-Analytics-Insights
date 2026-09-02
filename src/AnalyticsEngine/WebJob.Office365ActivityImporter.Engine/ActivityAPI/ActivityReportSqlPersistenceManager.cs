@@ -15,6 +15,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
@@ -32,6 +33,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         private readonly UserGroupsCache _userGroupsCache;
         private readonly ILogger _logger;
         private readonly AppConfig _appConfig;
+        private readonly IClock _clock;
         private string _defaultConnectionString = null;
         private UserGroupsFilterModel _userGroupsFilter = null;
 
@@ -82,16 +84,17 @@ namespace WebJob.Office365ActivityImporter.Engine
         // How many Copilot file contexts to resolve concurrently while pre-warming the cache (outside the SQL lock).
         private const int PrewarmConcurrency = 8;
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false)
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false, IClock clock = null)
         {
             _filterConfig = filterConfig;
             _userGroupsCache = userGroupsCache;
             _logger = logger;
             _appConfig = appConfig;
+            _clock = clock ?? SystemClock.Instance;
             _userGroupsFilter = new UserGroupsFilterModel(appConfig.UserGroupsFilter);
-            _maxConcurrentSaves = Math.Max(1, maxConcurrentSaves);
+            _maxConcurrentSaves = ActivitySaveConcurrencyPolicy.NormaliseMaxConcurrentSaves(maxConcurrentSaves);
             _usePerBatchDedupCache = usePerBatchDedupCache;
-            if (_maxConcurrentSaves > 1)
+            if (ActivitySaveConcurrencyPolicy.UseShardedStaging(_maxConcurrentSaves))
             {
                 _saveConcurrencyGate = new SemaphoreSlim(_maxConcurrentSaves, _maxConcurrentSaves);
             }
@@ -108,9 +111,12 @@ namespace WebJob.Office365ActivityImporter.Engine
                 // re-querying audit_events for every batch. The per-batch reload materialised ~the whole
                 // in-window event set each time because a batch spans nearly the whole window. See the field
                 // comment on _runImportCache. The AUDIT_PERBATCH_DEDUP_CACHE safety-valve restores the old path.
-                var cache = _usePerBatchDedupCache
-                    ? ActivityImportCache.GetAndBuildNewCache(activities.OldestContent, activities.NewestContent)
-                    : await GetOrBuildRunImportCacheAsync();
+                var cacheWindow = ActivityImportCacheWindow.Resolve(_usePerBatchDedupCache, activities.OldestContent,
+                    activities.NewestContent, _appConfig.DaysBeforeNowToDownload, _clock.UtcNow);
+
+                var cache = cacheWindow.Scope == ActivityDedupCacheScope.PerBatch
+                    ? ActivityImportCache.GetAndBuildNewCache(cacheWindow.FromUtc, cacheWindow.ToUtc)
+                    : await GetOrBuildRunImportCacheAsync(cacheWindow);
 
                 // Read default connection-string
                 if (string.IsNullOrEmpty(_defaultConnectionString))
@@ -145,12 +151,12 @@ namespace WebJob.Office365ActivityImporter.Engine
             // Graph resource calls in that mode (every Copilot event is staged agent-metadata-only), so there
             // is nothing to warm.
             var sharedLoader = await GetSharedCopilotLoaderAsync();
-            if (sharedLoader != null && _appConfig.ResolveCopilotResourceMetadata)
+            if (CopilotPrewarmPolicy.ShouldPrewarm(sharedLoader != null, _appConfig.ResolveCopilotResourceMetadata))
             {
                 await PrewarmCopilotFileMetadataAsync(activities, sharedLoader);
             }
 
-            if (_maxConcurrentSaves == 1)
+            if (!ActivitySaveConcurrencyPolicy.UseShardedStaging(_maxConcurrentSaves))
             {
                 // Default (serial) mode: one save at a time, using the shared staging table. Exactly the
                 // original behaviour - the whole save (staging create + load + merge + metadata) is
@@ -181,7 +187,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                 await _saveConcurrencyGate.WaitAsync();
                 try
                 {
-                    var shardedStagingTable = "##import_staging_event_lookups_" + Guid.NewGuid().ToString("N");
+                    var shardedStagingTable = ActivitySaveConcurrencyPolicy.NewShardedStagingTableName();
                     using (var con = new SqlConnection(_defaultConnectionString))
                     {
                         con.Open();
@@ -203,13 +209,17 @@ namespace WebJob.Office365ActivityImporter.Engine
 
         /// <summary>
         /// Lazily build the run-scoped dedup cache ONCE per import cycle (this manager is created per cycle),
-        /// covering the whole download window [now - DaysBeforeNowToDownload, now]. Every event processed this
+        /// over the window resolved by <see cref="ActivityImportCacheWindow"/>. Every event processed this
         /// cycle has a CreationTime inside that window (the API only serves it there) and the cache is keyed by
         /// event id, so a single full-window load is equivalent to the old per-batch [Min,Max] loads - without
         /// the massive redundancy. Kept current thereafter in-memory by RememberProcessedEvent /
         /// RememberNewlyIgnoredEvent as batches save. Thread-safe (double-checked init + a thread-safe cache).
+        ///
+        /// The window is supplied by the caller (resolved on entry to CommitAll) rather than computed here, so
+        /// the rule is a pure function of the clock and the configured download window. Once built, later
+        /// calls return the same cache and their window argument is ignored.
         /// </summary>
-        private async Task<ActivityImportCache> GetOrBuildRunImportCacheAsync()
+        private async Task<ActivityImportCache> GetOrBuildRunImportCacheAsync(ActivityDedupCacheWindow window)
         {
             if (_runImportCacheBuilt) return _runImportCache;
             await _runImportCacheInitLock.WaitAsync();
@@ -217,19 +227,13 @@ namespace WebJob.Office365ActivityImporter.Engine
             {
                 if (!_runImportCacheBuilt)
                 {
-                    // +1 day of lower margin so an event created just outside the exact window boundary (the
-                    // download window is computed slightly earlier, at cycle start) can never be missed.
-                    var daysBack = Math.Max(_appConfig.DaysBeforeNowToDownload, 1) + 1;
-                    var cacheFrom = DateTime.UtcNow.AddDays(-daysBack);
-                    var cacheTo = DateTime.UtcNow.AddMinutes(2);
-
                     var sw = System.Diagnostics.Stopwatch.StartNew();
-                    var built = ActivityImportCache.GetAndBuildNewCache(cacheFrom, cacheTo);
+                    var built = ActivityImportCache.GetAndBuildNewCache(window.FromUtc, window.ToUtc);
                     sw.Stop();
 
                     _logger.LogInformation($"Audit events import: built run dedup cache from audit_events in " +
                         $"{sw.Elapsed.TotalSeconds.ToString("n1")}s ({built.ProcessedIdCount.ToString("n0")} already-processed id(s), " +
-                        $"{daysBack}-day window) - reused across all save batches this cycle instead of reloading per batch.");
+                        $"{window.DaysBack}-day window) - reused across all save batches this cycle instead of reloading per batch.");
 
                     _runImportCache = built;
                     _runImportCacheBuilt = true;
@@ -285,7 +289,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// </summary>
         private async Task PrewarmCopilotFileMetadataAsync(ActivityReportSet activities, ICopilotMetadataLoader loader)
         {
-            var fileContexts = ExtractCopilotFileContexts(activities);
+            var fileContexts = CopilotPrewarmPolicy.ExtractFileContexts(activities);
             if (fileContexts.Count == 0) return;
 
             using (var throttle = new SemaphoreSlim(PrewarmConcurrency))
@@ -311,38 +315,12 @@ namespace WebJob.Office365ActivityImporter.Engine
         }
 
         /// <summary>
-        /// The distinct (fileContextId -> eventUpn) map to pre-resolve for a batch. Mirrors
-        /// <c>CopilotAuditEventManager</c>: only the first file-type context per event is used; a Teams meeting
-        /// context ends file processing for that event; Teams chat contexts are additive (not files).
+        /// The distinct (fileContextId -> eventUpn) map to pre-resolve for a batch. Thin wrapper kept so
+        /// existing call sites and tests are unaffected; the rule itself lives in
+        /// <see cref="CopilotPrewarmPolicy.ExtractFileContexts"/>.
         /// </summary>
         internal static Dictionary<string, string> ExtractCopilotFileContexts(IEnumerable<AbstractAuditLogContent> activities)
-        {
-            var fileContexts = new Dictionary<string, string>();
-            foreach (var copilot in activities.OfType<CopilotAuditLogContent>())
-            {
-                var contexts = copilot.CopilotEventData?.Contexts;
-                if (contexts == null) continue;
-                foreach (var context in contexts)
-                {
-                    if (context == null) continue;
-                    // Type is checked before the id guard so a (typically non-null) meeting/chat context
-                    // controls flow exactly as CopilotAuditEventManager does, even if its id were null.
-                    if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING) break;   // meeting ends file/meeting processing
-                    if (context.Type == ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_CHAT) continue;   // chat is additive, not a file
-                    // First file-type context for this event (a null-id file resolves to nothing, so skip it but still stop).
-                    // Also skip contexts Graph can never resolve (local C:\ / UNC / DataAgent) so the concurrent
-                    // prewarm doesn't fire a guaranteed-miss round-trip for each one (mirrors TryAddFileAsync).
-                    if (context.Id != null
-                        && !CopilotAuditEventManager.ShouldSkipGraphFileLookup(context.Id)
-                        && !fileContexts.ContainsKey(context.Id))
-                    {
-                        fileContexts[context.Id] = copilot.UserId;
-                    }
-                    break;
-                }
-            }
-            return fileContexts;
-        }
+            => CopilotPrewarmPolicy.ExtractFileContexts(activities);
 
         /// <summary>
         /// Fill up staging table & return import result
@@ -363,31 +341,23 @@ namespace WebJob.Office365ActivityImporter.Engine
             var swDedup = System.Diagnostics.Stopwatch.StartNew();
             foreach (var abtractLog in activities)
             {
-                // Don't insert duplicates in same set
-                if (!processedIds.Contains(abtractLog.Id) && !cache.HaveSeenInProcessedOrIgnoredEvents(abtractLog))
-                {
-                    var result = SaveResultEnum.NotSaved;
-                    if (_filterConfig.InScope(abtractLog))
-                    {
-                        if (await _userGroupsCache.IsInGroupsFilter(abtractLog.UserId, _userGroupsFilter))
-                        {
-                            logsToInsert.Rows.Add(new AuditLogTempEntity(abtractLog, abtractLog.UserId));
+                // Don't insert duplicates in same set. The decision itself (dedup -> URL scope -> user
+                // scope, plus what gets remembered where) lives in ActivityStagingRules so it can be
+                // asserted with no SQL and no Graph; see issue #373.
+                var decision = await ActivityStagingRules.DecideAndRememberAsync(
+                    abtractLog,
+                    processedIds,
+                    cache,
+                    log => _filterConfig.InScope(log),
+                    upn => _userGroupsCache.IsInGroupsFilter(upn, _userGroupsFilter),
+                    log => logsToInsert.Rows.Add(new AuditLogTempEntity(log, log.UserId)));
 
-                            // Remember we've done this one now
-                            cache.RememberProcessedEvent(abtractLog);
-                            result = SaveResultEnum.Imported;
-                        }
-                        else
-                        {
-                            result = SaveResultEnum.UserOutOfScope;
-                            _logger.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
-                        }
-                    }
-                    else
+                if (!decision.IsDuplicate)
+                {
+                    var result = decision.Result;
+                    if (result == SaveResultEnum.UserOutOfScope)
                     {
-                        // No URL
-                        cache.RememberNewlyIgnoredEvent(abtractLog);
-                        result = SaveResultEnum.UrlOutOfScope;
+                        _logger.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
                     }
 
                     // Update stats
@@ -400,8 +370,6 @@ namespace WebJob.Office365ActivityImporter.Engine
                     else if (result == SaveResultEnum.UrlOutOfScope) stats.URLsOutOfScope++;
                     else if (result == SaveResultEnum.UserOutOfScope) stats.UsersOutOfScope++;
                     else _logger.LogError($"Unexpected log result for log {abtractLog.Id}");
-
-                    processedIds.Add(abtractLog.Id);
                 }
             }
             swDedup.Stop();
@@ -414,7 +382,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             // Merge to normal tables. In concurrent mode each save has its own sharded staging table
             // (stagingTableName) and mergeLock serialises ONLY the merge (which writes shared lookup/fact
             // tables); the parallel staging LOAD inside SaveToStagingTable runs unlocked.
-            var effectiveStagingTable = stagingTableName ?? ActivityImportConstants.STAGING_TABLE_ACTIVITY;
+            var effectiveStagingTable = ActivitySaveConcurrencyPolicy.EffectiveStagingTableName(stagingTableName);
             var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", effectiveStagingTable);
             var swMerge = System.Diagnostics.Stopwatch.StartNew();
             await logsToInsert.SaveToStagingTable(10000, mergeSQL, stagingTableName, mergeLock);

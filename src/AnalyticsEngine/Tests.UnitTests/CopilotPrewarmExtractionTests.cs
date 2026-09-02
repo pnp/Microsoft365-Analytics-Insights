@@ -2,6 +2,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Collections.Generic;
 using System.Linq;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
@@ -86,6 +87,51 @@ namespace Tests.UnitTests
         {
             var acts = new List<AbstractAuditLogContent> { new SharePointAuditLogContent() };
             Assert.AreEqual(0, ActivityReportSqlPersistenceManager.ExtractCopilotFileContexts(acts).Count);
+        }
+
+        /// <summary>
+        /// The extraction moved to CopilotPrewarmPolicy in issue #373; the manager keeps a thin wrapper so
+        /// existing call sites are unaffected. This pins that the wrapper actually delegates rather than
+        /// leaving a second, divergent copy of the context rules behind.
+        /// </summary>
+        [TestMethod]
+        public void ManagerWrapperDelegatesToTheExtractedPolicy()
+        {
+            var url = "https://contoso.sharepoint.com/sites/x/Καλημέρα κόσμε.docx";
+            var acts = new List<AbstractAuditLogContent>
+            {
+                CopilotEvent("καλημέρα@contoso.onmicrosoft.com", Chat("19:chat@thread.v2"), File(url)),
+                CopilotEvent("b@contoso.com", Meeting("19:meeting@thread.v2"), File("https://contoso.sharepoint.com/sites/x/b.docx"))
+            };
+
+            var viaWrapper = ActivityReportSqlPersistenceManager.ExtractCopilotFileContexts(acts);
+            var viaPolicy = CopilotPrewarmPolicy.ExtractFileContexts(acts);
+
+            CollectionAssert.AreEquivalent(viaWrapper.Keys, viaPolicy.Keys);
+            Assert.AreEqual(1, viaPolicy.Count);
+            Assert.AreEqual("καλημέρα@contoso.onmicrosoft.com", viaPolicy[url]);
+        }
+
+        [TestMethod]
+        public void PrewarmIsSkippedWhenCopilotResourceResolutionIsDisabled()
+        {
+            // With resolution off the save path makes no Graph resource calls at all, so warming would be
+            // pure outbound Graph traffic for a cache nothing reads.
+            Assert.IsFalse(CopilotPrewarmPolicy.ShouldPrewarm(hasSharedLoader: true, resolveCopilotResourceMetadata: false));
+        }
+
+        [TestMethod]
+        public void PrewarmIsSkippedWhenTheSharedLoaderCouldNotBeBuilt()
+        {
+            // Building the run-scoped loader is best-effort (no Graph credentials in a test, for instance).
+            Assert.IsFalse(CopilotPrewarmPolicy.ShouldPrewarm(hasSharedLoader: false, resolveCopilotResourceMetadata: true));
+            Assert.IsFalse(CopilotPrewarmPolicy.ShouldPrewarm(hasSharedLoader: false, resolveCopilotResourceMetadata: false));
+        }
+
+        [TestMethod]
+        public void PrewarmRunsWhenThereIsALoaderAndResolutionIsEnabled()
+        {
+            Assert.IsTrue(CopilotPrewarmPolicy.ShouldPrewarm(hasSharedLoader: true, resolveCopilotResourceMetadata: true));
         }
     }
 }
