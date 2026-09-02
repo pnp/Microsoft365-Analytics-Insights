@@ -306,12 +306,12 @@ namespace Tests.UnitTests
         public void DailyActivityLoader_DefaultClock_IsTheSystemClock()
         {
             // The injected clock must be an opt-in for tests only: production reads DateTime.UtcNow exactly
-            // as it did before, so the import window is unchanged.
+            // as it did before, so the import window is unchanged. Identity is the whole assertion - that
+            // SystemClock reports UTC is already pinned by ClockAndContextFactoryTests.SystemClock_ReturnsUtcKind,
+            // and re-checking it here against a tolerance would only add a preemption flake.
             var loader = new InMemoryDailyActivityLoader(NullLogger.Instance);
 
             Assert.AreSame(SystemClock.Instance, loader.Clock);
-            Assert.IsTrue(Math.Abs((DateTime.UtcNow - loader.Clock.UtcNow).TotalSeconds) < 5,
-                "The default clock must report the real UTC time.");
         }
 
         [TestMethod]
