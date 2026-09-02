@@ -1,4 +1,3 @@
-using Common.Entities;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -8,17 +7,16 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 {
     /// <summary>
-    /// A usage report loader that only loads/saves on a specific day of the week. Has SQL and Graph dependencies. 
+    /// A usage report loader that only loads/saves on a specific day of the week. Has Graph (and, via a
+    /// store port, storage) dependencies.
     /// </summary>
     public abstract class GraphAndSqlAggregateWeeklyUsageReportLoader<T> : AbstractAggregateWeeklyUsageReportLoader<T> where T : BaseAggregateItemStats
     {
         protected readonly ManualGraphCallClient _client;
-        protected readonly AnalyticsEntitiesContext _context;
 
-        protected GraphAndSqlAggregateWeeklyUsageReportLoader(AnalyticsEntitiesContext db, ManualGraphCallClient client, ILogger logger) : base(logger)
+        protected GraphAndSqlAggregateWeeklyUsageReportLoader(ManualGraphCallClient client, ILogger logger) : base(logger)
         {
             _client = client;
-            _context = db;
         }
 
         /// <summary>

@@ -146,6 +146,9 @@
     <Compile Include="FakeLoaderClasses\FakeUsageReportStorageInspector.cs" />
     <Compile Include="FakeLoaderClasses\InMemorySiteUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\TablelessDailyActivityLoader.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryDailyActivityLoader.cs" />
+    <Compile Include="FakeLoaderClasses\InMemorySharePointSiteUsageStore.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryUsageReportStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeCallsPorts.cs" />
     <Compile Include="FakeLoaderClasses\FakeTeamsPorts.cs" />
@@ -265,6 +268,8 @@
     <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
     <Compile Include="SiteIdToUrlCacheTests.cs" />
+    <Compile Include="DailyActivityLoaderTests.cs" />
+    <Compile Include="SharePointSiteUsageStoreTests.cs" />
     <Compile Include="UsageReportRefreshPolicyTests.cs" />
     <Compile Include="UserImportTests.cs" />
     <Compile Include="UserLookupTests.cs" />

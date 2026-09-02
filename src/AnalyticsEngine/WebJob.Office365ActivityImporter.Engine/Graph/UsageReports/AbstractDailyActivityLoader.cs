@@ -4,12 +4,8 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Entity;
-using System.Data.Entity.Infrastructure;
-using System.Data.SqlClient;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
@@ -74,6 +70,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             => StorageInspector ?? new SqlUsageReportStorageInspector(db);
 
         /// <summary>
+        /// Reads and writes for this report's table. Injectable so the whole finalized-date scan and the
+        /// entire save loop - the upsert, the scope/lookup filters, the dirty check, the batch boundary -
+        /// can be exercised without SQL Server (#375); defaults to the EF adapter over whichever context
+        /// the caller passes in.
+        /// </summary>
+        public IUsageReportStore<TReportDbType> ReportStore { get; set; }
+
+        // Note the `??`: when a store is injected, the right-hand side is never evaluated, so GetTable(db)
+        // is not called and a null context is never dereferenced.
+        private IUsageReportStore<TReportDbType> StoreFor(AnalyticsEntitiesContext db)
+            => ReportStore ?? new SqlUsageReportStore<TReportDbType>(db, GetTable(db));
+
+        /// <summary>
+        /// Source of "now" for the import window and the finalized-date scan. Defaults to
+        /// <see cref="SystemClock"/>, i.e. <c>DateTime.UtcNow</c>, so behaviour is unchanged; injectable
+        /// (#368/#375) so a test asserting exact window bounds cannot disagree with the loader's own clock
+        /// read when the two straddle UTC midnight.
+        /// </summary>
+        public IClock Clock { get; set; } = SystemClock.Instance;
+
+        /// <summary>
         /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL, old
         /// enough that Graph will no longer change them, and covered by a previously completed import phase. These
         /// can be skipped entirely on the next import - no re-download, no re-write. Dates within the recent window
@@ -88,7 +105,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             DateTime? lastSuccessfulImport)
         {
             var window = UsageReportRefreshPolicy.ResolveSkipWindow(
-                daysBackMax, lastSuccessfulImport, RefreshableRecentDays, DateTime.UtcNow);
+                daysBackMax, lastSuccessfulImport, RefreshableRecentDays, Clock.UtcNow);
 
             if (!window.CanSkipAnyDate)
             {
@@ -97,7 +114,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 return new HashSet<DateTime>();
             }
 
-            var table = GetTable(db);
+            var store = StoreFor(db);
             if (await HasLeadingDateIndexAsync(db))
             {
                 // The window contains at most 25 finalized dates. DISTINCT over an indexed range
@@ -106,7 +123,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 var storedFinalizedDates = new HashSet<DateTime>();
                 foreach (var date in UsageReportRefreshPolicy.EnumerateSkipCandidates(window))
                 {
-                    if (await table.AnyAsync(activity => activity.Date == date))
+                    if (await store.HasAnyRowForDateAsync(date))
                     {
                         storedFinalizedDates.Add(date);
                     }
@@ -117,13 +134,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             // Some account/group report tables have no date-leading index. Repeated existence
             // probes would each scan the table, so use one range scan until an index is available.
-            var windowStart = window.WindowStartUtc;
-            var safeCutoff = window.SafeCutoffUtc;
-            var scannedDates = await table
-                .Where(activity => activity.Date >= windowStart && activity.Date < safeCutoff)
-                .Select(activity => activity.Date)
-                .Distinct()
-                .ToListAsync();
+            var scannedDates = await store.GetStoredDatesInRangeAsync(window.WindowStartUtc, window.SafeCutoffUtc);
 
             return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
         }
@@ -159,8 +170,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Example: Message: {"error":{"code":"InvalidArgument","message":"Invalid date value specified: $DateTime.Now. Only support data for the past 28 days."}}
                 var daysBack = (daysBackIdx + 1) * -1;
                 // Graph Usage Reports API operates in UTC; DateTime.Now on a non-UTC server
-                // produces the wrong date bucket near midnight.
-                var dt = DateTime.UtcNow.AddDays(daysBack);
+                // produces the wrong date bucket near midnight. Read per iteration, as before.
+                var dt = Clock.UtcNow.AddDays(daysBack);
 
                 // Finalized days we already hold don't change in Graph - skip the (often slow) paged download entirely.
                 if (datesToSkip != null && datesToSkip.Contains(dt.Date))
@@ -235,16 +246,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             // O(n) instead of O(n^2). AssociatedLookupId is [NotMapped] (it maps to UserID / YammerGroupID per
             // subclass), so existing rows can only be filtered in SQL by the mapped Date column - we key them by
             // lookup id in memory.
-            var autoDetectWasEnabled = db.Configuration.AutoDetectChangesEnabled;
-            db.Configuration.AutoDetectChangesEnabled = false;
-            try
+            var store = StoreFor(db);
+            using (store.BeginBulkWrite())
             {
                 foreach (var dateTime in LoadedReportPages.Keys)
                 {
                     // This day's existing rows, tracked (so updates go through the identity map without attach
                     // conflicts), keyed in memory by the [NotMapped] AssociatedLookupId.
                     var existingByLookupId = new Dictionary<int, TReportDbType>();
-                    foreach (var existingRow in await GetTable(db).Where(t => t.Date == dateTime.Date).ToListAsync())
+                    foreach (var existingRow in await store.GetRowsForDateAsync(dateTime.Date))
                     {
                         // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.
                         existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
@@ -311,16 +321,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         bool willWrite;
                         if (isNewLog)
                         {
-                            GetTable(db).Add(dateRequestedLog);
+                            store.AddRow(dateRequestedLog);
                             willWrite = true;
                         }
                         else
                         {
-                            willWrite = HasMappedValueChanged(db.Entry(dateRequestedLog));
-                            if (willWrite)
-                            {
-                                db.Entry(dateRequestedLog).State = EntityState.Modified;
-                            }
+                            willWrite = store.MarkUpdatedIfChanged(dateRequestedLog);
                         }
 
                         i++;
@@ -330,7 +336,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             pendingChanges++;
                             if (pendingChanges >= SaveBatchSize)
                             {
-                                await db.SaveChangesAsync();
+                                await store.SaveChangesAsync();
                                 pendingChanges = 0;
                             }
                         }
@@ -338,16 +344,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                     if (pendingChanges > 0)
                     {
-                        await db.SaveChangesAsync();
+                        await store.SaveChangesAsync();
                     }
 
                     // Release this day's tracked rows before moving to the next day.
-                    DetachReportLogEntities(db);
+                    store.ReleaseSavedRows();
                 }
-            }
-            finally
-            {
-                db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
             }
 
             LastSaveDbWriteCount = dbWrites;
@@ -386,36 +388,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 }
             }
             return lookupId.Value;
-        }
-
-        // Detach the day's saved usage-log entities so the EF6 change tracker (and the memory it holds) is
-        // released before the next day. Lookup entities (users/groups) are intentionally left tracked so the
-        // shared id cache keeps working.
-        private static void DetachReportLogEntities(AnalyticsEntitiesContext db)
-        {
-            foreach (var entry in db.ChangeTracker.Entries<AbstractUsageActivityLog>().ToList())
-            {
-                entry.State = EntityState.Detached;
-            }
-        }
-
-        // True if any mapped scalar value on the tracked entity differs from the value originally loaded from the
-        // DB. Compares the EF6 original/current value snapshots directly so it works with
-        // AutoDetectChangesEnabled = false (auto-detect is deliberately off to keep bulk saves O(n)). Navigation
-        // properties and [NotMapped] members (e.g. AssociatedLookupId) are not in these snapshots, so only real
-        // column changes trigger an UPDATE.
-        private static bool HasMappedValueChanged(DbEntityEntry entry)
-        {
-            var current = entry.CurrentValues;
-            var original = entry.OriginalValues;
-            foreach (var propertyName in current.PropertyNames)
-            {
-                if (!object.Equals(original[propertyName], current[propertyName]))
-                {
-                    return true;
-                }
-            }
-            return false;
         }
 
         protected virtual Task<bool> IdInScope(string lookupId)
