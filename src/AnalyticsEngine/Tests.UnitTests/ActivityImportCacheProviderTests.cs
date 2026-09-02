@@ -111,10 +111,9 @@ namespace Tests.UnitTests
 
             var allRacers = Task.WhenAll(racers);
             var finished = await Task.WhenAny(allRacers, Task.Delay(TimeSpan.FromSeconds(30)));
-            // Deliberately no using/finally on the barrier: on the timeout path a racer may still be sitting
-            // in SignalAndWait, and disposing it out from under that racer would fault its task with
-            // ObjectDisposedException - a fault nothing observes, because the timed-out racers are never
-            // awaited. Leaking a Barrier in an already-failing test is the simpler correct outcome.
+            // Deliberately no using/finally on the barrier: Barrier.Dispose is not safe against a concurrent
+            // SignalAndWait, and on the timeout path a racer may still be sitting in one. Leaving it to the
+            // GC on an already-failing path is simpler than reasoning about what happens if we don't.
             Assert.AreSame(allRacers, finished, "A racer did not finish - the init lock may be deadlocked.");
 
             var caches = await allRacers;
