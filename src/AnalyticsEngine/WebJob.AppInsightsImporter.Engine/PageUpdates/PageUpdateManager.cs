@@ -70,7 +70,11 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             var updatedUrls = new List<string>();
 
-            // Process all page update events in chunks of 1000 at a time, all in parallel
+            // Process page-update events in _chunkSize-sized chunks. ListBatchProcessor's two-argument
+            // constructor defaults maxConcurrentBatches to 1, so the chunks run strictly serially - the
+            // comment here used to say "chunks of 1000 at a time, all in parallel", and neither half was
+            // true. Corrected while adding the context factory below, because the two claims contradicted
+            // each other in the same class.
             var listProc = new ListBatchProcessor<PageUpdateEventAppInsightsQueryResult>(_chunkSize,
                 async chunk => await SaveChunk(chunk, updatedUrls));
 
