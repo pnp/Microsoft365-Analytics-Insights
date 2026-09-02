@@ -166,19 +166,26 @@ namespace Tests.UnitTests
         /// The App Insights "searches" staging table (created from the Create Searches Import Temp
         /// Table.sql resource by SearchesSaveExtension) stores the authenticated user's UPN and the
         /// search term. Both must be nvarchar - not varchar - or a non-Latin value (e.g. Greek) is
-        /// corrupted to '?'. For user_name that breaks the merge's inner join to the nvarchar
-        /// users.user_name and silently drops that user's searches. See issue #122 and the
-        /// "Character set support (Unicode / Greek)" convention.
+        /// corrupted to '?'. That matters most for search_term, which is free-form text a user types
+        /// in any script. See issue #122 and the "Character set support (Unicode / Greek)" convention.
         /// </summary>
+        /// <remarks>
+        /// Note the target column dbo.users.user_name is varchar(250), not nvarchar - so this staging
+        /// column being nvarchar does not, on its own, make a non-Latin UPN survive the merge. In
+        /// practice that is moot: Entra restricts userPrincipalName to A-Z a-z 0-9 ' . - _ ! # ^ ~
+        /// with accented characters disallowed, so the values arriving here are ASCII.
+        /// </remarks>
         [TestMethod]
         public void SearchesStagingUserNameAndTermAreNvarchar()
         {
             var ddl = WebJob.AppInsightsImporter.Engine.Properties.Resources.Create_Searches_Import_Temp_Table;
 
             Assert.IsTrue(Regex.IsMatch(ddl, @"\[user_name\]\s*\[nvarchar\]", RegexOptions.IgnoreCase),
-                "searches staging [user_name] must be nvarchar so non-Latin UPNs (e.g. Greek) aren't corrupted to '?'.");
+                "searches staging [user_name] must be nvarchar to stay consistent with the rest of the "
+                + "staging table and with urls/search_term; see the remarks above for why it is not, on "
+                + "its own, what makes a UPN survive the merge.");
             Assert.IsFalse(Regex.IsMatch(ddl, @"\[user_name\]\s*\[varchar\]", RegexOptions.IgnoreCase),
-                "searches staging [user_name] must NOT be varchar (single-code-page corrupts Unicode UPNs).");
+                "searches staging [user_name] must NOT be varchar (single-code-page).");
             Assert.IsTrue(Regex.IsMatch(ddl, @"\[search_term\]\s*\[nvarchar\]", RegexOptions.IgnoreCase),
                 "searches staging [search_term] must be nvarchar (users search in non-Latin scripts).");
         }

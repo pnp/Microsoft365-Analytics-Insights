@@ -53,12 +53,37 @@ namespace Tests.UnitTests
 
                 // Load the site with a new fake ID. Currently in the DB it doesn't have an ID
                 var siteUrlCache2 = new FakeSPSiteIdToUrlCache(db, logger, fakeUrlExisting);
-                var site2 = await siteUrlCache2.Load($"fake id2 {Guid.NewGuid()}");
+                var newIdForExistingUrl = $"fake id2 {Guid.NewGuid()}";
+                var site2 = await siteUrlCache2.Load(newIdForExistingUrl);
                 Assert.IsNotNull(site2);
                 Assert.AreEqual(fakeUrlExisting, site2.SiteUrl);
 
                 var dbRecord2 = db.sites.Where(s => s.UrlBase == fakeUrlExisting).SingleOrDefault();
                 Assert.IsNotNull(dbRecord2);
+
+                // The row must be RE-KEYED, not duplicated: this is the whole point of the URL lookup on
+                // the write path. Verified on a FRESH context - re-querying on the writing context would be
+                // answered from EF's identity map, so an adapter that only called SaveChangesAsync on the
+                // insert branch would leave the re-key tracked-but-unsaved and still pass. See issue #375.
+                using (var verifyDb = new AnalyticsEntitiesContext())
+                {
+                    var persisted = verifyDb.sites.AsNoTracking().Where(s => s.UrlBase == fakeUrlExisting).ToList();
+                    Assert.AreEqual(1, persisted.Count, "The URL row must not be duplicated.");
+                    Assert.AreEqual(newIdForExistingUrl, persisted[0].SiteId, "The existing URL row must be stamped with the new site id.");
+                }
+
+                // A stored site id must be served FROM THE DATABASE, not from Graph. The fake is primed with
+                // a different answer, so a store that stopped returning hits (or returned the Graph value)
+                // would fail here rather than silently costing a Graph round-trip per site.
+                //
+                // Asked for in a DIFFERENT CASE on purpose: the site_id lookup runs under a case-insensitive
+                // collation, so this also pins that the STORED spelling comes back rather than the requested
+                // one - which returning `SiteId = siteId` from the adapter would break.
+                var contradictingCache = new FakeSPSiteIdToUrlCache(db, logger, $"fake URL {Guid.NewGuid()}");
+                var storedHit = await contradictingCache.Load(fakeId.ToUpperInvariant());
+                Assert.IsNotNull(storedHit);
+                Assert.AreEqual(fakeUrlNew, storedHit.SiteUrl, "The stored URL must win over whatever Graph would say.");
+                Assert.AreEqual(fakeId, storedHit.SiteId, "The stored site-id spelling must be returned, not the requested one.");
             }
         }
 

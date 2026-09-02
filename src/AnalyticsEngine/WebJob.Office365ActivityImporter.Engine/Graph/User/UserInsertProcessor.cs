@@ -85,6 +85,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 readUserSkus,
                 METADATA_BATCH_SIZE,
                 userMetaCache,
+                dataMapper,
                 updateAction);
 
             _logger.LogInformation($"User import - Phase 2: Metadata enrichment completed for {insertedDbUsers.Count.ToString("N0")} new users");
@@ -182,6 +183,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             bool readUserSkus,
             int batchSize,
             UserMetadataCache userMetaCache,
+            UserDataMapper dataMapper,
             Func<AnalyticsEntitiesContext, GraphUser, List<GraphUser>, List<Common.Entities.User>, Common.Entities.User, bool, Dictionary<string, Common.Entities.User>, Task> updateAction)
         {
             var enrichedUsers = new List<Common.Entities.User>(insertedUserUpns.Count);
@@ -247,6 +249,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 // Update metadata for each user
+                //
+                // Resolve this batch's managers in ONE query first. Without it the manager
+                // resolution chain falls through to a per-user database lookup for every manager
+                // that is not already in dbUsersByAadId - which, since that dictionary is seeded
+                // from pre-existing users and then grows a batch at a time, means every manager
+                // who happens to be inserted in a later batch than their report. Graph does not
+                // order the delta by reporting line, so on a first import that is a large share of
+                // everyone who has a manager (#371).
+                var batchGraphUsers = new List<GraphUser>(batchUsers.Count);
+                foreach (var dbUser in batchUsers)
+                {
+                    if (!string.IsNullOrEmpty(dbUser.UserPrincipalName) && graphUsersByUpn.TryGetValue(dbUser.UserPrincipalName, out var batchGraphUser))
+                    {
+                        batchGraphUsers.Add(batchGraphUser);
+                    }
+                }
+                await dataMapper.PrefetchManagersForBatchAsync(batchGraphUsers);
+
                 foreach (var dbUser in batchUsers)
                 {
                     if (!string.IsNullOrEmpty(dbUser.UserPrincipalName) && graphUsersByUpn.TryGetValue(dbUser.UserPrincipalName, out var graphUser))

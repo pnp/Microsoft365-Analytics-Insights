@@ -327,7 +327,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Safety cap on paging: at 200k-user scale a single group rarely exceeds ~50k members
             // but a runaway nextLink shouldn't ever fill memory unbounded. 200k members per group
             // is comfortably above any realistic limit.
-            const int MAX_MEMBERS = 200_000;
             var all = new List<DirectoryObject>();
 
             var firstPage = await client.Groups[groupId].Members.GetAsync();
@@ -339,14 +338,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 {
                     all.Add(item);
                     loaded++;
-                    return loaded < MAX_MEMBERS;
+                    return TeamsCrawlPagingPolicy.ShouldContinuePaging(loaded, TeamsCrawlPagingPolicy.MaxTeamMembers);
                 });
 
             await iterator.IterateAsync();
 
             if (iterator.State == PagingState.Paused)
             {
-                logger.LogWarning($"Group {groupId}: hit MAX_MEMBERS ({MAX_MEMBERS:N0}). Returning partial list of {all.Count:N0} members.");
+                logger.LogWarning($"Group {groupId}: hit MAX_MEMBERS ({TeamsCrawlPagingPolicy.MaxTeamMembers:N0}). Returning partial list of {all.Count:N0} members.");
             }
 
             return all;
