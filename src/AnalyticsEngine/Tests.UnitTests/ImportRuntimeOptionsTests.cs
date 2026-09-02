@@ -160,10 +160,11 @@ namespace Tests.UnitTests
             // is what makes the word "after" in that message honest.
             var lastUtc = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
 
-            // The same instant in all three kinds the store can hand back. Utc and Local are what the two
-            // ISingleDateStore implementations actually produce; Unspecified is what an offset-less string in
-            // Redis parses to - a bare local wall-clock reading, which is why ToUniversalTime() treating
-            // Unspecified as local is the right reading of it.
+            // The same instant in all three kinds the gate accepts. `Local` is what both ISingleDateStore
+            // implementations actually produce (each stamps DateTime.Now). `Utc` and `Unspecified` reach the
+            // gate only from a value the standard composition did not write - a Z-suffixed or an offset-less
+            // Redis string, or a custom ISingleDateStore. An offset-less string is a bare local wall-clock
+            // reading, which is why ToUniversalTime() treating Unspecified as local is the right reading.
             //
             // Note SpecifyKind(lastUtc, Unspecified).ToLocalTime() would NOT do: ToLocalTime treats
             // Unspecified as UTC, so it just yields the Local value again.
