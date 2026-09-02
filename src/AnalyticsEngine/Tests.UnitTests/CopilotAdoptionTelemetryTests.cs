@@ -183,6 +183,11 @@ namespace Tests.UnitTests
                 1,
                 sink.Events.Count(
                     item => item.Stage == CopilotAdoptionTelemetryStages.CachePublished));
+            var published = sink.Events.Single(
+                item => item.Stage == CopilotAdoptionTelemetryStages.CachePublished);
+            Assert.IsTrue(
+                published.DurationMs < published.ElapsedMs,
+                "cache DurationMs must time MemoryCache.Set, not repeat total analysis elapsed time");
 
             var ordered = order.ToArray();
             Assert.IsTrue(

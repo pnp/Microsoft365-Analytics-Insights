@@ -191,12 +191,14 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
                 // Publish first. A blocked or broken telemetry channel must never keep the page polling
                 // after the analysis has already produced a valid result.
+                var cacheWatch = System.Diagnostics.Stopwatch.StartNew();
                 _cache.Set(cacheKey, analysis, _cacheTtl);
+                cacheWatch.Stop();
 
                 telemetry.Checkpoint(
                     CopilotAdoptionTelemetryStages.ServiceReturned, serviceDurationMs);
                 telemetry.Checkpoint(
-                    CopilotAdoptionTelemetryStages.CachePublished, watch.ElapsedMilliseconds);
+                    CopilotAdoptionTelemetryStages.CachePublished, cacheWatch.ElapsedMilliseconds);
                 telemetry.QueueCompletion(analysis);
                 return analysis;
             }
