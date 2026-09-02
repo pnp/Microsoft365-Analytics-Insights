@@ -132,17 +132,23 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Department names, office locations and company names are customer text and are routinely
-        /// non-Latin. Nothing in the mapping may fold or mangle them - see the character-set rule in the
-        /// repo's C# instructions.
+        /// Department names, job titles, office locations, countries and company names come from Entra
+        /// as free text with no character restriction, so they are routinely non-Latin. Nothing in the
+        /// mapping may fold or mangle them - see the character-set rule in the repo's C# instructions.
         /// </summary>
+        /// <remarks>
+        /// The UPN is deliberately ASCII here. Entra restricts <c>userPrincipalName</c> to
+        /// <c>A-Z a-z 0-9 ' . - _ ! # ^ ~</c> and explicitly disallows accented characters, so a Greek
+        /// UPN is not a case this pipeline can ever see - asserting one would be testing data that
+        /// cannot exist. The unrestricted fields above are where the real risk is.
+        /// </remarks>
         [TestMethod]
-        public void UserMapping_UsageLocationAndCompany_RoundTripNonAsciiValues()
+        public void UserMapping_ProfileLookupValues_RoundTripNonAsciiValues()
         {
             var plan = UserMetadataMappingRules.BuildPlan(new GraphUser
             {
-                UserPrincipalName = "καλημέρα@contoso.onmicrosoft.com",
-                Mail = "καλημέρα@contoso.onmicrosoft.com",
+                UserPrincipalName = "kalimera@contoso.onmicrosoft.com",
+                Mail = "kalimera@contoso.onmicrosoft.com",
                 CompanyName = "Καλημέρα κόσμε",
                 UsageLocation = "GR",
                 Department = "Μηχανική",
@@ -159,7 +165,6 @@ namespace Tests.UnitTests
             Assert.AreEqual("Ελλάδα", plan.CountryName);
             Assert.AreEqual("Αττική", plan.StateOrProvinceName);
             Assert.AreEqual("Μηχανικός", plan.JobTitleName);
-            Assert.AreEqual("καλημέρα@contoso.onmicrosoft.com", plan.Mail);
         }
 
         [TestMethod]
