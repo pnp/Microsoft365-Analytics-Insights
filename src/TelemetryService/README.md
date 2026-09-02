@@ -71,11 +71,16 @@ installations (the AnalyticsEngine importer in
   `JwtBearerOptions.MetadataAddress` to
   `…/{tenant}/v2.0/.well-known/openid-configuration?appid={clientId}` (see
   `EntraKeyDiscovery`). Without the `appid` parameter the API fetches Entra's
-  signing keys anonymously, so eSTS cannot attribute the key discovery to this
-  app registration at all. Neither Microsoft.Identity.Web nor
-  Microsoft.IdentityModel adds it, so it has to be set explicitly. eSTS echoes
-  the parameter into the `jwks_uri` it returns, so the follow-up key fetch is
-  attributed too.
+  signing keys anonymously, so Entra cannot tell which application is asking.
+  Neither Microsoft.Identity.Web nor Microsoft.IdentityModel adds it, so it has
+  to be set explicitly. Entra echoes the parameter into the `jwks_uri` it
+  returns, so the follow-up key fetch is attributed too, and the response is
+  narrowed to the keys that apply to this app.
+
+  This is a diagnosability and hygiene improvement. It is **not** remediation
+  for the MISE compliance KPI, and must not be recorded as such: that KPI also
+  requires a supported MISE version, and MISE identifies the calling app with a
+  request header rather than this query parameter.
 
   It must be assigned in a **`Configure`** delegate, not a `PostConfigure`:
   `JwtBearerPostConfigureOptions` builds the `ConfigurationManager` — the thing
@@ -395,10 +400,11 @@ work** — see the auth-model section above for the timeline. The registration
 remained non-compliant across two KPI cycles while EasyAuth was validating real
 tokens, so do not record platform authentication as remediation for this KPI.
 
-What this repository *does* guarantee is that key discovery is attributed to the
-app registration, via the `appid` parameter described in the auth-model section.
-That is necessary but, on its own, not sufficient: it makes the app visible to
-eSTS rather than compliant.
+What this repository *does* guarantee is that key discovery identifies the app
+registration, via the `appid` parameter described in the auth-model section.
+That is a diagnosability improvement only — it is explicitly **not** remediation
+for the compliance KPI, which also requires a supported MISE version and uses a
+different attribution mechanism. Do not record it as remediation.
 
 To verify attribution after deploying:
 

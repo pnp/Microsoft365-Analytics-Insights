@@ -11,18 +11,21 @@ namespace Web.Auth
     /// Without it the API fetches signing keys anonymously:
     ///     https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration
     ///     https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys
-    /// Those requests carry nothing that identifies the application, so eSTS cannot attribute the
-    /// key discovery to this app registration and the S360 MISE Compliance KPI sees no key-discovery
-    /// telemetry for it at all. Neither Microsoft.Identity.Web nor Microsoft.IdentityModel adds the
-    /// parameter for us, so it has to be set here.
+    /// Those requests carry nothing that identifies the application, so Entra cannot tell which app
+    /// is asking. Neither Microsoft.Identity.Web nor Microsoft.IdentityModel adds the parameter for
+    /// us, so it has to be set here.
     ///
-    /// Adding <c>?appid={clientId}</c> to the metadata address is enough to fix both requests: eSTS
+    /// Adding <c>?appid={clientId}</c> to the metadata address is enough to fix both requests: Entra
     /// echoes the parameter into the <c>jwks_uri</c> it returns, so the follow-up key fetch is
     /// attributed too, and it also narrows the response to the keys that actually apply to this app.
     ///
-    /// This does NOT make the service MISE-compliant - MISE is a separate stack that cannot be
-    /// referenced from this public repository (its packages are on an internal feed only, and CI
-    /// restores from nuget.org). It only stops the app being invisible to key-discovery telemetry.
+    /// This is a diagnosability and hygiene improvement, and is deliberately NOT presented as
+    /// remediation for the MISE compliance KPI:
+    ///  - that KPI additionally requires a supported MISE version, which this service does not run;
+    ///  - MISE identifies the calling app with a request header rather than this query parameter, so
+    ///    setting the parameter does not reproduce MISE's own attribution; and
+    ///  - MISE cannot be referenced from this public repository at all - its packages are published
+    ///    to an internal feed only, and CI restores from nuget.org on a public runner.
     /// </summary>
     public static class EntraKeyDiscovery
     {
