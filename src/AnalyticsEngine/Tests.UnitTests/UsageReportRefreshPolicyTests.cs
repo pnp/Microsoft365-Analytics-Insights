@@ -171,9 +171,11 @@ namespace Tests.UnitTests
             // Asserted through the LOADER, not the helper: swapping which of Resolve/TryResolve each loader
             // method uses would reverse this behaviour, and a helper-only test would not notice.
             //
-            // No database is reached. CompactColumnstoreAsync returns before touching the inspector, and
-            // HasLeadingDateIndexAsync resolves the inspector (the injected fake) before evaluating the
-            // table name, so a null context is safe for both.
+            // A null context is safe because the INJECTED INSPECTOR short-circuits InspectorFor's
+            // `StorageInspector ?? new SqlUsageReportStorageInspector(db)`, so the adapter is never
+            // constructed and the null is never dereferenced. (It is not, as an earlier version of this
+            // comment claimed, about C# evaluating the receiver before the argument - that ordering is
+            // guaranteed, but it is not what makes this safe.)
             var inspector = new FakeUsageReportStorageInspector();
             var loader = new TablelessDailyActivityLoader(NullLogger.Instance) { StorageInspector = inspector };
 

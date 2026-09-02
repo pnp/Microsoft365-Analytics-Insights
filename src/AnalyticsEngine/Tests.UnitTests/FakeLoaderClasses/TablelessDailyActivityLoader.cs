@@ -24,9 +24,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
     /// <see cref="TablelessUsageActivityLog"/>, existing only so the storage-inspector wiring can be
     /// exercised without SQL Server or Graph.
     ///
-    /// Neither method under test reaches the database: <c>CompactColumnstoreAsync</c> returns before it
-    /// touches the inspector, and <c>HasLeadingDateIndexAsync</c> resolves the inspector (the injected fake)
-    /// before evaluating the table name, so both can be called with a null context.
+    /// Callers pass a null <c>AnalyticsEntitiesContext</c>. That is safe because they also set
+    /// <c>StorageInspector</c>, which short-circuits the loader's
+    /// <c>StorageInspector ?? new SqlUsageReportStorageInspector(db)</c> - so the SQL adapter is never
+    /// constructed and the null is never dereferenced. Leave <c>StorageInspector</c> unset and the adapter's
+    /// own null guard throws instead.
     /// </summary>
     public class TablelessDailyActivityLoader
         : AbstractUserDailyActivityLoader<TablelessUsageActivityLog, OutlookUserActivityUserDetail>
