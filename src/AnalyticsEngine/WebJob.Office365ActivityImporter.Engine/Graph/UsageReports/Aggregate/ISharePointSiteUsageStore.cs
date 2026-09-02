@@ -9,37 +9,52 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 {
     /// <summary>A site row as the weekly SharePoint usage import needs it: just the key and the URL.</summary>
+    /// <remarks>
+    /// Settable properties and a parameterless constructor on purpose: this is what lets the EF adapter
+    /// project straight into it (<c>Select(s =&gt; new StoredSite { ... })</c>) instead of materialising an
+    /// anonymous type and then copying every row into a second list. On a tenant with tens of thousands
+    /// of sites that copy is pure garbage.
+    /// </remarks>
     public sealed class StoredSite
     {
+        public StoredSite()
+        {
+        }
+
         public StoredSite(int id, string urlBase)
         {
             Id = id;
             UrlBase = urlBase;
         }
 
-        public int Id { get; }
+        public int Id { get; set; }
 
         /// <summary>
         /// Nullable, exactly as the column is. The import discards null-URL sites rather than keying on
         /// them - see <c>SharePointSitesWeeklyUsageReportLoader.BeginSaveAsync</c>, and issue #375 part 2,
         /// where collapsing "no URL" into "no row" duplicated site rows.
         /// </summary>
-        public string UrlBase { get; }
+        public string UrlBase { get; set; }
     }
 
     /// <summary>The most recent stored week for one site.</summary>
+    /// <remarks>Projectable for the same reason as <see cref="StoredSite"/>.</remarks>
     public sealed class SiteLatestStoredWeek
     {
+        public SiteLatestStoredWeek()
+        {
+        }
+
         public SiteLatestStoredWeek(int siteId, DateTime? latestWeekEnding)
         {
             SiteId = siteId;
             LatestWeekEnding = latestWeekEnding;
         }
 
-        public int SiteId { get; }
+        public int SiteId { get; set; }
 
         /// <summary>Nullable because <c>week_ending</c> is - a stored row need not carry a week.</summary>
-        public DateTime? LatestWeekEnding { get; }
+        public DateTime? LatestWeekEnding { get; set; }
     }
 
     /// <summary>
@@ -103,22 +118,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 
         public async Task<IReadOnlyList<StoredSite>> GetAllSitesAsync()
         {
-            // Lightweight projection, not tracked - the save loop only needs the key and the URL.
-            var existingSites = await _db.sites.AsNoTracking()
-                .Select(s => new { s.ID, s.UrlBase })
+            // Lightweight projection, not tracked - the save loop only needs the key and the URL. Projected
+            // straight into the DTO so the whole table is materialised ONCE, not copied into a second list.
+            return await _db.sites.AsNoTracking()
+                .Select(s => new StoredSite { Id = s.ID, UrlBase = s.UrlBase })
                 .ToListAsync();
-
-            return existingSites.Select(s => new StoredSite(s.ID, s.UrlBase)).ToList();
         }
 
         public async Task<IReadOnlyList<SiteLatestStoredWeek>> GetLatestStoredWeekPerSiteAsync()
         {
-            var latestPerSite = await _db.SharePointSiteStats
+            return await _db.SharePointSiteStats
                 .GroupBy(s => s.SiteId)
-                .Select(g => new { SiteId = g.Key, Latest = g.Max(s => s.ForWeekEnding) })
+                .Select(g => new SiteLatestStoredWeek { SiteId = g.Key, LatestWeekEnding = g.Max(s => s.ForWeekEnding) })
                 .ToListAsync();
-
-            return latestPerSite.Select(r => new SiteLatestStoredWeek(r.SiteId, r.Latest)).ToList();
         }
 
         // Added (tracked) and attached via the stats row's navigation property, so EF inserts the site and

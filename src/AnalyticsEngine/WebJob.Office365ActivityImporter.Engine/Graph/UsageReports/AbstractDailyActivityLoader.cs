@@ -83,6 +83,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             => ReportStore ?? new SqlUsageReportStore<TReportDbType>(db, GetTable(db));
 
         /// <summary>
+        /// Source of "now" for the import window and the finalized-date scan. Defaults to
+        /// <see cref="SystemClock"/>, i.e. <c>DateTime.UtcNow</c>, so behaviour is unchanged; injectable
+        /// (#368/#375) so a test asserting exact window bounds cannot disagree with the loader's own clock
+        /// read when the two straddle UTC midnight.
+        /// </summary>
+        public IClock Clock { get; set; } = SystemClock.Instance;
+
+        /// <summary>
         /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL, old
         /// enough that Graph will no longer change them, and covered by a previously completed import phase. These
         /// can be skipped entirely on the next import - no re-download, no re-write. Dates within the recent window
@@ -97,7 +105,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             DateTime? lastSuccessfulImport)
         {
             var window = UsageReportRefreshPolicy.ResolveSkipWindow(
-                daysBackMax, lastSuccessfulImport, RefreshableRecentDays, DateTime.UtcNow);
+                daysBackMax, lastSuccessfulImport, RefreshableRecentDays, Clock.UtcNow);
 
             if (!window.CanSkipAnyDate)
             {
@@ -162,8 +170,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Example: Message: {"error":{"code":"InvalidArgument","message":"Invalid date value specified: $DateTime.Now. Only support data for the past 28 days."}}
                 var daysBack = (daysBackIdx + 1) * -1;
                 // Graph Usage Reports API operates in UTC; DateTime.Now on a non-UTC server
-                // produces the wrong date bucket near midnight.
-                var dt = DateTime.UtcNow.AddDays(daysBack);
+                // produces the wrong date bucket near midnight. Read per iteration, as before.
+                var dt = Clock.UtcNow.AddDays(daysBack);
 
                 // Finalized days we already hold don't change in Graph - skip the (often slow) paged download entirely.
                 if (datesToSkip != null && datesToSkip.Contains(dt.Date))

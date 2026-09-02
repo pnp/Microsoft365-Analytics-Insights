@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
+using UnitTests.FakeLoaderClasses;
 
 namespace Tests.UnitTests
 {
@@ -261,9 +262,10 @@ namespace Tests.UnitTests
         public async Task DailyActivityLoader_SkippedDates_AreNotRequestedFromGraph()
         {
             // The whole point of the finalized-date rule: a skipped day costs no (often slow) paged download.
-            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance);
-            var yesterday = DateTime.UtcNow.Date.AddDays(-1);
-            var twoDaysAgo = DateTime.UtcNow.Date.AddDays(-2);
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance) { Clock = new FixedClock(now) };
+            var yesterday = now.Date.AddDays(-1);
+            var twoDaysAgo = now.Date.AddDays(-2);
             loader.PagesByDate[yesterday] = new List<FakeUserActivityDetail> { Page(UserA, 1) };
             loader.PagesByDate[twoDaysAgo] = new List<FakeUserActivityDetail> { Page(UserA, 2) };
 
@@ -277,20 +279,62 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task DailyActivityLoader_NoCompletedImportPhase_DoesNotEvenAskStorage()
+        {
+            // Until a usage-report phase completes, stored rows may be from an interrupted save, so there
+            // is nothing to ask about - and asking would cost a scan of the biggest table for nothing.
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var inspector = new FakeUsageReportStorageInspector();
+            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
+                .Seed(StoredRow(now.Date.AddDays(-6), UserAId, 1));
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                Clock = new FixedClock(now),
+                StorageInspector = inspector,
+                ReportStore = store,
+            };
+
+            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: null);
+
+            Assert.AreEqual(0, skip.Count);
+            Assert.AreEqual(0, store.ExistenceProbes.Count);
+            Assert.AreEqual(0, store.RangeScans.Count);
+            Assert.AreEqual(0, inspector.IndexQuestionsAsked.Count, "The index question is only worth asking if something could be skipped.");
+        }
+
+        [TestMethod]
+        public void DailyActivityLoader_DefaultClock_IsTheSystemClock()
+        {
+            // The injected clock must be an opt-in for tests only: production reads DateTime.UtcNow exactly
+            // as it did before, so the import window is unchanged.
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance);
+
+            Assert.AreSame(SystemClock.Instance, loader.Clock);
+            Assert.IsTrue(Math.Abs((DateTime.UtcNow - loader.Clock.UtcNow).TotalSeconds) < 5,
+                "The default clock must report the real UTC time.");
+        }
+
+        [TestMethod]
         public async Task DailyActivityLoader_IndexedTable_ProbesEachCandidateDateInsteadOfScanning()
         {
             // With a date-leading index the scan is one bounded seek per candidate date; a DISTINCT over
             // the range would still touch every user's row for every date (millions at 200k users).
+            //
+            // The clock is FIXED: the loader reads "now" itself, so a test asserting exact window bounds
+            // against its own DateTime.UtcNow would disagree with the loader whenever the two reads
+            // straddle UTC midnight.
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var today = now.Date;
             var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
             {
+                Clock = new FixedClock(now),
                 StorageInspector = new FakeUsageReportStorageInspector(hasLeadingDateIndex: true),
             };
-            var today = DateTime.UtcNow.Date;
             var stored = today.AddDays(-6);
             var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>().Seed(StoredRow(stored, UserAId, 1));
             loader.ReportStore = store;
 
-            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: DateTime.UtcNow);
+            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
 
             Assert.AreEqual(0, store.RangeScans.Count, "The indexed branch must not fall back to a range scan.");
             CollectionAssert.AreEqual(
@@ -303,18 +347,20 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task DailyActivityLoader_UnindexedTable_UsesOneRangeScanForTheWholeWindow()
         {
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var today = now.Date;
             var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
             {
+                Clock = new FixedClock(now),
                 StorageInspector = new FakeUsageReportStorageInspector(hasLeadingDateIndex: false),
             };
-            var today = DateTime.UtcNow.Date;
             var storedInWindow = today.AddDays(-6);
             var storedTooRecent = today.AddDays(-1);
             var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
                 .Seed(StoredRow(storedInWindow, UserAId, 1), StoredRow(storedTooRecent, UserBId, 1));
             loader.ReportStore = store;
 
-            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: DateTime.UtcNow);
+            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
 
             Assert.AreEqual(0, store.ExistenceProbes.Count, "Without a date-leading index each probe would scan the table.");
             Assert.AreEqual(1, store.RangeScans.Count, "One scan for the whole window, not one per date.");
@@ -322,28 +368,6 @@ namespace Tests.UnitTests
             Assert.AreEqual(today.AddDays(-3), store.RangeScans[0].Item2);
             CollectionAssert.AreEqual(new[] { storedInWindow }, skip.ToArray(),
                 "A stored date inside the 3-day mutability window can still change in Graph and must be re-imported.");
-        }
-
-        [TestMethod]
-        public async Task DailyActivityLoader_NoCompletedImportPhase_DoesNotEvenAskStorage()
-        {
-            // Until a usage-report phase completes, stored rows may be from an interrupted save, so there
-            // is nothing to ask about - and asking would cost a scan of the biggest table for nothing.
-            var inspector = new FakeUsageReportStorageInspector();
-            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
-                .Seed(StoredRow(DateTime.UtcNow.Date.AddDays(-6), UserAId, 1));
-            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
-            {
-                StorageInspector = inspector,
-                ReportStore = store,
-            };
-
-            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: null);
-
-            Assert.AreEqual(0, skip.Count);
-            Assert.AreEqual(0, store.ExistenceProbes.Count);
-            Assert.AreEqual(0, store.RangeScans.Count);
-            Assert.AreEqual(0, inspector.IndexQuestionsAsked.Count, "The index question is only worth asking if something could be skipped.");
         }
 
         /// <summary>
