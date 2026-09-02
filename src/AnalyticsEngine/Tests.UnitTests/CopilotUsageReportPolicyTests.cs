@@ -56,7 +56,7 @@ namespace Tests.UnitTests
             {
                 Row("chris@contoso.onmicrosoft.com"),
                 Row(ConcealedA),
-                Row("καλημέρα@contoso.onmicrosoft.com"),
+                Row("o'brien-smith@contoso.onmicrosoft.com"),
             };
 
             var decision = CopilotUsageReportPolicy.EvaluateConcealment(parsed);
@@ -65,10 +65,12 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, decision.ConcealedCount);
             Assert.AreEqual(3, decision.TotalCount);
             CollectionAssert.AreEqual(
-                new[] { "chris@contoso.onmicrosoft.com", "καλημέρα@contoso.onmicrosoft.com" },
+                new[] { "chris@contoso.onmicrosoft.com", "o'brien-smith@contoso.onmicrosoft.com" },
                 decision.Importable.Select(r => r.UserPrincipalName).ToArray(),
-                "Visible identities must still import. The non-ASCII sample is an encoding-neutrality "
-                + "guard, not a claim that Entra permits non-Latin UPNs - it does not (#402/#414).");
+                "Visible identities must still import, verbatim. The apostrophe and hyphen are the "
+                + "awkward characters Entra actually permits in a UPN (A-Z a-z 0-9 ' . - _ ! # ^ ~), so "
+                + "this fails if the path escapes or normalises the value. Entra does not permit "
+                + "non-Latin UPNs, so a Greek sample here would be unreachable input (#402/#414).");
         }
 
         [TestMethod]

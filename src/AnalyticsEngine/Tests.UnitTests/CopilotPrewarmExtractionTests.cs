@@ -93,7 +93,8 @@ namespace Tests.UnitTests
         /// The extraction moved to CopilotPrewarmPolicy in issue #373; the manager keeps a one-line
         /// delegating wrapper. This does NOT try to prove delegation - with a one-line wrapper that
         /// comparison is tautological - it pins the thing that could actually regress: a non-Latin file
-        /// URL surviving the wrapper unchanged, as both the dictionary key and the value it maps to.
+        /// URL surviving the wrapper unchanged as the dictionary key, which is what the lookup below
+        /// depends on.
         ///
         /// The URL is the Unicode-bearing field here and the map's value is deliberately ASCII: it is
         /// the Copilot event's UserId, which this path consumes as an Entra UPN (it is handed to

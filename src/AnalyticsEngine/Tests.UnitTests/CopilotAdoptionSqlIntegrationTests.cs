@@ -829,7 +829,7 @@ namespace Tests.UnitTests
 
                   CREATE TABLE dbo.copilot_chats (
                       event_id uniqueidentifier NOT NULL PRIMARY KEY,
-                      app_host nvarchar(200) NULL,
+                      app_host nvarchar(max) NULL,
                       agent_id int NULL,
                       -- Denormalised copies of the parent audit event's columns; see migration
                       -- DenormaliseCopilotChatUserAndTime. Every Copilot query reads these instead of
@@ -843,8 +843,8 @@ namespace Tests.UnitTests
 
                   CREATE TABLE dbo.copilot_agents (
                       id int NOT NULL PRIMARY KEY,
-                      name nvarchar(400) NULL,
-                      agent_id nvarchar(400) NULL,
+                      name nvarchar(100) NULL,
+                      agent_id nvarchar(max) NULL,
                       is_custom_agent bit NULL);");
         }
 
@@ -941,7 +941,7 @@ namespace Tests.UnitTests
         {
             db.Execute(
                 @"CREATE TABLE dbo.copilot_event_accessed_resource_types (
-                      id int NOT NULL PRIMARY KEY, name nvarchar(200) NULL);
+                      id int NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
 
                   CREATE TABLE dbo.copilot_event_accessed_resources (
                       id int IDENTITY(1,1) NOT NULL PRIMARY KEY,
