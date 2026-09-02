@@ -132,6 +132,7 @@
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
+    <Compile Include="FakeLoaderClasses\FakeUsageReportStorageInspector.cs" />
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="OrgUrlStoreTests.cs" />
     <Compile Include="FakeLoaderClasses\FixedClock.cs" />
@@ -235,6 +236,7 @@
     <Compile Include="StreamTests.cs" />
     <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
+    <Compile Include="UsageReportRefreshPolicyTests.cs" />
     <Compile Include="UserImportTests.cs" />
     <Compile Include="UserLookupTests.cs" />
   </ItemGroup>
