@@ -104,13 +104,21 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         /// cache is keyed by event id, so a single full-window load is equivalent to the old per-batch
         /// [Min,Max] loads - without the massive redundancy.
         ///
-        /// Concurrent callers are serialised by a single-permit lock, so the load happens once and a failed
-        /// load leaves the flag clear so the next batch retries. The pre-check outside the lock is an
-        /// ordinary (non-volatile) read of <c>_runImportCacheBuilt</c>, and the reference is published before
-        /// the flag is set - this is the pre-#373 code moved verbatim, and it is safe under the .NET
-        /// Framework memory model on the x86/x64 platforms this runs on, where stores are not reordered with
-        /// stores nor loads with loads. <see cref="ActivityImportCache"/> is itself internally locked, so the
-        /// shared cache is safe once handed out.
+        /// Concurrent callers are serialised by a single-permit lock, so the load happens once, and a load
+        /// that throws leaves the flag clear so the next batch retries.
+        ///
+        /// The pre-check outside the lock is an ordinary (non-volatile) read of <c>_runImportCacheBuilt</c>,
+        /// with the reference published before the flag is set. That is the pre-#373 code moved verbatim and
+        /// it has always worked on the deployed runtime (.NET Framework on x86/x64), but it relies on
+        /// implementation behaviour rather than a guarantee the ECMA memory model makes - an ordinary read
+        /// is not an acquire. Making it a formal guarantee means <c>Volatile.Read</c>/<c>Volatile.Write</c>,
+        /// which is a change to inherited code and therefore out of scope for this extraction. A caller that
+        /// lost the race simply takes the lock and re-checks.
+        ///
+        /// Note <see cref="ActivityImportCache"/> locks the de-duplication members this path uses
+        /// (<c>HaveSeenInProcessedOrIgnoredEvents</c>, <c>RememberProcessedEvent</c>,
+        /// <c>RememberNewlyIgnoredEvent</c>, <c>ProcessedIdCount</c>) - not every member on it - which is what
+        /// makes sharing one cache across concurrent batches safe here.
         ///
         /// Once built, later calls return the same cache and their window argument is ignored.
         /// </summary>

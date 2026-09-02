@@ -14,7 +14,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
 {
     /// <summary>
     /// What one staging pass produced: the statistics for the batch and the events it handed to the
-    /// staging batch, which the metadata pass then tries to match against the rows the merge created.
+    /// staging batch, which the metadata pass then tries to match against the rows present in
+    /// <c>audit_events</c> after the merge.
     /// </summary>
     internal sealed class ActivityStagingPassResult
     {

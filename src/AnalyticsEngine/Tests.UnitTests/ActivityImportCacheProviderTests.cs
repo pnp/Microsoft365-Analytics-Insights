@@ -88,40 +88,39 @@ namespace Tests.UnitTests
             // exists. Without the init lock each of them would run the (expensive, whole-window)
             // audit_events query.
             //
-            // Dedicated threads plus a Barrier rather than Task.Run: the ThreadPool injects threads slowly
-            // once its minimum is exhausted, so pool-scheduled racers can end up arriving hundreds of
-            // milliseconds apart and never actually race. The barrier releases all eight at the same
-            // instant, and the first load then holds them for 250ms.
+            // LongRunning tasks plus a Barrier rather than plain Task.Run: the ThreadPool injects threads
+            // slowly once its minimum is exhausted, so pool-scheduled racers can arrive hundreds of
+            // milliseconds apart and never actually race. LongRunning gives each racer a dedicated thread
+            // while still surfacing its exceptions through the returned Task - a raw Thread would let an
+            // unhandled exception tear down the whole test host.
             const int racerCount = 8;
             var loader = new FakeActivityImportCacheLoader { LoadDuration = TimeSpan.FromMilliseconds(250) };
             var provider = new ActivityImportCacheProvider(loader, new RecordingLogger());
             var window = PerRunWindow();
 
-            var caches = new ActivityImportCache[racerCount];
-            var threads = new Thread[racerCount];
-            using (var startLine = new Barrier(racerCount))
-            {
-                for (int i = 0; i < racerCount; i++)
-                {
-                    var index = i;
-                    threads[i] = new Thread(() =>
+            var startLine = new Barrier(racerCount);
+            var racers = Enumerable.Range(0, racerCount)
+                .Select(_ => Task.Factory.StartNew(
+                    () =>
                     {
                         startLine.SignalAndWait();
-                        caches[index] = provider.GetForWindowAsync(window).GetAwaiter().GetResult();
-                    })
-                    { IsBackground = true };
-                    threads[i].Start();
-                }
+                        return provider.GetForWindowAsync(window).GetAwaiter().GetResult();
+                    },
+                    CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default))
+                .ToArray();
 
-                foreach (var thread in threads)
-                {
-                    Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(30)), "A racer did not finish - the init lock may be deadlocked.");
-                }
-            }
+            var allRacers = Task.WhenAll(racers);
+            var finished = await Task.WhenAny(allRacers, Task.Delay(TimeSpan.FromSeconds(30)));
+            // Deliberately no using/finally on the barrier: if a racer is stuck, disposing it out from
+            // under that thread would raise ObjectDisposedException on a thread with no handler. Leaking a
+            // Barrier in an already-failing test is the cheaper outcome.
+            Assert.AreSame(allRacers, finished, "A racer did not finish - the init lock may be deadlocked.");
+
+            var caches = await allRacers;
+            startLine.Dispose();
 
             Assert.AreEqual(1, loader.LoadCount, "Concurrent first callers must not each build the cache.");
             Assert.IsTrue(caches.All(c => c != null && ReferenceEquals(c, caches[0])), "All concurrent callers must get the same cache instance.");
-            await Task.CompletedTask;
         }
 
         [TestMethod]
