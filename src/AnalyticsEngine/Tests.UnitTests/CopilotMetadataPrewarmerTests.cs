@@ -21,8 +21,9 @@ namespace Tests.UnitTests
     /// CopilotPrewarmExtractionTests already covers which contexts are extracted and the
     /// <see cref="WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules.CopilotPrewarmPolicy.ShouldPrewarm"/>
     /// predicate in isolation. What could not be observed before, and is covered here, is the behaviour
-    /// around them: that a disabled tenant really makes no outbound call, that a Graph auth failure is
-    /// survivable and not retried per batch, and that the fan-out stays throttled.
+    /// around them: that a disabled tenant really makes no outbound Copilot file lookup (it still builds the
+    /// loader; the pre-warm is what is skipped), that a Graph auth failure is survivable and not retried per
+    /// batch, and that the fan-out stays throttled.
     /// </summary>
     [TestClass]
     public class CopilotMetadataPrewarmerTests
