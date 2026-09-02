@@ -44,13 +44,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 var v1Groups = await _groupSource.LoadGroupsWithProvisioningOptions();
 
-                // Filter v1 groups by those that have a Team
-                var teamPartition = TeamsCrawlRules.PartitionGroupsWithTeams(v1Groups);
-                allGroupsWithTeams = teamPartition.WithTeam;
-
-                foreach (var group in teamPartition.WithoutTeam)
+                foreach (var group in v1Groups)
                 {
-                    _logger.LogInformation($"Group name '{group.DisplayName}' has no Team associated.");
+                    // Filter v1 groups by those that have a Team. Classified and logged one group at a
+                    // time, deliberately: partitioning the whole list first would swallow the log lines
+                    // for earlier groups if a later group's resourceProvisioningOptions failed to parse.
+                    var status = TeamsCrawlRules.ClassifyGroup(group);
+                    if (status == GroupTeamStatus.HasTeam)
+                    {
+                        allGroupsWithTeams.Add(group);
+                    }
+                    else if (status == GroupTeamStatus.NoTeam)
+                    {
+                        _logger.LogInformation($"Group name '{group.DisplayName}' has no Team associated.");
+                    }
+
+                    // GroupTeamStatus.WorkloadsNotReported: neither crawled nor logged, as before.
                 }
             }
             else

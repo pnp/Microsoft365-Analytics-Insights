@@ -11,6 +11,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     ///
     /// Deliberately a <c>static</c> class rather than an interface: it is a rule, not a dependency
     /// (the convention in issue #381, matching <c>ImportCadenceGate</c> and <c>AuditLogContentDispatcher</c>).
+    ///
+    /// These methods deliberately do NOT null-check the arguments they iterate or dereference. The
+    /// code they were extracted from didn't either, and the resulting <see cref="NullReferenceException"/>
+    /// is part of the behaviour being preserved - converting it to an <see cref="ArgumentNullException"/>
+    /// would change the exception type and message an operator sees for no benefit.
     /// </summary>
     public static class TeamsCrawlRules
     {
@@ -22,22 +27,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         /// <summary>
         /// Whether a group returned by the v1 Graph endpoint has a Team attached, decided from its
-        /// <c>resourceProvisioningOptions</c> array.
+        /// <c>resourceProvisioningOptions</c> array. A group that didn't report its workloads at all
+        /// counts as not having one - use <see cref="ClassifyGroup"/> when that distinction matters.
         /// </summary>
-        /// <remarks>
-        /// A group with no <c>resourceProvisioningOptions</c> at all is treated as having no Team, and
-        /// is NOT reported as such - see <see cref="PartitionGroupsWithTeams"/>.
-        /// </remarks>
         public static bool GroupHasTeam(Group group)
         {
-            if (group is null) throw new ArgumentNullException(nameof(group));
-
-            if (!group.AdditionalData.ContainsKey(ResourceProvisioningOptionsProperty))
-            {
-                return false;
-            }
-
-            return ProvisioningOptionsIncludeTeam(group.AdditionalData[ResourceProvisioningOptionsProperty].ToString());
+            return ClassifyGroup(group) == GroupTeamStatus.HasTeam;
         }
 
         /// <summary>
@@ -62,36 +57,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         }
 
         /// <summary>
-        /// Split groups returned by the v1 endpoint into those with a Team and those without.
+        /// Classify a group returned by the v1 endpoint: does it have a Team, does it definitely not,
+        /// or did it not tell us?
         /// </summary>
         /// <remarks>
-        /// Groups that carry no <c>resourceProvisioningOptions</c> property land in neither list: the
-        /// original code neither crawled nor logged them, and that is preserved so operator-facing
-        /// log output is unchanged.
+        /// The three-way answer matters. A group that carries no <c>resourceProvisioningOptions</c>
+        /// property at all is neither crawled nor reported as "has no Team associated" - reporting it
+        /// would log every security group and distribution list in the tenant on every cycle.
+        ///
+        /// Classification is per group, rather than a partition of the whole list, so the caller emits
+        /// its log line for each group as it goes: a malformed <c>resourceProvisioningOptions</c> on a
+        /// later group must not swallow the lines already emitted for earlier ones.
         /// </remarks>
-        public static GroupTeamPartition PartitionGroupsWithTeams(IEnumerable<Group> groups)
+        public static GroupTeamStatus ClassifyGroup(Group group)
         {
-            if (groups is null) throw new ArgumentNullException(nameof(groups));
-
-            var partition = new GroupTeamPartition();
-            foreach (var group in groups)
+            if (!group.AdditionalData.ContainsKey(ResourceProvisioningOptionsProperty))
             {
-                if (!group.AdditionalData.ContainsKey(ResourceProvisioningOptionsProperty))
-                {
-                    continue;
-                }
-
-                if (GroupHasTeam(group))
-                {
-                    partition.WithTeam.Add(group);
-                }
-                else
-                {
-                    partition.WithoutTeam.Add(group);
-                }
+                return GroupTeamStatus.WorkloadsNotReported;
             }
 
-            return partition;
+            return ProvisioningOptionsIncludeTeam(group.AdditionalData[ResourceProvisioningOptionsProperty].ToString())
+                ? GroupTeamStatus.HasTeam
+                : GroupTeamStatus.NoTeam;
         }
 
         /// <summary>
@@ -101,9 +88,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// </summary>
         public static GroupCrawlPartition PartitionByCrawlConfig(IEnumerable<Group> groupsWithTeams, TeamsCrawlConfig crawlConfig)
         {
-            if (groupsWithTeams is null) throw new ArgumentNullException(nameof(groupsWithTeams));
-            if (crawlConfig is null) throw new ArgumentNullException(nameof(crawlConfig));
-
             var partition = new GroupCrawlPartition();
             foreach (var group in groupsWithTeams)
             {
@@ -127,9 +111,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// </summary>
         public static bool ShouldCrawlGroup(ICollection<string> whitelistGroupIds, ICollection<string> blacklistGroupIds, string groupId)
         {
-            if (whitelistGroupIds is null) throw new ArgumentNullException(nameof(whitelistGroupIds));
-            if (blacklistGroupIds is null) throw new ArgumentNullException(nameof(blacklistGroupIds));
-
             if (whitelistGroupIds.Count == 0)
             {
                 return !blacklistGroupIds.Contains(groupId);
@@ -140,17 +121,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     }
 
     /// <summary>
-    /// Result of <see cref="TeamsCrawlRules.PartitionGroupsWithTeams"/>.
+    /// What <see cref="TeamsCrawlRules.ClassifyGroup"/> made of a group's provisioned workloads.
     /// </summary>
-    public class GroupTeamPartition
+    public enum GroupTeamStatus
     {
-        public List<Group> WithTeam { get; } = new List<Group>();
+        /// <summary>The group has a Team, so it is crawled.</summary>
+        HasTeam,
+
+        /// <summary>The group reported its workloads and none of them is a Team.</summary>
+        NoTeam,
 
         /// <summary>
-        /// Groups that advertised their provisioned workloads but have no Team. These are the ones the
-        /// importer logs as "has no Team associated".
+        /// The group returned no <c>resourceProvisioningOptions</c> at all. Not crawled, and not
+        /// reported - see <see cref="TeamsCrawlRules.ClassifyGroup"/>.
         /// </summary>
-        public List<Group> WithoutTeam { get; } = new List<Group>();
+        WorkloadsNotReported
     }
 
     /// <summary>

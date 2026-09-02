@@ -33,8 +33,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// </remarks>
         public async Task PopulateNewMessagesAndReactions(List<ChannelWithReactions> channels, string teamId)
         {
-            if (channels is null) throw new ArgumentNullException(nameof(channels));
-
             foreach (var channel in channels)
             {
                 // Load stats. Will throw ChannelMessagesReadException if token is invalid
