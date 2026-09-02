@@ -151,6 +151,7 @@
     <Compile Include="Graph\PageableGraphLoaderExtensions.cs" />
     <Compile Include="Graph\PageableGraphResponse.cs" />
     <Compile Include="Graph\OfficeLicenseNameResolver.cs" />
+    <Compile Include="Graph\ISiteUrlStore.cs" />
     <Compile Include="Graph\SPSiteIdToUrlCache.cs" />
     <Compile Include="Graph\Teams\ChannelWithReactions.cs" />
     <Compile Include="Graph\Teams\CognitiveHelper.cs" />

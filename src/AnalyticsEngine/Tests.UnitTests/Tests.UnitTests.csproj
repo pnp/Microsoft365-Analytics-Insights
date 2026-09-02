@@ -139,6 +139,7 @@
     <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeUsageReportStorageInspector.cs" />
+    <Compile Include="FakeLoaderClasses\InMemorySiteUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\TablelessDailyActivityLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeCallsPorts.cs" />
@@ -256,6 +257,7 @@
     <Compile Include="StreamTests.cs" />
     <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
+    <Compile Include="SiteIdToUrlCacheTests.cs" />
     <Compile Include="UsageReportRefreshPolicyTests.cs" />
     <Compile Include="UserImportTests.cs" />
     <Compile Include="UserLookupTests.cs" />

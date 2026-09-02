@@ -44,12 +44,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     public abstract class SPSiteIdToUrlCache : ObjectByIdCache<SPSiteIdToUrl>
     {
-        private readonly AnalyticsEntitiesContext _db;
+        private readonly ISiteUrlStore _store;
         protected readonly ILogger _logger;
 
         public SPSiteIdToUrlCache(AnalyticsEntitiesContext db, ILogger logger)
+            : this(new SqlSiteUrlStore(db), logger)
         {
-            _db = db;
+        }
+
+        /// <summary>
+        /// As above, with the local cache supplied (issue #375). The context-taking constructor is kept as a
+        /// delegating overload so no call site changes.
+        /// </summary>
+        public SPSiteIdToUrlCache(ISiteUrlStore store, ILogger logger)
+        {
+            _store = store ?? throw new ArgumentNullException(nameof(store));
             _logger = logger;
         }
 
@@ -60,36 +69,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             try
             {
                 // Try finding from the database 1st so we go easy on Graph.
-                // Compare directly (no .ToLower()): SQL Server's default collation is case-insensitive,
-                // and LOWER() on the column makes the predicate non-SARGable, forcing a full scan of sites.
-                var dbRecordBySiteId = await _db.sites.Where(s => s.SiteId == id).SingleOrDefaultAsync();
-                if (dbRecordBySiteId != null)
+                var storedUrl = await _store.TryGetUrlForSiteIdAsync(id);
+                if (storedUrl != null)
                 {
                     return new SPSiteIdToUrl
                     {
-                        SiteId = dbRecordBySiteId.SiteId,
-                        SiteUrl = dbRecordBySiteId.UrlBase
+                        SiteId = id,
+                        SiteUrl = storedUrl
                     };
                 }
                 var site = await LoadSite(id);
                 _logger.LogInformation($"{nameof(SPSiteIdToUrlCache)}: Loaded site URL for {id}");
 
                 // Cache in DB
-                var dbRecordBySiteUrl = await _db.sites.Where(s => s.UrlBase == site.WebUrl).SingleOrDefaultAsync();
-                if (dbRecordBySiteUrl != null)
-                {
-                    dbRecordBySiteUrl.SiteId = id;
-                }
-                else
-                {
-                    dbRecordBySiteId = new Common.Entities.Site
-                    {
-                        SiteId = id,
-                        UrlBase = site.WebUrl
-                    };
-                    _db.sites.Add(dbRecordBySiteId);
-                }
-                await _db.SaveChangesAsync();
+                await _store.SaveSiteUrlAsync(id, site.WebUrl);
 
                 return new SPSiteIdToUrl
                 {
