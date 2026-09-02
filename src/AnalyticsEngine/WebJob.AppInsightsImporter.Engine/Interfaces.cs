@@ -77,7 +77,12 @@ namespace WebJob.AppInsightsImporter.Engine
         Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events);
     }
 
-    /// <summary>Writes the search events in a batch. Returns the number of new search rows merged.</summary>
+    /// <summary>
+    /// Writes the search events in a batch. Returns the merge script's ADO.NET rows-affected total, which
+    /// covers the new <c>search_terms</c> lookup rows as well as the <c>searches</c> rows - "Migrate
+    /// Searches Import.sql" runs both inserts in one batch with no <c>SET NOCOUNT ON</c>, so
+    /// <c>ExecuteNonQuery</c> sums them. It is not a count of searches alone.
+    /// </summary>
     public interface ISearchesPersistenceManager
     {
         Task<int> SaveSearchesAsync(CustomEventsResultCollection events);

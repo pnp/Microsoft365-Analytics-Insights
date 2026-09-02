@@ -177,8 +177,8 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     /// <summary>
     /// SQL <see cref="IPageUpdatePersistenceManager"/>. Takes no <see cref="AnalyticsEntitiesContext"/>:
     /// <see cref="PageUpdateManager"/> creates and disposes one context per chunk (plus one for the
-    /// URL-timestamp pass), so it cannot borrow the day context the other sections share. It gets the
-    /// factory instead, which is why this adapter carries one.
+    /// URL-timestamp pass), so it cannot borrow the single context the other three sections are given.
+    /// It gets the factory instead, which is why this adapter carries one.
     /// </summary>
     public sealed class SqlPageUpdatePersistenceManager : IPageUpdatePersistenceManager
     {
