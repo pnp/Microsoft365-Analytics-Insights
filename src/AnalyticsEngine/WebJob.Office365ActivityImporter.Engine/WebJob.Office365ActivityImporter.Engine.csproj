@@ -177,6 +177,7 @@
     <Compile Include="Graph\Teams\TeamTokenManager.cs" />
     <Compile Include="Graph\UsageReports\AbstractDailyActivityLoader.cs" />
     <Compile Include="Graph\UsageReports\IUsageReportStorageInspector.cs" />
+    <Compile Include="Graph\UsageReports\IUsageReportStore.cs" />
     <Compile Include="Graph\UsageReports\Rules\UsageReportRefreshPolicy.cs" />
     <Compile Include="Graph\Calls\CallQueueProcessor.cs" />
     <Compile Include="Graph\Calls\CallRecordAdapters.cs" />
@@ -204,6 +205,7 @@
     <Compile Include="Graph\UsageReports\ActivityReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\AbstractAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\AbstractModels.cs" />
+    <Compile Include="Graph\UsageReports\Aggregate\ISharePointSiteUsageStore.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSiteUsageDetail.cs" />
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSitesWeeklyUsageReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportRequest.cs" />
