@@ -173,8 +173,16 @@
     <Compile Include="Graph\UsageReports\IUsageReportStorageInspector.cs" />
     <Compile Include="Graph\UsageReports\Rules\UsageReportRefreshPolicy.cs" />
     <Compile Include="Graph\Calls\CallQueueProcessor.cs" />
+    <Compile Include="Graph\Calls\CallRecordAdapters.cs" />
+    <Compile Include="Graph\Calls\CallRecordImporter.cs" />
     <Compile Include="Graph\Calls\CallRecordSubscriptionInfo.cs" />
     <Compile Include="Graph\Calls\CallWebhook.cs" />
+    <Compile Include="Graph\Calls\GraphCallRecordSubscriptionManager.cs" />
+    <Compile Include="Graph\Calls\ICallNotificationQueueSender.cs" />
+    <Compile Include="Graph\Calls\ICallRecordPorts.cs" />
+    <Compile Include="Graph\Calls\ICallRecordSubscriptionManager.cs" />
+    <Compile Include="Graph\Calls\Rules\CallNotificationRules.cs" />
+    <Compile Include="Graph\Calls\Rules\CallSubscriptionRules.cs" />
     <Compile Include="Graph\Teams\ChannelMessagesLoader.cs" />
     <Compile Include="Graph\Teams\Extensions\GraphUserExtensions.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamChannelExtensions.cs" />
