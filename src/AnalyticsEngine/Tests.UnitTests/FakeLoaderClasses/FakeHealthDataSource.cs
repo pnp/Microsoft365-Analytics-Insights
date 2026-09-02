@@ -37,6 +37,9 @@ namespace UnitTests.FakeLoaderClasses
         public int ProbeCallCount { get; private set; }
         public int CountsCallCount { get; private set; }
 
+        /// <summary>Makes <see cref="GetDatabaseCountsAsync"/> take this long, to stand in for a slow scan.</summary>
+        public TimeSpan CountsDelay { get; set; } = TimeSpan.Zero;
+
         /// <summary>Every table a recent-volume scan was requested for, in order.</summary>
         public List<string> RecentVolumeRequests { get; } = new List<string>();
 
@@ -46,10 +49,11 @@ namespace UnitTests.FakeLoaderClasses
             return Task.FromResult(ProbeResult);
         }
 
-        public Task<DatabaseCountsResult> GetDatabaseCountsAsync()
+        public async Task<DatabaseCountsResult> GetDatabaseCountsAsync()
         {
             CountsCallCount++;
-            return Task.FromResult(CountsResult);
+            if (CountsDelay > TimeSpan.Zero) await Task.Delay(CountsDelay);
+            return CountsResult;
         }
 
         public Task<RecentVolumeResult> GetRecentVolumeAsync(string table, string timestampColumn)

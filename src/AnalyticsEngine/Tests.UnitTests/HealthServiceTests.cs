@@ -1,5 +1,6 @@
 extern alias AnalyticsWeb;
 
+using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.Health;
 using Common.Entities.Entities.UsageReports;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -82,11 +83,37 @@ namespace Tests.UnitTests
         /// The per-section single-flight gates are instance state, so the API must serve every request
         /// from one shared instance. A per-request instance would let a burst of page opens stampede a
         /// cold section with N simultaneous builds - each of which scans the two biggest fact tables.
+        /// This asserts the controller's own wiring, so replacing <c>HealthService.Default</c> with
+        /// <c>new HealthService(...)</c> in that constructor fails here.
         /// </summary>
         [TestMethod]
-        public void DefaultService_IsASingleInstanceSharedByEveryRequest()
+        public void DefaultService_IsTheOneEveryRequestIsServedFrom()
         {
-            Assert.AreSame(HealthService.Default, HealthService.Default);
+            var first = new HealthAPIController();
+            var second = new HealthAPIController();
+
+            Assert.AreSame(HealthService.Default, first.Service);
+            Assert.AreSame(first.Service, second.Service, "two requests must not each get their own gates");
+        }
+
+        /// <summary>
+        /// The section's <c>loadedAtUtc</c> is shown on the Health page and must mean "when this load
+        /// started", as it always has. Stamping it after the scans would report a time tens of seconds
+        /// later on a big tenant, where those scans run to their 20-second command timeout.
+        /// </summary>
+        [TestMethod]
+        public async Task Data_LoadedAtIsStampedBeforeTheScans_NotAfterThem()
+        {
+            var source = new FakeHealthDataSource { CountsDelay = TimeSpan.FromMilliseconds(250) };
+            var service = Build(source, new InMemoryHealthCache());
+
+            var before = DateTime.UtcNow;
+            var section = await service.LoadDataAsync();
+            var after = DateTime.UtcNow;
+
+            Assert.IsTrue(after - before >= TimeSpan.FromMilliseconds(200), "the fake must actually have been slow for this test to mean anything");
+            Assert.IsTrue(section.LoadedAtUtc < before.AddMilliseconds(200),
+                $"loadedAtUtc ({section.LoadedAtUtc:O}) was stamped after the scans, not before them (load started {before:O})");
         }
 
         #endregion

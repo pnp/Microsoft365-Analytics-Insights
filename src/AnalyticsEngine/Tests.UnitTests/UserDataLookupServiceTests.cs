@@ -472,36 +472,41 @@ namespace Tests.UnitTests
         [TestMethod]
         public void WorkloadEnabled_ReadsEachFlagFromItsOwnImportSetting()
         {
-            // Every flag must read its own property: a copy/paste slip here would show an admin the
-            // wrong reason for an empty category.
-            var settings = new ImportTaskSettings();
-            var flags = new[]
+            // Turn on exactly ONE setting at a time and assert exactly ONE flag reads as enabled. Turning
+            // them all on together would pass even if two cases were swapped, and a swap here would show
+            // an admin the wrong reason for an empty category.
+            var settingsByFlag = new (string Flag, Action<ImportTaskSettings> TurnOn)[]
             {
-                UserDataLookupRules.Wf.Calls, UserDataLookupRules.Wf.UsersMetadata, UserDataLookupRules.Wf.UsageReports,
-                UserDataLookupRules.Wf.Teams, UserDataLookupRules.Wf.AuditLog, UserDataLookupRules.Wf.WebTraffic,
-                UserDataLookupRules.Wf.SentEmails, UserDataLookupRules.Wf.Copilot,
+                (UserDataLookupRules.Wf.Calls, s => s.Calls = true),
+                (UserDataLookupRules.Wf.UsersMetadata, s => s.GraphUsersMetadata = true),
+                (UserDataLookupRules.Wf.UsageReports, s => s.GraphUsageReports = true),
+                (UserDataLookupRules.Wf.Teams, s => s.GraphTeams = true),
+                (UserDataLookupRules.Wf.AuditLog, s => s.ActivityLog = true),
+                (UserDataLookupRules.Wf.WebTraffic, s => s.WebTraffic = true),
+                (UserDataLookupRules.Wf.SentEmails, s => s.SentEmails = true),
+                (UserDataLookupRules.Wf.Copilot, s => s.Copilot = true),
             };
 
-            foreach (var flag in flags)
+            foreach (var enabled in settingsByFlag)
             {
-                Assert.IsFalse(UserDataLookupRules.WorkloadEnabled(settings, flag), $"{flag} should start off");
+                var settings = new ImportTaskSettings();
+                enabled.TurnOn(settings);
+
+                foreach (var candidate in settingsByFlag)
+                {
+                    var actual = UserDataLookupRules.WorkloadEnabled(settings, candidate.Flag);
+                    if (candidate.Flag == enabled.Flag)
+                    {
+                        Assert.IsTrue(actual, $"only {enabled.Flag} is on, so it must read as enabled");
+                    }
+                    else
+                    {
+                        Assert.IsFalse(actual, $"{candidate.Flag} reads as enabled when only {enabled.Flag} is on - the two cases are crossed");
+                    }
+                }
             }
 
-            settings.Calls = true;
-            settings.GraphUsersMetadata = true;
-            settings.GraphUsageReports = true;
-            settings.GraphTeams = true;
-            settings.ActivityLog = true;
-            settings.WebTraffic = true;
-            settings.SentEmails = true;
-            settings.Copilot = true;
-
-            foreach (var flag in flags)
-            {
-                Assert.IsTrue(UserDataLookupRules.WorkloadEnabled(settings, flag), $"{flag} should now be on");
-            }
-
-            Assert.IsFalse(UserDataLookupRules.WorkloadEnabled(settings, "NotAWorkload"));
+            Assert.IsFalse(UserDataLookupRules.WorkloadEnabled(new ImportTaskSettings(), "NotAWorkload"));
             Assert.IsFalse(UserDataLookupRules.WorkloadEnabled(null, UserDataLookupRules.Wf.Calls));
         }
 

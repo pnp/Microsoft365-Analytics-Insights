@@ -19,9 +19,14 @@ namespace Web.AnalyticsWeb.Models.Health
         /// suppresses the recent-volume figures (they were never read); everything else is kept even when
         /// part of the read failed, so one broken metric doesn't blank the rest of the section.
         /// </summary>
-        public static DataOverviewSection BuildDataSection(DatabaseCountsResult counts, RecentVolumeResult hits, RecentVolumeResult audit)
+        /// <param name="loadedAtUtc">
+        /// When the load <em>started</em>. Passed in rather than taken here because the section's
+        /// timestamp is shown on the Health page, and the scans that feed it can take tens of seconds -
+        /// stamping it on completion would report a later time than the page has always reported.
+        /// </param>
+        public static DataOverviewSection BuildDataSection(DatabaseCountsResult counts, RecentVolumeResult hits, RecentVolumeResult audit, DateTime loadedAtUtc)
         {
-            var section = new DataOverviewSection();
+            var section = new DataOverviewSection { LoadedAtUtc = loadedAtUtc };
             if (counts != null)
             {
                 section.ActivityCount = counts.ActivityCount;

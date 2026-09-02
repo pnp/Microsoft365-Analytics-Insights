@@ -33,6 +33,9 @@ namespace Web.AnalyticsWeb.Controllers
             _health = health ?? throw new ArgumentNullException(nameof(health));
         }
 
+        /// <summary>The service this controller will serve from. Exposed so a test can prove the wiring above.</summary>
+        internal HealthService Service => _health;
+
         // GET: api/Health  (and api/Health/summary)
         // Lightweight overview: the overall traffic-light + per-section grid. Skips the heavy SQL scans
         // (only probes DB reachability), so opening the Health page stays cheap on a big tenant.

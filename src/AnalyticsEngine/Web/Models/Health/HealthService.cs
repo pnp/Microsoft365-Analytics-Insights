@@ -187,6 +187,10 @@ namespace Web.AnalyticsWeb.Models.Health
 
         private async Task<DataOverviewSection> BuildDataAsync()
         {
+            // Stamped before any SQL runs: the section's timestamp is "when this load started", which is
+            // what the page has always shown, and the scans below can take tens of seconds.
+            var loadedAtUtc = DateTime.UtcNow;
+
             var counts = await _dataSource.GetDatabaseCountsAsync();
 
             // Recent volume + freshness on the two biggest fact tables, run in parallel on separate
@@ -202,7 +206,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 audit = auditTask.Result;
             }
 
-            return HealthDataSectionRules.BuildDataSection(counts, hits, audit);
+            return HealthDataSectionRules.BuildDataSection(counts, hits, audit, loadedAtUtc);
         }
 
         // --- Configuration (config + schema + webhook) ---
