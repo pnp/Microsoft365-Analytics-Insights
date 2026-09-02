@@ -87,8 +87,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task EventSections_RunInTheOrderTheImporterHasAlwaysUsed()
         {
-            // Order is behaviour: page-updates create URL rows that the clicks merge then joins to, and
-            // operators read the four section timings in this sequence in the logs.
+            // Order is operator-visible behaviour: the four section timings are printed in this sequence
+            // and read in that order in the logs.
             var h = new SectionHarness();
 
             await h.RunAsync(SomeEvents());
@@ -110,9 +110,12 @@ namespace Tests.UnitTests
             // real behavioural change:
             //   * the clicks merge INSERTs into dbo.urls while the page-updates section UPDATEs dbo.urls
             //     rows through EF, so concurrent sections interleave writes to the same table;
-            //   * each section already fans its staging inserts across up to
-            //     InsertBatchConcurrency.MaxConcurrentThreads threads (default 20 - the lever that exists
-            //     precisely to cap the SQL Server CPU/DTU burst on commit), so four at once multiplies it;
+            //   * the hit-update and click sections, and the page-update section's comment sub-path, each
+            //     drive their own EFInsertBatch fan-out of up to InsertBatchConcurrency.MaxConcurrentThreads
+            //     threads (default 20 - the lever that exists precisely to cap the SQL Server CPU/DTU burst
+            //     on commit). Running them together stacks independent fan-outs, so the cap no longer
+            //     bounds the whole save. (Searches is not one of them: it stages serially on a single
+            //     SqlCommand, so it adds separate serial SQL work rather than more threads.)
             //   * the per-section JobTimer timings operators read would interleave.
             //
             // Every boundary is gated in turn, because gating only one would leave the others free to
