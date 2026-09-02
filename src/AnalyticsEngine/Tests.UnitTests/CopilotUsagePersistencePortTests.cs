@@ -178,14 +178,16 @@ namespace Tests.UnitTests
             var store = new InMemoryCopilotUsagePersistenceManager();
             store.SeedUser("someone.else@contoso.onmicrosoft.com");   // establishes the known domain
 
-            var written = await DetailLoader(UserDetailReport("καλημέρα@contoso.onmicrosoft.com", 28, 10, 2), store)
+            var written = await DetailLoader(UserDetailReport("o'brien-smith@contoso.onmicrosoft.com", 28, 10, 2), store)
                 .LoadAndSaveAsync(DetailRequest());
 
             Assert.AreEqual(1, written);
-            Assert.IsTrue(store.Users.ContainsKey("καλημέρα@contoso.onmicrosoft.com"),
-                "An identity on a recognised domain must be created, not dropped. The non-ASCII sample "
-                + "is an encoding-neutrality guard - it fails if this path normalises or ASCII-folds the "
-                + "key - not a claim that Entra permits non-Latin UPNs, which it does not (#402/#414).");
+            Assert.IsTrue(store.Users.ContainsKey("o'brien-smith@contoso.onmicrosoft.com"),
+                "An identity on a recognised domain must be created, not dropped, and keyed verbatim. "
+                + "The apostrophe and hyphen are the awkward characters Entra actually permits in a UPN "
+                + "(A-Z a-z 0-9 ' . - _ ! # ^ ~), so this fails if the path escapes or normalises the "
+                + "key. Entra does not permit non-Latin UPNs (#402/#414), so a Greek sample here would "
+                + "be unreachable input; the Unicode guard in this file sits on displayName instead.");
         }
 
         [TestMethod]
