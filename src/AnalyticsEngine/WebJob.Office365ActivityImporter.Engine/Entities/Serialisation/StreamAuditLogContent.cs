@@ -2,6 +2,8 @@
 using Common.Entities.Entities.AuditLog;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Data.Entity;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 
@@ -30,9 +32,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             {
                 var vid = await session.StreamLookupManager.GetCreateOrUpdateStreamVideo(vidGuid, ResourceTitle);
                 var clientApp = await session.SharePointLookupManager.GetClientApp(ClientApplicationId);
-                var newEvent = new StreamEventMetada { Video = vid, AuditEvent = relatedAuditEvent, ClientApplication = clientApp };
+                var streamEvent = await session.Database.StreamEvents
+                    .Where(e => e.EventID == this.Id)
+                    .SingleOrDefaultAsync();
+                if (streamEvent == null)
+                {
+                    streamEvent = new StreamEventMetada { AuditEvent = relatedAuditEvent };
+                    session.Database.StreamEvents.Add(streamEvent);
+                }
 
-                session.Database.StreamEvents.Add(newEvent);
+                streamEvent.Video = vid;
+                streamEvent.ClientApplication = clientApp;
             }
             return vidGuid != Guid.Empty;
         }

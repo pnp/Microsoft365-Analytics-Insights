@@ -13,6 +13,35 @@ using WebJob.Office365ActivityImporter.Engine.Properties;
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
 {
     /// <summary>
+    /// IDs staged by an earlier failed attempt. The next attempt must stage those IDs even if a fresh
+    /// per-batch cache can already see an audit row committed before the failure; otherwise the retry
+    /// skips the metadata phase and can falsely report success.
+    /// </summary>
+    internal sealed class ActivitySaveRetryState
+    {
+        private readonly ConcurrentDictionary<Guid, byte> _eventIds =
+            new ConcurrentDictionary<Guid, byte>();
+
+        public bool ShouldRetry(Guid eventId) => _eventIds.ContainsKey(eventId);
+
+        public void MarkForRetry(IEnumerable<AbstractAuditLogContent> events)
+        {
+            foreach (var auditEvent in events)
+            {
+                if (auditEvent != null) _eventIds[auditEvent.Id] = 0;
+            }
+        }
+
+        public void MarkSucceeded(IEnumerable<AbstractAuditLogContent> events)
+        {
+            foreach (var auditEvent in events)
+            {
+                if (auditEvent != null) _eventIds.TryRemove(auditEvent.Id, out _);
+            }
+        }
+    }
+
+    /// <summary>
     /// What one staging pass produced: the statistics for the batch and the events it handed to the
     /// staging batch, which the metadata pass then tries to match against the rows present in
     /// <c>audit_events</c> after the merge.
@@ -97,6 +126,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         public async Task<ActivityStagingPassResult> RunAsync(ActivityReportSet activities, ActivityImportCache cache,
             IActivityStagingBatch batch, string stagingTableName, SemaphoreSlim mergeLock)
         {
+            return await RunAsync(activities, cache, batch, stagingTableName, mergeLock, retryState: null);
+        }
+
+        internal async Task<ActivityStagingPassResult> RunAsync(ActivityReportSet activities, ActivityImportCache cache,
+            IActivityStagingBatch batch, string stagingTableName, SemaphoreSlim mergeLock,
+            ActivitySaveRetryState retryState)
+        {
             var listOfActivitiesSavedToSQL = new ConcurrentBag<AbstractAuditLogContent>();
             // Sequential dedup within this set: a HashSet gives O(1) Contains. The previous
             // ConcurrentBag.Contains was O(n) per row (an O(n^2) scan over a large activity set).
@@ -116,52 +152,70 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
             Func<string, Task<bool>> userInGroupsFilter = upn => _userGroupsCache.IsInGroupsFilter(upn, _userGroupsFilter);
             Action<AbstractAuditLogContent> stageRow = log => batch.AddRow(new AuditLogTempEntity(log, log.UserId));
 
-            foreach (var abtractLog in activities)
+            try
             {
-                // Don't insert duplicates in same set. The decision itself (dedup -> URL scope -> user
-                // scope, plus what gets remembered where) lives in ActivityStagingRules so it can be
-                // asserted with no SQL and no Graph; see issue #373.
-                var decision = await ActivityStagingRules.DecideAndRememberAsync(
-                    abtractLog, processedIds, cache, urlInScope, userInGroupsFilter, stageRow);
-
-                if (!decision.IsDuplicate)
+                foreach (var abtractLog in activities)
                 {
-                    var result = decision.Result;
-                    if (result == SaveResultEnum.UserOutOfScope)
-                    {
-                        _logger.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
-                    }
+                    // Don't insert duplicates in same set. The decision itself (dedup -> URL scope -> user
+                    // scope, plus what gets remembered where) lives in ActivityStagingRules so it can be
+                    // asserted with no SQL and no Graph; see issue #373.
+                    var recoverMetadata = activities.RequiresMetadataRecovery(abtractLog)
+                        && cache.HaveSeenInProcessedOrIgnoredEvents(abtractLog)
+                        && !cache.WasRememberedThisCycle(abtractLog);
+                    var decision = await ActivityStagingRules.DecideAndRememberAsync(
+                        abtractLog, processedIds, cache, urlInScope, userInGroupsFilter, stageRow,
+                        retryState?.ShouldRetry(abtractLog.Id) == true || recoverMetadata);
 
-                    // Update stats
-                    if (result == SaveResultEnum.Imported)
+                    if (!decision.IsDuplicate)
                     {
-                        stats.Imported++;
-                        listOfActivitiesSavedToSQL.Add(abtractLog);
+                        var result = decision.Result;
+                        if (result == SaveResultEnum.UserOutOfScope)
+                        {
+                            _logger.LogInformation($"Skipping activity report for user '{abtractLog.UserId}' - not in user groups filter");
+                        }
+
+                        // Update stats
+                        if (result == SaveResultEnum.Imported)
+                        {
+                            stats.Imported++;
+                            listOfActivitiesSavedToSQL.Add(abtractLog);
+                        }
+                        else if (result == SaveResultEnum.ProcessedAlready) stats.ProcessedAlready++;
+                        else if (result == SaveResultEnum.UrlOutOfScope) stats.URLsOutOfScope++;
+                        else if (result == SaveResultEnum.UserOutOfScope) stats.UsersOutOfScope++;
+                        else _logger.LogError($"Unexpected log result for log {abtractLog.Id}");
                     }
-                    else if (result == SaveResultEnum.ProcessedAlready) stats.ProcessedAlready++;
-                    else if (result == SaveResultEnum.UrlOutOfScope) stats.URLsOutOfScope++;
-                    else if (result == SaveResultEnum.UserOutOfScope) stats.UsersOutOfScope++;
-                    else _logger.LogError($"Unexpected log result for log {abtractLog.Id}");
                 }
-            }
-            swDedup.Stop();
-            stats.SaveDedupMs = swDedup.Elapsed.TotalMilliseconds;
+                swDedup.Stop();
+                stats.SaveDedupMs = swDedup.Elapsed.TotalMilliseconds;
 
-            // Merge data
+                // Merge data
 #if DEBUG
-            Console.WriteLine("\nDEBUG: Merging activity staging table...");
+                Console.WriteLine("\nDEBUG: Merging activity staging table...");
 #endif
-            // Merge to normal tables. In concurrent mode each save has its own sharded staging table
-            // (stagingTableName) and mergeLock serialises ONLY the merge (which writes shared lookup/fact
-            // tables); the parallel staging LOAD inside the batch runs unlocked.
-            var effectiveStagingTable = ActivitySaveConcurrencyPolicy.EffectiveStagingTableName(stagingTableName);
-            var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", effectiveStagingTable);
-            var swMerge = System.Diagnostics.Stopwatch.StartNew();
-            await batch.LoadAndMergeAsync(StagingInsertsPerThread, mergeSQL, stagingTableName, mergeLock);
-            swMerge.Stop();
-            stats.SaveMergeMs = swMerge.Elapsed.TotalMilliseconds;
+                // Merge to normal tables. In concurrent mode each save has its own sharded staging table
+                // (stagingTableName) and mergeLock serialises ONLY the merge (which writes shared lookup/fact
+                // tables); the parallel staging LOAD inside the batch runs unlocked.
+                var effectiveStagingTable = ActivitySaveConcurrencyPolicy.EffectiveStagingTableName(stagingTableName);
+                var mergeSQL = Resources.Insert_Activity_from_Staging_Table.Replace("${STAGING_TABLE_ACTIVITY}", effectiveStagingTable);
+                var swMerge = System.Diagnostics.Stopwatch.StartNew();
+                await batch.LoadAndMergeAsync(StagingInsertsPerThread, mergeSQL, stagingTableName, mergeLock);
+                swMerge.Stop();
+                stats.SaveMergeMs = swMerge.Elapsed.TotalMilliseconds;
 
-            return new ActivityStagingPassResult(stats, listOfActivitiesSavedToSQL);
+                return new ActivityStagingPassResult(stats, listOfActivitiesSavedToSQL);
+            }
+            catch
+            {
+                retryState?.MarkForRetry(listOfActivitiesSavedToSQL);
+                var released = cache.ForgetProcessedEvents(listOfActivitiesSavedToSQL);
+                if (released > 0)
+                {
+                    _logger.LogWarning($"Audit events import: save attempt failed after staging {released.ToString("n0")} event(s); " +
+                        "released their in-memory dedup markers so a retry can stage them again.");
+                }
+                throw;
+            }
         }
     }
 }
