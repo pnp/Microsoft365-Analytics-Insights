@@ -21,6 +21,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private UserMetadataCache _userMetaCache;
         private readonly IUserMetadataLoader _userLoader;
+        private readonly IAnalyticsDbContextFactory _contextFactory;
         private UserBatchProcessor _batchProcessor;
         private UserInsertProcessor _insertProcessor;
         private UserLicenseProcessor _licenseProcessor;
@@ -48,6 +49,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var graphServiceClient = GraphServiceClientFactory.CreateWithTimeout(creds, TimeSpan.FromHours(1));
 
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient);
+            _contextFactory = DefaultAnalyticsDbContextFactory.Instance;
             InitializeHelpers();
         }
 
@@ -55,9 +57,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Constructor with injectable user loader for testing and alternate implementations
         /// </summary>
         public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader)
+            : this(logger, settings, userLoader, DefaultAnalyticsDbContextFactory.Instance)
+        {
+        }
+
+        /// <summary>
+        /// Constructor with an injectable user loader and database context factory (#372).
+        /// </summary>
+        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader, IAnalyticsDbContextFactory contextFactory)
             : base(logger, settings)
         {
             _userLoader = userLoader;
+            _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             InitializeHelpers();
         }
 
@@ -77,14 +88,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public async Task InsertAndUpdateDatabaseFromExternalUsers()
         {
             const int BATCH_SIZE = 500;
+            var phaseResults = new UserImportPhaseResults();
 
-            using (var db = new AnalyticsEntitiesContext())
+            using (var db = _contextFactory.Create())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
 
                 _userMetaCache = new UserMetadataCache(db);
                 _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache);
-                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db));
 
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - start");
 
@@ -137,6 +149,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Insert any user we've not seen so far
                 var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null);
+                phaseResults.InsertPhaseSucceeded = true;
                 _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
                 // Reload newly inserted users WITH TRACKING and update dictionaries
@@ -248,7 +261,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             dbUsersByUpn,
                             dbUsersByAadId,
                             _dataMapper.GraphUsersByAadId,
-                            _userMetaCache);
+                            _userMetaCache,
+                            new SqlUserBulkUpdateWriter(db.Database.Connection.ConnectionString));
                     }
                     else
                     {
@@ -259,8 +273,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             dbUsersByUpn,
                             dbUsersByAadId,
                             async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId),
+                            // Resolve the whole batch's managers in one query rather than one per
+                            // user - see UserDataMapper.PrefetchManagersForBatchAsync (#371).
+                            batch => _dataMapper.PrefetchManagersForBatchAsync(batch),
                             BATCH_SIZE);
                     }
+                    phaseResults.UpdatePhaseSucceeded = true;
                     _logger.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
                 }
                 catch (Exception ex)
@@ -326,6 +344,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                     db.ChangeTracker.DetectChanges();
                     await db.SaveChangesAsync();
+                    phaseResults.LicenceRefreshSucceeded = true;
+                }
+                else
+                {
+                    // No separate licence phase runs at all when tenant SKUs are unavailable:
+                    // ProcessUserLicenses already ran per user inside the update phase above, so
+                    // there is no outstanding licence work that committing the delta could skip.
+                    // Set inside the branch rather than after it so that a catch added around the
+                    // work above would leave the flag false, exactly as it would for the other two
+                    // phases.
+                    phaseResults.LicenceRefreshSucceeded = true;
                 }
 
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
@@ -337,7 +366,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // effect, so the failed users will be retried on the next import
                 // cycle instead of being skipped because Graph already considers
                 // them "seen".
-                await _userLoader.CommitDeltaTokenAsync();
+                //
+                // The check is explicit rather than implied by that control flow so the
+                // guarantee survives someone adding a catch: see UserImportCommitPolicy (#372).
+                if (UserImportCommitPolicy.ShouldCommitDelta(phaseResults))
+                {
+                    await _userLoader.CommitDeltaTokenAsync();
+                }
+                else
+                {
+                    _logger.LogWarning("User import - NOT committing the Graph delta token: at least one import phase did not complete. " +
+                        "The same users will be reprocessed on the next cycle rather than being skipped.");
+                }
 
                 // Final cleanup
                 dbUsersByUpn.Clear();
@@ -372,7 +412,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             if (_dataMapper == null)
             {
-                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db));
             }
             if (_licenseProcessor == null)
             {
