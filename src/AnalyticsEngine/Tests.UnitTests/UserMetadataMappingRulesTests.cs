@@ -48,7 +48,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void UserMapping_DirectFields_AreCopiedOntoTheUserRow()
+        public void UserMapping_DirectFields_AreTakenFromTheGraphUser()
         {
             var plan = UserMetadataMappingRules.BuildPlan(FullyPopulatedGraphUser());
 
@@ -217,7 +217,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void NormaliseLookupName_IsTheSingleRuleForEveryLookupValue()
+        public void NormaliseLookupName_TrimsCapsAndTreatsEmptyAsClear()
         {
             Assert.IsNull(UserMetadataMappingRules.NormaliseLookupName(null));
             Assert.IsNull(UserMetadataMappingRules.NormaliseLookupName("   "));
