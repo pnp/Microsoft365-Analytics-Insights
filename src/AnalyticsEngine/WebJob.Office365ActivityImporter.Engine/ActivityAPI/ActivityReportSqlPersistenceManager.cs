@@ -42,6 +42,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         private readonly CopilotMetadataPrewarmer _copilotPrewarmer;
         private readonly ISaveSessionFactory _saveSessionFactory;
         private readonly ActivityStagingPass _stagingPass;
+        private readonly ActivitySaveRetryState _retryState = new ActivitySaveRetryState();
 
         /// <summary>
         /// Process-wide gate that serializes writes to the staging tables. Intentionally <c>static</c> so that
@@ -242,29 +243,45 @@ namespace WebJob.Office365ActivityImporter.Engine
             // ActivityStagingPass, which reaches SQL only through IActivityStagingBatch, so the batch's
             // counters, log lines and merge wiring can be asserted without a database (issue #373).
             var stagingBatch = _stagingWriter.CreateBatch(db);
-            var staged = await _stagingPass.RunAsync(activities, cache, stagingBatch, stagingTableName, mergeLock);
+            var staged = await _stagingPass.RunAsync(
+                activities, cache, stagingBatch, stagingTableName, mergeLock, _retryState);
             var stats = staged.Stats;
 
-            #region Add Extra Metadata
-
-            // The metadata pass writes SHARED tables (webs/sites via ProcessExtendedProperties, plus the
-            // Copilot / Power Platform commits), so in concurrent mode it is serialised by the same lock.
-            var swMeta = System.Diagnostics.Stopwatch.StartNew();
-            if (mergeLock != null) await mergeLock.WaitAsync();
             try
             {
-                await SaveMetadataAsync(db, staged.SavedToSql, sharedCopilotLoader, stats);
+                #region Add Extra Metadata
+
+                // The metadata pass writes SHARED tables (webs/sites via ProcessExtendedProperties, plus the
+                // Copilot / Power Platform commits), so in concurrent mode it is serialised by the same lock.
+                var swMeta = System.Diagnostics.Stopwatch.StartNew();
+                if (mergeLock != null) await mergeLock.WaitAsync();
+                try
+                {
+                    await SaveMetadataAsync(db, staged.SavedToSql, sharedCopilotLoader, stats);
+                }
+                finally
+                {
+                    if (mergeLock != null) mergeLock.Release();
+                }
+                swMeta.Stop();
+                stats.SaveMetadataMs = swMeta.Elapsed.TotalMilliseconds;
+                _retryState.MarkSucceeded(staged.SavedToSql);
+
+                #endregion
+
+                return stats;
             }
-            finally
+            catch
             {
-                if (mergeLock != null) mergeLock.Release();
+                _retryState.MarkForRetry(staged.SavedToSql);
+                var released = cache.ForgetProcessedEvents(staged.SavedToSql);
+                if (released > 0)
+                {
+                    _logger.LogWarning($"Audit events import: metadata save failed after staging/merge for {released.ToString("n0")} event(s); " +
+                        "released their in-memory dedup markers so a retry can run the metadata phase again.");
+                }
+                throw;
             }
-            swMeta.Stop();
-            stats.SaveMetadataMs = swMeta.Elapsed.TotalMilliseconds;
-
-            #endregion
-
-            return stats;
         }
 
         /// <summary>
@@ -430,4 +447,3 @@ namespace WebJob.Office365ActivityImporter.Engine
         public string WebUrl { get; set; }
     }
 }
-

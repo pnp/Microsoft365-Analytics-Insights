@@ -28,4 +28,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
         /// </summary>
         Task MarkProcessedAsync(IReadOnlyCollection<string> blobIds);
     }
+
+    /// <summary>
+    /// Optional two-phase companion for <see cref="IProcessedBlobStore"/>. A blob is marked recovery-pending
+    /// before any of its events can be partially committed, then cleared only after its processed marker is
+    /// durable. Kept separate so existing custom checkpoint implementations remain source-compatible.
+    /// </summary>
+    public interface IActivityMetadataRecoveryStore
+    {
+        Task<ISet<string>> GetMetadataRecoveryPendingBlobIdsAsync();
+
+        Task MarkMetadataRecoveryPendingAsync(IReadOnlyCollection<string> blobIds);
+
+        Task ClearMetadataRecoveryPendingAsync(IReadOnlyCollection<string> blobIds);
+    }
 }

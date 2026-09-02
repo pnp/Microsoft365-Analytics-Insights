@@ -448,11 +448,13 @@ BEGIN
 -- isPrompt arrives as the JSON literal 'true'/'false', which CONVERT(bit, ...) cannot parse, hence the
 -- explicit CASE; Size is Edm.Int64 so TRY_CONVERT protects against a non-numeric value.
 --
--- De-duplicated on (chat, message id), which this insert previously was NOT. One interaction can be
+-- De-duplicated on (chat, persisted message id), which this insert previously was NOT. One interaction can be
 -- staged into TWO staging tables - a Teams chat context stages a chat-only row and a following file
 -- context stages a SharePoint row - and each staging table runs this merge, so its messages were
 -- inserted twice. The NOT EXISTS seeks the chat's handful of existing rows via IX_copilot_chat_id.
--- Messages with no Id keep the previous behaviour (a generated GUID, and therefore no de-dup).
+-- Messages with no Id use a deterministic fallback from the event id + prompt/response flag + size.
+-- parsed_messages is already DISTINCT on exactly that tuple, so this preserves the one-attempt row set
+-- while making a retry of the same audit event idempotent.
 ;WITH parsed_messages AS (
     SELECT DISTINCT
         imports.event_id,
@@ -462,21 +464,33 @@ BEGIN
     FROM [${STAGING_TABLE_ACTIVITY}] imports
     CROSS APPLY OPENJSON(imports.messages_json) msg
     WHERE imports.messages_json IS NOT NULL
+),
+resolved_messages AS (
+    SELECT
+        pm.event_id,
+        COALESCE(
+            pm.message_id,
+            N'missing:' + CONVERT(nvarchar(36), pm.event_id)
+                + N':' + COALESCE(CONVERT(nvarchar(1), pm.is_prompt), N'u')
+                + N':' + COALESCE(CONVERT(nvarchar(20), pm.[size]), N'u')
+        ) AS persisted_message_id,
+        pm.[size],
+        pm.is_prompt
+    FROM parsed_messages pm
 )
 INSERT INTO copilot_event_messages (copilot_chat_id, message_id, [size], is_prompt)
 SELECT
-    pm.event_id,
-    ISNULL(pm.message_id, NEWID()), -- Generate GUID if no ID provided
-    pm.[size],
-    pm.is_prompt
-FROM parsed_messages pm
-WHERE pm.message_id IS NULL
-   OR NOT EXISTS (
-        SELECT 1
-        FROM copilot_event_messages x
-        WHERE x.copilot_chat_id = pm.event_id
-          AND x.message_id = pm.message_id
-    );
+    rm.event_id,
+    rm.persisted_message_id,
+    rm.[size],
+    rm.is_prompt
+FROM resolved_messages rm
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM copilot_event_messages x
+    WHERE x.copilot_chat_id = rm.event_id
+      AND x.message_id = rm.persisted_message_id
+);
 
 END
 
