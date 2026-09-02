@@ -9,6 +9,10 @@ installations (the AnalyticsEngine importer in
 > the shared `Common/UsageReporting` netstandard2.0 project (data contracts
 > + Cosmos save adaptor) so the wire format stays in sync.
 
+> See [`LESSONS-LEARNED.md`](LESSONS-LEARNED.md) for operational gotchas that
+> have already cost real time — verifying what is actually deployed, querying
+> this service's telemetry correctly, and the identity-configuration traps.
+
 ## What it does
 
 - Receives `TelemetryPayload` POSTs from instances of
