@@ -102,6 +102,12 @@
     <Compile Include="Constants.cs" />
     <Compile Include="ActivityImportCache.cs" />
     <Compile Include="ImportLastRunStore.cs" />
+    <Compile Include="ImportRuntimeOptions.cs" />
+    <Compile Include="ActivityReportsCadenceGate.cs" />
+    <Compile Include="Graph\Sections\IGraphImportSection.cs" />
+    <Compile Include="Graph\Sections\IGraphImportSectionFactory.cs" />
+    <Compile Include="Graph\Sections\DelegateGraphImportSection.cs" />
+    <Compile Include="Graph\Sections\ProductionGraphImportSectionFactory.cs" />
     <Compile Include="Entities\BaseUser.cs" />
     <Compile Include="Entities\ChatReactions.cs" />
     <Compile Include="Entities\Serialisation\BaseSerialisationClasses.cs" />
