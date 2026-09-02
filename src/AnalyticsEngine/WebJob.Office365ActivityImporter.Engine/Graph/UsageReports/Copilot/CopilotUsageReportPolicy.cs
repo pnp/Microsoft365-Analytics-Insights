@@ -1,4 +1,3 @@
-using Common.Entities;
 using Common.Entities.Entities.UsageReports;
 using System;
 using System.Collections.Generic;

@@ -337,9 +337,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// </summary>
         public int UserCountSaveBatchSize { get; set; } = 500;
 
-        private static bool HasChanged(CopilotUserCountLog stored, CopilotUserCountLog incoming)
-            => CopilotUsageReportPolicy.UserCountValueChanged(stored, incoming);
-
         /// <summary>Matches the unique index on (report_type, report_period_days, report_date, app_name).</summary>
         private static string KeyOf(CopilotUserCountLog row)
         {
