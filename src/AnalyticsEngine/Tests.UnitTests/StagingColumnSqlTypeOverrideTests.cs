@@ -166,10 +166,15 @@ namespace Tests.UnitTests
         /// The App Insights "searches" staging table (created from the Create Searches Import Temp
         /// Table.sql resource by SearchesSaveExtension) stores the authenticated user's UPN and the
         /// search term. Both must be nvarchar - not varchar - or a non-Latin value (e.g. Greek) is
-        /// corrupted to '?'. For user_name that breaks the merge's inner join to the nvarchar
-        /// users.user_name and silently drops that user's searches. See issue #122 and the
-        /// "Character set support (Unicode / Greek)" convention.
+        /// corrupted to '?'. That matters most for search_term, which is free-form text a user types
+        /// in any script. See issue #122 and the "Character set support (Unicode / Greek)" convention.
         /// </summary>
+        /// <remarks>
+        /// Note the target column dbo.users.user_name is varchar(250), not nvarchar - so this staging
+        /// column being nvarchar does not, on its own, make a non-Latin UPN survive the merge. In
+        /// practice that is moot: Entra restricts userPrincipalName to A-Z a-z 0-9 ' . - _ ! # ^ ~
+        /// with accented characters disallowed, so the values arriving here are ASCII.
+        /// </remarks>
         [TestMethod]
         public void SearchesStagingUserNameAndTermAreNvarchar()
         {
