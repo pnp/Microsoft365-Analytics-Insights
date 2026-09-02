@@ -133,6 +133,7 @@
     <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
+    <Compile Include="FakeLoaderClasses\FakeTeamsPorts.cs" />
     <Compile Include="OrgUrlStoreTests.cs" />
     <Compile Include="FakeLoaderClasses\FixedClock.cs" />
     <Compile Include="GraphFileMetadataLoaderTests.cs" />
@@ -215,6 +216,7 @@
     <Compile Include="SingleDateStoreTests.cs" />
     <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="GraphImportTests.cs" />
+    <Compile Include="TeamsCrawlTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
