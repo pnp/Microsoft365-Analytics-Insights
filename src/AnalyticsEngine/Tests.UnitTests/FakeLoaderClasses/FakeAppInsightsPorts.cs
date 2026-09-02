@@ -34,7 +34,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
             PageViewDaysRequested.Add(forDateUtc);
             if (DaysThatFailToDownload.Contains(forDateUtc))
             {
-                throw new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}");
+                // A FAULTED TASK, not a synchronous throw: that is the shape a real HTTP failure arrives in,
+                // and the importer observes it at `await Task.WhenAll(...)`. A fake that threw synchronously
+                // would let a regression that only handled the synchronous case pass.
+                return Task.FromException<PageViewCollection>(
+                    new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}"));
             }
 
             var result = new PageViewCollection();
@@ -51,7 +55,8 @@ namespace Tests.UnitTests.FakeLoaderClasses
             CustomEventDaysRequested.Add(forDateUtc);
             if (DaysThatFailToDownload.Contains(forDateUtc))
             {
-                throw new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}");
+                return Task.FromException<CustomEventsResultCollection>(
+                    new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}"));
             }
 
             var result = new CustomEventsResultCollection();

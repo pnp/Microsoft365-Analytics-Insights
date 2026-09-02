@@ -126,7 +126,12 @@ namespace Tests.UnitTests
             // catch, so JobTimer.TrackFinishedEventAndStopTimer never ran. Extracting the day loop into its
             // own method made that `return` exit only the inner method, which would have emitted
             // FinishedSectionImport for a cycle that imported nothing - a false success to liveness
-            // monitoring, visible only in Release because DEBUG rethrows.
+            // monitoring.
+            //
+            // The production path is #if DEBUG-forked, so this test is too. Note CI currently builds and
+            // tests RELEASE ONLY (the Debug matrix entry is commented out in ci.yml / pr.yml / tests.yml),
+            // so it is the #else arm - the one guarding the actual regression - that CI runs. The DEBUG arm
+            // only runs in a local Debug build.
             var h = new Harness();
             h.Watermark.NewestHitTimestampUtc = FixedNowUtc.AddHours(-2);
             h.Source.DaysThatFailToDownload.Add(FixedNowUtc.Date);

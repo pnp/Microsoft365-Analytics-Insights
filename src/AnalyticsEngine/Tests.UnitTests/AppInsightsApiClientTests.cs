@@ -148,18 +148,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task AppInsightsClient_BackoffIsCappedSoAnOutageCannotStallTheWebJob()
+        public void AppInsightsClient_BackoffDoublesThenCapsSoAnOutageCannotStallTheWebJob()
         {
-            var handler = new StubHandler { Fallback = () => Status(HttpStatusCode.BadGateway) };
-            var delay = new RecordingDelay();
+            // Asserted on the pure calculation, not through the retry loop: MaxRetries stops the loop at
+            // attempt 4 (16 seconds), so the cap is unreachable from there and a test driven through the
+            // loop would stay green if Math.Min were deleted.
+            Assert.AreEqual(1, AppInsightsAPIClient.BackoffSecondsFor(0));
+            Assert.AreEqual(2, AppInsightsAPIClient.BackoffSecondsFor(1));
+            Assert.AreEqual(16, AppInsightsAPIClient.BackoffSecondsFor(4));
+            Assert.AreEqual(32, AppInsightsAPIClient.BackoffSecondsFor(5));
 
-            using (var client = NewClient(handler, delay: delay))
-            {
-                await Assert.ThrowsExceptionAsync<HttpRequestException>(() => client.GetPageViewsAsync(Day, false));
-
-                Assert.IsTrue(delay.Requested.All(d => d <= TimeSpan.FromSeconds(AppInsightsAPIClient.MaxBackoffSeconds)),
-                    "No single wait may exceed the cap: " + string.Join(", ", delay.Requested));
-            }
+            // 2^6 = 64 > 60, so this is the first attempt the cap actually bites on.
+            Assert.AreEqual(AppInsightsAPIClient.MaxBackoffSeconds, AppInsightsAPIClient.BackoffSecondsFor(6));
+            Assert.AreEqual(AppInsightsAPIClient.MaxBackoffSeconds, AppInsightsAPIClient.BackoffSecondsFor(20));
         }
 
         [TestMethod]
