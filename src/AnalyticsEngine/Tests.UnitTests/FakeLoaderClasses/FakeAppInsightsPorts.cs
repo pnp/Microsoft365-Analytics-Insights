@@ -23,9 +23,19 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public Dictionary<DateTime, int> PageViewCountByDay { get; } = new Dictionary<DateTime, int>();
         public Dictionary<DateTime, int> CustomEventCountByDay { get; } = new Dictionary<DateTime, int>();
 
+        /// <summary>
+        /// Days whose download blows up. The importer treats that as fatal for the whole run - DEBUG
+        /// rethrows, Release abandons the run without reporting the section finished.
+        /// </summary>
+        public HashSet<DateTime> DaysThatFailToDownload { get; } = new HashSet<DateTime>();
+
         public Task<PageViewCollection> GetPageViewsAsync(DateTime forDateUtc, bool saveRestResponses)
         {
             PageViewDaysRequested.Add(forDateUtc);
+            if (DaysThatFailToDownload.Contains(forDateUtc))
+            {
+                throw new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}");
+            }
 
             var result = new PageViewCollection();
             var count = PageViewCountByDay.TryGetValue(forDateUtc, out var c) ? c : 0;
@@ -39,6 +49,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public Task<CustomEventsResultCollection> GetCustomEventsAsync(DateTime forDateUtc, bool saveRestResponses)
         {
             CustomEventDaysRequested.Add(forDateUtc);
+            if (DaysThatFailToDownload.Contains(forDateUtc))
+            {
+                throw new InvalidOperationException($"Fake download failure for {forDateUtc:yyyy-MM-dd}");
+            }
 
             var result = new CustomEventsResultCollection();
             var count = CustomEventCountByDay.TryGetValue(forDateUtc, out var c) ? c : 0;
