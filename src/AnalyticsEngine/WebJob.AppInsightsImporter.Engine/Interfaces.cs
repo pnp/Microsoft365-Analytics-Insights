@@ -57,4 +57,58 @@ namespace WebJob.AppInsightsImporter.Engine
         Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
         Task SaveCustomEventsAsync(CustomEventsResultCollection events);
     }
+
+    /// <summary>
+    /// Writes a batch of page-views. The one write port of the day persistence manager that has anything
+    /// to report back: the staging rules already work out how many rows were dropped and why, and those
+    /// numbers previously reached a log line and nothing else. See issue #369.
+    /// </summary>
+    public interface IPageViewsPersistenceManager
+    {
+        Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
+    }
+
+    /// <summary>
+    /// Writes the time-on-page patches carried by page-exit events. Returns the row count the merge
+    /// reported, which is what the event save summary prints.
+    /// </summary>
+    public interface IHitUpdatePersistenceManager
+    {
+        Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events);
+    }
+
+    /// <summary>
+    /// Writes the search events in a batch. Returns the merge script's ADO.NET rows-affected total, which
+    /// covers the new <c>search_terms</c> lookup rows as well as the <c>searches</c> rows - "Migrate
+    /// Searches Import.sql" runs both inserts in one batch with no <c>SET NOCOUNT ON</c>, so
+    /// <c>ExecuteNonQuery</c> sums them. It is not a count of searches alone.
+    /// </summary>
+    public interface ISearchesPersistenceManager
+    {
+        Task<int> SaveSearchesAsync(CustomEventsResultCollection events);
+    }
+
+    /// <summary>
+    /// Writes page metadata / comment / like updates. Returns the number of DISTINCT URLs the page-update
+    /// manager found update work for - not a guarantee that those updates committed. A URL is added to the
+    /// list before the chunk's final <c>SaveChangesAsync</c>, and a <c>SqlException</c> or
+    /// <c>DbUpdateException</c> there is logged and swallowed, so a URL whose only pending changes (a like,
+    /// a simple metadata prop) failed to commit is still counted.
+    /// </summary>
+    public interface IPageUpdatePersistenceManager
+    {
+        Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events);
+    }
+
+    /// <summary>
+    /// Writes the click events in a batch. Like <see cref="ISearchesPersistenceManager"/> this is the
+    /// merge script's ADO.NET rows-affected total, not a count of clicks: "Migrate clicks from
+    /// staging.sql" inserts into <c>hits_clicked_element_class_names</c>, <c>urls</c> and
+    /// <c>hits_clicked_element_titles</c> before <c>hits_clicked_elements</c>, all in one batch with no
+    /// <c>SET NOCOUNT ON</c>.
+    /// </summary>
+    public interface IClicksPersistenceManager
+    {
+        Task<int> SaveClicksAsync(CustomEventsResultCollection events);
+    }
 }

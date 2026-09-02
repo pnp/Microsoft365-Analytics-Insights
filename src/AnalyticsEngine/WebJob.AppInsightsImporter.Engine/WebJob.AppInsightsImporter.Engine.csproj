@@ -73,7 +73,9 @@
     <Compile Include="AppInsightsColumn.cs" />
     <Compile Include="AppInsightsImporter.cs" />
     <Compile Include="AppInsightsImportWindow.cs" />
+    <Compile Include="CustomEventSectionSaver.cs" />
     <Compile Include="Interfaces.cs" />
+    <Compile Include="PageViewSaveResult.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="PageUpdates\PageCommentsExtensions.cs" />
     <Compile Include="PageUpdates\PageUpdateManager.cs" />

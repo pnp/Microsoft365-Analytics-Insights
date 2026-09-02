@@ -74,7 +74,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     _dbMaintenance ?? new SqlImportDbMaintenance(db),
                     _siteFilterLoader ?? new SqlSiteFilterLoader(db),
                     _hitWatermarkStore ?? new SqlHitWatermarkStore(db),
-                    _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig));
+                    _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig, _contextFactory));
             }
         }
 
