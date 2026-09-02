@@ -193,10 +193,16 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task Dedup_UnicodeUpn_IsPassedToTheUserFilterUnchanged()
         {
-            // The Management Activity API's UserId is NOT an Entra UPN - it is unvalidated and also
-            // carries app@sharepoint, SIDs and GUIDs - so a non-ASCII value is defensible input here.
-            // (Entra UPNs themselves are ASCII: see #402/#414.) This pins that the rules pass whatever
-            // arrives through to the filter verbatim, with no normalisation or ASCII folding.
+            // The Management Activity API's UserId is NOT schema-guaranteed to be an Entra UPN - the
+            // common schema also carries app@sharepoint, SIDs and GUIDs - so nothing upstream validates
+            // it, and this rule must not assume. (Entra UPNs themselves are ASCII: see #402/#414.)
+            //
+            // Note the scope: this covers the IN-MEMORY staging decision only. Further downstream the
+            // value is inserted into dbo.users.user_name, which is varchar(250)
+            // (insert_activity_from_staging_table.sql), so a genuinely non-ASCII value would be
+            // corrupted at rest. That is a property of the storage, not of these rules; what is pinned
+            // here is that the rules pass whatever arrives through to the filter verbatim, with no
+            // normalisation or ASCII folding of their own.
             const string nonAsciiUserId = "καλημέρα@contoso.onmicrosoft.com";
             string seenUpn = null;
 
