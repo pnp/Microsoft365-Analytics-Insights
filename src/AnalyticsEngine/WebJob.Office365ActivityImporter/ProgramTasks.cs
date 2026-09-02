@@ -43,9 +43,14 @@ namespace WebJob.Office365ActivityImporter
             _sentEmailMailboxSkipList = sentEmailMailboxSkipList;
         }
 
-        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl)
+        /// <summary>
+        /// Start listening for queued call notifications and make sure the Graph webhook subscription
+        /// is in place. The processor is owned by the caller because it must outlive a single import
+        /// cycle - Program.cs creates it once for the process (see issue #378).
+        /// </summary>
+        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
         {
-            var callQueueProcessor = await CallQueueProcessor.GetCallQueueProcessor(_settings, _settings.TenantGUID.ToString(), null);
+            if (callQueueProcessor is null) throw new ArgumentNullException(nameof(callQueueProcessor));
 
             // Fire and forget calls SB receiver
             _ = callQueueProcessor.BeginProcessCallsQueue();
@@ -143,12 +148,11 @@ namespace WebJob.Office365ActivityImporter
                 // Concurrent-save mode is opt-in and OFF by default (1 = the original strictly-serial save).
                 // Set AUDIT_MAX_CONCURRENT_SAVES > 1 to let batches commit in parallel (sharded staging;
                 // shared-table writes still serialised). Validate in a non-production environment before use.
-                int maxConcurrentSaves = 1;
-                var concurrentSavesEnv = Environment.GetEnvironmentVariable("AUDIT_MAX_CONCURRENT_SAVES");
-                if (!string.IsNullOrWhiteSpace(concurrentSavesEnv) && int.TryParse(concurrentSavesEnv.Trim(), out int parsedConcurrentSaves) && parsedConcurrentSaves > 1)
+                var maxConcurrentSaves = ImportRuntimeOptions.ResolveMaxConcurrentSaves(
+                    Environment.GetEnvironmentVariable(ImportRuntimeOptions.MaxConcurrentSavesEnvVariable));
+                if (maxConcurrentSaves > ImportRuntimeOptions.DefaultMaxConcurrentSaves)
                 {
-                    maxConcurrentSaves = parsedConcurrentSaves;
-                    _logger.LogInformation($"Activity import: concurrent-save mode enabled (AUDIT_MAX_CONCURRENT_SAVES={maxConcurrentSaves}).");
+                    _logger.LogInformation($"Activity import: concurrent-save mode enabled ({ImportRuntimeOptions.MaxConcurrentSavesEnvVariable}={maxConcurrentSaves}).");
                 }
 
                 var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH, maxConcurrentSaves);
@@ -157,13 +161,11 @@ namespace WebJob.Office365ActivityImporter
                 // audit_events for every batch, which materialised ~the whole in-window event set each time -
                 // the dominant save cost at scale). Set AUDIT_PERBATCH_DEDUP_CACHE=true to restore the old
                 // per-batch build without a redeploy if the new path ever misbehaves.
-                bool usePerBatchDedupCache = false;
-                var perBatchCacheEnv = Environment.GetEnvironmentVariable("AUDIT_PERBATCH_DEDUP_CACHE");
-                if (!string.IsNullOrWhiteSpace(perBatchCacheEnv) &&
-                    (perBatchCacheEnv.Trim() == "1" || perBatchCacheEnv.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)))
+                var usePerBatchDedupCache = ImportRuntimeOptions.ResolveUsePerBatchDedupCache(
+                    Environment.GetEnvironmentVariable(ImportRuntimeOptions.PerBatchDedupCacheEnvVariable));
+                if (usePerBatchDedupCache)
                 {
-                    usePerBatchDedupCache = true;
-                    _logger.LogWarning("Activity import: per-batch dedup cache ENABLED (AUDIT_PERBATCH_DEDUP_CACHE) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
+                    _logger.LogWarning($"Activity import: per-batch dedup cache ENABLED ({ImportRuntimeOptions.PerBatchDedupCacheEnvVariable}) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
                 }
 
                 var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves, usePerBatchDedupCache);
