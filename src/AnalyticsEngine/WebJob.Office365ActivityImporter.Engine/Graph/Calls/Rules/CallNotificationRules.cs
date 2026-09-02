@@ -19,11 +19,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// to POST to it), so a notification whose clientState doesn't match must never be queued.
         /// The comparison is ordinal and exact, deliberately - a case-insensitive or trimmed
         /// comparison would weaken the check.
+        ///
+        /// Deliberately NOT null-checked: the original loop dereferenced the list directly, so a
+        /// malformed POST with no <c>value</c> array produced a <see cref="NullReferenceException"/>
+        /// that the web app's global exception logger reports. Converting that to an
+        /// <see cref="ArgumentNullException"/> would change the exception type and message an operator
+        /// sees in App Insights for no benefit.
         /// </remarks>
         public static CallNotificationSelection SelectValidNotifications(IEnumerable<Common.Entities.Models.GraphChangeNotification> notifications, string expectedClientState)
         {
-            if (notifications is null) throw new ArgumentNullException(nameof(notifications));
-
             var selection = new CallNotificationSelection();
             foreach (var change in notifications)
             {

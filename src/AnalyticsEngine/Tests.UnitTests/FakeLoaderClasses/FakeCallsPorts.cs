@@ -67,7 +67,11 @@ namespace UnitTests.FakeLoaderClasses
         {
             Creates.Add(new CreateCall { NotificationUrl = notificationUrl, ClientState = clientState, ExpiryUtc = expiryUtc });
 
-            if (_createFailure != null) throw _createFailure;
+            // Faulted task rather than a synchronous throw, deliberately: a real Graph failure only
+            // surfaces when the returned task is awaited. Throwing synchronously here would let a
+            // caller that forgot to await still land in the catch block - which is exactly the
+            // silent-failure bug commit 560e501 had to fix.
+            if (_createFailure != null) return Task.FromException<CallRecordSubscription>(_createFailure);
 
             return Task.FromResult(new CallRecordSubscription
             {
@@ -82,7 +86,8 @@ namespace UnitTests.FakeLoaderClasses
         {
             Renewals.Add(new RenewCall { SubscriptionId = subscriptionId, ExpiryUtc = expiryUtc });
 
-            if (_renewFailure != null) throw _renewFailure;
+            // See the note in CreateSubscription: the failure must only be observable by awaiting.
+            if (_renewFailure != null) return Task.FromException<CallRecordSubscription>(_renewFailure);
 
             return Task.FromResult(new CallRecordSubscription
             {
@@ -90,6 +95,29 @@ namespace UnitTests.FakeLoaderClasses
                 Resource = CallSubscriptionRules.CallRecordsResource,
                 ExpirationDateTime = expiryUtc
             });
+        }
+    }
+
+    /// <summary>
+    /// <see cref="ICallNotificationQueueSender"/> whose sends fail the way Service Bus does when the
+    /// namespace is unreachable - as a faulted task, so a caller that forgot to await it would not
+    /// see the failure. See issue #378.
+    /// </summary>
+    public class FailingCallNotificationQueueSender : ICallNotificationQueueSender
+    {
+        private readonly Exception _failure;
+
+        public FailingCallNotificationQueueSender(Exception failure)
+        {
+            _failure = failure ?? throw new ArgumentNullException(nameof(failure));
+        }
+
+        public int SendAttempts { get; private set; }
+
+        public Task SendAsync(string messageBody)
+        {
+            SendAttempts++;
+            return Task.FromException(_failure);
         }
     }
 
@@ -123,10 +151,24 @@ namespace UnitTests.FakeLoaderClasses
     /// </summary>
     public class InMemoryCallRecordPersistenceManager : ICallRecordPersistenceManager
     {
+        private Exception _saveFailure;
+
         public List<CallRecordDTO> Saved { get; } = new List<CallRecordDTO>();
+
+        /// <summary>
+        /// Make saves fail the way SQL does - as a faulted task, so the failure is only observable by
+        /// awaiting it.
+        /// </summary>
+        public InMemoryCallRecordPersistenceManager FailingWith(Exception failure)
+        {
+            _saveFailure = failure;
+            return this;
+        }
 
         public Task SaveOrReplaceCallRecord(CallRecordDTO call)
         {
+            if (_saveFailure != null) return Task.FromException(_saveFailure);
+
             Saved.Add(call);
             return Task.CompletedTask;
         }

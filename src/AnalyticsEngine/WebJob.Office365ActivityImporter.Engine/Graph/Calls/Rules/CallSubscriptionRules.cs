@@ -32,8 +32,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// </summary>
         public static bool IsCallRecordsSubscriptionFor(string resource, string notificationUrl, Uri webAppUrl)
         {
-            if (webAppUrl is null) throw new ArgumentNullException(nameof(webAppUrl));
-
             return resource == CallRecordsResource && notificationUrl == webAppUrl.ToString();
         }
 
@@ -55,8 +53,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// </remarks>
         public static CallSubscriptionAction Decide(IReadOnlyList<CallRecordSubscription> existingSubscriptions, DateTime nowUtc)
         {
-            if (existingSubscriptions is null) throw new ArgumentNullException(nameof(existingSubscriptions));
-
             var expiry = ExpiryFor(nowUtc);
 
             if (existingSubscriptions.Count == 0)
@@ -79,8 +75,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// </summary>
         public static CallRecordSubscription SelectCurrentForStatus(IReadOnlyList<CallRecordSubscription> matchingSubscriptions)
         {
-            if (matchingSubscriptions is null) throw new ArgumentNullException(nameof(matchingSubscriptions));
-
             return matchingSubscriptions
                 .OrderByDescending(s => s.ExpirationDateTime ?? DateTimeOffset.MinValue)
                 .FirstOrDefault();
