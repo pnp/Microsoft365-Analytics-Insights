@@ -10,7 +10,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     /// <remarks>
     /// This is a value, not an EF entity: it can be built and asserted without a database, a Graph
-    /// call, or the lookup caches. <see cref="UserMetadataApplier"/> is what puts it onto a
+    /// call, or the lookup caches. <c>UserDataMapper</c> is what applies it to a
     /// <see cref="Common.Entities.User"/>.
     /// </remarks>
     public sealed class UserMetadataChangePlan
