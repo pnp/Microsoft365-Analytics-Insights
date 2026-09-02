@@ -183,7 +183,9 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(1, written);
             Assert.IsTrue(store.Users.ContainsKey("καλημέρα@contoso.onmicrosoft.com"),
-                "A non-Latin UPN on a recognised domain must be created, not dropped.");
+                "An identity on a recognised domain must be created, not dropped. The non-ASCII sample "
+                + "is an encoding-neutrality guard - it fails if this path normalises or ASCII-folds the "
+                + "key - not a claim that Entra permits non-Latin UPNs, which it does not (#402/#414).");
         }
 
         [TestMethod]

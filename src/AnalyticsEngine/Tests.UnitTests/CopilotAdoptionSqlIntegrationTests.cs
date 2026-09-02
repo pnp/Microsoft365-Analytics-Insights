@@ -53,19 +53,21 @@ namespace Tests.UnitTests
                 CreateCopilotReportTable(db);
 
                 db.Execute(
-                    @"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Engineering');
+                    @"INSERT INTO dbo.user_departments (id, name)
+                          VALUES (1, N'Engineering'), (2, N'Καλημέρα κόσμε');
                       INSERT INTO dbo.license_types (id, name, sku_id)
                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot'),
                                  (2, N'Office 365 E3', N'ENTERPRISEPACK');
 
-                      -- Deliberately non-ASCII: real tenants have Greek, Cyrillic and CJK display
-                      -- names, and a varchar column anywhere in this path would silently mangle them.
+                      -- 'greekdept' carries the Unicode guard on a column that is genuinely Unicode in
+                      -- production: its department name. Its UPN stays ASCII because Entra does not
+                      -- permit anything else (#402/#414).
                       INSERT INTO dbo.users (id, user_name, mail, account_enabled, department_id)
                           VALUES (10, N'active@contoso.com',  N'active@contoso.com',  1, 1),
                                  (11, N'dormant@contoso.com', N'dormant@contoso.com', 1, 1),
                                  (12, N'never@contoso.com',   N'never@contoso.com',   0, 1),
                                  (13, N'unlicensed@contoso.com', N'unlicensed@contoso.com', 1, 1),
-                                 (14, N'καλημέρα@contoso.com', N'καλημέρα@contoso.com', 1, 1);
+                                 (14, N'greekdept@contoso.com', N'greekdept@contoso.com', 1, 2);
 
                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
                           VALUES (1, 10, 1), (2, 11, 1), (3, 12, 1), (4, 14, 1),
@@ -95,8 +97,11 @@ namespace Tests.UnitTests
                 Assert.AreEqual(4, rows.Count, "Only the four Copilot-licensed users should be returned.");
                 Assert.IsFalse(rows.Any(r => r.UserPrincipalName == "unlicensed@contoso.com"),
                     "A user with only an E3 licence must not be counted as a Copilot seat.");
-                Assert.IsTrue(rows.Any(r => r.UserPrincipalName == "καλημέρα@contoso.com"),
-                    "A non-ASCII user principal name must survive the query unchanged.");
+                Assert.AreEqual("Καλημέρα κόσμε",
+                    rows.Single(r => r.UserPrincipalName == "greekdept@contoso.com").Department,
+                    "A non-ASCII department name must survive the query unchanged. This is a real "
+                    + "encoding guard: user_departments.name is nvarchar, so a varchar column or a "
+                    + "non-N literal anywhere on this path would return question marks.");
 
                 var active = rows.Single(r => r.UserPrincipalName == "active@contoso.com");
                 Assert.AreEqual(3, active.Interactions);
@@ -120,12 +125,18 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Guards the Unicode requirement end to end on the columns that are genuinely Unicode in
+        /// production: a varchar column or a non-N string literal anywhere on this path turns a Greek
+        /// department or display name into question marks, in an export about to be sent to an executive.
+        ///
+        /// The UPN is deliberately ASCII. Entra restricts userPrincipalName to ASCII (#402/#414), so
+        /// dbo.users.user_name is varchar(250) by design; asserting a Greek UPN round-trips here would
+        /// only pass by declaring the fixture column wider than production, which proves nothing.
+        /// </summary>
         [TestMethod]
         public void LicensedUsersQuery_PreservesNonLatinMetadata()
         {
-            // Guards the Unicode requirement end to end: a varchar column or a non-N string literal
-            // anywhere on this path turns a Greek display name into question marks, in an export that
-            // is about to be sent to an executive.
             using (var db = ScratchDatabase.Create("CopilotAdoptUni"))
             {
                 CreateUserTables(db);
@@ -136,7 +147,7 @@ namespace Tests.UnitTests
                       INSERT INTO dbo.license_types (id, name, sku_id)
                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
                       INSERT INTO dbo.users (id, user_name, mail, account_enabled, department_id)
-                          VALUES (1, N'καλημέρα@contoso.com', N'καλημέρα@contoso.com', 1, 1);
+                          VALUES (1, N'greek.dept@contoso.com', N'greek.dept@contoso.com', 1, 1);
                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);");
 
                 var rows = Query<LicensedUserUsageRow>(
@@ -147,7 +158,7 @@ namespace Tests.UnitTests
                     new SqlParameter("@maxRows", 1000));
 
                 Assert.AreEqual(1, rows.Count);
-                Assert.AreEqual("καλημέρα@contoso.com", rows[0].UserPrincipalName);
+                Assert.AreEqual("greek.dept@contoso.com", rows[0].UserPrincipalName);
                 Assert.AreEqual("Καλημέρα κόσμε", rows[0].Department);
             }
         }
@@ -775,7 +786,11 @@ namespace Tests.UnitTests
 
                   CREATE TABLE dbo.users (
                       id int NOT NULL PRIMARY KEY,
-                      user_name nvarchar(400) NULL,
+                      -- Must mirror production (Create DB.sql + migrations): user_name is varchar(250)
+                      -- NOT NULL because Entra UPNs are ASCII (#402/#414), while mail is nvarchar. A
+                      -- fixture that widened these to nvarchar would make any Unicode assertion on them
+                      -- self-fulfilling and unable to catch the varchar regression it claims to guard.
+                      user_name varchar(250) NOT NULL,
                       mail nvarchar(400) NULL,
                       account_enabled bit NULL,
                       department_id int NULL,
