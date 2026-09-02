@@ -22,16 +22,22 @@ The `UserMetadataUpdater` class has been refactored to improve code organization
 **Purpose**: Handles all license and SKU processing operations for users.
 
 **Key Responsibilities**:
-- Process tenant-level SKUs for all users
-- Add SKU licenses to specific users
+- Reconcile tenant-level SKUs against the stored licence lookups for all users
+- Build the set of licence assignments a specific SKU implies
 - Handle user-specific license processing when tenant-level SKUs are unavailable
 - Resolve SKU part numbers to friendly license type names
 
 **Key Methods**:
-- `ProcessSKUsForAllUsers()` - Processes all tenant SKUs and assigns to users
-- `AddSkuForUsers()` - Adds a specific SKU to a list of users
+- `ProcessSKUsForAllUsers()` - Reconciles `user_license_type_lookups` against all tenant SKUs
+- `AddSkuAssignments()` - Adds the assignments implied by one SKU to the desired-state set
 - `ProcessUserLicenses()` - Processes licenses for individual users
 - `GetLicenseType()` - Gets or creates license type from SKU part number
+
+Reads and writes of `user_license_type_lookups` go through `IUserLicenseStore`
+(`SqlUserLicenseStore` in production), and the add/remove plan is computed by the
+database-free `UserLicenseAssignmentDelta`. See issue #392 - this step used to delete
+every licence lookup and refill it SKU by SKU, leaving reports to see a tenant with no
+licences for minutes at a time.
 
 ### 3. **UserDataMapper.cs**
 **Purpose**: Handles mapping and updating of user data between Graph and database entities.

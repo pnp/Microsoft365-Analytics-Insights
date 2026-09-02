@@ -102,6 +102,12 @@
     <Compile Include="Constants.cs" />
     <Compile Include="ActivityImportCache.cs" />
     <Compile Include="ImportLastRunStore.cs" />
+    <Compile Include="ImportRuntimeOptions.cs" />
+    <Compile Include="ActivityReportsCadenceGate.cs" />
+    <Compile Include="Graph\Sections\IGraphImportSection.cs" />
+    <Compile Include="Graph\Sections\IGraphImportSectionFactory.cs" />
+    <Compile Include="Graph\Sections\DelegateGraphImportSection.cs" />
+    <Compile Include="Graph\Sections\ProductionGraphImportSectionFactory.cs" />
     <Compile Include="Entities\BaseUser.cs" />
     <Compile Include="Entities\ChatReactions.cs" />
     <Compile Include="Entities\Serialisation\BaseSerialisationClasses.cs" />
@@ -231,6 +237,7 @@
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
+    <Compile Include="Graph\User\IUserLicenseStore.cs" />
     <Compile Include="Graph\User\IUserLookupStore.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
     <Compile Include="Graph\User\ManagerPrefetchCache.cs" />
@@ -238,6 +245,7 @@
     <Compile Include="Graph\User\Rules\UserBulkUpdateRules.cs" />
     <Compile Include="Graph\User\Rules\UserImportCommitPolicy.cs" />
     <Compile Include="Graph\User\SqlUserBulkUpdateWriter.cs" />
+    <Compile Include="Graph\User\SqlUserLicenseStore.cs" />
     <Compile Include="Graph\User\SqlUserLookupStore.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
     <Compile Include="Graph\User\Rules\UserMetadataMappingRules.cs" />
@@ -245,6 +253,7 @@
     <Compile Include="Graph\User\UserGraphResponse.cs" />
     <Compile Include="Graph\User\UserGroupsCache.cs" />
     <Compile Include="Graph\User\UserInsertProcessor.cs" />
+    <Compile Include="Graph\User\UserLicenseAssignmentDelta.cs" />
     <Compile Include="Graph\User\UserLicenseProcessor.cs" />
     <Compile Include="Graph\User\UserMetadataCache.cs" />
     <Compile Include="Graph\User\UserMetadataUpdater.cs" />
