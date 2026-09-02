@@ -79,6 +79,10 @@
     <Compile Include="ActivityAPI\Copilot\SpoGraphClient.cs" />
     <Compile Include="ActivityAPI\Copilot\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\StagingClasses.cs" />
+    <Compile Include="ActivityAPI\Rules\ActivityImportCacheWindow.cs" />
+    <Compile Include="ActivityAPI\Rules\ActivitySaveConcurrencyPolicy.cs" />
+    <Compile Include="ActivityAPI\Rules\ActivityStagingRules.cs" />
+    <Compile Include="ActivityAPI\Rules\CopilotPrewarmPolicy.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
@@ -150,6 +154,15 @@
     <Compile Include="Graph\SPSiteIdToUrlCache.cs" />
     <Compile Include="Graph\Teams\ChannelWithReactions.cs" />
     <Compile Include="Graph\Teams\CognitiveHelper.cs" />
+    <Compile Include="Graph\Teams\GraphChannelMessagesSourceLoader.cs" />
+    <Compile Include="Graph\Teams\GraphTeamsGroupSourceLoader.cs" />
+    <Compile Include="Graph\Teams\IChannelMessagesSourceLoader.cs" />
+    <Compile Include="Graph\Teams\ITeamsGroupSourceLoader.cs" />
+    <Compile Include="Graph\Teams\Rules\ChannelMessageScopeRules.cs" />
+    <Compile Include="Graph\Teams\Rules\TeamsCrawlPagingPolicy.cs" />
+    <Compile Include="Graph\Teams\Rules\TeamsCrawlRules.cs" />
+    <Compile Include="Graph\Teams\TeamChannelDeltaTokenStores.cs" />
+    <Compile Include="Graph\Teams\TeamsChannelCrawler.cs" />
     <Compile Include="Graph\Teams\Extensions\ChatMessageListExtensions.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamsCognitiveExtensions.cs" />
     <Compile Include="Graph\Teams\TeamsCrawlConfig.cs" />
@@ -157,6 +170,8 @@
     <Compile Include="Graph\Teams\TeamsImporter.cs" />
     <Compile Include="Graph\Teams\TeamTokenManager.cs" />
     <Compile Include="Graph\UsageReports\AbstractDailyActivityLoader.cs" />
+    <Compile Include="Graph\UsageReports\IUsageReportStorageInspector.cs" />
+    <Compile Include="Graph\UsageReports\Rules\UsageReportRefreshPolicy.cs" />
     <Compile Include="Graph\Calls\CallQueueProcessor.cs" />
     <Compile Include="Graph\Calls\CallRecordAdapters.cs" />
     <Compile Include="Graph\Calls\CallRecordImporter.cs" />
@@ -189,6 +204,8 @@
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportSource.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageReportPolicy.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\ICopilotUsagePersistenceManager.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\SqlCopilotUsagePersistenceManager.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailParser.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportParser.cs" />

@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 
 namespace WebJob.Office365ActivityImporter.Engine
@@ -53,8 +54,8 @@ namespace WebJob.Office365ActivityImporter.Engine
 
             // Include an extra minute either side of cache-loading range, as EF6 assumes datetime2 which can miss some datetime edge values
             // This is easier than doing a new migration to convert every DT field.
-            cacheTo = cacheTo.AddMinutes(1);
-            cacheFrom = cacheFrom.AddMinutes(-1);
+            cacheTo = ActivityImportCacheWindow.PadTo(cacheTo);
+            cacheFrom = ActivityImportCacheWindow.PadFrom(cacheFrom);
 
 #if DEBUG
             Console.WriteLine($"DEBUG: Loading activity cache from {cacheFrom} to {cacheTo}.");

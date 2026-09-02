@@ -33,7 +33,9 @@
     <Compile Include="AppConfigDefaultsTests.cs" />
     <Compile Include="PreInstallAdvisorTests.cs" />
     <Compile Include="ImportCadenceTests.cs" />
+    <Compile Include="AppInsightsApiClientTests.cs" />
     <Compile Include="AppInsightsAuthTests.cs" />
+    <Compile Include="AppInsightsImporterOrchestrationTests.cs" />
     <Compile Include="CheckpointTableClientFactoryTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
@@ -118,13 +120,17 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ActivityImportCacheWindowTests.cs" />
     <Compile Include="ActivityImporterTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
+    <Compile Include="ActivitySaveConcurrencyPolicyTests.cs" />
+    <Compile Include="ActivityStagingRulesTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
     <Compile Include="AppInsightsImportWindowTests.cs" />
     <Compile Include="AppInsightsClickRulesTests.cs" />
+    <Compile Include="AppInsightsPageUpdateRulesTests.cs" />
     <Compile Include="AppInsightsPageViewRulesTests.cs" />
     <Compile Include="AppInsightsSearchRulesTests.cs" />
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
@@ -132,10 +138,19 @@
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserMetadataLoader.cs" />
+    <Compile Include="FakeLoaderClasses\FakeUsageReportStorageInspector.cs" />
+    <Compile Include="FakeLoaderClasses\TablelessDailyActivityLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeCallsPorts.cs" />
+    <Compile Include="FakeLoaderClasses\FakeTeamsPorts.cs" />
     <Compile Include="OrgUrlStoreTests.cs" />
     <Compile Include="FakeLoaderClasses\FixedClock.cs" />
+    <Compile Include="FakeLoaderClasses\FakeHealthDataSource.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryHealthCache.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryUserDataLookupQuery.cs" />
+    <Compile Include="HealthServiceTests.cs" />
+    <Compile Include="UserDataLookupServiceTests.cs" />
+    <Compile Include="UserDataLookupSqlIntegrationTests.cs" />
     <Compile Include="GraphFileMetadataLoaderTests.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
@@ -152,6 +167,7 @@
     <Compile Include="CopilotTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
@@ -183,6 +199,7 @@
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
     <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
+    <Compile Include="CopilotUsagePersistencePortTests.cs" />
     <Compile Include="CopilotUsageReportImportTests.cs" />
     <Compile Include="DenormaliseCopilotChatUserAndTimeMigrationTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
@@ -208,6 +225,7 @@
     <Compile Include="FakeEntities\FakeOfficeServicesDB.cs" />
     <Compile Include="CallRecordTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivityImporter.cs" />
+    <Compile Include="FakeLoaderClasses\FakeAppInsightsPorts.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivityReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivityReportPersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeContentMetaDataLoader.cs" />
@@ -217,6 +235,7 @@
     <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="CallsImportTests.cs" />
     <Compile Include="GraphImportTests.cs" />
+    <Compile Include="TeamsCrawlTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
@@ -237,6 +256,7 @@
     <Compile Include="StreamTests.cs" />
     <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
+    <Compile Include="UsageReportRefreshPolicyTests.cs" />
     <Compile Include="UserImportTests.cs" />
     <Compile Include="UserLookupTests.cs" />
   </ItemGroup>
