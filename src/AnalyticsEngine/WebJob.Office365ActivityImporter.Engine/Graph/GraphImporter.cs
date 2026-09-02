@@ -74,10 +74,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// because a trailing optional argument is baked in by the calling compiler and so is binary-breaking
         /// for already-compiled callers.
         ///
-        /// <b>Internal deliberately.</b> An instance built this way can only run
+        /// <b>Internal deliberately.</b> An instance built this way is composed only for
         /// <see cref="GetAndSaveAllGraphData"/>: it has no <see cref="GraphServiceClient"/> and no
-        /// <see cref="ISingleDateStore"/>, so <see cref="GetAndSaveActivityReportsMultiThreaded"/> would throw
-        /// on it. <c>InternalsVisibleTo("Tests.UnitTests")</c> makes it reachable from the test project, which
+        /// <see cref="ISingleDateStore"/>, so the still-public
+        /// <see cref="GetAndSaveActivityReportsMultiThreaded"/> is not supported on it.
+        /// <c>InternalsVisibleTo("Tests.UnitTests")</c> makes it reachable from the test project, which
         /// is its only intended caller; production composes through the constructor above.
         /// </summary>
         internal GraphImporter(AnalyticsLogger logger, AppConfig settings, IGraphImportSectionFactory sectionFactory, IImportLastRunStore lastRunStore, IClock clock)

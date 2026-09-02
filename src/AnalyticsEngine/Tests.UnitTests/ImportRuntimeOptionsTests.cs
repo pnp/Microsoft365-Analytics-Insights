@@ -150,12 +150,14 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ActivityReportsGate_NextRunUtc_IsExactlyWhenTheGateOpens()
+        public void ActivityReportsGate_NextRunUtc_IsTheLastInstantTheGateIsStillShut()
         {
-            // The "will import again after ..." line an operator reads must name the instant the gate
-            // actually opens. Adding minWait to the stored LOCAL value instead - which is what the code did
+            // The "will import again after ..." line an operator reads must name the threshold the gate
+            // actually uses. Adding minWait to the stored LOCAL value instead - which is what the code did
             // before the gate moved to UTC - reports an hour out across a daylight-saving transition.
-            // Asserted against ShouldRun itself, so the two can never drift apart.
+            // Asserted against ShouldRun itself, so the two can never drift apart. Note the announced instant
+            // is the last one at which the gate is STILL SHUT: the comparison is strictly greater-than, which
+            // is what makes the word "after" in that message honest.
             var lastUtc = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
 
             // The same instant in all three kinds the store can hand back. Utc and Local are what the two
