@@ -4,7 +4,9 @@ using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
@@ -24,6 +26,7 @@ namespace Tests.UnitTests
     /// against a real tenant.
     /// </summary>
     [TestClass]
+    [DoNotParallelize]
     public class GraphImportOrchestrationTests
     {
         private const string FirstSectionCadence = "first-test-section-cadence";
@@ -48,6 +51,23 @@ namespace Tests.UnitTests
         {
             return new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), settings,
                 new FakeGraphImportSectionFactory(sections), store, clock);
+        }
+
+        private static async Task<string> CaptureConsole(Func<Task> action)
+        {
+            var captured = new StringWriter();
+            var original = Console.Out;
+            Console.SetOut(captured);
+            try
+            {
+                await action();
+            }
+            finally
+            {
+                Console.SetOut(original);
+            }
+
+            return captured.ToString();
         }
 
         [TestMethod]
@@ -136,12 +156,17 @@ namespace Tests.UnitTests
             section.Result = false;
 
             var store = new RecordingImportLastRunStore();
-            await BuildImporter(GatingSettings(), store, new FixedClock(Now), section)
-                .GetAndSaveAllGraphData(GatingSettings());
+            var output = await CaptureConsole(() => BuildImporter(GatingSettings(), store, new FixedClock(Now), section)
+                .GetAndSaveAllGraphData(GatingSettings()));
 
             Assert.AreEqual(1, section.RunCount);
             Assert.AreEqual(0, store.Writes.Count,
                 "Stamping the gate after a failure would idle a broken import for a whole interval - issue #285.");
+            Assert.IsFalse(output.Contains("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"),
+                "A section that returned false must not report itself as successfully finished.");
+            StringAssert.Contains(output,
+                "Failing section did not complete successfully; it will be retried on the next cycle.",
+                "The trace must name the section and make clear that it will retry.");
         }
 
         [TestMethod]
@@ -173,11 +198,23 @@ namespace Tests.UnitTests
             var store = new RecordingImportLastRunStore();
             var importer = BuildImporter(GatingSettings(), store, new FixedClock(Now), throwing, later);
 
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.GetAndSaveAllGraphData(GatingSettings()));
+            var console = new StringWriter();
+            var original = Console.Out;
+            Console.SetOut(console);
+            try
+            {
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.GetAndSaveAllGraphData(GatingSettings()));
+            }
+            finally
+            {
+                Console.SetOut(original);
+            }
 
             Assert.AreEqual(1, throwing.RunCount);
             Assert.AreEqual(0, later.RunCount, "The exception unwinds out of the loop, so later sections are skipped this cycle.");
             Assert.AreEqual(0, store.Writes.Count, "A section that threw must not be recorded as having run.");
+            Assert.IsFalse(console.ToString().Contains("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"),
+                "A section that threw must not report itself as successfully finished.");
         }
 
         [TestMethod]
@@ -192,6 +229,25 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, store.Writes.Count);
             Assert.AreEqual(FirstSectionCadence, store.Writes[0].Key);
             Assert.AreEqual(Now, store.Writes[0].Value, "The stamp must come from the injected clock, not from wall time.");
+        }
+
+        [TestMethod]
+        public async Task GraphImporter_SuccessfulSections_ReportFinishedEventsWithTheirNames()
+        {
+            var gated = FakeGraphImportSection.Gated("Gated telemetry section", FirstSectionCadence, 24);
+            var ungated = FakeGraphImportSection.Ungated("Ungated telemetry section");
+
+            var output = await CaptureConsole(() => BuildImporter(
+                    GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), gated, ungated)
+                .GetAndSaveAllGraphData(GatingSettings()));
+
+            var finishedEvents = Regex.Matches(output,
+                "New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'").Count;
+            Assert.AreEqual(2, finishedEvents, "Each successful section must emit one completion event.");
+            StringAssert.Contains(output, "context=Gated telemetry section:",
+                "The gated completion event must identify the section in Application Insights.");
+            StringAssert.Contains(output, "context=Ungated telemetry section:",
+                "The ungated completion event must identify the section in Application Insights.");
         }
 
         [TestMethod]
@@ -275,11 +331,17 @@ namespace Tests.UnitTests
             throttled.Result = false;
             var later = FakeGraphImportSection.Gated("Teams import", FirstSectionCadence, 24);
 
-            await BuildImporter(GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), throttled, later)
-                .GetAndSaveAllGraphData(GatingSettings());
+            var output = await CaptureConsole(() => BuildImporter(
+                    GatingSettings(), new RecordingImportLastRunStore(), new FixedClock(Now), throttled, later)
+                .GetAndSaveAllGraphData(GatingSettings()));
 
             Assert.AreEqual(1, throttled.RunCount);
             Assert.AreEqual(1, later.RunCount);
+            Assert.AreEqual(1, Regex.Matches(output,
+                    "New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'").Count,
+                "Only the later successful section must report completion.");
+            Assert.IsFalse(output.Contains("Usage reports did not complete successfully"),
+                "The ungated usage-report path uses false for its ordinary throttle result and must not warn.");
         }
 
         [TestMethod]
