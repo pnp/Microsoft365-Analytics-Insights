@@ -1,3 +1,4 @@
+using Azure.Messaging.ServiceBus;
 using Common.Entities.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Models.ODataErrors;
@@ -217,8 +218,35 @@ namespace Tests.UnitTests
             await CallQueueProcessor.AddChangeMsgToQueue(changes, new CapturingLogger(), queue);
 
             Assert.AreEqual(2, queue.SentMessages.Count);
-            var roundTripped = JsonConvert.DeserializeObject<GraphChangeNotification>(queue.SentMessages[0]);
-            Assert.AreEqual("call-1", roundTripped.ResourceData.Id, "The queued body must round-trip back to the same notification.");
+
+            // Round-trip BOTH bodies: asserting only the first would let a change that queued a
+            // placeholder for the id-less notification still pass, and an unparseable body just
+            // dead-letters on the other side.
+            var first = JsonConvert.DeserializeObject<GraphChangeNotification>(queue.SentMessages[0]);
+            var second = JsonConvert.DeserializeObject<GraphChangeNotification>(queue.SentMessages[1]);
+            Assert.AreEqual("call-1", first.ResourceData.Id, "The queued body must round-trip back to the same notification.");
+            Assert.AreEqual(string.Empty, second.ResourceData.Id, "The id-less notification must be queued as itself, not as a placeholder.");
+        }
+
+        /// <summary>
+        /// A queue send that fails must propagate. The webhook controller turns that into a 500 so
+        /// Graph re-delivers the notification; swallowing it would return 200 and lose the call
+        /// silently. The fake fails as a faulted task, so this also pins that the send is actually
+        /// awaited - a dropped await compiles here and would make the failure invisible.
+        /// </summary>
+        [TestMethod]
+        public async Task AddChangeMsgToQueue_WhenTheSendFails_PropagatesSoTheWebhookCanReportFailure()
+        {
+            var queue = new FailingCallNotificationQueueSender(new ServiceBusException("namespace unreachable", ServiceBusFailureReason.ServiceCommunicationProblem));
+            var changes = new List<GraphChangeNotification>
+            {
+                new GraphChangeNotification { ClientState = "s", ResourceData = new ResourceData { Id = "call-1" } },
+            };
+
+            await Assert.ThrowsExceptionAsync<ServiceBusException>(() =>
+                CallQueueProcessor.AddChangeMsgToQueue(changes, new CapturingLogger(), queue));
+
+            Assert.AreEqual(1, queue.SendAttempts);
         }
 
         #endregion
@@ -304,6 +332,23 @@ namespace Tests.UnitTests
 
             Assert.IsNotNull(result, "Returning null here would make the queue retry a call that can never succeed.");
             Assert.AreEqual(0, store.Saved.Count, "A call with no organiser must not be written - Organizer is a required relationship.");
+        }
+
+        /// <summary>
+        /// A failing save must propagate. CallQueueProcessor catches it, reports the import as
+        /// unsuccessful and ABANDONS the Service Bus message so the call is retried; swallowing it
+        /// would complete the message and lose the call record permanently. The fake fails as a
+        /// faulted task, so this also pins that the save is actually awaited - dropping the await
+        /// compiles, and would report success before the save had even run.
+        /// </summary>
+        [TestMethod]
+        public async Task CallRecordImporter_WhenTheSaveFails_PropagatesSoTheQueueMessageIsRetried()
+        {
+            var source = new FakeCallRecordSourceLoader().Returning("call-3", Call("call-3", "someone@contoso.local"));
+            var store = new InMemoryCallRecordPersistenceManager().FailingWith(new InvalidOperationException("simulated SQL failure"));
+            var importer = new CallRecordImporter(source, store, new CapturingLogger());
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.ImportFromNotification(Notification("call-3")));
         }
 
         #endregion
