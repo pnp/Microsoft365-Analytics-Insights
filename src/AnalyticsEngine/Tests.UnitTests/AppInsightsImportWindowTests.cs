@@ -12,13 +12,13 @@ namespace Tests.UnitTests
     ///
     /// Scope note: these methods take the instant as a parameter and never read <c>DateTime.Now</c> or
     /// <c>TimeZoneInfo.Local</c>, so nothing here can be shifted by the host's timezone. The bug the
-    /// importer's code comment warns about - a caller supplying a LOCAL clock - is a call-site concern
-    /// and is <b>not covered by any current test</b>. <c>AppInsightsImporter</c> does read
-    /// <c>_clock.UtcNow</c> today, and <c>ClockAndContextFactoryTests</c> covers the adapter
-    /// (<c>SystemClock.UtcNow</c> returns a UTC instant) and the constructor wiring (the injected clock
-    /// is stored) - but nothing invokes <c>ImportAndSave</c>, so replacing those reads with
-    /// <c>DateTime.Now</c> would leave every test green. A caller-level test can follow once the
-    /// importer's database and HTTP dependencies are behind seams (the rest of #374).
+    /// importer's code comment warns about - a caller supplying a LOCAL clock - is a call-site concern,
+    /// and it is now covered: the rest of #374 put the importer's database and HTTP dependencies behind
+    /// ports, so <c>AppInsightsImporterOrchestrationTests.AppInsightsImporter_WindowIsDrivenByTheInjected
+    /// Clock_NotTheWallClock</c> runs <c>ImportAndSave</c> end to end against a clock fixed years in the
+    /// past and asserts the days actually requested. Swapping <c>_clock.UtcNow</c> for
+    /// <c>DateTime.Now</c>/<c>DateTime.UtcNow</c> inside <c>ImportAndSave</c> now fails a test rather
+    /// than leaving every test green.
     ///
     /// Runs with zero SQL Server, zero HTTP and zero wall-clock dependency.
     /// </summary>

@@ -73,6 +73,7 @@
     <Compile Include="AppInsightsColumn.cs" />
     <Compile Include="AppInsightsImporter.cs" />
     <Compile Include="AppInsightsImportWindow.cs" />
+    <Compile Include="Interfaces.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="PageUpdates\PageCommentsExtensions.cs" />
     <Compile Include="PageUpdates\PageUpdateManager.cs" />
@@ -84,6 +85,7 @@
     </Compile>
     <Compile Include="Sql\HitUpdatesSqlExtension.cs" />
     <Compile Include="Sql\ImportDbHacks.cs" />
+    <Compile Include="Sql\SqlAppInsightsAdapters.cs" />
     <Compile Include="Sql\Models\ClickTempEntity.cs" />
     <Compile Include="Sql\Models\HitTempEntity.cs" />
     <Compile Include="Sql\Models\HitUpdate.cs" />
