@@ -4,9 +4,11 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Linq;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -308,6 +310,109 @@ namespace Tests.UnitTests
                 // Still exactly one copilot_chats row
                 var chatCount = await db.CopilotChats.CountAsync(c => c.AuditEvent.Id == commonEvent.Id);
                 Assert.AreEqual(1, chatCount, "Duplicate event_id across batches should produce exactly one copilot_chats row.");
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotEventManager_FileAndMeetingMetadata_AreIdempotentAcrossRetries()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var suffix = Guid.NewGuid().ToString("N");
+                var user = new User
+                {
+                    AzureAdId = "retry-user-" + suffix,
+                    UserPrincipalName = "retry.user." + suffix + "@contoso.onmicrosoft.com"
+                };
+                var fileEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.UtcNow,
+                    Operation = new EventOperation { Name = "Copilot file retry " + suffix },
+                    User = user,
+                    Id = Guid.NewGuid()
+                };
+                var meetingEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.UtcNow,
+                    Operation = new EventOperation { Name = "Copilot meeting retry " + suffix },
+                    User = user,
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.AddRange(new[] { fileEvent, meetingEvent });
+                await db.SaveChangesAsync();
+
+                var fileContent = new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = _config.TestCopilotDocContextIdSpSite,
+                                Type = _config.TeamSiteFileExtension
+                            }
+                        }
+                    },
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = null, IsPrompt = true, Size = 111 }
+                        }
+                    }
+                };
+                var meetingContent = new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:meeting_retry_" + suffix + "@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING
+                            }
+                        }
+                    },
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = null, IsPrompt = false, Size = 222 }
+                        }
+                    }
+                };
+
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    var manager = new CopilotAuditEventManager(
+                        _config.ConnectionStrings.DatabaseConnectionString,
+                        new FakeCopilotMetadataLoader(),
+                        _logger);
+                    await manager.SaveSingleCopilotEventToSqlStaging(fileContent, fileEvent);
+                    await manager.SaveSingleCopilotEventToSqlStaging(meetingContent, meetingEvent);
+                    await manager.CommitAllChanges();
+                }
+
+                Assert.AreEqual(1,
+                    await db.CopilotEventMetadataFiles.CountAsync(f => f.ChatId == fileEvent.Id),
+                    "Retrying metadata must not duplicate the one resolved file row for an interaction.");
+                Assert.AreEqual(1,
+                    await db.CopilotEventMetadataMeetings.CountAsync(m => m.ChatId == meetingEvent.Id),
+                    "Retrying metadata must not duplicate the one resolved meeting row for an interaction.");
+                var messages = await db.CopilotMessages
+                    .Where(m => m.ChatId == fileEvent.Id || m.ChatId == meetingEvent.Id)
+                    .ToListAsync();
+                Assert.AreEqual(2, messages.Count,
+                    "Retrying metadata must not duplicate messages whose source payload omitted an Id.");
+                Assert.IsTrue(messages.All(m => m.MessageId.StartsWith("missing:", StringComparison.Ordinal)),
+                    "Missing message IDs need a deterministic retry key rather than a fresh GUID per attempt.");
             }
         }
 

@@ -217,21 +217,12 @@ namespace Tests.UnitTests
             //
             // The consequence of losing those Clear() calls differs per table, and is worse than mere
             // repeated work for two of the three:
-            //   * chat-only - the root copilot_chats row is de-duplicated by the merge, so the usual
-            //     cost is an unboundedly growing batch on the hot path. It is NOT purely cost, though:
-            //     common_upsert_copilot_agents.sql deliberately does not de-duplicate messages that
-            //     have no Id (ISNULL(pm.message_id, NEWID()) plus "WHERE pm.message_id IS NULL"), so a
-            //     retained chat-only row carrying such a message inserts a fresh copilot_event_messages
-            //     row on every commit. Cost-only holds only when the event has no messages, or every
-            //     message has a stable Id;
-            //   * SharePoint and Teams - insert_sp_copilot_events_from_staging_table.sql and
-            //     insert_teams_copilot_events_from_staging_table.sql insert into copilot_event_files /
-            //     copilot_event_meetings with NO NOT EXISTS guard, and both inherit [Key] on
-            //     copilot_chat_id from BaseCopilotSpecificEvent - so a retained row THAT SUCCESSFULLY
-            //     INSERTED its metadata can make the NEXT commit fail on a duplicate primary key.
-            //     (Both managers deliberately stage rows even when Graph resolution returns null; those
-            //     rows fail the workload scripts' inner joins against the lookup tables, so they never
-            //     inserted a metadata row and have no key to collide with.)
+            //   * chat-only - the root chat and its messages are de-duplicated by the merge (messages
+            //     without an Id get a deterministic fallback), so the remaining cost is an unboundedly
+            //     growing staging batch on the hot path;
+            //   * SharePoint and Teams - the workload merges de-duplicate on copilot_chat_id, so retained
+            //     rows do not create a second file/meeting record. They still make every later staging load
+            //     and lookup larger, so clearing remains a load-bearing performance contract.
             //
             // A guard needs a real database: under the current hard-wired InsertBatch design, staging is
             // only List.Add, but committing a non-empty batch opens a connection. It must cover all

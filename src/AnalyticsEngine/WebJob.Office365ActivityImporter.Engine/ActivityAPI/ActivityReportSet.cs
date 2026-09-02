@@ -29,6 +29,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// </summary>
         public bool DownloadComplete { get; set; } = true;
 
+        /// <summary>
+        /// Content blobs known not to have a completed checkpoint because the checkpoint store was read
+        /// successfully and did not contain them. Their existing audit rows may be staged again to drive
+        /// idempotent workload metadata after an earlier partial save.
+        /// </summary>
+        internal ISet<string> MetadataRecoveryBlobIds { get; set; } = new HashSet<string>();
+
+        internal bool RequiresMetadataRecovery(AbstractAuditLogContent auditEvent)
+        {
+            return auditEvent != null
+                && !string.IsNullOrEmpty(auditEvent.SourceContentId)
+                && MetadataRecoveryBlobIds.Contains(auditEvent.SourceContentId);
+        }
+
         #region Props
 
         /// <summary>

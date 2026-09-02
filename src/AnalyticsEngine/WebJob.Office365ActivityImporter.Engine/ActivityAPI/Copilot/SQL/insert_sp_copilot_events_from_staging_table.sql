@@ -42,3 +42,8 @@ insert into [copilot_event_files] (copilot_chat_id, file_name_id, file_extension
 	  inner join event_file_ext on event_file_ext.extension_name = imports.file_extension
 	  inner join urls on urls.full_url = imports.url
 	  inner join sites on sites.url_base = imports.url_base
+	  where not exists (
+		select 1
+		from copilot_event_files existing
+		where existing.copilot_chat_id = imports.event_id
+	  )

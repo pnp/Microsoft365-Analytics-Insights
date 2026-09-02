@@ -1,7 +1,13 @@
+using Common.Entities;
+using Common.Entities.Config;
+using Common.Entities.Entities;
+using Common.Entities.Entities.AuditLog;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Data.Entity;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -10,8 +16,10 @@ using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
+using FixedClock = UnitTests.FakeLoaderClasses.FixedClock;
 
 namespace Tests.UnitTests
 {
@@ -68,7 +76,26 @@ namespace Tests.UnitTests
             }, NullLoggerShim.Instance);
 
         private static ActivityStagingPass PassFor(AuditFilterConfig filterConfig, ILogger logger)
-            => new ActivityStagingPass(filterConfig, GroupsCache(), new Common.Entities.Config.UserGroupsFilterModel("Finance"), logger);
+            => new ActivityStagingPass(filterConfig, GroupsCache(), new UserGroupsFilterModel("Finance"), logger);
+
+        private sealed class SequenceActivityImportCacheProvider : IActivityImportCacheProvider
+        {
+            private readonly Queue<ActivityImportCache> _caches;
+
+            public SequenceActivityImportCacheProvider(params ActivityImportCache[] caches)
+            {
+                _caches = new Queue<ActivityImportCache>(caches);
+            }
+
+            public Task<ActivityImportCache> GetForWindowAsync(ActivityDedupCacheWindow window)
+                => Task.FromResult(_caches.Dequeue());
+        }
+
+        private sealed class FailingSaveSessionFactory : ISaveSessionFactory
+        {
+            public Task<SaveSession> CreateAsync(AnalyticsEntitiesContext db, ActivityImporter.Engine.ActivityAPI.Copilot.ICopilotMetadataLoader sharedCopilotLoader)
+                => Task.FromException<SaveSession>(new InvalidOperationException("metadata session failed"));
+        }
 
         [TestMethod]
         public async Task SavePipeline_EachOutcomeIsStagedAndCountedCorrectly()
@@ -174,6 +201,276 @@ namespace Tests.UnitTests
             StringAssert.Contains(merged.LastMergeSql, shard, "The merge must read the shard this save just loaded...");
             Assert.IsFalse(merged.LastMergeSql.Contains(ActivityImportConstants.STAGING_TABLE_ACTIVITY),
                 "...and must not touch the shared staging table another save may be loading.");
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_MergeFailure_ReleasesProcessedMarkerSoRetryRestagesTheEvent()
+        {
+            var log = SpEvent(InScopeUpn);
+            var cache = ActivityImportCache.GetEmptyCache();
+            var writer = new InMemoryActivityStagingWriter();
+            var mergeAttempts = 0;
+            writer.OnMerge = () => Interlocked.Increment(ref mergeAttempts) == 1
+                ? Task.FromException(new InvalidOperationException("merge failed"))
+                : Task.CompletedTask;
+            var pass = PassFor(new AllowAllFilterConfig(), new RecordingLogger());
+            var retryState = new ActivitySaveRetryState();
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => pass.RunAsync(
+                SetOf(log), cache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null, retryState));
+
+            Assert.IsFalse(cache.HaveSeenInProcessedOrIgnoredEvents(log),
+                "A failed save attempt must release the in-memory marker, or the retry skips the event and falsely succeeds.");
+            Assert.IsTrue(retryState.ShouldRetry(log.Id),
+                "The retry must remember which staged id to force through a freshly loaded per-batch cache.");
+
+            var refreshedCache = ActivityImportCache.GetEmptyCache();
+            refreshedCache.RememberLoadedProcessedEvent(log);
+            var recovered = await pass.RunAsync(
+                SetOf(log), refreshedCache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null, retryState);
+
+            Assert.AreEqual(2, mergeAttempts);
+            Assert.AreEqual(1, recovered.Stats.Imported);
+            Assert.AreEqual(1, writer.Batches[0].RowCountAtMerge);
+            Assert.AreEqual(1, writer.Batches[1].RowCountAtMerge,
+                "The retry must stage the event again even when a refreshed cache can see a row from the prior attempt.");
+            Assert.IsTrue(refreshedCache.HaveSeenInProcessedOrIgnoredEvents(log),
+                "The successful retry keeps the marker for later batches in the same cycle.");
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_MetadataFailure_ReleasesProcessedMarkerSoOuterRetryCanRestageTheEvent()
+        {
+            var log = SpEvent(InScopeUpn);
+            log.SourceContentId = "metadata-recovery-blob";
+            var firstCache = ActivityImportCache.GetEmptyCache();
+            var refreshedCache = ActivityImportCache.GetEmptyCache();
+            refreshedCache.RememberLoadedProcessedEvent(log);
+            var firstWriter = new InMemoryActivityStagingWriter();
+            var secondWriter = new InMemoryActivityStagingWriter();
+            var config = new AppConfig();
+            var firstManager = new ActivityReportSqlPersistenceManager(
+                new AllowAllFilterConfig(),
+                GroupsCache(),
+                new RecordingLogger(),
+                config,
+                maxConcurrentSaves: 1,
+                usePerBatchDedupCache: false,
+                clock: new FixedClock(Created.AddHours(1)),
+                cacheProvider: new SequenceActivityImportCacheProvider(firstCache),
+                stagingWriter: firstWriter,
+                copilotMetadataLoaderFactory: new FakeCopilotMetadataLoaderFactory(new RecordingCopilotMetadataLoader()),
+                saveSessionFactory: new FailingSaveSessionFactory());
+            var secondManager = new ActivityReportSqlPersistenceManager(
+                new AllowAllFilterConfig(),
+                GroupsCache(),
+                new RecordingLogger(),
+                config,
+                maxConcurrentSaves: 1,
+                usePerBatchDedupCache: false,
+                clock: new FixedClock(Created.AddHours(2)),
+                cacheProvider: new SequenceActivityImportCacheProvider(refreshedCache),
+                stagingWriter: secondWriter,
+                copilotMetadataLoaderFactory: new FakeCopilotMetadataLoaderFactory(new RecordingCopilotMetadataLoader()),
+                saveSessionFactory: new FailingSaveSessionFactory());
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => firstManager.CommitAll(SetOf(log)));
+
+            Assert.AreEqual(1, firstWriter.LastBatch.RowCountAtMerge,
+                "Precondition: the event reached the merge before the metadata phase failed.");
+            Assert.IsFalse(firstCache.HaveSeenInProcessedOrIgnoredEvents(log));
+
+            var recoverySet = SetOf(log);
+            recoverySet.MetadataRecoveryBlobIds.Add(log.SourceContentId);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => secondManager.CommitAll(recoverySet));
+
+            Assert.AreEqual(1, secondWriter.LastBatch.RowCountAtMerge,
+                "A new cycle must force the event through metadata when its blob carries a durable recovery marker.");
+            Assert.IsFalse(refreshedCache.HaveSeenInProcessedOrIgnoredEvents(log),
+                "A failed recovery attempt must leave the id available for another attempt.");
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_MetadataRecovery_DoesNotBypassAnotherCurrentBatchsReservation()
+        {
+            var log = SpEvent(InScopeUpn);
+            log.SourceContentId = "metadata-recovery-blob";
+            var cache = ActivityImportCache.GetEmptyCache();
+            cache.RememberProcessedEvent(log);
+            var writer = new InMemoryActivityStagingWriter();
+            var recoverySet = SetOf(log);
+            recoverySet.MetadataRecoveryBlobIds.Add(log.SourceContentId);
+
+            var result = await PassFor(new AllowAllFilterConfig(), new RecordingLogger()).RunAsync(
+                recoverySet, cache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null,
+                new ActivitySaveRetryState());
+
+            Assert.AreEqual(0, result.Stats.Imported);
+            Assert.AreEqual(0, writer.LastBatch.RowCountAtMerge,
+                "Recovery bypasses only ids loaded from SQL, not a reservation made by another batch in this cycle.");
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_DbLoadedEventWithoutPriorRecoveryMarker_RemainsDeduplicated()
+        {
+            var log = SpEvent(InScopeUpn);
+            log.SourceContentId = "newly-premarked-blob";
+            var cache = ActivityImportCache.GetEmptyCache();
+            cache.RememberLoadedProcessedEvent(log);
+            var writer = new InMemoryActivityStagingWriter();
+
+            var result = await PassFor(new AllowAllFilterConfig(), new RecordingLogger()).RunAsync(
+                SetOf(log), cache, writer.CreateBatch(null), stagingTableName: null, mergeLock: null,
+                new ActivitySaveRetryState());
+
+            Assert.AreEqual(0, result.Stats.Imported);
+            Assert.AreEqual(0, writer.LastBatch.RowCountAtMerge,
+                "Pre-marking a new/cold blob is only crash protection; it must not replay DB data unless the marker existed before this cycle.");
+        }
+
+        [TestMethod]
+        public async Task MetadataRecovery_ReplayingStreamExchangeAndEntraMetadata_IsIdempotent()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var userUpn = "metadata.retry." + suffix + "@contoso.onmicrosoft.com";
+            var exchangePropertyName = "exchange-name-" + suffix;
+            var exchangePropertyValue = "exchange-value-" + suffix;
+            var entraPropertyName = "entra-name-" + suffix;
+            var entraPropertyValue = "entra-value-" + suffix;
+            var streamVideoId = Guid.NewGuid();
+
+            var exchange = new ExchangeAuditLogContent
+            {
+                Id = Guid.NewGuid(),
+                UserId = userUpn,
+                CreationTime = Created,
+                Workload = ActivityImportConstants.WORKLOAD_EXCHANGE,
+                Operation = "ExchangeMetadataRetry",
+                ObjectId = "mailbox-" + suffix,
+                ExtendedProperties = new List<Dictionary<string, string>>
+                {
+                    new Dictionary<string, string>
+                    {
+                        { "Name", exchangePropertyName },
+                        { "Value", exchangePropertyValue }
+                    }
+                }
+            };
+            var entra = new AzureADAuditLogContent
+            {
+                Id = Guid.NewGuid(),
+                UserId = userUpn,
+                CreationTime = Created,
+                Workload = ActivityImportConstants.WORKLOAD_AZURE_AD,
+                Operation = "EntraMetadataRetry",
+                ExtendedProperties = new List<Dictionary<string, string>>
+                {
+                    new Dictionary<string, string>
+                    {
+                        { "Name", entraPropertyName },
+                        { "Value", entraPropertyValue }
+                    }
+                }
+            };
+            var stream = new StreamAuditLogContent
+            {
+                Id = Guid.NewGuid(),
+                UserId = userUpn,
+                CreationTime = Created,
+                Workload = ActivityImportConstants.WORKLOAD_STREAM,
+                Operation = "StreamMetadataRetry",
+                ObjectId = "https://web.microsoftstream.com/video/" + streamVideoId,
+                ResourceTitle = "Synthetic retry video",
+                ClientApplicationId = O365ClientApplication.UNKNOWN_CLIENT_APP_ID.ToString()
+            };
+
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var user = new User { UserPrincipalName = userUpn, AzureAdId = "metadata-retry-" + suffix };
+                    var exchangeEvent = new CommonAuditEvent
+                    {
+                        Id = exchange.Id,
+                        TimeStamp = exchange.CreationTime,
+                        User = user,
+                        Operation = new EventOperation { Name = exchange.Operation }
+                    };
+                    var entraEvent = new CommonAuditEvent
+                    {
+                        Id = entra.Id,
+                        TimeStamp = entra.CreationTime,
+                        User = user,
+                        Operation = new EventOperation { Name = entra.Operation }
+                    };
+                    var streamEvent = new CommonAuditEvent
+                    {
+                        Id = stream.Id,
+                        TimeStamp = stream.CreationTime,
+                        User = user,
+                        Operation = new EventOperation { Name = stream.Operation }
+                    };
+
+                    db.AuditEventsCommon.AddRange(new[] { exchangeEvent, entraEvent, streamEvent });
+                    db.exchange_events.Add(new ExchangeEventMetadata { AuditEvent = exchangeEvent, object_id = exchange.ObjectId });
+                    db.azure_ad_events.Add(new AzureADEventMetadata { AuditEvent = entraEvent });
+                    await db.SaveChangesAsync();
+
+                    var session = new SaveSession(
+                        new RecordingLogger(), db, new AppConfig(), new RecordingCopilotMetadataLoader());
+                    await exchange.ProcessExtendedProperties(session, exchangeEvent, new RecordingLogger());
+                    await entra.ProcessExtendedProperties(session, entraEvent, new RecordingLogger());
+                    await stream.ProcessExtendedProperties(session, streamEvent, new RecordingLogger());
+                    db.ChangeTracker.DetectChanges();
+                    await db.SaveChangesAsync();
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var session = new SaveSession(
+                        new RecordingLogger(), db, new AppConfig(), new RecordingCopilotMetadataLoader());
+                    await exchange.ProcessExtendedProperties(
+                        session, await db.AuditEventsCommon.SingleAsync(e => e.Id == exchange.Id), new RecordingLogger());
+                    await entra.ProcessExtendedProperties(
+                        session, await db.AuditEventsCommon.SingleAsync(e => e.Id == entra.Id), new RecordingLogger());
+                    await stream.ProcessExtendedProperties(
+                        session, await db.AuditEventsCommon.SingleAsync(e => e.Id == stream.Id), new RecordingLogger());
+                    db.ChangeTracker.DetectChanges();
+                    await db.SaveChangesAsync();
+
+                    Assert.AreEqual(1, await db.Set<ExchangeExtendedProperties>()
+                        .CountAsync(p => p.ParentEventID == exchange.Id));
+                    Assert.AreEqual(1, await db.Set<AzureADExtendedProperties>()
+                        .CountAsync(p => p.ParentEventID == entra.Id));
+                    Assert.AreEqual(1, await db.StreamEvents.CountAsync(e => e.EventID == stream.Id));
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    db.Set<ExchangeExtendedProperties>().RemoveRange(
+                        db.Set<ExchangeExtendedProperties>().Where(p => p.ParentEventID == exchange.Id));
+                    db.Set<AzureADExtendedProperties>().RemoveRange(
+                        db.Set<AzureADExtendedProperties>().Where(p => p.ParentEventID == entra.Id));
+                    db.StreamEvents.RemoveRange(db.StreamEvents.Where(e => e.EventID == stream.Id));
+                    db.exchange_events.RemoveRange(db.exchange_events.Where(e => e.EventID == exchange.Id));
+                    db.azure_ad_events.RemoveRange(db.azure_ad_events.Where(e => e.EventID == entra.Id));
+                    db.AuditEventsCommon.RemoveRange(
+                        db.AuditEventsCommon.Where(e => e.Id == exchange.Id || e.Id == entra.Id || e.Id == stream.Id));
+                    await db.SaveChangesAsync();
+
+                    db.audit_event_prop_names.RemoveRange(db.audit_event_prop_names.Where(n =>
+                        n.name == exchangePropertyName || n.name == entraPropertyName));
+                    db.audit_event_prop_vals.RemoveRange(db.audit_event_prop_vals.Where(v =>
+                        v.value == exchangePropertyValue || v.value == entraPropertyValue));
+                    db.Streams.RemoveRange(db.Streams.Where(v => v.StreamID == streamVideoId));
+                    db.users.RemoveRange(db.users.Where(u => u.UserPrincipalName == userUpn));
+                    db.event_operations.RemoveRange(db.event_operations.Where(o =>
+                        o.Name == exchange.Operation || o.Name == entra.Operation || o.Name == stream.Operation));
+                    await db.SaveChangesAsync();
+                }
+            }
         }
 
         [TestMethod]
