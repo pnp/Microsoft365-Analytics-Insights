@@ -29,6 +29,17 @@ namespace WebJob.AppInsightsImporter.Engine
         internal const int MaxBackoffSeconds = 60;
 
         /// <summary>
+        /// The exponential back-off for a retry attempt, in seconds: 1, 2, 4, 8 ... capped at
+        /// <see cref="MaxBackoffSeconds"/>. Used when the response carries no <c>Retry-After</c> header.
+        /// Pure, so the cap is assertable at an attempt number the retry loop itself never reaches
+        /// (<see cref="MaxRetries"/> stops at 16 seconds).
+        /// </summary>
+        internal static int BackoffSecondsFor(int attempt)
+        {
+            return Math.Min((int)Math.Pow(2, attempt), MaxBackoffSeconds);
+        }
+
+        /// <summary>
         /// How the client waits between retries. Replaceable by tests so the retry and back-off rules can be
         /// asserted on the delays actually <b>requested</b>, rather than inferred from elapsed wall-clock
         /// time - which measures scheduling, GC and deserialisation as well, and is therefore both flaky
@@ -155,7 +166,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     }
 
                     var retryAfterSeconds = GetRetryAfterSeconds(response);
-                    var backoff = retryAfterSeconds ?? Math.Min((int)Math.Pow(2, attempt), MaxBackoffSeconds);
+                    var backoff = retryAfterSeconds ?? BackoffSecondsFor(attempt);
                     _logger.LogWarning($"Transient HTTP {(int)response.StatusCode} from App Insights API. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
 
                     response.Dispose();
@@ -163,7 +174,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 catch (Exception ex) when (IsTransientException(ex) && attempt < MaxRetries)
                 {
-                    var backoff = Math.Min((int)Math.Pow(2, attempt), MaxBackoffSeconds);
+                    var backoff = BackoffSecondsFor(attempt);
                     _logger.LogWarning($"Transient error calling App Insights API: {ex.Message}. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
                     await RetryDelay(TimeSpan.FromSeconds(backoff));
                 }
