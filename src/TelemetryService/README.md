@@ -414,8 +414,8 @@ To verify attribution after deploying:
 
 1. Sign in to the dashboard and load both protected API endpoints, so token
    acquisition and key discovery occur together.
-2. In Application Insights, confirm the outbound dependency URLs carry the
-   parameter:
+2. In Application Insights, confirm the outbound dependency URLs carry a query
+   string:
 
    ```kusto
    AppDependencies
@@ -424,10 +424,34 @@ To verify attribution after deploying:
    | project TimeGenerated, Data, ResultCode
    ```
 
-   Both the `.well-known/openid-configuration` and `discovery/v2.0/keys` calls
-   must include `appid=`. A bare pair means the metadata address was lost — the
-   most likely cause is a Microsoft.Identity.Web upgrade changing the
-   post-configuration order, which `EntraKeyDiscoveryTests` is there to catch.
+   **Do not look for the literal `appid=` — you will not find it.** The
+   dependency exporter redacts query strings, so a tagged request appears as
+   `…/v2.0/.well-known/openid-configuration?*`. Presence of the `?` is the
+   signal; the value is never recorded.
+
+   **Expect a mix of tagged and untagged calls, and do not read the untagged
+   ones as failure.** Microsoft.Identity.Web runs a second, independent
+   `ConfigurationManager` through `AadIssuerValidator` to resolve the issuer,
+   and that one is not ours to configure — it will always fetch without the
+   parameter. A single token validation therefore produces both a tagged pair
+   and a bare pair, side by side.
+
+   So the check is: **does any `openid-configuration` call carry a `?`**. If
+   one does, the metadata address is applied and the matching
+   `discovery/v2.0/keys` call will carry it too, because Entra echoes the
+   parameter into `jwks_uri`. If *none* of them do, over a window in which a
+   token was definitely validated, then the address was lost — the most likely
+   cause is a Microsoft.Identity.Web upgrade changing the post-configuration
+   order, which `EntraKeyDiscoveryTests` is there to catch.
+
+   A useful before/after form, which avoids all of the above ambiguity:
+
+   ```kusto
+   AppDependencies
+   | where TimeGenerated > ago(7d)
+   | where Target has "login.microsoftonline.com"
+   | summarize total = count(), tagged = countif(Data contains "?") by bin(TimeGenerated, 1d)
+   ```
 3. Allow 3–5 days for the compliance pipeline to reflect new telemetry.
 
 Note that key discovery only happens on a cold start or when a cached
