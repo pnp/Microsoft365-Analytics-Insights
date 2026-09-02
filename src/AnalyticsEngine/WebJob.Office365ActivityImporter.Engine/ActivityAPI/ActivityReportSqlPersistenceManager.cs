@@ -339,18 +339,21 @@ namespace WebJob.Office365ActivityImporter.Engine
             // (summed) across batches in ImportStat.AddStats; in concurrent-save mode the merge/metadata are
             // serialised by mergeLock so their summed times approximate the real serialised wall-time.
             var swDedup = System.Diagnostics.Stopwatch.StartNew();
+
+            // Hoisted out of the loop: all three capture only loop-invariant state, and Roslyn does not
+            // cache capturing lambdas, so building them per event would allocate three delegates for every
+            // one of the batch's events.
+            Func<AbstractAuditLogContent, bool> urlInScope = log => _filterConfig.InScope(log);
+            Func<string, Task<bool>> userInGroupsFilter = upn => _userGroupsCache.IsInGroupsFilter(upn, _userGroupsFilter);
+            Action<AbstractAuditLogContent> stageRow = log => logsToInsert.Rows.Add(new AuditLogTempEntity(log, log.UserId));
+
             foreach (var abtractLog in activities)
             {
                 // Don't insert duplicates in same set. The decision itself (dedup -> URL scope -> user
                 // scope, plus what gets remembered where) lives in ActivityStagingRules so it can be
                 // asserted with no SQL and no Graph; see issue #373.
                 var decision = await ActivityStagingRules.DecideAndRememberAsync(
-                    abtractLog,
-                    processedIds,
-                    cache,
-                    log => _filterConfig.InScope(log),
-                    upn => _userGroupsCache.IsInGroupsFilter(upn, _userGroupsFilter),
-                    log => logsToInsert.Rows.Add(new AuditLogTempEntity(log, log.UserId)));
+                    abtractLog, processedIds, cache, urlInScope, userInGroupsFilter, stageRow);
 
                 if (!decision.IsDuplicate)
                 {
