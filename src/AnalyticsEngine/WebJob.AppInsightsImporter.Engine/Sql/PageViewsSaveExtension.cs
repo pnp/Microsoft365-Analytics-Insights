@@ -18,7 +18,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// <summary>
         /// Save hits to staging table & then import all to real hits + lookups
         /// </summary>
-        public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger, List<FilterUrlConfig> filterUrls)
+        public static async Task<PageViewSaveResult> SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger, List<FilterUrlConfig> filterUrls)
         {
             var sw = Stopwatch.StartNew();
 
@@ -44,15 +44,18 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
             sw.Restart();
             const int MAX_HITS_PER_THREAD = 1000;
-            await logsToInsert.SaveToStagingTable(MAX_HITS_PER_THREAD, FixScript(Resources.Migrate_Hits_Import_into_Hits));
+            var mergeRowsAffected = await logsToInsert.SaveToStagingTable(MAX_HITS_PER_THREAD, FixScript(Resources.Migrate_Hits_Import_into_Hits));
 
             logger.LogInformation($"Hits batch imported and merged in {sw.Elapsed.TotalSeconds:N1}s.");
+
+            // Reporting only - the counts above used to end at the log lines. See issue #369.
+            return PageViewSaveResult.FromPlan(plan, mergeRowsAffected);
         }
 
 
-        public static async Task SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger)
+        public static async Task<PageViewSaveResult> SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger)
         {
-            await SaveToSQL(pageViews, database, logger, new List<FilterUrlConfig>());
+            return await SaveToSQL(pageViews, database, logger, new List<FilterUrlConfig>());
         }
 
 

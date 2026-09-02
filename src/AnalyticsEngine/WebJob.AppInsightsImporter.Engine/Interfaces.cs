@@ -57,4 +57,41 @@ namespace WebJob.AppInsightsImporter.Engine
         Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
         Task SaveCustomEventsAsync(CustomEventsResultCollection events);
     }
+
+    /// <summary>
+    /// Writes a batch of page-views. The one write port of the day persistence manager that has anything
+    /// to report back: the staging rules already work out how many rows were dropped and why, and those
+    /// numbers previously reached a log line and nothing else. See issue #369.
+    /// </summary>
+    public interface IPageViewsPersistenceManager
+    {
+        Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
+    }
+
+    /// <summary>
+    /// Writes the time-on-page patches carried by page-exit events. Returns the row count the merge
+    /// reported, which is what the event save summary prints.
+    /// </summary>
+    public interface IHitUpdatePersistenceManager
+    {
+        Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events);
+    }
+
+    /// <summary>Writes the search events in a batch. Returns the number of new search rows merged.</summary>
+    public interface ISearchesPersistenceManager
+    {
+        Task<int> SaveSearchesAsync(CustomEventsResultCollection events);
+    }
+
+    /// <summary>Writes page metadata / comment / like updates. Returns the number of URLs updated.</summary>
+    public interface IPageUpdatePersistenceManager
+    {
+        Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events);
+    }
+
+    /// <summary>Writes the click events in a batch. Returns the row count the merge reported.</summary>
+    public interface IClicksPersistenceManager
+    {
+        Task<int> SaveClicksAsync(CustomEventsResultCollection events);
+    }
 }
