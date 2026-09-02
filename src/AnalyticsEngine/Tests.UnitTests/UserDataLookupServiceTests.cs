@@ -298,23 +298,29 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// UPNs are customer text and can be non-Latin. Nothing in the lookup's own logic may fold or
-        /// mangle them - see the character-set rule in the repo's C# instructions. (The database column
-        /// currently does mangle them; that is a separate schema bug, issue #402.)
+        /// The service must be encoding-neutral: whatever UPN string it is handed comes back unchanged,
+        /// both on the profile and inside the SQL shown to the admin. Nothing here may normalise, fold
+        /// or ASCII-filter it.
         /// </summary>
+        /// <remarks>
+        /// A non-ASCII sample is used because it is the value most likely to be silently mangled by an
+        /// accidental <c>Normalize()</c> or encoding round trip - not because Entra can issue one.
+        /// Entra restricts <c>userPrincipalName</c> to <c>A-Z a-z 0-9 ' . - _ ! # ^ ~</c> and disallows
+        /// accented characters, so a Greek UPN is not a real tenant case.
+        /// </remarks>
         [TestMethod]
-        public async Task Summary_UpnWithNonAsciiCharacters_IsMatchedAndEmittedVerbatim()
+        public async Task Summary_UpnIsPassedThroughWithoutReEncoding()
         {
-            const string greekUpn = "καλημέρα.κόσμε@contoso.com";
+            const string nonAsciiUpn = "καλημέρα.κόσμε@contoso.com";
             var store = new InMemoryUserDataLookupQuery();
-            store.AddUser(11, greekUpn);
+            store.AddUser(11, nonAsciiUpn);
             var service = new UserDataLookupService(store);
 
-            var result = await service.GetSummaryAsync(greekUpn, AllWorkloadsOn);
+            var result = await service.GetSummaryAsync(nonAsciiUpn, AllWorkloadsOn);
 
             Assert.AreEqual(UserDataLookupStatus.Ok, result.Status);
-            Assert.AreEqual(greekUpn, result.Value.Profile.UserPrincipalName);
-            StringAssert.Contains(result.Value.Categories.First().SqlQuery, "user_name = '" + greekUpn + "'");
+            Assert.AreEqual(nonAsciiUpn, result.Value.Profile.UserPrincipalName);
+            StringAssert.Contains(result.Value.Categories.First().SqlQuery, "user_name = '" + nonAsciiUpn + "'");
         }
 
         #endregion

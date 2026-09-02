@@ -43,9 +43,9 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task BatchedCounts_MatchThePerCategoryCounts_ForEveryCategory()
         {
-            // Deliberately ASCII: dbo.users.user_name is still varchar(250), so a non-Latin UPN is
-            // stored mangled (issue #402). The seeded URL below is Unicode, because urls.full_url IS
-            // nvarchar and must round-trip.
+            // The seeded URL below is Unicode because urls.full_url is nvarchar and genuinely carries
+            // non-Latin SharePoint paths. The UPN is ASCII because Entra restricts userPrincipalName to
+            // A-Z a-z 0-9 ' . - _ ! # ^ ~ - a non-Latin UPN is not a case this pipeline can receive.
             var upn = $"userdatalookup.{Guid.NewGuid():N}@contoso.com";
 
             using (var db = new AnalyticsEntitiesContext())
@@ -230,12 +230,11 @@ namespace Tests.UnitTests
         /// data.
         /// </summary>
         /// <remarks>
-        /// This deliberately uses an ASCII UPN. A non-Latin UPN cannot be asserted here yet:
-        /// <c>dbo.users.user_name</c> is still <c>varchar(250)</c> on the default CP1 collation, so a
-        /// Greek UPN is written to the database as <c>?a??µ??a...</c> and never matches on read. That is
-        /// a pre-existing schema bug, filed as issue #402 - fixing it needs a migration, which #381
-        /// rules out. The service-level Unicode guarantee is covered without a database in
-        /// <c>UserDataLookupServiceTests.Summary_UpnWithNonAsciiCharacters_IsMatchedAndEmittedVerbatim</c>.
+        /// The UPN here is ASCII because that is all Entra can issue: <c>userPrincipalName</c> is
+        /// restricted to <c>A-Z a-z 0-9 ' . - _ ! # ^ ~</c> with accented characters disallowed, so a
+        /// non-Latin UPN is not a real tenant case. That the service does not itself re-encode whatever
+        /// string it is given is covered without a database in
+        /// <c>UserDataLookupServiceTests.Summary_UpnIsPassedThroughWithoutReEncoding</c>.
         /// </remarks>
         [TestMethod]
         public async Task Profile_AndUserIdLookup_ResolveTheSameUser()
