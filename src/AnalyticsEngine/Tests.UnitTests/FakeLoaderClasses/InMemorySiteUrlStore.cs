@@ -6,16 +6,17 @@ using WebJob.Office365ActivityImporter.Engine.Graph;
 namespace Tests.UnitTests.FakeLoaderClasses
 {
     /// <summary>
-    /// In-memory <see cref="ISiteUrlStore"/> - the local site-id/URL cache table replaced by a dictionary,
-    /// so the lookup precedence and write-back can be asserted with no SQL Server. See issue #375.
+    /// In-memory <see cref="ISiteUrlStore"/> - the local site-id/URL cache table replaced by a list, so the
+    /// lookup precedence and write-back can be asserted with no SQL Server. See issue #375.
     ///
-    /// Mirrors the SQL adapter's write rule: a stored entry already holding the URL is re-keyed to the new
-    /// site id rather than duplicated.
+    /// Deliberately mirrors two things about the SQL adapter: a row is a hit even when its URL is null, and
+    /// URL matching on the write path is CASE-INSENSITIVE (SQL Server's default collation), so a
+    /// case-differing URL is re-keyed rather than duplicated.
     /// </summary>
     public class InMemorySiteUrlStore : ISiteUrlStore
     {
-        /// <summary>Site id -> URL, in insertion order.</summary>
-        public Dictionary<string, string> UrlBySiteId { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The stored rows, in insertion order.</summary>
+        public List<SPSiteIdToUrl> Rows { get; } = new List<SPSiteIdToUrl>();
 
         /// <summary>Every site id looked up, in order.</summary>
         public List<string> Reads { get; } = new List<string>();
@@ -25,31 +26,30 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public InMemorySiteUrlStore Seed(string siteId, string url)
         {
-            UrlBySiteId[siteId] = url;
+            Rows.Add(new SPSiteIdToUrl { SiteId = siteId, SiteUrl = url });
             return this;
         }
 
-        public Task<string> TryGetUrlForSiteIdAsync(string siteId)
+        public Task<SPSiteIdToUrl> TryGetForSiteIdAsync(string siteId)
         {
             Reads.Add(siteId);
-            return Task.FromResult(UrlBySiteId.TryGetValue(siteId, out var url) ? url : null);
+            return Task.FromResult(Rows.Find(r => string.Equals(r.SiteId, siteId, StringComparison.OrdinalIgnoreCase)));
         }
 
         public Task SaveSiteUrlAsync(string siteId, string url)
         {
             Writes.Add(Tuple.Create(siteId, url));
 
-            // Re-key an existing entry for the same URL rather than storing it twice.
-            foreach (var existing in new List<string>(UrlBySiteId.Keys))
+            // Re-key an existing row already holding this URL rather than storing it twice. Case-insensitive
+            // to match the SQL collation the real adapter's `s.UrlBase == url` runs under.
+            var existing = Rows.Find(r => string.Equals(r.SiteUrl, url, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
             {
-                if (string.Equals(UrlBySiteId[existing], url, StringComparison.Ordinal))
-                {
-                    UrlBySiteId.Remove(existing);
-                    break;
-                }
+                existing.SiteId = siteId;
+                return Task.CompletedTask;
             }
 
-            UrlBySiteId[siteId] = url;
+            Rows.Add(new SPSiteIdToUrl { SiteId = siteId, SiteUrl = url });
             return Task.CompletedTask;
         }
     }

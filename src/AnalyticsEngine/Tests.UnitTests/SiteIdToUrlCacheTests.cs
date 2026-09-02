@@ -72,18 +72,53 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task SiteUrlCache_DatabaseMiss_FallsBackToGraphAndWritesResultBack()
         {
+            // Uses a non-Latin URL purely as the sample value, so a pass-through that mangled it fails here.
+            // NOTE this is deliberately NOT described as encoding coverage - nothing in this path
+            // serialises, so a lossy Graph deserialisation or an ANSI EF mapping would not show up.
+            const string url = "https://contoso.sharepoint.com/sites/Καλημέρα";
             var store = new InMemorySiteUrlStore();
-            var cache = new StubGraphSiteCache(store, Graph(("site-2", "https://contoso.sharepoint.com/sites/two")));
+            var cache = new StubGraphSiteCache(store, Graph(("site-2", url)));
 
             var result = await cache.Load("site-2");
 
-            Assert.AreEqual("https://contoso.sharepoint.com/sites/two", result.SiteUrl);
+            Assert.AreEqual(url, result.SiteUrl);
             CollectionAssert.AreEqual(new[] { "site-2" }, cache.GraphCalls.ToArray());
 
             // Written back, so the next import does not repeat the round-trip.
             Assert.AreEqual(1, store.Writes.Count);
             Assert.AreEqual("site-2", store.Writes[0].Item1);
-            Assert.AreEqual("https://contoso.sharepoint.com/sites/two", store.Writes[0].Item2);
+            Assert.AreEqual(url, store.Writes[0].Item2);
+        }
+
+        [TestMethod]
+        public async Task SiteUrlCache_StoredRowWithNoUrl_IsStillAHitAndDoesNotReachGraph()
+        {
+            // Site.UrlBase is nullable, so "no row" and "a row whose URL is null" are different answers.
+            // Collapsing them sends a null-URL row to Graph and then inserts a SECOND row for the same site
+            // id, after which the single-row lookup throws for that site forever.
+            var store = new InMemorySiteUrlStore().Seed("site-null", null);
+            var cache = new StubGraphSiteCache(store, Graph(("site-null", "https://should-not-be-used")));
+
+            var result = await cache.Load("site-null");
+
+            Assert.IsNotNull(result);
+            Assert.IsNull(result.SiteUrl);
+            Assert.AreEqual(0, cache.GraphCalls.Count);
+            Assert.AreEqual(0, store.Writes.Count, "A second row for the same site id would break the lookup.");
+        }
+
+        [TestMethod]
+        public async Task SiteUrlCache_DatabaseHit_ReturnsTheStoredSiteIdSpellingNotTheRequestedOne()
+        {
+            // The site-id lookup runs under a case-insensitive collation, so the stored spelling can differ
+            // from the one asked for. The original returned the STORED value; preserve that.
+            var store = new InMemorySiteUrlStore().Seed("Site-MixedCase", "https://contoso.sharepoint.com/sites/mc");
+            var cache = new StubGraphSiteCache(store, Graph());
+
+            var result = await cache.Load("site-mixedcase");
+
+            Assert.AreEqual("Site-MixedCase", result.SiteId);
+            Assert.AreEqual(0, cache.GraphCalls.Count);
         }
 
         [TestMethod]
@@ -137,22 +172,5 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, store.Reads.Count, "...and must not re-query the database either.");
         }
 
-        [TestMethod]
-        public async Task SiteUrlCache_NonLatinSiteUrl_RoundTripsUnchanged()
-        {
-            // SharePoint site URLs are customer text and routinely non-Latin; an encoding slip here would
-            // store a mangled URL that never matches again.
-            const string greekUrl = "https://contoso.sharepoint.com/sites/Καλημέρα";
-            var store = new InMemorySiteUrlStore();
-            var cache = new StubGraphSiteCache(store, Graph(("site-5", greekUrl)));
-
-            var fromGraph = await cache.Load("site-5");
-            Assert.AreEqual(greekUrl, fromGraph.SiteUrl);
-            Assert.AreEqual(greekUrl, store.Writes[0].Item2);
-
-            // And it comes back out of the store byte-identical on the next lookup.
-            var fromStore = await new StubGraphSiteCache(store, Graph()).Load("site-5");
-            Assert.AreEqual(greekUrl, fromStore.SiteUrl);
-        }
     }
 }

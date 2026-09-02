@@ -69,14 +69,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             try
             {
                 // Try finding from the database 1st so we go easy on Graph.
-                var storedUrl = await _store.TryGetUrlForSiteIdAsync(id);
-                if (storedUrl != null)
+                // Branch on the ROW, not on the URL: a row whose UrlBase is null is still a hit, and
+                // treating it as a miss would insert a second row for the same site id.
+                var stored = await _store.TryGetForSiteIdAsync(id);
+                if (stored != null)
                 {
-                    return new SPSiteIdToUrl
-                    {
-                        SiteId = id,
-                        SiteUrl = storedUrl
-                    };
+                    return stored;
                 }
                 var site = await LoadSite(id);
                 _logger.LogInformation($"{nameof(SPSiteIdToUrlCache)}: Loaded site URL for {id}");

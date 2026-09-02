@@ -53,12 +53,29 @@ namespace Tests.UnitTests
 
                 // Load the site with a new fake ID. Currently in the DB it doesn't have an ID
                 var siteUrlCache2 = new FakeSPSiteIdToUrlCache(db, logger, fakeUrlExisting);
-                var site2 = await siteUrlCache2.Load($"fake id2 {Guid.NewGuid()}");
+                var newIdForExistingUrl = $"fake id2 {Guid.NewGuid()}";
+                var site2 = await siteUrlCache2.Load(newIdForExistingUrl);
                 Assert.IsNotNull(site2);
                 Assert.AreEqual(fakeUrlExisting, site2.SiteUrl);
 
                 var dbRecord2 = db.sites.Where(s => s.UrlBase == fakeUrlExisting).SingleOrDefault();
                 Assert.IsNotNull(dbRecord2);
+
+                // The row must be RE-KEYED, not duplicated: this is the whole point of the URL lookup on
+                // the write path. Without this assertion, deleting `dbRecordBySiteUrl.SiteId = siteId` from
+                // SqlSiteUrlStore would leave the test green while defeating the cache across imports and
+                // restoring a Graph call per site, every cycle. See issue #375.
+                Assert.AreEqual(newIdForExistingUrl, dbRecord2.SiteId);
+                Assert.AreEqual(1, db.sites.Count(s => s.UrlBase == fakeUrlExisting), "The URL row must not be duplicated.");
+
+                // A stored site id must be served FROM THE DATABASE, not from Graph. The fake is primed with
+                // a different answer, so a store that stopped returning hits (or returned the Graph value)
+                // would fail here rather than silently costing a Graph round-trip per site.
+                var contradictingCache = new FakeSPSiteIdToUrlCache(db, logger, $"fake URL {Guid.NewGuid()}");
+                var storedHit = await contradictingCache.Load(fakeId);
+                Assert.IsNotNull(storedHit);
+                Assert.AreEqual(fakeUrlNew, storedHit.SiteUrl, "The stored URL must win over whatever Graph would say.");
+                Assert.AreEqual(fakeId, storedHit.SiteId);
             }
         }
 
