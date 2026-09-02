@@ -166,7 +166,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update manager
-            await UpdateUserManager(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            await UpdateUserManager(db, plan.ManagerAadId, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
 
             dbUser.LastUpdated = DateTime.Now;
         }
@@ -174,19 +174,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Update user's manager relationship
         /// </summary>
+        /// <param name="managerAadId">
+        /// The manager's Entra object id from <see cref="UserMetadataMappingRules.BuildPlan"/>, or null
+        /// when Graph reported no manager. Taking it as a parameter keeps the resolution chain readable
+        /// and means the mapping rule is the single place that reads it off the Graph user.
+        /// </param>
         private async Task UpdateUserManager(
             AnalyticsEntitiesContext db,
-            GraphUser graphUser,
+            string managerAadId,
             List<GraphUser> allGraphUsers,
             Common.Entities.User dbUser,
             Dictionary<string, Common.Entities.User> dbUsersByAadId = null,
             List<Common.Entities.User> allDbUsers = null)
         {
-            if (graphUser.DefaultManagerInfo?.Id != null)
+            if (managerAadId != null)
             {
                 // Try getting manager from DB using dictionary lookup if available
                 Common.Entities.User dbManager = null;
-                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out dbManager))
+                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(managerAadId, out dbManager))
                 {
                     // Found manager using fast dictionary lookup
                     // CRITICAL: Ensure manager is tracked by EF before assignment
@@ -198,7 +203,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     // Fallback to LINQ query if dictionary not provided (for backwards compatibility)
                     dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) &&
-                        new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
+                        new Guid(u.AzureAdId).Equals(new Guid(managerAadId))).FirstOrDefault();
 
                     if (dbManager != null)
                     {
@@ -212,11 +217,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     GraphUser graphManagerUser = null;
                     if (_graphUsersByAadId != null)
                     {
-                        _graphUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out graphManagerUser);
+                        _graphUsersByAadId.TryGetValue(managerAadId, out graphManagerUser);
                     }
                     else
                     {
-                        graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == graphUser.DefaultManagerInfo?.Id);
+                        graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == managerAadId);
                     }
 
                     if (graphManagerUser != null)
@@ -256,7 +261,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                     else
                     {
-                        _logger.LogWarning($"Couldn't find manager with AAD ID {graphUser.DefaultManagerInfo?.Id} in Graph cache or DB");
+                        _logger.LogWarning($"Couldn't find manager with AAD ID {managerAadId} in Graph cache or DB");
                     }
                 }
                 else
