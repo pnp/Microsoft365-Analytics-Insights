@@ -12,6 +12,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// Why this is not simply "everything the delta returned": a delta response also re-serves the
     /// unchanged parent of a thread whose reply changed, and re-serves a message whose only change was
     /// a reaction. Without this filter the importer would re-count old messages every cycle.
+    ///
+    /// Argument null-checks are deliberately absent, matching the code this was extracted from: a null
+    /// message list, or a message with null <c>Replies</c>/<c>Reactions</c>, threw a
+    /// <see cref="NullReferenceException"/> before and still does.
     /// </summary>
     public static class ChannelMessageScopeRules
     {
@@ -25,8 +29,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// </param>
         public static ChannelMessageScope SelectNewMessagesAndReactions(IEnumerable<ChatMessage> rootMsgs, DateTime? newSince)
         {
-            if (rootMsgs is null) throw new ArgumentNullException(nameof(rootMsgs));
-
             var scope = new ChannelMessageScope();
 
             foreach (var rootMsg in rootMsgs)

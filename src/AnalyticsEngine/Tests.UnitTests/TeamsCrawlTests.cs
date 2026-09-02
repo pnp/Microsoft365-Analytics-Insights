@@ -22,23 +22,23 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// A group only counts as having a Team if its <c>resourceProvisioningOptions</c> array says so.
-        /// A group that didn't return the property at all is neither crawled nor reported as
-        /// "has no Team associated" - reporting it would spam the importer log with every security
-        /// group and distribution list in the tenant.
+        /// The three-way answer matters: a group that didn't report the property at all is neither
+        /// crawled nor reported as "has no Team associated" — reporting it would spam the importer log
+        /// with every security group and distribution list in the tenant, on every cycle.
         /// </summary>
         [TestMethod]
-        public void PartitionGroupsWithTeams_SplitsOnResourceProvisioningOptions()
+        public void ClassifyGroup_DistinguishesNoTeamFromWorkloadsNotReported()
         {
             var withTeam = FakeTeamsGroupSourceLoader.GroupWithProvisioningOptions("g-team", "Contoso Marketing", "[\"Team\",\"Exchange\"]");
             var withoutTeam = FakeTeamsGroupSourceLoader.GroupWithProvisioningOptions("g-noteam", "Contoso Distribution List", "[\"Exchange\"]");
             var noPropertyAtAll = FakeTeamsGroupSourceLoader.GroupWithProvisioningOptions("g-unknown", "Contoso Security Group", null);
 
-            var partition = TeamsCrawlRules.PartitionGroupsWithTeams(new[] { withTeam, withoutTeam, noPropertyAtAll });
+            Assert.AreEqual(GroupTeamStatus.HasTeam, TeamsCrawlRules.ClassifyGroup(withTeam));
+            Assert.AreEqual(GroupTeamStatus.NoTeam, TeamsCrawlRules.ClassifyGroup(withoutTeam));
+            Assert.AreEqual(GroupTeamStatus.WorkloadsNotReported, TeamsCrawlRules.ClassifyGroup(noPropertyAtAll),
+                "A group with no resourceProvisioningOptions property must be distinguishable from one that reported no Team.");
 
-            CollectionAssert.AreEqual(new[] { "g-team" }, partition.WithTeam.Select(g => g.Id).ToArray(),
-                "Only the group whose provisioning options include Team should be crawled.");
-            CollectionAssert.AreEqual(new[] { "g-noteam" }, partition.WithoutTeam.Select(g => g.Id).ToArray(),
-                "A group with no resourceProvisioningOptions property must not be reported as 'has no Team associated'.");
+            Assert.IsFalse(TeamsCrawlRules.GroupHasTeam(noPropertyAtAll), "Either way it is not crawled.");
         }
 
         /// <summary>

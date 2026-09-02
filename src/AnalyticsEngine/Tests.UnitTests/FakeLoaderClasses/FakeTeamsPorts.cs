@@ -43,12 +43,18 @@ namespace UnitTests.FakeLoaderClasses
         /// <c>AdditionalData</c>. Pass <c>null</c> for <paramref name="provisioningOptionsJson"/> to
         /// model a group that didn't return the property at all.
         /// </summary>
+        /// <remarks>
+        /// The property name is written as a literal on purpose, NOT as
+        /// <c>TeamsCrawlRules.ResourceProvisioningOptionsProperty</c>: this is the Graph wire contract,
+        /// and a typo in the production constant must fail these tests rather than move the reader and
+        /// the writer together.
+        /// </remarks>
         public static Group GroupWithProvisioningOptions(string id, string displayName, string provisioningOptionsJson)
         {
             var group = new Group { Id = id, DisplayName = displayName };
             if (provisioningOptionsJson != null)
             {
-                group.AdditionalData[TeamsCrawlRules.ResourceProvisioningOptionsProperty] = provisioningOptionsJson;
+                group.AdditionalData["resourceProvisioningOptions"] = provisioningOptionsJson;
             }
             return group;
         }
