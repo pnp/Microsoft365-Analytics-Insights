@@ -97,15 +97,20 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task Dedup_SameIdTwiceInOneSet_IsOnlyStagedOnce()
         {
-            var h = new Harness();
+            // Deliberately a user-out-of-scope event: that is the ONLY outcome the cache does not
+            // remember, so the second decision can only be caught by the in-set HashSet. With an imported
+            // event the cache would catch it and deleting decidedInThisSet.Add would go unnoticed.
+            var h = new Harness { UserInGroupsFilterResult = false };
             var id = Guid.NewGuid();
 
             var first = await h.DecideAsync(Event(id));
             var second = await h.DecideAsync(Event(id));
 
-            Assert.AreEqual(SaveResultEnum.Imported, first.Result);
+            Assert.AreEqual(SaveResultEnum.UserOutOfScope, first.Result);
+            Assert.IsFalse(h.Cache.HaveSeenInProcessedOrIgnoredEvents(Event(id)), "Precondition: this outcome is not cached.");
             Assert.IsTrue(second.IsDuplicate);
-            Assert.AreEqual(1, h.Staged.Count);
+            Assert.AreEqual(1, h.UserFilterCalls, "The repeated id must not be re-evaluated against the user filter.");
+            Assert.AreEqual(0, h.Staged.Count);
         }
 
         [TestMethod]
