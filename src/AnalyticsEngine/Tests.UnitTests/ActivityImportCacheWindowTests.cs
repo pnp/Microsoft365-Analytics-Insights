@@ -78,10 +78,14 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ImportCache_WindowIsPaddedOneMinuteEitherSide()
+        public void ImportCache_PadHelpersWidenTheRangeByOneMinuteEitherSide()
         {
             // EF6 maps DateTime to datetime2, whose precision differs from the datetime columns in the
             // database, so an exact boundary comparison can miss edge values.
+            //
+            // Scope note: this pins the HELPERS. It does NOT pin the load path - deleting the PadFrom /
+            // PadTo calls in ActivityImportCache.GetAndBuildNewCache would leave this green, because that
+            // method opens a database. Covering it needs the cache provider port from #373 part 2.
             Assert.AreEqual(NowUtc.AddMinutes(-1), ActivityImportCacheWindow.PadFrom(NowUtc));
             Assert.AreEqual(NowUtc.AddMinutes(1), ActivityImportCacheWindow.PadTo(NowUtc));
         }
