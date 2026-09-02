@@ -135,6 +135,12 @@
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="OrgUrlStoreTests.cs" />
     <Compile Include="FakeLoaderClasses\FixedClock.cs" />
+    <Compile Include="FakeLoaderClasses\FakeHealthDataSource.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryHealthCache.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryUserDataLookupQuery.cs" />
+    <Compile Include="HealthServiceTests.cs" />
+    <Compile Include="UserDataLookupServiceTests.cs" />
+    <Compile Include="UserDataLookupSqlIntegrationTests.cs" />
     <Compile Include="GraphFileMetadataLoaderTests.cs" />
     <Compile Include="GraphStringUtilsTests.cs" />
     <Compile Include="DataCleanupTests.cs" />
