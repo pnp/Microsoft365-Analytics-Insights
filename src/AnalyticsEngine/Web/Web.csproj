@@ -231,6 +231,8 @@
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
     <Compile Include="Models\AuthTeamRequest.cs" />
+    <Compile Include="Models\CopilotAdoption\CopilotAdoptionAnalysisCoordinator.cs" />
+    <Compile Include="Models\CopilotAdoption\CopilotAdoptionTelemetry.cs" />
     <Compile Include="Models\InstallLogModels.cs" />
     <Compile Include="Models\ProfilingStatusModels.cs" />
     <Compile Include="Models\ReportsModels.cs" />
