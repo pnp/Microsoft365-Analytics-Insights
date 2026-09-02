@@ -109,8 +109,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         /// "tried", so a broken Graph auth costs one attempt and one warning per cycle rather than per batch.
         ///
         /// Concurrent callers are serialised by a single-permit lock; the pre-check outside it is the same
-        /// non-volatile flag read as the pre-#373 code, moved verbatim (see the note on
-        /// <c>ActivityImportCacheProvider</c>).
+        /// ordinary (non-volatile) flag read as the pre-#373 code, moved verbatim - see the note on
+        /// <c>ActivityImportCacheProvider</c> for why that is left as-is rather than made a formal guarantee.
         /// </summary>
         private async Task<ICopilotMetadataLoader> GetSharedLoaderAsync()
         {

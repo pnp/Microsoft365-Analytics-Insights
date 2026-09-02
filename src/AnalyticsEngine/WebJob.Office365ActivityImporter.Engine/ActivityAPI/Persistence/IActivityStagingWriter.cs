@@ -16,6 +16,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
     /// <c>EFInsertBatch&lt;AuditLogTempEntity&gt;</c>, and <c>InsertBatch&lt;T&gt;</c> keeps its row-by-row
     /// implementation per project convention.
     ///
+    /// Why one <c>LoadAndMergeAsync</c> rather than #373's proposed separate create / load / merge calls:
+    /// <c>InsertBatch.SaveToStagingTable</c> opens one connection, creates the staging table on it, fans the
+    /// row inserts out over separate per-chunk connections, then runs the merge back on the original - and
+    /// holds that original connection open throughout, which is what keeps the (Release-configuration)
+    /// <c>##</c> global temp table alive and visible to the chunk connections and to the merge. Splitting
+    /// that across three port calls would break the table's lifetime or force the port to hold connection
+    /// state.
+    ///
     /// Internal because <see cref="AuditLogTempEntity"/> is internal;
     /// <c>InternalsVisibleTo("Tests.UnitTests")</c> makes it reachable from the test project.
     /// </summary>
@@ -23,8 +31,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
     {
         /// <summary>
         /// Start one save batch. Created per save (not per manager) because the underlying
-        /// <c>InsertBatch</c> is bound to the context/connection this save runs on and owns that save's row
-        /// list.
+        /// <c>InsertBatch</c> takes its connection string from the context this save runs on and owns that
+        /// save's row list.
         /// </summary>
         IActivityStagingBatch CreateBatch(AnalyticsEntitiesContext db);
     }

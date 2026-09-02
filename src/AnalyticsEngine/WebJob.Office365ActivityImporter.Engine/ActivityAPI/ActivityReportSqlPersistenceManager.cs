@@ -94,10 +94,11 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// than in a chained constructor initialiser. That is deliberate ordering-insurance: a chained
         /// <c>: this(new SqlThing(appConfig...), ...)</c> evaluates the adapter's constructor <i>before</i>
         /// this body's <c>new UserGroupsFilterModel(appConfig.UserGroupsFilter)</c>. It makes no difference
-        /// today - none of the production adapters below validates or dereferences what it is handed, so a
-        /// null <c>appConfig</c> still raises the same <see cref="NullReferenceException"/> at the same
-        /// point either way - but it means adding a guard to one of those adapters later cannot silently
-        /// change which exception an existing caller sees.
+        /// today - neither adapter that is handed <c>appConfig</c> (<see cref="GraphCopilotMetadataLoaderFactory"/>
+        /// and <see cref="SaveSessionFactory"/>) validates or dereferences it in its constructor, so a null
+        /// <c>appConfig</c> still raises the same <see cref="NullReferenceException"/> at the same point
+        /// either way - but it means adding such a guard later cannot silently change which exception an
+        /// existing caller sees.
         /// </summary>
         internal ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig,
             int maxConcurrentSaves, bool usePerBatchDedupCache, IClock clock,
