@@ -156,7 +156,7 @@ namespace Tests.UnitTests
         {
             // The pre-warm runs OUTSIDE the SQL lock precisely so it can overlap, but an unbounded fan-out
             // over a large batch would burst Graph and get the tenant throttled.
-            var graph = new RecordingCopilotMetadataLoader { FileLookupDuration = TimeSpan.FromMilliseconds(60) };
+            var graph = new RecordingCopilotMetadataLoader { FileLookupDuration = TimeSpan.FromMilliseconds(150) };
             var prewarmer = new CopilotMetadataPrewarmer(new FakeCopilotMetadataLoaderFactory(graph), new RecordingLogger());
 
             var events = Enumerable.Range(0, 24)
@@ -168,8 +168,11 @@ namespace Tests.UnitTests
             Assert.AreEqual(24, graph.FileLookups.Count);
             Assert.IsTrue(graph.PeakConcurrentFileLookups > 1,
                 $"The pre-warm must actually overlap its Graph calls; peak concurrency was {graph.PeakConcurrentFileLookups}.");
-            Assert.IsTrue(graph.PeakConcurrentFileLookups <= CopilotMetadataPrewarmer.PrewarmConcurrency,
-                $"The fan-out must stay within {CopilotMetadataPrewarmer.PrewarmConcurrency}; peak concurrency was {graph.PeakConcurrentFileLookups}.");
+            // Asserted as the literal cap, not against CopilotMetadataPrewarmer.PrewarmConcurrency: comparing
+            // the observed peak to the very constant that sizes the semaphore cannot fail when that constant
+            // changes, which is exactly the value an operator would care about.
+            Assert.IsTrue(graph.PeakConcurrentFileLookups <= 8,
+                $"The fan-out must stay within 8 concurrent Graph lookups; peak concurrency was {graph.PeakConcurrentFileLookups}.");
         }
     }
 }

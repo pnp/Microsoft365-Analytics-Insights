@@ -106,7 +106,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(imported.Id, writer.LastBatch.Rows[0].Id);
 
             CollectionAssert.AreEquivalent(new List<AbstractAuditLogContent> { imported }, result.SavedToSql.ToList(),
-                "Only staged events go to the metadata pass - anything else has no audit_events row to attach metadata to.");
+                "Only staged events are offered to the metadata pass - the others were never sent to the staging table, so the merge cannot have created a row for them.");
         }
 
         [TestMethod]
