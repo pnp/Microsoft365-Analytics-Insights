@@ -136,6 +136,7 @@
     <Compile Include="AppInsightsClickRulesTests.cs" />
     <Compile Include="AppInsightsPageUpdateRulesTests.cs" />
     <Compile Include="AppInsightsPageViewRulesTests.cs" />
+    <Compile Include="AppInsightsSavePortTests.cs" />
     <Compile Include="AppInsightsSearchRulesTests.cs" />
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
     <Compile Include="CopilotExtendedDataTests.cs" />

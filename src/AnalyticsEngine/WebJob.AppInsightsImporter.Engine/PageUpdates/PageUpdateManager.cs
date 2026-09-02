@@ -31,16 +31,28 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly CognitiveServicesClient _cognitiveClient = null;
         private readonly AppConfig _config;
         private readonly IClock _clock;
+        private readonly IAnalyticsDbContextFactory _contextFactory;
 
         public PageUpdateManager(ILogger logger, AppConfig config, IClock clock = null) : this(logger, 1000, config, clock)
         {
         }
         public PageUpdateManager(ILogger logger, int chunkSize, AppConfig config, IClock clock = null)
+            : this(logger, chunkSize, config, clock, null)
+        {
+        }
+
+        /// <summary>
+        /// The full constructor. <paramref name="contextFactory"/> is required here rather than a trailing
+        /// optional parameter on the overloads above, because an optional argument is baked in by the
+        /// calling compiler and adding one would break already-compiled callers (#381's convention).
+        /// </summary>
+        public PageUpdateManager(ILogger logger, int chunkSize, AppConfig config, IClock clock, IAnalyticsDbContextFactory contextFactory)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _chunkSize = chunkSize;
             _config = config;
             _clock = clock ?? SystemClock.Instance;
+            _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             if (chunkSize < 0)
             {
                 throw new ArgumentOutOfRangeException("Chunk size must be > 0", nameof(chunkSize));
@@ -58,7 +70,11 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             var updatedUrls = new List<string>();
 
-            // Process all page update events in chunks of 1000 at a time, all in parallel
+            // Process page-update events in _chunkSize-sized chunks (1000 in production - see
+            // PageUpdatesSaveExtension). ListBatchProcessor's two-argument constructor defaults
+            // maxConcurrentBatches to 1, so the chunks run strictly SERIALLY: the comment here used to
+            // say "all in parallel", which was never true. Corrected while adding the context factory
+            // below, because SqlPageUpdatePersistenceManager's doc had inherited the same wrong claim.
             var listProc = new ListBatchProcessor<PageUpdateEventAppInsightsQueryResult>(_chunkSize,
                 async chunk => await SaveChunk(chunk, updatedUrls));
 
@@ -74,7 +90,7 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 const int URL_LOOKUP_BATCH = 1000;
                 var now = _clock.UtcNow;
-                using (var db = new AnalyticsEntitiesContext())
+                using (var db = _contextFactory.Create())
                 {
                     db.Configuration.AutoDetectChangesEnabled = false;
                     for (int i = 0; i < uniqueUpdatedUrls.Count; i += URL_LOOKUP_BATCH)
@@ -107,7 +123,7 @@ namespace WebJob.AppInsightsImporter.Engine
 #if DEBUG
             _logger.LogInformation($"DEBUG: Updating {chunk.Count} URLs on new thread");
 #endif
-            using (var context = new AnalyticsEntitiesContext())
+            using (var context = _contextFactory.Create())
             {
                 var urlMetadataFieldNameCache = new UrlMetadataFieldNameCache(context);
 
