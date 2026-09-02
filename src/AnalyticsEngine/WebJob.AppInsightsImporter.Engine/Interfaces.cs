@@ -88,7 +88,13 @@ namespace WebJob.AppInsightsImporter.Engine
         Task<int> SaveSearchesAsync(CustomEventsResultCollection events);
     }
 
-    /// <summary>Writes page metadata / comment / like updates. Returns the number of URLs updated.</summary>
+    /// <summary>
+    /// Writes page metadata / comment / like updates. Returns the number of DISTINCT URLs the page-update
+    /// manager found update work for - not a guarantee that those updates committed. A URL is added to the
+    /// list before the chunk's final <c>SaveChangesAsync</c>, and a <c>SqlException</c> or
+    /// <c>DbUpdateException</c> there is logged and swallowed, so a URL whose only pending changes (a like,
+    /// a simple metadata prop) failed to commit is still counted.
+    /// </summary>
     public interface IPageUpdatePersistenceManager
     {
         Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events);
