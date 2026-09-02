@@ -24,6 +24,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     {
         private readonly ICopilotReportSource _reportSource;
         private readonly ILogger _logger;
+        private readonly ICopilotUsagePersistenceManager _persistence;
 
         /// <summary>
         /// Rows persisted per SaveChanges. These reports are small (a period's worth of days x a dozen apps),
@@ -33,9 +34,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         public int SaveBatchSize { get; set; } = 500;
 
         public CopilotUserCountReportLoader(ICopilotReportSource reportSource, ILogger logger)
+            : this(reportSource, logger, null)
+        {
+        }
+
+        /// <summary>
+        /// As above, with the write side supplied (issue #370). The original signature is kept as a
+        /// delegating overload so no already-compiled caller breaks.
+        /// </summary>
+        public CopilotUserCountReportLoader(ICopilotReportSource reportSource, ILogger logger, ICopilotUsagePersistenceManager persistence)
         {
             _reportSource = reportSource ?? throw new ArgumentNullException(nameof(reportSource));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _persistence = persistence;
         }
 
         public Task<int> LoadAndSaveSummaryAsync(AnalyticsEntitiesContext db, string period, string version = CopilotReportVersions.V2)
@@ -49,12 +60,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         }
 
         /// <summary>
-        /// Downloads, parses and upserts one aggregate report. Returns the number of rows written to SQL
-        /// (0 when everything Graph returned already matched what we hold).
+        /// Downloads, parses and upserts one aggregate report against the supplied context. Returns the
+        /// number of rows written to SQL (0 when everything Graph returned already matched what we hold).
         /// </summary>
-        public async Task<int> LoadAndSaveAsync(AnalyticsEntitiesContext db, CopilotReportRequest request)
+        public Task<int> LoadAndSaveAsync(AnalyticsEntitiesContext db, CopilotReportRequest request)
         {
-            if (db == null) throw new ArgumentNullException(nameof(db));
+            if (_persistence == null && db == null) throw new ArgumentNullException(nameof(db));
+            return LoadAndSaveCoreAsync(_persistence ?? new SqlCopilotUsagePersistenceManager(db, _logger) { UserCountSaveBatchSize = SaveBatchSize }, request);
+        }
+
+        /// <summary>
+        /// As above, using the <see cref="ICopilotUsagePersistenceManager"/> this loader was constructed
+        /// with, so the import can run with no database at all.
+        /// </summary>
+        public Task<int> LoadAndSaveAsync(CopilotReportRequest request)
+        {
+            if (_persistence == null)
+            {
+                throw new InvalidOperationException(
+                    $"This overload needs an {nameof(ICopilotUsagePersistenceManager)}; construct the loader with one, or call the overload that takes a database context.");
+            }
+            return LoadAndSaveCoreAsync(_persistence, request);
+        }
+
+        private async Task<int> LoadAndSaveCoreAsync(ICopilotUsagePersistenceManager persistence, CopilotReportRequest request)
+        {
             if (request == null) throw new ArgumentNullException(nameof(request));
 
             var isTrend = request.ReportName == CopilotReportNames.UserCountTrend;
@@ -105,7 +135,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 // Health page shows why the table is empty instead of implying the tenant has no licences.
                 importLog.RowsRead = 0;
                 importLog.Error = Truncate($"Report not available: {GraphHttpException.DescribeForStorage(ex)}", 1000);
-                await SaveImportLog(db, importLog);
+                await persistence.RecordReportLoadAsync(importLog);
 
                 _logger.LogWarning($"Copilot aggregate report {request} is not available on this tenant: {ex.Message} " +
                     "These reports exist only in the global cloud (not US Government or 21Vianet). No rows were imported.");
@@ -114,7 +144,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             catch (Exception ex)
             {
                 importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
-                await SaveImportLog(db, importLog);
+                await persistence.RecordReportLoadAsync(importLog);
                 throw;
             }
 
@@ -125,13 +155,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             {
                 _logger.LogWarning($"Copilot aggregate report {request} returned no rows. " +
                     "The report downloaded successfully and was genuinely empty, which is expected on a tenant with no Microsoft 365 Copilot licences.");
-                await SaveImportLog(db, importLog);
+                await persistence.RecordReportLoadAsync(importLog);
                 return 0;
             }
 
-            var written = await UpsertOrRecordFailure(db, parsed, isTrend ? CopilotUserCountReportTypes.Trend : CopilotUserCountReportTypes.Summary, importLog);
+            var written = await UpsertOrRecordFailure(persistence, parsed, isTrend ? CopilotUserCountReportTypes.Trend : CopilotUserCountReportTypes.Summary, importLog);
             importLog.RowsSaved = written;
-            await SaveImportLog(db, importLog);
+            await persistence.RecordReportLoadAsync(importLog);
 
             _logger.LogInformation($"Copilot aggregate report {request}: parsed {parsed.Count} row(s), wrote {written} to SQL.");
             return written;
@@ -152,112 +182,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                           .Sum(a => a.Count);
         }
 
-        private async Task<int> UpsertOrRecordFailure(AnalyticsEntitiesContext db, List<CopilotUserCountLog> parsed,
+        private async Task<int> UpsertOrRecordFailure(ICopilotUsagePersistenceManager persistence, List<CopilotUserCountLog> parsed,
             string reportType, CopilotUsageReportImportLog importLog)
         {
             try
             {
-                return await UpsertAsync(db, parsed, reportType);
+                var upsert = await persistence.UpsertUserCountsAsync(parsed, reportType);
+                return upsert.Written;
             }
             catch (Exception ex)
             {
                 // Persistence failures must reach the Health page too, and must be written on a FRESH context:
                 // the one that just failed a SaveChanges can be left with entities in a broken state.
                 importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
-                using (var freshDb = new AnalyticsEntitiesContext())
-                {
-                    await SaveImportLog(freshDb, importLog);
-                }
+                await persistence.RecordReportLoadAfterFailureAsync(importLog);
                 throw;
             }
-        }
-
-        private async Task<int> UpsertAsync(AnalyticsEntitiesContext db, List<CopilotUserCountLog> parsed, string reportType)
-        {
-            var minDate = parsed.Min(r => r.ReportDate);
-            var maxDate = parsed.Max(r => r.ReportDate);
-
-            // One query for everything we might collide with. Bounded by the report's own date range, so this
-            // stays small even after years of retained history.
-            var existing = await db.CopilotUserCountLogs
-                .Where(r => r.ReportType == reportType && r.ReportDate >= minDate && r.ReportDate <= maxDate)
-                .ToListAsync();
-
-            var existingByKey = new Dictionary<string, CopilotUserCountLog>(StringComparer.OrdinalIgnoreCase);
-            foreach (var row in existing)
-            {
-                existingByKey[KeyOf(row)] = row;
-            }
-
-            var written = 0;
-            var pending = 0;
-            var autoDetectWasEnabled = db.Configuration.AutoDetectChangesEnabled;
-            db.Configuration.AutoDetectChangesEnabled = false;
-            try
-            {
-                foreach (var row in parsed)
-                {
-                    var key = KeyOf(row);
-                    if (existingByKey.TryGetValue(key, out var stored))
-                    {
-                        // Graph gap-fills the most recent ~3 days, so re-importing an overlapping window is
-                        // normal and usually changes nothing. Only write when a value actually moved. The
-                        // refresh date deliberately does NOT count as a change on its own: it advances every
-                        // day, so including it would rewrite every day in the window daily (up to 180 days x
-                        // every app) purely to restamp provenance. Report-level freshness lives in
-                        // copilot_usage_report_import_log instead.
-                        if (!HasChanged(stored, row)) continue;
-
-                        stored.ReportRefreshDate = row.ReportRefreshDate;
-                        stored.EnabledUsers = row.EnabledUsers;
-                        stored.ActiveUsers = row.ActiveUsers;
-                        stored.PromptsSubmitted = row.PromptsSubmitted;
-                        stored.AveragePromptsSubmitted = row.AveragePromptsSubmitted;
-                        db.Entry(stored).State = EntityState.Modified;
-                    }
-                    else
-                    {
-                        db.CopilotUserCountLogs.Add(row);
-                        existingByKey[key] = row;
-                    }
-
-                    written++;
-                    pending++;
-                    if (pending >= SaveBatchSize)
-                    {
-                        await db.SaveChangesAsync();
-                        pending = 0;
-                    }
-                }
-
-                if (pending > 0) await db.SaveChangesAsync();
-            }
-            finally
-            {
-                db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
-            }
-
-            return written;
-        }
-
-        private static bool HasChanged(CopilotUserCountLog stored, CopilotUserCountLog incoming)
-        {
-            return stored.EnabledUsers != incoming.EnabledUsers
-                || stored.ActiveUsers != incoming.ActiveUsers
-                || stored.PromptsSubmitted != incoming.PromptsSubmitted
-                || stored.AveragePromptsSubmitted != incoming.AveragePromptsSubmitted;
-        }
-
-        /// <summary>Matches the unique index on (report_type, report_period_days, report_date, app_name).</summary>
-        private static string KeyOf(CopilotUserCountLog row)
-        {
-            return $"{row.ReportType}|{(row.ReportPeriodDays.HasValue ? row.ReportPeriodDays.Value.ToString() : string.Empty)}|{row.ReportDate:yyyy-MM-dd}|{row.AppName}";
-        }
-
-        private static async Task SaveImportLog(AnalyticsEntitiesContext db, CopilotUsageReportImportLog importLog)
-        {
-            db.CopilotUsageReportImportLogs.Add(importLog);
-            await db.SaveChangesAsync();
         }
 
         private static string Truncate(string value, int maxLength)
