@@ -78,8 +78,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules
         ///
         /// <list type="number">
         /// <item>already decided in this set, or already in the cache -> skip entirely (no stats, no logging);</item>
-        /// <item>URL out of scope -> remember as newly-ignored (so it is not reconsidered, and so it reaches
-        ///       <c>ignored_audit_events</c>) and report <see cref="SaveResultEnum.UrlOutOfScope"/>;</item>
+        /// <item>URL out of scope -> remember in the newly-ignored bucket (which also marks it processed, so
+        ///       it is not reconsidered for the rest of this import cycle) and report
+        ///       <see cref="SaveResultEnum.UrlOutOfScope"/>. Note the newly-ignored bucket is currently
+        ///       in-memory only: <c>ActivityImportCache.SaveNewlyIgnoredEvents</c>, which would write it to
+        ///       <c>ignored_audit_events</c>, has no caller anywhere in the solution;</item>
         /// <item>URL in scope but user outside the groups filter -> report
         ///       <see cref="SaveResultEnum.UserOutOfScope"/> and remember <b>nothing</b>. That asymmetry is
         ///       existing behaviour, preserved deliberately;</item>

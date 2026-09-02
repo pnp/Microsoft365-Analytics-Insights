@@ -84,7 +84,18 @@ namespace WebJob.Office365ActivityImporter.Engine
         // How many Copilot file contexts to resolve concurrently while pre-warming the cache (outside the SQL lock).
         private const int PrewarmConcurrency = 8;
 
-        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false, IClock clock = null)
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves = 1, bool usePerBatchDedupCache = false)
+            : this(filterConfig, userGroupsCache, logger, appConfig, maxConcurrentSaves, usePerBatchDedupCache, null)
+        {
+        }
+
+        /// <summary>
+        /// As above, with the clock supplied (issue #368). The original signature is kept as a delegating
+        /// overload rather than gaining an optional parameter: optional arguments are filled in by the
+        /// compiler, so widening the existing constructor would be a binary-breaking change for any already
+        /// compiled caller.
+        /// </summary>
+        public ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig, int maxConcurrentSaves, bool usePerBatchDedupCache, IClock clock)
         {
             _filterConfig = filterConfig;
             _userGroupsCache = userGroupsCache;

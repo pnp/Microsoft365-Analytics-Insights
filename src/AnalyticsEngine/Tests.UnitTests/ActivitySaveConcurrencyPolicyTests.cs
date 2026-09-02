@@ -9,12 +9,19 @@ namespace Tests.UnitTests
     /// The AUDIT_MAX_CONCURRENT_SAVES operator safety-valve, extracted by issue #373 so it is assertable
     /// without SQL Server. Default (1) is the original strictly-serial path against the single shared staging
     /// table; above 1 each save loads its own sharded staging table.
+    ///
+    /// Scope note: these tests cover the <b>policy</b>, which is what
+    /// <c>ActivityReportSqlPersistenceManager</c> now asks. They do not observe the manager choosing a
+    /// branch, taking the shared-write semaphore, or the merge SQL it emits - none of that is reachable
+    /// without SQL Server until the collaborator split (#373 part 2) puts the staging writer and save
+    /// session behind interfaces. #373's <c>Concurrency_ShardedMode_StillSerialisesSharedTableWrites</c>
+    /// belongs to that part, not this one.
     /// </summary>
     [TestClass]
     public class ActivitySaveConcurrencyPolicyTests
     {
         [TestMethod]
-        public void Concurrency_MaxConcurrentSavesOne_UsesSerialPathAndSharedStagingTable()
+        public void Concurrency_MaxConcurrentSavesOne_PolicySelectsSerialPathAndSharedStagingTable()
         {
             Assert.IsFalse(ActivitySaveConcurrencyPolicy.UseShardedStaging(1));
 
@@ -24,7 +31,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Concurrency_UnsetOrInvalidMaxConcurrentSaves_FallsBackToTheSerialPath()
+        public void Concurrency_UnsetOrInvalidMaxConcurrentSaves_PolicyFallsBackToTheSerialPath()
         {
             // A bad app setting must degrade to the safe default rather than break the import.
             Assert.AreEqual(1, ActivitySaveConcurrencyPolicy.NormaliseMaxConcurrentSaves(0));
@@ -37,7 +44,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Concurrency_MaxConcurrentSavesGreaterThanOne_UsesDistinctShardedStagingTablePerSave()
+        public void Concurrency_MaxConcurrentSavesGreaterThanOne_PolicyIssuesADistinctShardedStagingTablePerSave()
         {
             Assert.IsTrue(ActivitySaveConcurrencyPolicy.UseShardedStaging(2));
             Assert.IsTrue(ActivitySaveConcurrencyPolicy.UseShardedStaging(16));
@@ -51,19 +58,20 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Concurrency_ShardedStagingTable_IsAGlobalTempTableInEveryBuildConfiguration()
+        public void Concurrency_ShardedStagingTable_IsAGlobalTempTableNotTheDebugStagingTable()
         {
             // ActivityImportConstants.STAGING_TABLE_ACTIVITY is a permanent "debug_"-prefixed table in DEBUG
             // builds. The sharded name has always been a "##" global temp table regardless of configuration,
             // which is what makes it visible to the merge on the same connection and self-cleaning. Deriving
-            // it from the constant would change that in one of the two configurations.
+            // it from the constant would change that in one of the two configurations - and CI runs the suite
+            // in both Debug and Release, so between them this covers both.
             var name = ActivitySaveConcurrencyPolicy.NewShardedStagingTableName();
             StringAssert.StartsWith(name, "##");
             StringAssert.StartsWith(name, ActivitySaveConcurrencyPolicy.ShardedStagingTablePrefix);
         }
 
         [TestMethod]
-        public void Concurrency_ShardedMode_MergeSqlIsPointedAtTheSavesOwnShard()
+        public void Concurrency_ShardedMode_PolicyPointsTheMergeSqlAtTheSavesOwnShard()
         {
             var shard = ActivitySaveConcurrencyPolicy.NewShardedStagingTableName();
             Assert.AreEqual(shard, ActivitySaveConcurrencyPolicy.EffectiveStagingTableName(shard));

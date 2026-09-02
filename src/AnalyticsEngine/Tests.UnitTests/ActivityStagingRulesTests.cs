@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
@@ -143,8 +144,11 @@ namespace Tests.UnitTests
             Assert.IsFalse(decision.Staged);
             Assert.AreEqual(SaveResultEnum.UrlOutOfScope, decision.Result);
 
-            // An out-of-scope URL is a final decision: remembered as newly-ignored so it is written to
-            // ignored_audit_events and never reconsidered.
+            // Specifically the NEWLY-IGNORED bucket, not just "processed": asserting only
+            // HaveSeenInProcessedOrIgnoredEvents would still pass if the rule were changed to
+            // RememberProcessedEvent, which is a different fact about the event.
+            var newlyIgnored = h.Cache.GetIds(ActivityImportCache.CacheType.NewlyIgnored);
+            Assert.IsTrue(newlyIgnored.Any(chunk => chunk.ContainsKey(log.Id)));
             Assert.IsTrue(h.Cache.HaveSeenInProcessedOrIgnoredEvents(log));
 
             // ...and the user-groups lookup is never reached, so an out-of-scope site costs no Graph traffic.
