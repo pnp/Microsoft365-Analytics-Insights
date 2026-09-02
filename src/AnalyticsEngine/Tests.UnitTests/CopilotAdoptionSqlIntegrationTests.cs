@@ -778,20 +778,23 @@ namespace Tests.UnitTests
         private static void CreateUserTables(ScratchDatabase db)
         {
             db.Execute(
-                @"CREATE TABLE dbo.user_departments (id int NOT NULL PRIMARY KEY, name nvarchar(200) NULL);
-                  CREATE TABLE dbo.user_job_titles (id int NOT NULL PRIMARY KEY, name nvarchar(200) NULL);
-                  CREATE TABLE dbo.user_country_or_region (id int NOT NULL PRIMARY KEY, name nvarchar(200) NULL);
-                  CREATE TABLE dbo.user_office_locations (id int NOT NULL PRIMARY KEY, name nvarchar(200) NULL);
-                  CREATE TABLE dbo.user_company_name (id int NOT NULL PRIMARY KEY, name nvarchar(200) NULL);
+                @"CREATE TABLE dbo.user_departments (id int NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
+                  CREATE TABLE dbo.user_job_titles (id int NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
+                  CREATE TABLE dbo.user_country_or_region (id int NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
+                  CREATE TABLE dbo.user_office_locations (id int NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
+                  CREATE TABLE dbo.user_company_name (id int NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
 
                   CREATE TABLE dbo.users (
                       id int NOT NULL PRIMARY KEY,
-                      -- Must mirror production (Create DB.sql + migrations): user_name is varchar(250)
-                      -- NOT NULL because Entra UPNs are ASCII (#402/#414), while mail is nvarchar. A
-                      -- fixture that widened these to nvarchar would make any Unicode assertion on them
-                      -- self-fulfilling and unable to catch the varchar regression it claims to guard.
+                      -- These types must mirror production, or an assertion made against them proves
+                      -- nothing. user_name is varchar(250) NOT NULL (Create DB.sql) because Entra UPNs
+                      -- are ASCII (#402/#414); mail is nvarchar(max) (migration ExtendedUsageReports,
+                      -- c.String() with no MaxLength). The lookup-table names above are nvarchar(100)
+                      -- from AbstractEFEntityWithName.Name's [MaxLength(100)]. A fixture that widened
+                      -- user_name to nvarchar would make a Unicode assertion on it self-fulfilling and
+                      -- unable to catch the varchar regression it claims to guard.
                       user_name varchar(250) NOT NULL,
-                      mail nvarchar(400) NULL,
+                      mail nvarchar(max) NULL,
                       account_enabled bit NULL,
                       department_id int NULL,
                       job_title_id int NULL,
@@ -802,8 +805,8 @@ namespace Tests.UnitTests
 
                   CREATE TABLE dbo.license_types (
                       id int NOT NULL PRIMARY KEY,
-                      name nvarchar(200) NULL,
-                      sku_id nvarchar(200) NULL);
+                      name nvarchar(100) NULL,
+                      sku_id nvarchar(max) NULL);
 
                   CREATE TABLE dbo.user_license_type_lookups (
                       id int NOT NULL PRIMARY KEY,
