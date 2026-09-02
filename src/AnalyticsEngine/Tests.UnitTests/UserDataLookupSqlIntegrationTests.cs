@@ -139,12 +139,12 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 var upn = $"batchkeys.{DateTime.UtcNow.Ticks}@contoso.com";
-                var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
-                db.users.Add(user);
-                await db.SaveChangesAsync();
-
                 try
                 {
+                    var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
+                    db.users.Add(user);
+                    await db.SaveChangesAsync();
+
                     var batched = await new SqlUserDataLookupQuery().GetCountsByCategoryAsync(user.ID);
 
                     CollectionAssert.AreEquivalent(
@@ -155,8 +155,7 @@ namespace Tests.UnitTests
                 }
                 finally
                 {
-                    db.users.Remove(user);
-                    await db.SaveChangesAsync();
+                    await DeleteUserByUpnAsync(db, upn);
                 }
             }
         }
@@ -173,10 +172,10 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 var upn = $"roundtrips.{DateTime.UtcNow.Ticks}@contoso.com";
-                var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
                 CommandCountingInterceptor counter = null;
                 try
                 {
+                    var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
                     db.users.Add(user);
                     await db.SaveChangesAsync();
 
@@ -206,12 +205,11 @@ namespace Tests.UnitTests
                 finally
                 {
                     // The interceptor is process-wide, and the user row is in a database shared with the
-                    // rest of the suite: both must go even if the warm-up or an assertion threw.
+                    // rest of the suite: both must go even if the warm-up or an assertion threw. The user
+                    // is removed by UPN, not by a captured id, so a save that committed without handing
+                    // the id back is still undone.
                     if (counter != null) DbInterception.Remove(counter);
-                    if (user.ID != 0)
-                    {
-                        await db.Database.ExecuteSqlCommandAsync("DELETE FROM dbo.users WHERE id = @p0", user.ID);
-                    }
+                    await DeleteUserByUpnAsync(db, upn);
                 }
             }
         }
@@ -245,12 +243,12 @@ namespace Tests.UnitTests
             var upn = $"profilelookup.{DateTime.UtcNow.Ticks}@contoso.com";
             using (var db = new AnalyticsEntitiesContext())
             {
-                var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
-                db.users.Add(user);
-                await db.SaveChangesAsync();
-
                 try
                 {
+                    var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
+                    db.users.Add(user);
+                    await db.SaveChangesAsync();
+
                     var query = new SqlUserDataLookupQuery();
 
                     var profile = await query.GetProfileAsync(upn);
@@ -262,8 +260,7 @@ namespace Tests.UnitTests
                 }
                 finally
                 {
-                    db.users.Remove(user);
-                    await db.SaveChangesAsync();
+                    await DeleteUserByUpnAsync(db, upn);
                 }
             }
         }
@@ -272,13 +269,20 @@ namespace Tests.UnitTests
 
         private sealed class SeededUser
         {
+            /// <summary>
+            /// A value unique to this test run, embedded in every row's natural key. Cleanup is driven
+            /// off these rather than off generated ids, so it still works if a save committed but the
+            /// identity value never made it back (EF commits before <c>AcceptAllChanges</c>).
+            /// </summary>
+            public string Tag { get; set; }
+
+            public string Upn { get; set; }
             public int UserId { get; set; }
             public User User { get; set; }
             public EventOperation Operation { get; set; }
             public O365ClientApplication ClientApp { get; set; }
             public StreamVideo Video { get; set; }
             public EmailAddress FromAddress { get; set; }
-            public int UrlId { get; set; }
             public List<CommonAuditEvent> AuditEvents { get; } = new List<CommonAuditEvent>();
 
             /// <summary>The row count deliberately given to each category, all different from each other.</summary>
@@ -298,13 +302,18 @@ namespace Tests.UnitTests
         {
             var ticks = DateTime.UtcNow.Ticks;
 
+            // Recorded BEFORE the first write: cleanup keys off these, so a save that commits without
+            // handing back its identity value still gets undone.
+            seeded.Tag = "userdatalookup-" + ticks;
+            seeded.Upn = upn;
+
             var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
             db.users.Add(user);
             await db.SaveChangesAsync();
             seeded.User = user;
             seeded.UserId = user.ID;
 
-            var operation = new EventOperation { Name = "UserDataLookupIntegrationTest " + ticks };
+            var operation = new EventOperation { Name = "UserDataLookupIntegrationTest " + seeded.Tag };
             db.event_operations.Add(operation);
             await db.SaveChangesAsync();
             seeded.Operation = operation;
@@ -336,8 +345,8 @@ namespace Tests.UnitTests
             AddAuditChildren(db, seeded, UserDataLookupRules.CatAuditGeneral, 4, e => db.general_audit_events.Add(new GeneralEventMetada { AuditEvent = e }));
 
             // Stream events need a client application and a video: both FK columns are non-nullable.
-            var clientApp = new O365ClientApplication { Name = "UserDataLookupTest " + ticks, ClientApplicationId = Guid.NewGuid() };
-            var video = new StreamVideo { Name = "UserDataLookupTest " + ticks, StreamID = Guid.NewGuid() };
+            var clientApp = new O365ClientApplication { Name = "UserDataLookupTest " + seeded.Tag, ClientApplicationId = Guid.NewGuid() };
+            var video = new StreamVideo { Name = "UserDataLookupTest " + seeded.Tag, StreamID = Guid.NewGuid() };
             db.O365ClientApplications.Add(clientApp);
             db.Streams.Add(video);
             await db.SaveChangesAsync();
@@ -362,8 +371,8 @@ namespace Tests.UnitTests
 
             // --- web hits: linked to the user indirectly, hits -> sessions -> users ---
             const int hitCount = 12;
-            var url = new Url { FullUrl = $"https://contoso.sharepoint.com/sites/test/Καλημέρα-{ticks}.pdf" };
-            var session = new UserSession { user = user, ai_session_id = "userdatalookup-" + ticks };
+            var url = new Url { FullUrl = $"https://contoso.sharepoint.com/sites/test/Καλημέρα-{seeded.Tag}.pdf" };
+            var session = new UserSession { user = user, ai_session_id = seeded.Tag };
             db.sessions.Add(session);
             for (var i = 0; i < hitCount; i++)
             {
@@ -377,7 +386,6 @@ namespace Tests.UnitTests
             }
             seeded.ExpectedCounts[UserDataLookupRules.CatWebHits] = hitCount;
             await db.SaveChangesAsync();
-            seeded.UrlId = url.ID;
 
             // --- the daily usage-report logs: direct FK, one distinct count each ---
             AddUsageDays(db, seeded, UserDataLookupRules.CatUsageOutlook, 15, (u, d) => db.OutlookUsageActivityLogs.Add(new OutlookUsageActivityLog { User = u, Date = d }));
@@ -402,7 +410,7 @@ namespace Tests.UnitTests
                     FromAddress = fromAddress,
                     SentDate = DateTime.UtcNow.AddMinutes(-i),
                     Subject = $"Καλημέρα {i}",
-                    GraphMessageId = $"userdatalookup-{ticks}-{i}",
+                    GraphMessageId = $"{seeded.Tag}-{i}",
                 });
             }
             seeded.ExpectedCounts[UserDataLookupRules.CatSentEmails] = sentEmailCount;
@@ -443,15 +451,19 @@ namespace Tests.UnitTests
         /// </summary>
         private static async Task CleanUpAsync(SeededUser seeded)
         {
-            if (seeded == null || seeded.UserId == 0)
+            if (seeded?.Tag == null)
             {
-                // Nothing was committed (or the user insert itself failed), so there is nothing to undo.
+                // Seeding never started, so there is nothing to undo.
                 return;
             }
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                var userId = seeded.UserId;
+                // Resolve the user from its UPN rather than trusting the captured identity value: EF
+                // commits before it hands the id back, so a failure in between would leave UserId at 0
+                // with the row already in the database.
+                var userId = (await db.Database.SqlQuery<int>(
+                    "SELECT ISNULL((SELECT TOP 1 id FROM dbo.users WHERE user_name = @p0), 0)", seeded.Upn).ToListAsync()).Single();
 
                 // Children of audit_events and of the user, before their parents.
                 await db.Database.ExecuteSqlCommandAsync(
@@ -480,24 +492,30 @@ namespace Tests.UnitTests
                       DELETE FROM dbo.users WHERE id = @p0;",
                     userId);
 
-                // The lookup rows the deleted children pointed at, now nothing references them. Each id is
-                // 0 when seeding never got that far, and no row has id 0, so the DELETE is simply a no-op.
+                // The lookup rows the deleted children pointed at, now nothing references them. Matched on
+                // this run's tag rather than on captured ids, for the same reason as the user above.
                 await db.Database.ExecuteSqlCommandAsync(
-                    @"DELETE FROM dbo.urls WHERE id = @p0;
-                      DELETE FROM dbo.event_operations WHERE id = @p1;
-                      DELETE FROM dbo.o365_client_applications WHERE id = @p2;
-                      DELETE FROM dbo.stream_videos WHERE id = @p3;
-                      DELETE FROM dbo.email_addresses WHERE id = @p4;",
-                    seeded.UrlId,
-                    seeded.Operation?.ID ?? 0,
-                    seeded.ClientApp?.ID ?? 0,
-                    seeded.Video?.ID ?? 0,
-                    seeded.FromAddress?.ID ?? 0);
+                    @"DELETE FROM dbo.urls WHERE full_url LIKE N'%' + @p0 + N'%';
+                      DELETE FROM dbo.event_operations WHERE operation_name LIKE N'%' + @p0 + N'%';
+                      DELETE FROM dbo.o365_client_applications WHERE name LIKE N'%' + @p0 + N'%';
+                      DELETE FROM dbo.stream_videos WHERE name LIKE N'%' + @p0 + N'%';
+                      DELETE FROM dbo.email_addresses WHERE address = @p1;",
+                    seeded.Tag, seeded.Upn ?? string.Empty);
 
                 var leftOver = (await db.Database.SqlQuery<int>(
-                    "SELECT COUNT(*) FROM dbo.users WHERE id = @p0", userId).ToListAsync()).Single();
+                    "SELECT COUNT(*) FROM dbo.users WHERE user_name = @p0", seeded.Upn ?? string.Empty).ToListAsync()).Single();
                 Assert.AreEqual(0, leftOver, "the test user should have been removed - later tests share this database");
             }
+        }
+
+        /// <summary>
+        /// Removes a user by its UPN, which is unique per test run. Deliberately not by a captured
+        /// identity value: EF commits before it returns the generated id, so a failure in between would
+        /// leave the row behind in a database the whole suite shares.
+        /// </summary>
+        private static Task DeleteUserByUpnAsync(AnalyticsEntitiesContext db, string upn)
+        {
+            return db.Database.ExecuteSqlCommandAsync("DELETE FROM dbo.users WHERE user_name = @p0", upn ?? string.Empty);
         }
 
         #endregion
