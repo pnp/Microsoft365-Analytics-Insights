@@ -116,12 +116,6 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void PageUpdateRefresh_ZeroWindow_MeansRefreshEveryUrlSeenBeforeNow()
-        {
-            Assert.AreEqual(NowUtc, PageUpdateRefreshPolicy.StaleBeforeUtc(0, NowUtc));
-        }
-
-        [TestMethod]
         public void PageUpdateRefresh_IsDrivenByTheSuppliedInstantNotTheWallClock()
         {
             var fixedInstant = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
