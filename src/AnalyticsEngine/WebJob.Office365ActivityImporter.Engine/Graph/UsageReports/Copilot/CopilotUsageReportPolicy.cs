@@ -1,3 +1,5 @@
+using Common.Entities;
+using Common.Entities.Entities.UsageReports;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -175,6 +177,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             var at = upn.LastIndexOf('@');
             if (at <= 0 || at == upn.Length - 1) return null;
             return upn.Substring(at + 1);
+        }
+
+        /// <summary>
+        /// Has anything worth writing actually moved on an aggregate user-count row?
+        ///
+        /// Graph gap-fills the most recent ~3 days, so re-importing an overlapping window is normal and
+        /// usually changes nothing. The refresh date deliberately does <b>not</b> count as a change on its
+        /// own: it advances every day, so including it would rewrite every day in the window daily (up to
+        /// 180 days x every app) purely to restamp provenance. Report-level freshness lives in
+        /// <c>copilot_usage_report_import_log</c> instead.
+        ///
+        /// Lives here rather than privately in the SQL adapter so the in-memory test double asserts the
+        /// production rule instead of a second copy of it that could silently drift.
+        /// </summary>
+        public static bool UserCountValueChanged(CopilotUserCountLog stored, CopilotUserCountLog incoming)
+        {
+            return stored.EnabledUsers != incoming.EnabledUsers
+                || stored.ActiveUsers != incoming.ActiveUsers
+                || stored.PromptsSubmitted != incoming.PromptsSubmitted
+                || stored.AveragePromptsSubmitted != incoming.AveragePromptsSubmitted;
         }
     }
 

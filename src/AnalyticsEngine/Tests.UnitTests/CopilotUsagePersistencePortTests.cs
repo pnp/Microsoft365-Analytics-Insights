@@ -103,10 +103,13 @@ namespace Tests.UnitTests
             var written = await CountLoader(TrendReport(180), store).LoadAndSaveAsync(TrendRequest());
 
             Assert.AreEqual(0, written, "Re-importing identical values must write nothing.");
-            var upsert = await store.UpsertUserCountsAsync(
-                new List<CopilotUserCountLog>(store.UserCounts.Values), CopilotUserCountReportTypes.Trend);
-            Assert.AreEqual(1, upsert.Unchanged);
-            Assert.AreEqual(0, upsert.Updated);
+
+            // The SECOND import is the interesting event, and this is its own result - not the store's rows
+            // fed back into itself, which would compare each row against its own reference and pass
+            // regardless of what the rule does.
+            Assert.AreEqual(1, store.LastUserCountUpsert.Unchanged);
+            Assert.AreEqual(0, store.LastUserCountUpsert.Updated);
+            Assert.AreEqual(0, store.LastUserCountUpsert.Inserted);
         }
 
         [TestMethod]
@@ -118,6 +121,8 @@ namespace Tests.UnitTests
             var written = await CountLoader(TrendReport(191), store).LoadAndSaveAsync(TrendRequest());
 
             Assert.AreEqual(1, written);
+            Assert.AreEqual(1, store.LastUserCountUpsert.Updated);
+            Assert.AreEqual(0, store.LastUserCountUpsert.Unchanged);
             Assert.AreEqual(191, store.UserCounts.Values.Single().ActiveUsers);
         }
 

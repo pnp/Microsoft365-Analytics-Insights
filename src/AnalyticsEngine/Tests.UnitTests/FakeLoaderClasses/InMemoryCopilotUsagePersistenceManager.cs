@@ -34,6 +34,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>Import-log rows recorded through the after-a-failure path (a fresh context in production).</summary>
         public List<CopilotUsageReportImportLog> ImportLogsRecordedAfterFailure { get; } = new List<CopilotUsageReportImportLog>();
 
+        /// <summary>The result of the most recent upsert, so a test can assert Inserted/Updated/Unchanged.</summary>
+        public CopilotUsageUpsertResult LastUserCountUpsert { get; private set; }
+
         /// <summary>Set to make the next per-user upsert throw, to exercise the failure diagnostic path.</summary>
         public Exception FailUserDetailUpsertWith { get; set; }
 
@@ -106,19 +109,14 @@ namespace Tests.UnitTests.FakeLoaderClasses
         {
             if (FailUserCountUpsertWith != null) throw FailUserCountUpsertWith;
 
-            var result = new CopilotUsageUpsertResult();
-            foreach (var row in rows)
+            var result = new CopilotUsageUpsertResult();            foreach (var row in rows)
             {
                 var key = $"{row.ReportType}|{(row.ReportPeriodDays.HasValue ? row.ReportPeriodDays.Value.ToString() : string.Empty)}|{row.ReportDate:yyyy-MM-dd}|{row.AppName}";
                 if (UserCounts.TryGetValue(key, out var stored))
                 {
-                    // Mirrors the SQL adapter: the refresh date deliberately does NOT count as a change.
-                    var changed = stored.EnabledUsers != row.EnabledUsers
-                        || stored.ActiveUsers != row.ActiveUsers
-                        || stored.PromptsSubmitted != row.PromptsSubmitted
-                        || stored.AveragePromptsSubmitted != row.AveragePromptsSubmitted;
-
-                    if (!changed)
+                    // The production rule, not a copy of it - so a change here (e.g. letting the refresh
+                    // date count as a change again) fails these tests rather than only the DB-backed ones.
+                    if (!CopilotUsageReportPolicy.UserCountValueChanged(stored, row))
                     {
                         result.Unchanged++;
                         continue;
@@ -138,6 +136,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 }
             }
 
+            LastUserCountUpsert = result;
             return Task.FromResult(result);
         }
 
