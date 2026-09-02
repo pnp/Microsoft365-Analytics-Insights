@@ -79,6 +79,10 @@
     <Compile Include="ActivityAPI\Copilot\SpoGraphClient.cs" />
     <Compile Include="ActivityAPI\Copilot\Models.cs" />
     <Compile Include="ActivityAPI\Copilot\StagingClasses.cs" />
+    <Compile Include="ActivityAPI\Rules\ActivityImportCacheWindow.cs" />
+    <Compile Include="ActivityAPI\Rules\ActivitySaveConcurrencyPolicy.cs" />
+    <Compile Include="ActivityAPI\Rules\ActivityStagingRules.cs" />
+    <Compile Include="ActivityAPI\Rules\CopilotPrewarmPolicy.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
