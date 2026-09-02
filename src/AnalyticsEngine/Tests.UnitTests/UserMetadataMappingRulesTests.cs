@@ -139,8 +139,8 @@ namespace Tests.UnitTests
         /// <remarks>
         /// The UPN is deliberately ASCII here. Entra restricts <c>userPrincipalName</c> to
         /// <c>A-Z a-z 0-9 ' . - _ ! # ^ ~</c> and explicitly disallows accented characters, so a Greek
-        /// UPN is not a case this pipeline can ever see - asserting one would be testing data that
-        /// cannot exist. The unrestricted fields above are where the real risk is.
+        /// UPN is not a real tenant case and asserting one would be testing data the pipeline does not
+        /// receive. The unrestricted fields above are where the real risk is.
         /// </remarks>
         [TestMethod]
         public void UserMapping_ProfileLookupValues_RoundTripNonAsciiValues()
