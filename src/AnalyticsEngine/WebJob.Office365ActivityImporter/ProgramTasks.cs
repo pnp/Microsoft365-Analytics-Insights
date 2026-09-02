@@ -148,12 +148,11 @@ namespace WebJob.Office365ActivityImporter
                 // Concurrent-save mode is opt-in and OFF by default (1 = the original strictly-serial save).
                 // Set AUDIT_MAX_CONCURRENT_SAVES > 1 to let batches commit in parallel (sharded staging;
                 // shared-table writes still serialised). Validate in a non-production environment before use.
-                int maxConcurrentSaves = 1;
-                var concurrentSavesEnv = Environment.GetEnvironmentVariable("AUDIT_MAX_CONCURRENT_SAVES");
-                if (!string.IsNullOrWhiteSpace(concurrentSavesEnv) && int.TryParse(concurrentSavesEnv.Trim(), out int parsedConcurrentSaves) && parsedConcurrentSaves > 1)
+                var maxConcurrentSaves = ImportRuntimeOptions.ResolveMaxConcurrentSaves(
+                    Environment.GetEnvironmentVariable(ImportRuntimeOptions.MaxConcurrentSavesEnvVariable));
+                if (maxConcurrentSaves > ImportRuntimeOptions.DefaultMaxConcurrentSaves)
                 {
-                    maxConcurrentSaves = parsedConcurrentSaves;
-                    _logger.LogInformation($"Activity import: concurrent-save mode enabled (AUDIT_MAX_CONCURRENT_SAVES={maxConcurrentSaves}).");
+                    _logger.LogInformation($"Activity import: concurrent-save mode enabled ({ImportRuntimeOptions.MaxConcurrentSavesEnvVariable}={maxConcurrentSaves}).");
                 }
 
                 var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH, maxConcurrentSaves);
@@ -162,13 +161,11 @@ namespace WebJob.Office365ActivityImporter
                 // audit_events for every batch, which materialised ~the whole in-window event set each time -
                 // the dominant save cost at scale). Set AUDIT_PERBATCH_DEDUP_CACHE=true to restore the old
                 // per-batch build without a redeploy if the new path ever misbehaves.
-                bool usePerBatchDedupCache = false;
-                var perBatchCacheEnv = Environment.GetEnvironmentVariable("AUDIT_PERBATCH_DEDUP_CACHE");
-                if (!string.IsNullOrWhiteSpace(perBatchCacheEnv) &&
-                    (perBatchCacheEnv.Trim() == "1" || perBatchCacheEnv.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)))
+                var usePerBatchDedupCache = ImportRuntimeOptions.ResolveUsePerBatchDedupCache(
+                    Environment.GetEnvironmentVariable(ImportRuntimeOptions.PerBatchDedupCacheEnvVariable));
+                if (usePerBatchDedupCache)
                 {
-                    usePerBatchDedupCache = true;
-                    _logger.LogWarning("Activity import: per-batch dedup cache ENABLED (AUDIT_PERBATCH_DEDUP_CACHE) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
+                    _logger.LogWarning($"Activity import: per-batch dedup cache ENABLED ({ImportRuntimeOptions.PerBatchDedupCacheEnvVariable}) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
                 }
 
                 var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves, usePerBatchDedupCache);
