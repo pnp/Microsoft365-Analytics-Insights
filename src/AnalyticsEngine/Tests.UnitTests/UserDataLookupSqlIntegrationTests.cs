@@ -50,9 +50,13 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                var seeded = await SeedUserWithDataAsync(db, upn);
+                // The seed state is created BEFORE the first write and cleanup is armed immediately, so a
+                // failure part-way through seeding still removes whatever it managed to commit - this
+                // database is shared with the rest of the suite.
+                var seeded = new SeededUser();
                 try
                 {
+                    await SeedUserWithDataAsync(db, upn, seeded);
                     var query = new SqlUserDataLookupQuery();
 
                     var batched = await query.GetCountsByCategoryAsync(seeded.UserId);
@@ -73,9 +77,18 @@ namespace Tests.UnitTests
                             $"'{expected.Key}' reported the wrong number - its subquery or dictionary entry is counting something else");
                     }
 
-                    var seededCounts = seeded.ExpectedCounts.Values.ToList();
-                    CollectionAssert.AllItemsAreUnique(seededCounts, "the seeded counts must all differ, or a crossed mapping could still pass");
-                    Assert.AreEqual(21, seededCounts.Count,
+                    CollectionAssert.AllItemsAreUnique(seeded.ExpectedCounts.Values.ToList(),
+                        "the seeded counts must all differ, or a crossed mapping could still pass");
+
+                    // Assert against what the DATABASE actually returned, not the fixture's own
+                    // bookkeeping: exactly the seeded categories carry data and the rest really are zero.
+                    // This is what makes the class comment's "21 of 30" claim checkable.
+                    var nonZero = batched.Where(c => c.Value != 0).Select(c => c.Key).OrderBy(k => k).ToList();
+                    CollectionAssert.AreEqual(
+                        seeded.ExpectedCounts.Keys.OrderBy(k => k).ToList(),
+                        nonZero,
+                        "the categories reporting data are not the ones that were seeded");
+                    Assert.AreEqual(21, nonZero.Count,
                         "the class comment says 21 of the 30 categories carry data; keep it honest if that changes");
                 }
                 finally
@@ -98,9 +111,10 @@ namespace Tests.UnitTests
 
             using (var db = new AnalyticsEntitiesContext())
             {
-                var seeded = await SeedUserWithDataAsync(db, upn);
+                var seeded = new SeededUser();
                 try
                 {
+                    await SeedUserWithDataAsync(db, upn, seeded);
                     var batched = await new SqlUserDataLookupQuery().GetCountsByCategoryAsync(seeded.UserId);
 
                     foreach (var meta in UserDataLookupRules.Categories)
@@ -160,18 +174,20 @@ namespace Tests.UnitTests
             {
                 var upn = $"roundtrips.{DateTime.UtcNow.Ticks}@contoso.com";
                 var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
-                db.users.Add(user);
-                await db.SaveChangesAsync();
-
-                var query = new SqlUserDataLookupQuery();
-
-                // Warm up first: the very first context in a run can issue its own schema commands.
-                await query.GetUserIdAsync(upn);
-
-                var counter = new CommandCountingInterceptor();
-                DbInterception.Add(counter);
+                CommandCountingInterceptor counter = null;
                 try
                 {
+                    db.users.Add(user);
+                    await db.SaveChangesAsync();
+
+                    var query = new SqlUserDataLookupQuery();
+
+                    // Warm up first: the very first context in a run can issue its own schema commands.
+                    await query.GetUserIdAsync(upn);
+
+                    counter = new CommandCountingInterceptor();
+                    DbInterception.Add(counter);
+
                     counter.Reset();
                     await query.GetCountsByCategoryAsync(user.ID);
                     var batchedCommands = counter.Count;
@@ -189,9 +205,13 @@ namespace Tests.UnitTests
                 }
                 finally
                 {
-                    DbInterception.Remove(counter);
-                    db.users.Remove(user);
-                    await db.SaveChangesAsync();
+                    // The interceptor is process-wide, and the user row is in a database shared with the
+                    // rest of the suite: both must go even if the warm-up or an assertion threw.
+                    if (counter != null) DbInterception.Remove(counter);
+                    if (user.ID != 0)
+                    {
+                        await db.Database.ExecuteSqlCommandAsync("DELETE FROM dbo.users WHERE id = @p0", user.ID);
+                    }
                 }
             }
         }
@@ -274,10 +294,9 @@ namespace Tests.UnitTests
         ///
         /// See the class comment for which nine categories are deliberately left at zero.
         /// </summary>
-        private static async Task<SeededUser> SeedUserWithDataAsync(AnalyticsEntitiesContext db, string upn)
+        private static async Task SeedUserWithDataAsync(AnalyticsEntitiesContext db, string upn, SeededUser seeded)
         {
             var ticks = DateTime.UtcNow.Ticks;
-            var seeded = new SeededUser();
 
             var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
             db.users.Add(user);
@@ -389,7 +408,6 @@ namespace Tests.UnitTests
             seeded.ExpectedCounts[UserDataLookupRules.CatSentEmails] = sentEmailCount;
 
             await db.SaveChangesAsync();
-            return seeded;
         }
 
         /// <summary>Adds <paramref name="count"/> rows hanging off distinct audit events (they are keyed or uniquely indexed by event_id).</summary>
@@ -416,12 +434,21 @@ namespace Tests.UnitTests
         /// Removes everything the test added. These tests share the unit-test database with the rest of
         /// the suite, so leaving audit events or hits behind would skew anything that counts them.
         ///
+        /// Tolerates partial state: it is armed before the first write, so it may be called when seeding
+        /// failed half way and only some of the ids were assigned.
+        ///
         /// Runs entirely as raw SQL on a <b>fresh</b> context: the seeding context still tracks all the
         /// rows, and deleting a parent out from under a tracked child makes EF try to null a
         /// non-nullable foreign key on the next <c>SaveChanges</c>.
         /// </summary>
         private static async Task CleanUpAsync(SeededUser seeded)
         {
+            if (seeded == null || seeded.UserId == 0)
+            {
+                // Nothing was committed (or the user insert itself failed), so there is nothing to undo.
+                return;
+            }
+
             using (var db = new AnalyticsEntitiesContext())
             {
                 var userId = seeded.UserId;
@@ -453,14 +480,19 @@ namespace Tests.UnitTests
                       DELETE FROM dbo.users WHERE id = @p0;",
                     userId);
 
-                // The lookup rows the deleted children pointed at, now nothing references them.
+                // The lookup rows the deleted children pointed at, now nothing references them. Each id is
+                // 0 when seeding never got that far, and no row has id 0, so the DELETE is simply a no-op.
                 await db.Database.ExecuteSqlCommandAsync(
                     @"DELETE FROM dbo.urls WHERE id = @p0;
                       DELETE FROM dbo.event_operations WHERE id = @p1;
                       DELETE FROM dbo.o365_client_applications WHERE id = @p2;
                       DELETE FROM dbo.stream_videos WHERE id = @p3;
                       DELETE FROM dbo.email_addresses WHERE id = @p4;",
-                    seeded.UrlId, seeded.Operation.ID, seeded.ClientApp.ID, seeded.Video.ID, seeded.FromAddress.ID);
+                    seeded.UrlId,
+                    seeded.Operation?.ID ?? 0,
+                    seeded.ClientApp?.ID ?? 0,
+                    seeded.Video?.ID ?? 0,
+                    seeded.FromAddress?.ID ?? 0);
 
                 var leftOver = (await db.Database.SqlQuery<int>(
                     "SELECT COUNT(*) FROM dbo.users WHERE id = @p0", userId).ToListAsync()).Single();
