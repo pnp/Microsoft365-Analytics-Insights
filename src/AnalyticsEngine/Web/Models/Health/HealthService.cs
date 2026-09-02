@@ -4,17 +4,12 @@ using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Common.Entities;
 using Common.Entities.Config;
-using Common.Entities.Entities.UsageReports;
 using DataUtils;
 using DataUtils.AppInsights;
 using DataUtils.Health;
 using System;
 using System.Collections.Generic;
-using System.Data.Entity;
-using System.Data.Entity.Migrations;
-using System.Data.SqlClient;
 using System.Linq;
-using System.Runtime.Caching;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,30 +22,25 @@ namespace Web.AnalyticsWeb.Models.Health
     /// roll-up <see cref="HealthSummary"/>. The SPA fetches only the sub-section the user is looking at,
     /// so opening Health no longer runs every SQL scan + App Insights query at once.
     ///
-    /// Performance: the SQL section uses a short per-query <see cref="SqlQueryTimeoutSecs"/> command
-    /// timeout, runs its two heavy tables in parallel on separate contexts, and folds each table's
-    /// 24h/7d counts + freshness into a single pass. On a very large tenant those scans degrade to a
-    /// per-metric error instead of hanging the request (mirrors <c>ProfilingStatusAPIController</c>) -
-    /// the cheap DMV approximate counts still show. The overall roll-up (Overview) deliberately skips
-    /// those scans entirely and only probes database reachability with <c>SELECT 1</c>.
+    /// Performance: the SQL section uses a short per-query command timeout, runs its two heavy tables in
+    /// parallel on separate contexts, and folds each table's 24h/7d counts + freshness into a single pass
+    /// (see <see cref="SqlHealthDataSource"/>). On a very large tenant those scans degrade to a per-metric
+    /// error instead of hanging the request (mirrors <c>ProfilingStatusAPIController</c>) - the cheap DMV
+    /// approximate counts still show. The overall roll-up (Overview) deliberately skips those scans
+    /// entirely and only probes database reachability with <c>SELECT 1</c>.
     ///
     /// Reuses the app's existing Entra credential (honouring certificate auth) + App Insights connection
     /// string, so no new API key or config is required. See HEALTH-MONITORING-DESIGN.md (#144).
+    ///
+    /// SQL access is behind <see cref="IHealthDataSource"/> and caching behind <see cref="IHealthCache"/>
+    /// so the section-building logic is testable without a database (issues #379 / #381).
     /// </summary>
-    public static class HealthService
+    public class HealthService
     {
         public const int CacheSeconds = 60;
 
         // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).
         private const int CycleSlaHours = 24;
-
-        // Per-query SQL timeout. AnalyticsEntitiesContext sets an infinite command timeout (for long
-        // importer/migration work); here a single unindexed scan of audit_events / hits on a big tenant
-        // would otherwise run until Azure App Service kills the HTTP request (~230s) -> 500. Cap each
-        // query so it degrades to a per-metric error instead.
-        private const int SqlQueryTimeoutSecs = 20;
-        // The overall roll-up only needs "can we reach the DB?", so its probe is capped even shorter.
-        private const int DbProbeTimeoutSecs = 10;
 
         private const string CacheVersion = "v3";
         private const string SummaryKey = "health:summary:" + CacheVersion;
@@ -63,50 +53,63 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // One gate per cache key so a burst of page opens can't stampede a cold section with N
         // simultaneous builds, but different sections still build concurrently.
-        private static readonly SemaphoreSlim _summaryGate = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim _dataGate = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim _livenessGate = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim _exceptionsGate = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim _componentsGate = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim _configGate = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim _credGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _summaryGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _dataGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _livenessGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _exceptionsGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _componentsGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _configGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _credGate = new SemaphoreSlim(1, 1);
+
+        private readonly IHealthDataSource _dataSource;
+        private readonly IHealthCache _cache;
+
+        /// <summary>
+        /// The instance the Health API serves every request from. It is deliberately a singleton: the
+        /// per-key gates above are instance state, so a new instance per request would lose the
+        /// single-flight protection that stops a burst of page opens stampeding a cold section.
+        /// </summary>
+        public static readonly HealthService Default = new HealthService(new SqlHealthDataSource(), MemoryCacheHealthCache.Instance);
+
+        public HealthService(IHealthDataSource dataSource, IHealthCache cache)
+        {
+            _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        }
 
         // --- Public, independently-cached section loaders (one per api/Health route) ---
 
-        public static Task<HealthSummary> LoadSummaryAsync(AppConfig config)
+        public Task<HealthSummary> LoadSummaryAsync(AppConfig config)
             => GetOrBuildAsync(SummaryKey, _summaryGate, () => BuildSummaryAsync(config));
 
-        public static Task<DataOverviewSection> LoadDataAsync()
+        public Task<DataOverviewSection> LoadDataAsync()
             => GetOrBuildAsync(DataKey, _dataGate, BuildDataAsync);
 
-        public static Task<LivenessSection> LoadLivenessAsync(AppConfig config)
+        public Task<LivenessSection> LoadLivenessAsync(AppConfig config)
             => GetOrBuildAsync(LivenessKey, _livenessGate, () => BuildLivenessAsync(config));
 
-        public static Task<ExceptionsSection> LoadExceptionsAsync(AppConfig config)
+        public Task<ExceptionsSection> LoadExceptionsAsync(AppConfig config)
             => GetOrBuildAsync(ExceptionsKey, _exceptionsGate, () => BuildExceptionsAsync(config));
 
-        public static Task<ComponentsSection> LoadComponentsAsync(AppConfig config)
+        public Task<ComponentsSection> LoadComponentsAsync(AppConfig config)
             => GetOrBuildAsync(ComponentsKey, _componentsGate, () => BuildComponentsAsync(config));
 
-        public static Task<ConfigSection> LoadConfigAsync(AppConfig config)
+        public Task<ConfigSection> LoadConfigAsync(AppConfig config)
             => GetOrBuildAsync(ConfigKey, _configGate, () => BuildConfigAsync(config));
 
         /// <summary>Cache-or-build helper: single-flight per key, caches the result (even when it carries per-section errors) for <see cref="CacheSeconds"/>.</summary>
-        private static async Task<T> GetOrBuildAsync<T>(string key, SemaphoreSlim gate, Func<Task<T>> build) where T : class
+        private async Task<T> GetOrBuildAsync<T>(string key, SemaphoreSlim gate, Func<Task<T>> build) where T : class
         {
-            if (MemoryCache.Default.Get(key) is T hit) return hit;
+            if (_cache.TryGet<T>(key, out var hit)) return hit;
 
             await gate.WaitAsync();
             try
             {
                 // Re-check: another request may have built it while we waited for the gate.
-                if (MemoryCache.Default.Get(key) is T hit2) return hit2;
+                if (_cache.TryGet<T>(key, out var hit2)) return hit2;
 
                 var built = await build();
-                MemoryCache.Default.Set(key, built, new CacheItemPolicy
-                {
-                    AbsoluteExpiration = DateTimeOffset.UtcNow.AddSeconds(CacheSeconds)
-                });
+                _cache.Set(key, built, TimeSpan.FromSeconds(CacheSeconds));
                 return built;
             }
             finally
@@ -117,7 +120,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Overview / overall roll-up ---
 
-        private static async Task<HealthSummary> BuildSummaryAsync(AppConfig config)
+        private async Task<HealthSummary> BuildSummaryAsync(AppConfig config)
         {
             var summary = new HealthSummary
             {
@@ -132,14 +135,14 @@ namespace Web.AnalyticsWeb.Models.Health
             var componentsTask = LoadComponentsAsync(config);
             var livenessTask = LoadLivenessAsync(config);
             var exceptionsTask = LoadExceptionsAsync(config);
-            var dbProbeTask = ProbeDatabaseAsync();
+            var dbProbeTask = _dataSource.ProbeDatabaseAsync();
             await Task.WhenAll(configTask, componentsTask, livenessTask, exceptionsTask, dbProbeTask);
 
             var cfg = configTask.Result;
             var components = componentsTask.Result;
             var liveness = livenessTask.Result;
             var exceptions = exceptionsTask.Result;
-            var dataError = dbProbeTask.Result;
+            var dataError = dbProbeTask.Result?.Error;
 
             var input = new HealthRollupInput
             {
@@ -170,7 +173,7 @@ namespace Web.AnalyticsWeb.Models.Health
             // Data tab), so the Overview stays cheap.
             summary.Sections = new List<SectionStatus>
             {
-                DataProbeStatus(dataError),
+                HealthDataSectionRules.DataProbeStatus(dataError),
                 new SectionStatus { Key = "liveness", Label = "Import liveness", Status = liveness.Status, Reasons = liveness.Reasons },
                 new SectionStatus { Key = "exceptions", Label = "Exceptions", Status = exceptions.Status, Reasons = exceptions.Reasons },
                 new SectionStatus { Key = "components", Label = "Component health", Status = components.Status, Reasons = components.Reasons },
@@ -180,238 +183,35 @@ namespace Web.AnalyticsWeb.Models.Health
             return summary;
         }
 
-        private static SectionStatus DataProbeStatus(string dataError)
-        {
-            return string.IsNullOrEmpty(dataError)
-                ? new SectionStatus { Key = "data", Label = "Data overview", Status = HealthStatusNames.Healthy, Reasons = new List<string> { "Database reachable (open the Data tab for counts)." } }
-                : new SectionStatus { Key = "data", Label = "Data overview", Status = HealthStatusNames.Unhealthy, Reasons = new List<string> { "Database query failed: " + dataError } };
-        }
-
-        /// <summary>Cheap "can we reach the DB?" probe for the overall roll-up - no table scans. Returns the error message, or null when reachable.</summary>
-        private static async Task<string> ProbeDatabaseAsync()
-        {
-            try
-            {
-                using (var db = new AnalyticsEntitiesContext())
-                {
-                    db.Database.CommandTimeout = DbProbeTimeoutSecs;
-                    await db.Database.SqlQuery<int>("SELECT 1").ToListAsync();
-                }
-                return null;
-            }
-            catch (Exception ex)
-            {
-                return InnermostMessage(ex);
-            }
-        }
-
         // --- Data overview (SQL) ---
 
-        private static async Task<DataOverviewSection> BuildDataAsync()
+        private async Task<DataOverviewSection> BuildDataAsync()
         {
-            var section = new DataOverviewSection();
+            // Stamped before any SQL runs: the section's timestamp is "when this load started", which is
+            // what the page has always shown, and the scans below can take tens of seconds.
+            var loadedAtUtc = DateTime.UtcNow;
 
-            // Approximate counts + DB size come from DMVs (sys.dm_db_partition_stats / sys.database_files),
-            // which need VIEW DATABASE STATE. Isolate them so a locked-down SQL login still gets the more
-            // important recent-volume + freshness signals below.
-            try
+            var counts = await _dataSource.GetDatabaseCountsAsync();
+
+            // Recent volume + freshness on the two biggest fact tables, run in parallel on separate
+            // contexts. Skipped entirely when the cheap block already failed hard (the database is
+            // unreachable), which is what the old inline code did too.
+            RecentVolumeResult hits = null, audit = null;
+            if (string.IsNullOrEmpty(counts?.DataError))
             {
-                using (var db = new AnalyticsEntitiesContext())
-                {
-                    db.Database.CommandTimeout = SqlQueryTimeoutSecs;
-                    try
-                    {
-                        var approx = await LoadApproxRowCounts(db);
-                        section.ActivityCount = ApproxFor(approx, "audit_events");
-                        section.HitCount = ApproxFor(approx, "hits");
-                        section.TeamsCount = ApproxFor(approx, "teams");
-                        section.SentEmailCount = ApproxFor(approx, "sent_emails");
-                        section.CallRecordCount = ApproxFor(approx, "call_records");
-                        section.CopilotChatCount = ApproxFor(approx, "copilot_chats");
-                        section.UserCount = ApproxFor(approx, "users");
-                        section.DatabaseSizeMb = await LoadDatabaseSizeMb(db);
-                    }
-                    catch (Exception dmvEx)
-                    {
-                        // Counts stay 0; the recent-volume / freshness rows below are the real "is it flowing" signal.
-                        section.CountsError = InnermostMessage(dmvEx);
-                    }
-
-                    // Teams-being-tracked is a filtered count on a small table (thousands of rows) - cheap.
-                    section.TeamsBeingTrackedCount = await db.Teams.Where(t => t.HasRefreshToken).CountAsync();
-
-                    // Latest Copilot usage-report import per report. One row per import on a tiny table, so
-                    // this is free. Without it the "tenant conceals user identities" case is invisible: the
-                    // import succeeds, stores nothing, and looks exactly like a tenant with no Copilot usage -
-                    // and a failed download looks like a recent healthy import.
-                    var latestCopilotImports = await db.CopilotUsageReportImportLogs
-                        .GroupBy(l => l.ReportName)
-                        .Select(g => g.OrderByDescending(l => l.ImportedUtc).FirstOrDefault())
-                        .ToListAsync();
-
-                    foreach (var import in latestCopilotImports.Where(i => i != null))
-                    {
-                        if (!section.CopilotUsageReportLastImportUtc.HasValue
-                            || import.ImportedUtc > section.CopilotUsageReportLastImportUtc.Value)
-                        {
-                            section.CopilotUsageReportLastImportUtc = import.ImportedUtc;
-                        }
-
-                        if (import.ReportName == CopilotUsageReportNames.UsageUserDetail && import.IsUpnObfuscated)
-                        {
-                            section.CopilotUsageReportsIdentitiesConcealed = true;
-                        }
-
-                        if (!string.IsNullOrEmpty(import.Error))
-                        {
-                            section.CopilotUsageReportErrors.Add($"{import.ReportName}: {import.Error}");
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                section.DataError = InnermostMessage(ex);
-            }
-
-            // Recent volume + freshness on the two biggest fact tables. Their timestamp columns are NOT
-            // indexed (all indexes on hits/audit_events are FK indexes - see Create DB.sql), so these are
-            // clustered-index scans. We therefore: fold each table's 24h/7d counts + newest into ONE pass,
-            // run the two tables in parallel on separate contexts, and cap the command timeout so on a huge
-            // tenant they degrade to RecentVolumeError instead of hanging the request. (DataError above is
-            // only for a hard connection failure.)
-            if (string.IsNullOrEmpty(section.DataError))
-            {
-                var hitsTask = RecentVolumeAsync("hits", "hit_timestamp");
-                var auditTask = RecentVolumeAsync("audit_events", "time_stamp");
+                var hitsTask = _dataSource.GetRecentVolumeAsync("hits", "hit_timestamp");
+                var auditTask = _dataSource.GetRecentVolumeAsync("audit_events", "time_stamp");
                 await Task.WhenAll(hitsTask, auditTask);
-                var hits = hitsTask.Result;
-                var audit = auditTask.Result;
-
-                if (string.IsNullOrEmpty(hits.Error))
-                {
-                    section.HitsLast24h = hits.Last24h;
-                    section.HitsLast7d = hits.Last7d;
-                    section.NewestHitUtc = hits.Newest;
-                }
-                if (string.IsNullOrEmpty(audit.Error))
-                {
-                    section.AuditEventsLast24h = audit.Last24h;
-                    section.AuditEventsLast7d = audit.Last7d;
-                    section.NewestAuditEventUtc = audit.Newest;
-                }
-
-                var volumeErrors = new[] { hits.Error, audit.Error }.Where(e => !string.IsNullOrEmpty(e)).Distinct().ToList();
-                if (volumeErrors.Count > 0) section.RecentVolumeError = string.Join("; ", volumeErrors);
+                hits = hitsTask.Result;
+                audit = auditTask.Result;
             }
 
-            ComputeDataStatus(section);
-            return section;
-        }
-
-        private static void ComputeDataStatus(DataOverviewSection s)
-        {
-            if (!string.IsNullOrEmpty(s.DataError))
-            {
-                s.Status = HealthStatusNames.Unhealthy;
-                s.Reasons = new List<string> { "Database query failed: " + s.DataError };
-                return;
-            }
-
-            var reasons = new List<string>();
-            if (!string.IsNullOrEmpty(s.CountsError)) reasons.Add("Approximate counts unavailable: " + s.CountsError);
-            if (!string.IsNullOrEmpty(s.RecentVolumeError)) reasons.Add("Recent-volume scan didn't complete: " + s.RecentVolumeError);
-            if (s.CopilotUsageReportsIdentitiesConcealed)
-            {
-                reasons.Add("Per-user Microsoft 365 Copilot usage from Graph is not being imported because this tenant conceals user identities in Microsoft 365 usage reports: "
-                    + "Graph returns a hash instead of each user principal name, which cannot be linked to a user. "
-                    + "Tenant-level Copilot user counts and the audit-log Copilot import are unaffected. "
-                    + "To enable it, turn off 'Display concealed user, group and site names in all reports' in the Microsoft 365 admin centre (Settings > Org settings > Reports).");
-            }
-            foreach (var copilotError in s.CopilotUsageReportErrors)
-            {
-                reasons.Add("Graph Copilot usage report import failed - " + copilotError);
-            }
-
-            if (reasons.Count > 0)
-            {
-                s.Status = HealthStatusNames.Degraded;
-                s.Reasons = reasons;
-            }
-            else
-            {
-                s.Status = HealthStatusNames.Healthy;
-                s.Reasons = new List<string> { "All checks passing." };
-            }
-        }
-
-        private static async Task<Dictionary<string, long>> LoadApproxRowCounts(AnalyticsEntitiesContext db)
-        {
-            const string sql =
-                "SELECT o.name AS TableName, SUM(ps.row_count) AS Rows " +
-                "FROM sys.dm_db_partition_stats ps " +
-                "JOIN sys.objects o ON o.object_id = ps.object_id " +
-                "WHERE ps.index_id IN (0,1) AND o.[type] = 'U' " +
-                "GROUP BY o.name";
-            var rows = await db.Database.SqlQuery<TableRowCount>(sql).ToListAsync();
-            var dict = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-            foreach (var r in rows)
-            {
-                if (!string.IsNullOrEmpty(r.TableName)) dict[r.TableName] = r.Rows;
-            }
-            return dict;
-        }
-
-        private static long ApproxFor(Dictionary<string, long> counts, string tableName)
-            => counts != null && counts.TryGetValue(tableName, out var n) ? n : 0;
-
-        private static async Task<long> LoadDatabaseSizeMb(AnalyticsEntitiesContext db)
-        {
-            // type = 0 => data files (exclude the log). size is in 8 KB pages.
-            const string sql = "SELECT CAST(ISNULL(SUM(CAST(size AS BIGINT)), 0) * 8 / 1024 AS BIGINT) FROM sys.database_files WHERE [type] = 0";
-            var result = await db.Database.SqlQuery<long>(sql).ToListAsync();
-            return result.FirstOrDefault();
-        }
-
-        /// <summary>
-        /// One-pass 24h + 7d count and newest-timestamp for a fact table. <paramref name="table"/> and
-        /// <paramref name="tsColumn"/> are compile-time constants (not user input), so there's no injection
-        /// risk. Runs with a short command timeout so an unindexed scan on a huge tenant degrades to an error.
-        /// </summary>
-        private static async Task<RecentVolume> RecentVolumeAsync(string table, string tsColumn)
-        {
-            var volume = new RecentVolume();
-            try
-            {
-                using (var db = new AnalyticsEntitiesContext())
-                {
-                    db.Database.CommandTimeout = SqlQueryTimeoutSecs;
-                    var p24 = new SqlParameter("@c24", DateTime.UtcNow.AddHours(-24));
-                    var p7 = new SqlParameter("@c7", DateTime.UtcNow.AddDays(-7));
-                    var sql =
-                        $"SELECT SUM(CASE WHEN [{tsColumn}] > @c24 THEN CAST(1 AS BIGINT) ELSE 0 END) AS Last24h, " +
-                        $"SUM(CASE WHEN [{tsColumn}] > @c7 THEN CAST(1 AS BIGINT) ELSE 0 END) AS Last7d, " +
-                        $"MAX([{tsColumn}]) AS Newest " +
-                        $"FROM [dbo].[{table}]";
-                    var r = (await db.Database.SqlQuery<RecentVolumeRow>(sql, p24, p7).ToListAsync()).FirstOrDefault();
-                    if (r != null)
-                    {
-                        volume.Last24h = r.Last24h ?? 0;
-                        volume.Last7d = r.Last7d ?? 0;
-                        volume.Newest = r.Newest.HasValue ? DateTime.SpecifyKind(r.Newest.Value, DateTimeKind.Utc) : (DateTime?)null;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                volume.Error = InnermostMessage(ex);
-            }
-            return volume;
+            return HealthDataSectionRules.BuildDataSection(counts, hits, audit, loadedAtUtc);
         }
 
         // --- Configuration (config + schema + webhook) ---
 
-        private static async Task<ConfigSection> BuildConfigAsync(AppConfig config)
+        private async Task<ConfigSection> BuildConfigAsync(AppConfig config)
         {
             var section = new ConfigSection();
 
@@ -419,14 +219,12 @@ namespace Web.AnalyticsWeb.Models.Health
             // __MigrationHistory. Does NOT apply anything.
             try
             {
-                var migrationsConfig = new Common.Entities.Migrations.Configuration();
-                var migrator = new DbMigrator(migrationsConfig);
-                section.PendingMigrations = migrator.GetPendingMigrations().ToList();
+                section.PendingMigrations = (await _dataSource.GetPendingMigrationsAsync()).ToList();
                 section.SchemaUpToDate = section.PendingMigrations.Count == 0;
             }
             catch (Exception ex)
             {
-                section.SchemaError = InnermostMessage(ex);
+                section.SchemaError = HealthDataSectionRules.InnermostMessage(ex);
             }
 
             try
@@ -451,20 +249,15 @@ namespace Web.AnalyticsWeb.Models.Health
                     if (config.ImportJobSettings.Calls) section.EnabledImports.Add("Teams calls");
                 }
 
-                using (var db = new AnalyticsEntitiesContext())
-                {
-                    // Reuse the homepage's tested logic (config from the applied installer config + a
-                    // cached Graph lookup of the Teams call-records webhook subscription).
-                    var status = await SystemStatus.LoadFrom(db, null);
-                    section.CallsImportEnabled = status.CallsImportEnabled;
-                    section.WebhookState = status.CallWebhookState.ToString();
-                    section.WebhookExpiryUtc = status.CallWebhookExpiry;
-                    section.WebhookDetail = status.CallWebhookStatusDetail;
-                }
+                var webhook = await _dataSource.GetCallWebhookStatusAsync();
+                section.CallsImportEnabled = webhook.CallsImportEnabled;
+                section.WebhookState = webhook.WebhookState;
+                section.WebhookExpiryUtc = webhook.WebhookExpiryUtc;
+                section.WebhookDetail = webhook.WebhookDetail;
             }
             catch (Exception ex)
             {
-                section.ConfigError = InnermostMessage(ex);
+                section.ConfigError = HealthDataSectionRules.InnermostMessage(ex);
             }
 
             var input = new HealthRollupInput
@@ -475,9 +268,9 @@ namespace Web.AnalyticsWeb.Models.Health
                 CallsImportEnabled = section.CallsImportEnabled,
                 WebhookState = section.WebhookState
             };
-            SetStatusFromRollup(section, input);
+            HealthDataSectionRules.SetStatusFromRollup(section, input);
             if (!string.IsNullOrEmpty(section.ConfigError) || !string.IsNullOrEmpty(section.SchemaError))
-                RaiseAtLeastDegraded(section, "Some configuration couldn't be read.");
+                HealthDataSectionRules.RaiseAtLeastDegraded(section, "Some configuration couldn't be read.");
 
             return section;
         }
@@ -486,7 +279,7 @@ namespace Web.AnalyticsWeb.Models.Health
         {
             try
             {
-                return new SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
+                return new System.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
             }
             catch
             {
@@ -496,7 +289,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Component health (runtime credential + Service Bus + App Insights HealthCheck) ---
 
-        private static async Task<ComponentsSection> BuildComponentsAsync(AppConfig config)
+        private async Task<ComponentsSection> BuildComponentsAsync(AppConfig config)
         {
             var section = new ComponentsSection
             {
@@ -515,7 +308,7 @@ namespace Web.AnalyticsWeb.Models.Health
             }
             catch (Exception ex)
             {
-                section.ComponentHealthError = "Couldn't build the Entra credential: " + InnermostMessage(ex);
+                section.ComponentHealthError = "Couldn't build the Entra credential: " + HealthDataSectionRules.InnermostMessage(ex);
             }
 
             if (credential != null)
@@ -532,7 +325,7 @@ namespace Web.AnalyticsWeb.Models.Health
                     }
                     catch (Exception ex)
                     {
-                        if (string.IsNullOrEmpty(section.ComponentHealthError)) section.ComponentHealthError = InnermostMessage(ex);
+                        if (string.IsNullOrEmpty(section.ComponentHealthError)) section.ComponentHealthError = HealthDataSectionRules.InnermostMessage(ex);
                     }
                     finally
                     {
@@ -550,7 +343,7 @@ namespace Web.AnalyticsWeb.Models.Health
                     .Select(c => new ComponentStatusInput { Component = c.Component, Status = c.Status, Detail = c.Detail })
                     .ToList()
             };
-            SetStatusFromRollup(section, input);
+            HealthDataSectionRules.SetStatusFromRollup(section, input);
             return section;
         }
 
@@ -597,7 +390,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 {
                     Component = "Credential",
                     Status = HealthStatusNames.Degraded,
-                    Detail = "Couldn't check the runtime certificate: " + InnermostMessage(ex),
+                    Detail = "Couldn't check the runtime certificate: " + HealthDataSectionRules.InnermostMessage(ex),
                     LastSeenUtc = DateTime.UtcNow
                 });
             }
@@ -630,7 +423,7 @@ namespace Web.AnalyticsWeb.Models.Health
             }
             catch (Exception ex)
             {
-                var detail = InnermostMessage(ex);
+                var detail = HealthDataSectionRules.InnermostMessage(ex);
 
                 // A network-layer rejection (rather than an auth failure) in a private deployment almost always
                 // means the namespace has public access disabled but no private endpoint - which needs Premium.
@@ -695,7 +488,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Import liveness (App Insights) ---
 
-        private static async Task<LivenessSection> BuildLivenessAsync(AppConfig config)
+        private async Task<LivenessSection> BuildLivenessAsync(AppConfig config)
         {
             var section = new LivenessSection
             {
@@ -716,7 +509,7 @@ namespace Web.AnalyticsWeb.Models.Health
             }
             catch (Exception ex)
             {
-                section.LivenessError = "Couldn't build the Entra credential: " + InnermostMessage(ex);
+                section.LivenessError = "Couldn't build the Entra credential: " + HealthDataSectionRules.InnermostMessage(ex);
             }
 
             if (credential != null)
@@ -729,7 +522,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 }
                 catch (Exception ex)
                 {
-                    if (string.IsNullOrEmpty(section.LivenessError)) section.LivenessError = InnermostMessage(ex);
+                    if (string.IsNullOrEmpty(section.LivenessError)) section.LivenessError = HealthDataSectionRules.InnermostMessage(ex);
                 }
                 finally
                 {
@@ -747,7 +540,7 @@ namespace Web.AnalyticsWeb.Models.Health
                     .Select(j => new JobLivenessInput { JobName = j.JobName, LastCycleUtc = j.LastCycleUtc })
                     .ToList()
             };
-            SetStatusFromRollup(section, input);
+            HealthDataSectionRules.SetStatusFromRollup(section, input);
             return section;
         }
 
@@ -801,7 +594,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
         // --- Exceptions overview (App Insights) ---
 
-        private static async Task<ExceptionsSection> BuildExceptionsAsync(AppConfig config)
+        private async Task<ExceptionsSection> BuildExceptionsAsync(AppConfig config)
         {
             var section = new ExceptionsSection
             {
@@ -822,7 +615,7 @@ namespace Web.AnalyticsWeb.Models.Health
             }
             catch (Exception ex)
             {
-                section.ExceptionsError = "Couldn't build the Entra credential: " + InnermostMessage(ex);
+                section.ExceptionsError = "Couldn't build the Entra credential: " + HealthDataSectionRules.InnermostMessage(ex);
             }
 
             if (credential != null)
@@ -835,7 +628,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 }
                 catch (Exception ex)
                 {
-                    if (string.IsNullOrEmpty(section.ExceptionsError)) section.ExceptionsError = InnermostMessage(ex);
+                    if (string.IsNullOrEmpty(section.ExceptionsError)) section.ExceptionsError = HealthDataSectionRules.InnermostMessage(ex);
                 }
                 finally
                 {
@@ -850,7 +643,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 AnyTelemetryQueryError = !string.IsNullOrEmpty(section.ExceptionsError),
                 SqlCapacityExceptions24h = section.SqlCapacityExceptions24h
             };
-            SetStatusFromRollup(section, input);
+            HealthDataSectionRules.SetStatusFromRollup(section, input);
             return section;
         }
 
@@ -888,20 +681,20 @@ namespace Web.AnalyticsWeb.Models.Health
             }
         }
 
-        // --- Shared credential + roll-up helpers ---
+        // --- Shared credential helper ---
 
         /// <summary>Builds (and briefly caches) the app's Entra credential, honouring certificate auth so the AI sections don't each re-hit Key Vault.</summary>
-        private static async Task<TokenCredential> GetCredentialAsync(AppConfig config)
+        private async Task<TokenCredential> GetCredentialAsync(AppConfig config)
         {
-            if (MemoryCache.Default.Get(CredKey) is TokenCredential cached) return cached;
+            if (_cache.TryGet<TokenCredential>(CredKey, out var cached)) return cached;
 
             await _credGate.WaitAsync();
             try
             {
-                if (MemoryCache.Default.Get(CredKey) is TokenCredential cached2) return cached2;
+                if (_cache.TryGet<TokenCredential>(CredKey, out var cached2)) return cached2;
 
                 var built = await BuildCredential(config);
-                MemoryCache.Default.Set(CredKey, built, DateTimeOffset.UtcNow.AddSeconds(CacheSeconds));
+                _cache.Set(CredKey, built, TimeSpan.FromSeconds(CacheSeconds));
                 return built;
             }
             finally
@@ -918,33 +711,6 @@ namespace Web.AnalyticsWeb.Models.Health
                 return new ClientCertificateCredential(config.TenantGUID.ToString(), config.ClientID, cert);
             }
             return new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret);
-        }
-
-        /// <summary>Sets a section's own traffic-light from the pure, unit-tested <see cref="HealthRollup"/> so every section + the overall use one rule set.</summary>
-        private static void SetStatusFromRollup(HealthSection section, HealthRollupInput input)
-        {
-            section.Status = HealthRollup.Evaluate(input, out var reasons).ToString();
-            section.Reasons = reasons;
-        }
-
-        /// <summary>Bumps a section to at least Degraded (used when a section partially failed to load).</summary>
-        private static void RaiseAtLeastDegraded(HealthSection section, string reason)
-        {
-            if (!string.Equals(section.Status, HealthStatusNames.Unhealthy, StringComparison.OrdinalIgnoreCase))
-                section.Status = HealthStatusNames.Degraded;
-            section.Reasons.RemoveAll(r => r == "All checks passing.");
-            if (!section.Reasons.Contains(reason)) section.Reasons.Add(reason);
-        }
-
-        /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>
-        private static string InnermostMessage(Exception ex)
-        {
-            var e = ex;
-            while (e.InnerException != null)
-            {
-                e = e.InnerException;
-            }
-            return e.Message;
         }
 
         #region KQL
@@ -1004,26 +770,5 @@ namespace Web.AnalyticsWeb.Models.Health
             "| summarize Count = count()";
 
         #endregion
-
-        private class TableRowCount
-        {
-            public string TableName { get; set; }
-            public long Rows { get; set; }
-        }
-
-        private class RecentVolumeRow
-        {
-            public long? Last24h { get; set; }
-            public long? Last7d { get; set; }
-            public DateTime? Newest { get; set; }
-        }
-
-        private class RecentVolume
-        {
-            public long Last24h { get; set; }
-            public long Last7d { get; set; }
-            public DateTime? Newest { get; set; }
-            public string Error { get; set; }
-        }
     }
 }
