@@ -288,13 +288,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                     var key = KeyOf(row);
                     if (existingByKey.TryGetValue(key, out var stored))
                     {
-                        // Graph gap-fills the most recent ~3 days, so re-importing an overlapping window is
-                        // normal and usually changes nothing. Only write when a value actually moved. The
-                        // refresh date deliberately does NOT count as a change on its own: it advances every
-                        // day, so including it would rewrite every day in the window daily (up to 180 days x
-                        // every app) purely to restamp provenance. Report-level freshness lives in
-                        // copilot_usage_report_import_log instead.
-                        if (!HasChanged(stored, row))
+                        // Only write when a value actually moved; the rule (including why the refresh date
+                        // is deliberately excluded) lives in CopilotUsageReportPolicy so the in-memory test
+                        // double asserts the same rule rather than a copy of it.
+                        if (!CopilotUsageReportPolicy.UserCountValueChanged(stored, row))
                         {
                             result.Unchanged++;
                             continue;
@@ -341,12 +338,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         public int UserCountSaveBatchSize { get; set; } = 500;
 
         private static bool HasChanged(CopilotUserCountLog stored, CopilotUserCountLog incoming)
-        {
-            return stored.EnabledUsers != incoming.EnabledUsers
-                || stored.ActiveUsers != incoming.ActiveUsers
-                || stored.PromptsSubmitted != incoming.PromptsSubmitted
-                || stored.AveragePromptsSubmitted != incoming.AveragePromptsSubmitted;
-        }
+            => CopilotUsageReportPolicy.UserCountValueChanged(stored, incoming);
 
         /// <summary>Matches the unique index on (report_type, report_period_days, report_date, app_name).</summary>
         private static string KeyOf(CopilotUserCountLog row)
