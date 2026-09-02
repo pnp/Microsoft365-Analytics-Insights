@@ -31,6 +31,20 @@ paths = [
   '''src/SPO/.*SharePointOnPremisesConfig\.json''',
 ]
 
+# --- Synthetic Teams crawl test delta-token false positive ---
+[[allowlists]]
+description = """
+The Teams channel crawler unit test uses a made-up prior delta-token sentinel. The Token property name
+and the sentinel's entropy trigger generic-api-key, but no credential is present. Scope the exception
+to the exact introducing commit and test file so future findings remain visible.
+"""
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["2ae1a0a18529ad1a6bef1a8a229774999f1be5bf"]
+paths = [
+  '''^src/AnalyticsEngine/Tests\.UnitTests/TeamsCrawlTests\.cs$''',
+]
+
 # --- Local build / IDE / dependency / generated artifacts ---
 # These are never committed (they're gitignored) and are absent from a fresh CI checkout; they only
 # appear in a local working-tree (`gitleaks dir`) scan. Allowlisting keeps the local scan meaningful.
