@@ -102,8 +102,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         /// Lazily build the run-scoped cache ONCE, over the window resolved on entry to the save. Every event
         /// processed this cycle has a CreationTime inside that window (the API only serves it there) and the
         /// cache is keyed by event id, so a single full-window load is equivalent to the old per-batch
-        /// [Min,Max] loads - without the massive redundancy. Thread-safe (double-checked init around a
-        /// single-permit lock; <see cref="ActivityImportCache"/> is itself internally thread-safe).
+        /// [Min,Max] loads - without the massive redundancy.
+        ///
+        /// Concurrent callers are serialised by a single-permit lock, so the load happens once and a failed
+        /// load leaves the flag clear so the next batch retries. The pre-check outside the lock is an
+        /// ordinary (non-volatile) read of <c>_runImportCacheBuilt</c>, and the reference is published before
+        /// the flag is set - this is the pre-#373 code moved verbatim, and it is safe under the .NET
+        /// Framework memory model on the x86/x64 platforms this runs on, where stores are not reordered with
+        /// stores nor loads with loads. <see cref="ActivityImportCache"/> is itself internally locked, so the
+        /// shared cache is safe once handed out.
         ///
         /// Once built, later calls return the same cache and their window argument is ignored.
         /// </summary>

@@ -105,7 +105,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
 
         /// <summary>
         /// Lazily build the run-scoped loader (once). Best-effort: on any failure (e.g. no Graph credentials
-        /// in a test) returns null and callers fall back to the per-session loader. Thread-safe.
+        /// in a test) returns null and callers fall back to the per-session loader. A failure counts as
+        /// "tried", so a broken Graph auth costs one attempt and one warning per cycle rather than per batch.
+        ///
+        /// Concurrent callers are serialised by a single-permit lock; the pre-check outside it is the same
+        /// non-volatile flag read as the pre-#373 code, moved verbatim (see the note on
+        /// <c>ActivityImportCacheProvider</c>).
         /// </summary>
         private async Task<ICopilotMetadataLoader> GetSharedLoaderAsync()
         {

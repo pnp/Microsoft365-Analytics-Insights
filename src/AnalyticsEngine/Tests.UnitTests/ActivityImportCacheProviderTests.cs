@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
@@ -86,17 +87,41 @@ namespace Tests.UnitTests
             // In concurrent-save mode several batches enter the save path at once, all before the cache
             // exists. Without the init lock each of them would run the (expensive, whole-window)
             // audit_events query.
+            //
+            // Dedicated threads plus a Barrier rather than Task.Run: the ThreadPool injects threads slowly
+            // once its minimum is exhausted, so pool-scheduled racers can end up arriving hundreds of
+            // milliseconds apart and never actually race. The barrier releases all eight at the same
+            // instant, and the first load then holds them for 250ms.
+            const int racerCount = 8;
             var loader = new FakeActivityImportCacheLoader { LoadDuration = TimeSpan.FromMilliseconds(250) };
             var provider = new ActivityImportCacheProvider(loader, new RecordingLogger());
             var window = PerRunWindow();
 
-            var racers = Enumerable.Range(0, 8)
-                .Select(_ => Task.Run(async () => await provider.GetForWindowAsync(window)))
-                .ToArray();
-            var caches = await Task.WhenAll(racers);
+            var caches = new ActivityImportCache[racerCount];
+            var threads = new Thread[racerCount];
+            using (var startLine = new Barrier(racerCount))
+            {
+                for (int i = 0; i < racerCount; i++)
+                {
+                    var index = i;
+                    threads[i] = new Thread(() =>
+                    {
+                        startLine.SignalAndWait();
+                        caches[index] = provider.GetForWindowAsync(window).GetAwaiter().GetResult();
+                    })
+                    { IsBackground = true };
+                    threads[i].Start();
+                }
+
+                foreach (var thread in threads)
+                {
+                    Assert.IsTrue(thread.Join(TimeSpan.FromSeconds(30)), "A racer did not finish - the init lock may be deadlocked.");
+                }
+            }
 
             Assert.AreEqual(1, loader.LoadCount, "Concurrent first callers must not each build the cache.");
-            Assert.IsTrue(caches.All(c => ReferenceEquals(c, caches[0])), "All concurrent callers must get the same cache instance.");
+            Assert.IsTrue(caches.All(c => c != null && ReferenceEquals(c, caches[0])), "All concurrent callers must get the same cache instance.");
+            await Task.CompletedTask;
         }
 
         [TestMethod]

@@ -13,8 +13,8 @@ using WebJob.Office365ActivityImporter.Engine.Properties;
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
 {
     /// <summary>
-    /// What one staging pass produced: the statistics for the batch and the events that were actually
-    /// staged, which the metadata pass then reads back from SQL.
+    /// What one staging pass produced: the statistics for the batch and the events it handed to the
+    /// staging batch, which the metadata pass then tries to match against the rows the merge created.
     /// </summary>
     internal sealed class ActivityStagingPassResult
     {
@@ -31,9 +31,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         public ImportStat Stats { get; }
 
         /// <summary>
-        /// The events handed to the staging table, in the order the pass added them. A
-        /// <see cref="ConcurrentBag{T}"/> rather than a list purely because that is what this pass has always
-        /// produced, and the metadata pass's enumeration order therefore stays as it was.
+        /// The events handed to the staging batch. Note this is what was <i>offered</i> to SQL, not
+        /// necessarily what reached <c>audit_events</c>: <c>InsertBatch</c> skips any row whose value is
+        /// wider than its staging column (see issue #122 / #127), which is why the metadata pass tolerates
+        /// an event having no saved row.
+        ///
+        /// A <see cref="ConcurrentBag{T}"/> rather than a list purely because that is what this pass has
+        /// always produced, so the metadata pass's (unordered) enumeration behaves exactly as it did -
+        /// <see cref="ConcurrentBag{T}"/> makes no insertion-order guarantee.
         /// </summary>
         public ConcurrentBag<AbstractAuditLogContent> SavedToSql { get; }
     }

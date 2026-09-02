@@ -90,11 +90,14 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// <see cref="IActivityStagingWriter"/> carries the internal staging entity;
         /// <c>InternalsVisibleTo("Tests.UnitTests")</c> makes it reachable from the tests.
         ///
-        /// A <c>null</c> collaborator means "build the production adapter". That is how the public
-        /// constructors above keep the original field-initialisation order: <c>appConfig</c> is still
-        /// dereferenced (and still throws a <see cref="NullReferenceException"/> if it is null) before any
-        /// adapter is constructed, rather than a chained <c>: this(new SqlThing(appConfig...), ...)</c>
-        /// moving an adapter's own validation in front of it.
+        /// A <c>null</c> collaborator means "build the production adapter", constructed in the body rather
+        /// than in a chained constructor initialiser. That is deliberate ordering-insurance: a chained
+        /// <c>: this(new SqlThing(appConfig...), ...)</c> evaluates the adapter's constructor <i>before</i>
+        /// this body's <c>new UserGroupsFilterModel(appConfig.UserGroupsFilter)</c>. It makes no difference
+        /// today - none of the production adapters below validates or dereferences what it is handed, so a
+        /// null <c>appConfig</c> still raises the same <see cref="NullReferenceException"/> at the same
+        /// point either way - but it means adding a guard to one of those adapters later cannot silently
+        /// change which exception an existing caller sees.
         /// </summary>
         internal ActivityReportSqlPersistenceManager(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache, ILogger logger, AppConfig appConfig,
             int maxConcurrentSaves, bool usePerBatchDedupCache, IClock clock,
