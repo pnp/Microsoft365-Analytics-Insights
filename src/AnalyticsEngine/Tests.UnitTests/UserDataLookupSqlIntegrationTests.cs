@@ -45,7 +45,8 @@ namespace Tests.UnitTests
         {
             // The seeded URL below is Unicode because urls.full_url is nvarchar and genuinely carries
             // non-Latin SharePoint paths. The UPN is ASCII because Entra restricts userPrincipalName to
-            // A-Z a-z 0-9 ' . - _ ! # ^ ~ - a non-Latin UPN is not a case this pipeline can receive.
+            // A-Z a-z 0-9 ' . - _ ! # ^ ~ with accented characters disallowed, so a non-Latin UPN is not
+            // a real tenant case.
             var upn = $"userdatalookup.{Guid.NewGuid():N}@contoso.com";
 
             using (var db = new AnalyticsEntitiesContext())
@@ -230,7 +231,7 @@ namespace Tests.UnitTests
         /// data.
         /// </summary>
         /// <remarks>
-        /// The UPN here is ASCII because that is all Entra can issue: <c>userPrincipalName</c> is
+        /// The UPN here is ASCII because that is what Entra issues: <c>userPrincipalName</c> is
         /// restricted to <c>A-Z a-z 0-9 ' . - _ ! # ^ ~</c> with accented characters disallowed, so a
         /// non-Latin UPN is not a real tenant case. That the service does not itself re-encode whatever
         /// string it is given is covered without a database in
