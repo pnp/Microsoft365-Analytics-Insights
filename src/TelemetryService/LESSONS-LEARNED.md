@@ -99,6 +99,43 @@ When reasoning about what an identity library does at runtime, prefer this over
 reading the library's source. It answers "what did this deployment actually
 send", which is the question that matters.
 
+### …but dependency telemetry redacts query strings
+
+`Data` keeps the *shape* of a URL, not its query values. A request carrying
+`?appid=<guid>` is recorded as `…/openid-configuration?*`, and other callers
+show per-parameter redaction such as `?api-version=2019-08-01&resource=REDACTED`.
+
+Searching `Data` for a literal parameter value therefore finds nothing even when
+the parameter is definitely on the wire. **Test for the presence of `?`, not for
+the parameter.** The most reliable form is a before/after count, which is immune
+to how any individual URL was redacted:
+
+```kusto
+AppDependencies
+| where TimeGenerated > ago(30d)
+| where Target has "login.microsoftonline.com"
+| summarize total = count(), tagged = countif(Data contains "?") by bin(TimeGenerated, 1d)
+```
+
+This cost real time. A verified-working deployment was briefly declared broken
+because the literal `appid=` could not be found in telemetry.
+
+### One token validation produces two different key fetches
+
+Microsoft.Identity.Web runs an independent `ConfigurationManager` through
+`AadIssuerValidator` to resolve the issuer, separate from the one
+`JwtBearerOptions` owns. Both fetch `openid-configuration` and then the JWKS, so
+a single validation emits two near-simultaneous pairs of calls.
+
+Only the `JwtBearerOptions` one is ours to configure. The issuer validator's
+pair will never carry our parameter, and its presence is not a defect. Any check
+that assumes "all discovery calls should look the same" will misfire.
+
+Related: validation short-circuits. A token rejected on audience or issuer may
+never require signing keys, so a probe can produce the issuer validator's fetch
+and nothing else. When forcing key discovery deliberately, the token has to get
+far enough to need a signature check.
+
 ### The EasyAuth sidecar is invisible from inside the app
 
 On Linux, App Service Authentication runs as a **separate container** — the
