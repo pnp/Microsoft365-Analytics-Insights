@@ -180,6 +180,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>When set, the save fails with this exception instead of returning <see cref="ReturnCount"/>.</summary>
         public Exception FailWith { get; set; }
 
+        /// <summary>
+        /// When set, the save returns this (initially incomplete) task instead of a completed one, so a
+        /// test can hold a section open and observe whether the orchestration waits for it.
+        /// </summary>
+        public TaskCompletionSource<int> Gate { get; set; }
+
         /// <summary>Every batch this port was asked to save, in order.</summary>
         public List<CustomEventsResultCollection> Saved { get; } = new List<CustomEventsResultCollection>();
 
@@ -196,6 +202,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 // catch whether or not the caller awaited the call, so a fake that threw synchronously
                 // could not detect a dropped `await` in the section orchestration.
                 return Task.FromException<int>(FailWith);
+            }
+            if (Gate != null)
+            {
+                return Gate.Task;
             }
             return Task.FromResult(ReturnCount);
         }

@@ -95,6 +95,36 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task EventSections_EachSectionCompletesBeforeTheNextOneStarts()
+        {
+            // The order test above only pins the order calls are MADE in. It would still pass if the
+            // orchestration started all four sections and then awaited Task.WhenAll - which would be a
+            // real behavioural change: the sections share one AnalyticsEntitiesContext (EF6 contexts are
+            // not thread-safe) and they write overlapping lookup tables.
+            //
+            // Holding one section open makes the difference observable with no timing races. Everything
+            // up to the open gate runs synchronously on this thread, so when RunAsync returns, exactly
+            // the sections up to and including the gated one can have been invoked.
+            var h = new SectionHarness();
+            h.Searches.Gate = new TaskCompletionSource<int>();
+
+            var run = h.RunAsync(SomeEvents());
+
+            Assert.IsFalse(run.IsCompleted, "The saver must still be waiting on the open section.");
+            CollectionAssert.AreEqual(
+                new[] { "Hit updates", "Searches" },
+                h.CallLog.ToArray(),
+                "Nothing after the section being awaited may have started yet.");
+
+            h.Searches.Gate.SetResult(0);
+            await run;
+
+            CollectionAssert.AreEqual(
+                new[] { "Hit updates", "Searches", "Page updates", "Clicks" },
+                h.CallLog.ToArray());
+        }
+
+        [TestMethod]
         public async Task EventSections_EachReceiveTheSameBatchInstance()
         {
             // Guards against a refactor handing a section a copy, or an empty collection, of the batch.
