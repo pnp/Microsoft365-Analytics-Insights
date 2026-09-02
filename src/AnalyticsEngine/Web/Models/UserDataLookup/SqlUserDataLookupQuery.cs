@@ -110,8 +110,9 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                     })
                     .FirstOrDefaultAsync();
 
-                // The user row was deleted between finding it and counting: every per-category count
-                // would have returned 0, so return zeros rather than an incomplete dictionary.
+                // The user row vanished between finding it and counting. Return zeros for every category
+                // rather than an incomplete dictionary - the summary shows a row per category, and a
+                // missing key reads as 0 there anyway.
                 return ToDictionary(counts ?? new AllCategoryCounts());
             }
         }
