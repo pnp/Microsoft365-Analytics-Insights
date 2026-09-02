@@ -33,24 +33,44 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public Task<SPSiteIdToUrl> TryGetForSiteIdAsync(string siteId)
         {
             Reads.Add(siteId);
-            return Task.FromResult(Rows.Find(r => string.Equals(r.SiteId, siteId, StringComparison.OrdinalIgnoreCase)));
+            return Task.FromResult(Single(Rows.FindAll(r => string.Equals(r.SiteId, siteId, StringComparison.OrdinalIgnoreCase)), "site id", siteId));
         }
 
         public Task SaveSiteUrlAsync(string siteId, string url)
         {
             Writes.Add(Tuple.Create(siteId, url));
 
-            // Re-key an existing row already holding this URL rather than storing it twice. Case-insensitive
-            // to match the SQL collation the real adapter's `s.UrlBase == url` runs under.
-            var existing = Rows.Find(r => string.Equals(r.SiteUrl, url, StringComparison.OrdinalIgnoreCase));
-            if (existing != null)
+            // A NULL url matches no row: the production context sets UseDatabaseNullSemantics = true, so
+            // `s.UrlBase == url` with a null parameter becomes `UrlBase = NULL`, which is never true in SQL
+            // and therefore always takes the insert path. C# equality would have re-keyed a null-URL row.
+            if (url != null)
             {
-                existing.SiteId = siteId;
-                return Task.CompletedTask;
+                // Re-key an existing row already holding this URL rather than storing it twice.
+                // Case-insensitive to match the SQL collation the real adapter's `s.UrlBase == url` runs under.
+                var existing = Single(Rows.FindAll(r => string.Equals(r.SiteUrl, url, StringComparison.OrdinalIgnoreCase)), "url", url);
+                if (existing != null)
+                {
+                    existing.SiteId = siteId;
+                    return Task.CompletedTask;
+                }
             }
 
             Rows.Add(new SPSiteIdToUrl { SiteId = siteId, SiteUrl = url });
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Mirrors <c>SingleOrDefaultAsync</c>: the production adapter THROWS when a lookup matches more
+        /// than one row, and duplicate site ids are the exact failure state this cache guards against
+        /// (<c>site_id</c> is not unique). A fake that quietly returned the first match would hide it.
+        /// </summary>
+        private static SPSiteIdToUrl Single(List<SPSiteIdToUrl> matches, string by, string value)
+        {
+            if (matches.Count > 1)
+            {
+                throw new InvalidOperationException($"Sequence contains more than one element: {matches.Count} rows match {by} '{value}'.");
+            }
+            return matches.Count == 1 ? matches[0] : null;
         }
     }
 }
