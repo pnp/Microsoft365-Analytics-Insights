@@ -51,9 +51,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public static async Task PopulateNewMessagesAndReactions(this List<ChannelWithReactions> channels, Team team, RefreshOAuthToken refreshToken,
             CacheConnectionManager cacheConnectionManager, ILogger logger)
         {
-            // Nothing to crawl: return before building any adapter, so a team with no channels still
-            // touches neither Redis nor the logger, exactly as the original per-channel loop did.
-            if (channels.Count == 0)
+            // Nothing to crawl: return before building any adapter, so a team with no channels - or one
+            // we hold no user token for - still touches neither Redis, the logger nor team.Id, exactly
+            // as the original per-channel loop did (it read messages only when a token was present, and
+            // saved a delta token only when one came back).
+            if (channels.Count == 0 || refreshToken == null)
             {
                 return;
             }

@@ -174,8 +174,10 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// The channel object must end up holding what the rule selected - a wrapper that computed the
-        /// scope but forgot to assign it would silently import nothing.
+        /// The channel object must end up holding what the rule selected - and must be holding it
+        /// because the delta filter ran. The fixture deliberately mixes before-token and after-token
+        /// content, so a wrapper that passed <c>null</c> for the delta timestamp, or assigned everything
+        /// Graph returned, fails here rather than looking correct.
         /// </summary>
         [TestMethod]
         public void CalculateAndSetNewMessagesAndReactions_ReplacesChannelMessagesAndReactions()
@@ -184,13 +186,16 @@ namespace Tests.UnitTests
             channel.Messages.Add(Msg("stale-from-a-previous-cycle", BeforeToken));
             channel.Reactions.Add(new ChatMessageReaction { ReactionType = "stale" });
 
-            var root = Msg("root", AfterToken, AfterToken);
+            // An old thread parent, re-served by the delta only because it was replied to and reacted to.
+            var reServedParent = Msg("old-parent", BeforeToken, BeforeToken, AfterToken);
+            reServedParent.Replies.Add(Msg("new-reply", AfterToken));
 
-            channel.CalculateAndSetNewMessagesAndReactions(new List<ChatMessage> { root }, DeltaTokenWrittenAt, AnalyticsLogger.ConsoleOnlyTracer());
+            channel.CalculateAndSetNewMessagesAndReactions(new List<ChatMessage> { reServedParent }, DeltaTokenWrittenAt, AnalyticsLogger.ConsoleOnlyTracer());
 
-            CollectionAssert.AreEqual(new[] { "root" }, channel.Messages.Select(m => m.Id).ToArray());
-            Assert.AreEqual(1, channel.Reactions.Count);
-            Assert.AreEqual("like", channel.Reactions[0].ReactionType);
+            CollectionAssert.AreEqual(new[] { "new-reply" }, channel.Messages.Select(m => m.Id).ToArray(),
+                "The channel must end up with the delta-filtered set, not everything Graph returned.");
+            Assert.AreEqual(1, channel.Reactions.Count, "Only the reaction added since the delta token is new.");
+            Assert.AreEqual(new DateTimeOffset(AfterToken), channel.Reactions[0].CreatedDateTime);
         }
 
         #endregion
