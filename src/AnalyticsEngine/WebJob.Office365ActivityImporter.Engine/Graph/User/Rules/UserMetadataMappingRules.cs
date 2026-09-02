@@ -87,11 +87,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// resolution - which can hit the database - so moving the read into this rule would change the
         /// stored value. <c>IClock</c> only exposes <c>UtcNow</c>, so converting it is a behavioural
         /// change and out of scope for #381.
+        ///
+        /// No null guard on <paramref name="graphUser"/>: the code this replaced dereferenced it
+        /// directly, and the resulting <see cref="NullReferenceException"/> is operator-facing, so
+        /// swapping it for an <see cref="ArgumentNullException"/> would be a behavioural change. See the
+        /// convention established on task 07.
         /// </remarks>
         public static UserMetadataChangePlan BuildPlan(GraphUser graphUser)
         {
-            if (graphUser == null) throw new ArgumentNullException(nameof(graphUser));
-
             return new UserMetadataChangePlan
             {
                 AccountEnabled = graphUser.AccountEnabled,

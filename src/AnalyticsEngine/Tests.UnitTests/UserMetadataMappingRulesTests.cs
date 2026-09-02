@@ -215,13 +215,6 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        [ExpectedException(typeof(ArgumentNullException))]
-        public void UserMapping_NullGraphUser_IsRejected()
-        {
-            UserMetadataMappingRules.BuildPlan(null);
-        }
-
-        [TestMethod]
         public void NormaliseLookupName_TrimsCapsAndTreatsEmptyAsClear()
         {
             Assert.IsNull(UserMetadataMappingRules.NormaliseLookupName(null));
