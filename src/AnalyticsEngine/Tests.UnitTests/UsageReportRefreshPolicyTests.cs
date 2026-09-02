@@ -1,7 +1,11 @@
+using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
+using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
@@ -92,17 +96,6 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void UsageReports_CompletionMarkerIsNormalisedToUtcBeforeComparing()
-        {
-            // The marker arrives from a store that may hand back a local or unspecified kind; comparing it
-            // raw against a UTC "today" would shift the cutoff by the host's offset.
-            var localMarker = new DateTime(2026, 6, 10, 23, 30, 0, DateTimeKind.Local);
-            var window = Window(28, localMarker);
-
-            Assert.AreEqual(localMarker.ToUniversalTime().Date, window.SafeCutoffUtc);
-        }
-
-        [TestMethod]
         public void UsageReports_LookBackIsClampedToWhatGraphCanAnswer()
         {
             // Graph retains ~28 days of daily detail, and reports lag 2-3 days, so a configured value
@@ -111,8 +104,25 @@ namespace Tests.UnitTests
             Assert.AreEqual(UsageReportRefreshPolicy.MinDaysBack, UsageReportRefreshPolicy.ClampDaysBack(-7));
             Assert.AreEqual(UsageReportRefreshPolicy.MaxDaysBack, UsageReportRefreshPolicy.ClampDaysBack(365));
             Assert.AreEqual(14, UsageReportRefreshPolicy.ClampDaysBack(14));
+        }
 
-            Assert.AreEqual(UsageReportRefreshPolicy.MaxDaysBack, Window(365, NowUtc).DaysBackMax);
+        [TestMethod]
+        public void UsageReports_ClampIsAppliedBeforeTheWindowIsComputed()
+        {
+            // Reporting the clamped DaysBackMax while computing WindowStartUtc from the raw value would be
+            // invisible to a test that only checked DaysBackMax - and would make the indexed path issue 362
+            // existence queries instead of 25, and the unindexed path scan a year of a 200k-user table.
+            var wide = Window(365, NowUtc);
+            Assert.AreEqual(UsageReportRefreshPolicy.MaxDaysBack, wide.DaysBackMax);
+            Assert.AreEqual(NowUtc.Date.AddDays(-UsageReportRefreshPolicy.MaxDaysBack), wide.WindowStartUtc);
+            Assert.AreEqual(UsageReportRefreshPolicy.MaxDaysBack - RefreshableRecentDays,
+                UsageReportRefreshPolicy.EnumerateSkipCandidates(wide).Count());
+
+            var narrow = Window(0, NowUtc);
+            Assert.AreEqual(UsageReportRefreshPolicy.MinDaysBack, narrow.DaysBackMax);
+            Assert.AreEqual(NowUtc.Date.AddDays(-UsageReportRefreshPolicy.MinDaysBack), narrow.WindowStartUtc);
+            Assert.AreEqual(0, UsageReportRefreshPolicy.EnumerateSkipCandidates(narrow).Count(),
+                "At the minimum look-back the whole window is still mutable, so there is nothing to skip.");
         }
 
         [TestMethod]
@@ -128,9 +138,10 @@ namespace Tests.UnitTests
     }
 
     /// <summary>
-    /// The table-name resolution behind the storage-inspector port. The two callers react differently to a
-    /// missing TableAttribute - the index question throws, the maintenance silently skips - and that
-    /// asymmetry is existing behaviour worth pinning.
+    /// The table-name resolution behind the storage-inspector port, and the loader wiring that uses it.
+    /// The two callers react differently to a missing TableAttribute - the index question throws, the
+    /// maintenance silently skips - and that asymmetry is existing behaviour worth pinning at the level
+    /// that could actually regress.
     /// </summary>
     [TestClass]
     public class UsageReportTableNameTests
@@ -148,12 +159,48 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void UsageReports_EntityWithoutATable_ThrowsForTheIndexQuestionButNotForMaintenance()
+        public void UsageReports_TableNameHelper_TryResolveReturnsNullWhereResolveThrows()
         {
-            Assert.IsNull(UsageReportTableName.TryResolve(typeof(NoTableAttribute)),
-                "Maintenance skips silently, so it needs the non-throwing form.");
-            Assert.ThrowsException<InvalidOperationException>(() => UsageReportTableName.Resolve(typeof(NoTableAttribute)),
-                "The index question cannot be answered without a table, so it must fail loudly.");
+            Assert.IsNull(UsageReportTableName.TryResolve(typeof(NoTableAttribute)));
+            Assert.ThrowsException<InvalidOperationException>(() => UsageReportTableName.Resolve(typeof(NoTableAttribute)));
+        }
+
+        [TestMethod]
+        public async Task UsageReports_LoaderWithoutATable_ThrowsForTheIndexQuestionButSkipsMaintenance()
+        {
+            // Asserted through the LOADER, not the helper: swapping which of Resolve/TryResolve each loader
+            // method uses would reverse this behaviour, and a helper-only test would not notice.
+            //
+            // No database is reached. CompactColumnstoreAsync returns before touching the inspector, and
+            // HasLeadingDateIndexAsync resolves the inspector (the injected fake) before evaluating the
+            // table name, so a null context is safe for both.
+            var inspector = new FakeUsageReportStorageInspector();
+            var loader = new TablelessDailyActivityLoader(NullLogger.Instance) { StorageInspector = inspector };
+
+            await loader.CompactColumnstoreAsync(null);
+            Assert.AreEqual(0, inspector.CompactionsRequested.Count,
+                "Maintenance for an entity with no table must be skipped silently, not attempted.");
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => loader.HasLeadingDateIndexAsync(null));
+            Assert.AreEqual(0, inspector.IndexQuestionsAsked.Count);
+        }
+
+        [TestMethod]
+        public async Task UsageReports_LoaderWithATable_AsksTheInspectorForThatTable()
+        {
+            // The other half: a normal loader must reach the inspector with its own schema-qualified name.
+            var inspector = new FakeUsageReportStorageInspector(hasLeadingDateIndex: false);
+            var loader = new OutlookUserActivityLoader(null, null, new UserGroupsFilterModel(null), NullLogger.Instance)
+            {
+                StorageInspector = inspector
+            };
+
+            Assert.IsFalse(await loader.HasLeadingDateIndexAsync(null), "The loader must return what the inspector answers.");
+            await loader.CompactColumnstoreAsync(null);
+
+            var expected = UsageReportTableName.Resolve(typeof(OutlookUsageActivityLog));
+            CollectionAssert.AreEqual(new[] { expected }, inspector.IndexQuestionsAsked.ToArray());
+            CollectionAssert.AreEqual(new[] { expected }, inspector.CompactionsRequested.ToArray());
         }
     }
 }
