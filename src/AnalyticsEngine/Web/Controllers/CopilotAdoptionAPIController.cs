@@ -3,17 +3,16 @@ using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Runtime.Caching;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
+using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -47,15 +46,6 @@ namespace Web.AnalyticsWeb.Controllers
     [RoutePrefix("api/CopilotAdoption")]
     public class CopilotAdoptionAPIController : ApiController
     {
-        private const string CacheKeyPrefix = "CopilotAdoption::Analysis::";
-
-        /// <summary>
-        /// How long a completed analysis is reused. Long enough that working through the list - sorting,
-        /// filtering, exporting - never re-runs the queries, short enough that a refresh after an import
-        /// shows new data. The imports themselves run far less often than this.
-        /// </summary>
-        private const int CacheMinutes = 10;
-
         /// <summary>Windows the UI offers. Anything else is snapped to the nearest, so a hand-edited URL cannot force a year-long scan.</summary>
         private static readonly int[] AllowedWindowDays = { 7, 28, 90, 180 };
 
@@ -67,6 +57,18 @@ namespace Web.AnalyticsWeb.Controllers
         /// single request from materialising an entire directory into one HTTP response.
         /// </summary>
         private const int MaxCsvRows = 100000;
+
+        public CopilotAdoptionAPIController()
+            : this(CopilotAdoptionAnalysisCoordinator.Default)
+        {
+        }
+
+        internal CopilotAdoptionAPIController(CopilotAdoptionAnalysisCoordinator coordinator)
+        {
+            Coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
+        }
+
+        internal CopilotAdoptionAnalysisCoordinator Coordinator { get; }
 
         #region Availability
 
@@ -172,10 +174,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         /// <remarks>
         /// Task.WhenAny rather than a cancellable await: the analysis is shared between callers, so one
-        /// caller giving up must not cancel it for everyone else. The task is left running and observed on
-        /// completion by the continuation in <see cref="GetAnalysisAsync"/>.
+        /// caller giving up must not cancel it for everyone else. The task is left running in the shared
+        /// <see cref="CopilotAdoptionAnalysisCoordinator"/>.
         /// </remarks>
-        private static async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
+        private async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
             int windowDays, string seatLicenceTypeIds, CancellationToken cancellationToken)
         {
             return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, FirstResponseBudget, cancellationToken);
@@ -185,19 +187,14 @@ namespace Web.AnalyticsWeb.Controllers
         /// As above, but with an explicit wait budget. Exports use a much longer one - see
         /// <see cref="ExportWaitBudget"/>.
         /// </summary>
-        private static async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
+        private async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
             int windowDays, string seatLicenceTypeIds, TimeSpan budget, CancellationToken cancellationToken)
         {
-            var task = GetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
-
-            if (task.IsCompleted)
-            {
-                return await task;   // rethrows a genuine failure, as before
-            }
-
-            var finished = await Task.WhenAny(task, Task.Delay(budget, cancellationToken));
-
-            return finished == task ? await task : null;
+            return await Coordinator.TryGetAsync(
+                NormaliseWindowDays(windowDays),
+                ParseIds(seatLicenceTypeIds),
+                budget,
+                cancellationToken);
         }
 
         /// <summary>
@@ -578,235 +575,6 @@ namespace Web.AnalyticsWeb.Controllers
             };
 
             return response;
-        }
-
-        #endregion
-
-        #region Analysis cache
-
-        /// <summary>
-        /// The cached analysis for this window and licence override, running it if necessary.
-        ///
-        /// The <see cref="Task{T}"/> itself is cached, not its result, so several requests arriving
-        /// while the first analysis is still running all await the same execution instead of each
-        /// starting their own scan of the Copilot audit history. A failed analysis is evicted so the
-        /// next request retries rather than serving a cached error for ten minutes.
-        /// </summary>
-        /// <remarks>
-        /// Two details are load-bearing.
-        /// <para>
-        /// The work is wrapped in a <see cref="Lazy{T}"/> and only the winner of
-        /// <c>AddOrGetExisting</c> is evaluated. Starting the task first and then racing to insert it does
-        /// not share anything: a C# async method runs eagerly, so the loser has already issued its queries
-        /// and "abandoning" it only discards the result. Two concurrent first hits meant two full scans of
-        /// the audit history - and the SPA loads summary, filters and SQL concurrently on a cold page.
-        /// </para>
-        /// <para>
-        /// The shared execution deliberately does NOT take the caller's <see cref="CancellationToken"/>.
-        /// The token is bound to one HTTP request, so an admin navigating away would cancel the analysis
-        /// that every other waiter is awaiting.
-        /// </para>
-        /// </remarks>
-        /// <summary>
-        /// Analyses currently RUNNING, keyed the same way as the cache.
-        /// </summary>
-        /// <remarks>
-        /// Separate from <see cref="MemoryCache"/> on purpose. The cache entry's absolute expiry starts when
-        /// the entry is INSERTED, which is before the analysis has run - so a 10-minute entry holding an
-        /// analysis that takes seven minutes is only reusable for three, and an analysis that takes longer
-        /// than the expiry would be evicted while still running. The next request would then start a SECOND
-        /// full analysis against an already-struggling database, and so on for as long as anyone kept
-        /// polling. Polling makes that far more likely to happen, so it has to be fixed here (issue #360).
-        ///
-        /// In-flight runs therefore live here, with no expiry, and only the finished RESULT is put in the
-        /// cache - with its lifetime starting at completion, which is what the 10 minutes was always meant
-        /// to mean.
-        /// </remarks>
-        private static readonly ConcurrentDictionary<string, Lazy<Task<CopilotAdoptionAnalysis>>> _inFlight =
-            new ConcurrentDictionary<string, Lazy<Task<CopilotAdoptionAnalysis>>>(StringComparer.Ordinal);
-
-        private static Task<CopilotAdoptionAnalysis> GetAnalysisAsync(
-            int windowDays,
-            string seatLicenceTypeIds,
-            CancellationToken cancellationToken)
-        {
-            var window = NormaliseWindowDays(windowDays);
-            var overrideIds = ParseIds(seatLicenceTypeIds);
-            var cacheKey = CacheKeyPrefix + window + "::"
-                           + (overrideIds.Count == 0 ? "auto" : string.Join(",", overrideIds.OrderBy(i => i)));
-
-            // A completed result, still inside its 10 minutes.
-            var cached = MemoryCache.Default.Get(cacheKey) as CopilotAdoptionAnalysis;
-            if (cached != null)
-            {
-                return Task.FromResult(cached);
-            }
-
-            // A run already under way - join it rather than starting another.
-            var candidate = new Lazy<Task<CopilotAdoptionAnalysis>>(() =>
-            {
-                var options = CopilotAdoptionOptions.Default;
-                options.WindowDays = window;
-
-                var service = new CopilotAdoptionService(options);
-                return RunAndReportAsync(service, overrideIds, window);
-            }, LazyThreadSafetyMode.ExecutionAndPublication);
-
-            // GetOrAdd is atomic, and because the Lazy has not been evaluated yet the loser costs nothing -
-            // no query is issued for it.
-            var effective = _inFlight.GetOrAdd(cacheKey, candidate);
-
-            if (ReferenceEquals(effective, candidate))
-            {
-                // We won the race to create the entry. Re-check the result cache BEFORE evaluating the Lazy:
-                // between the miss above and here, an earlier run could have completed and published its
-                // result, and starting a second multi-minute analysis on top of a perfectly good one is
-                // exactly what this whole mechanism exists to prevent.
-                var justPublished = MemoryCache.Default.Get(cacheKey) as CopilotAdoptionAnalysis;
-                if (justPublished != null)
-                {
-                    RemoveInFlight(cacheKey, candidate);
-                    return Task.FromResult(justPublished);
-                }
-
-                var startedTask = effective.Value;
-
-                // Only the caller that actually started this run attaches the completion handling, so a
-                // hundred polls do not attach a hundred continuations to the same task.
-                startedTask.ContinueWith(
-                    completed =>
-                    {
-                        if (completed.IsFaulted)
-                        {
-                            // Reading .Exception is what actually OBSERVES the fault. Testing IsFaulted
-                            // alone leaves it unobserved if every caller has given up polling by now.
-                            var ignored = completed.Exception;
-                        }
-                        else if (!completed.IsCanceled)
-                        {
-                            // Publish BEFORE removing the in-flight entry, so there is no instant where the
-                            // key is absent from both stores and a concurrent caller would start again.
-                            MemoryCache.Default.Set(
-                                cacheKey, completed.Result, DateTimeOffset.UtcNow.AddMinutes(CacheMinutes));
-                        }
-
-                        // Generation-safe: ConcurrentDictionary's ICollection.Remove compares key AND value,
-                        // so this can only ever remove our own entry, never a newer run that replaced it.
-                        RemoveInFlight(cacheKey, candidate);
-                    },
-                    TaskContinuationOptions.ExecuteSynchronously);
-
-                return startedTask;
-            }
-
-            return effective.Value;
-        }
-
-        /// <summary>Removes an in-flight entry only if it is still the one we put there.</summary>
-        private static void RemoveInFlight(string cacheKey, Lazy<Task<CopilotAdoptionAnalysis>> ours)
-        {
-            var current = _inFlight as ICollection<KeyValuePair<string, Lazy<Task<CopilotAdoptionAnalysis>>>>;
-            current.Remove(new KeyValuePair<string, Lazy<Task<CopilotAdoptionAnalysis>>>(cacheKey, ours));
-        }
-
-        /// <summary>
-        /// Runs the analysis and reports how it went to App Insights.
-        ///
-        /// Deliberately inside the cache's Lazy factory, so exactly one event is emitted per actual
-        /// analysis rather than one per HTTP request. A cache hit does no work and should not look in
-        /// telemetry as though it did - otherwise the p95 would be dominated by cached reads and the
-        /// slow runs, which are the entire point of measuring, would disappear into the average.
-        /// </summary>
-        private static async Task<CopilotAdoptionAnalysis> RunAndReportAsync(
-            CopilotAdoptionService service, List<int> overrideIds, int windowDays)
-        {
-            try
-            {
-                var analysis = await service.AnalyseAsync(
-                    overrideIds.Count == 0 ? null : overrideIds, CancellationToken.None);
-
-                TrackAnalysis(analysis, windowDays);
-                return analysis;
-            }
-            catch (Exception ex)
-            {
-                // Previously TrackAnalysis sat after the await with no try/catch, so an analysis that threw
-                // reported NOTHING - no event, and no exception either, because the web application has no
-                // Application Insights request/exception collection of its own. That combination is what
-                // made issue #360 so hard to diagnose: a failing page with no telemetry at all.
-                TrackAnalysisFailure(ex, windowDays);
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Reports an analysis that failed outright. Never throws: telemetry must not be the reason a
-        /// request behaves differently.
-        /// </summary>
-        private static void TrackAnalysisFailure(Exception ex, int windowDays)
-        {
-            try
-            {
-                var config = new AppConfig();
-                var logger = new AnalyticsLogger(
-                    config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
-
-                logger.TrackException(ex);
-                logger.LogError(
-                    $"Copilot adoption analysis failed for a {windowDays}-day window: "
-                    + $"{ex.GetBaseException().Message}");
-
-                // One shared analysis can have many requests awaiting it, and each will rethrow this very
-                // instance. Marking it here stops the Web API exception logger reporting the same
-                // failure once more per waiting request.
-                WebExceptionTelemetry.MarkReported(ex);
-            }
-            catch (Exception)
-            {
-                // Deliberately swallowed - see above.
-            }
-        }
-
-        /// <summary>
-        /// Emits the <c>CopilotAdoptionAnalysis</c> event. Never throws: telemetry must not be the
-        /// reason a request behaves differently, which is the same rule the workbook endpoint follows.
-        /// </summary>
-        private static void TrackAnalysis(CopilotAdoptionAnalysis analysis, int windowDays)
-        {
-            try
-            {
-                var diagnostics = analysis?.Summary?.Diagnostics;
-                if (diagnostics == null) return;
-
-                var steps = new Dictionary<string, long>();
-                foreach (var step in diagnostics.Steps)
-                {
-                    // Last write wins; a step runs once per analysis, so a collision would be a bug.
-                    steps[step.Step] = step.DurationMs;
-                }
-
-                // A step that reached the command timeout is the signal that matters: the query was
-                // abandoned and its figures degraded to a warning rather than an error, so nothing
-                // else in the request tells anyone the report is incomplete.
-                var timeoutMs = CopilotAdoptionService.QueryTimeoutSecs * 1000L;
-                var timedOut = diagnostics.Steps.Any(s => s.DurationMs >= timeoutMs);
-
-                var config = new AppConfig();
-                var logger = new AnalyticsLogger(
-                    config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
-
-                logger.TrackCopilotAdoptionAnalysis(
-                    windowDays,
-                    diagnostics.TotalMs,
-                    steps,
-                    analysis.Summary.Warnings.Count,
-                    timedOut,
-                    diagnostics.SlowestStep?.Step);
-            }
-            catch (Exception)
-            {
-                // Swallowed on purpose - see the workbook endpoint for the same reasoning.
-            }
         }
 
         #endregion

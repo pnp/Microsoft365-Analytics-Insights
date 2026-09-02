@@ -19,6 +19,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
+using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
@@ -245,6 +246,15 @@ namespace WebJob.Office365ActivityImporter
                 sentEmailMailboxSkipList = new InMemorySentEmailMailboxSkipList();
             }
 
+            // Service Bus listener for Teams call notifications. Created ONCE here, outside the cycle
+            // loop, because the processor must outlive a single import cycle - ProgramTasks is rebuilt
+            // every cycle, so holding it there would create (and leak) a new Service Bus client and
+            // message pump every time. This replaces the process-wide static singleton that used to
+            // live inside CallQueueProcessor (issue #378); it is only built on the first cycle that
+            // actually needs it, and only published after Init() succeeds, so a failed start-up is
+            // retried on the next cycle exactly as before.
+            CallQueueProcessor callQueueProcessor = null;
+
             // Run app
             while (runAgain)
             {
@@ -263,7 +273,14 @@ namespace WebJob.Office365ActivityImporter
                     {
                         try
                         {
-                            await tasks.ProcessCallQueueAndWebhook(webHookUrl);
+                            if (callQueueProcessor == null)
+                            {
+                                var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString());
+                                await newProcessor.Init();
+                                callQueueProcessor = newProcessor;
+                            }
+
+                            await tasks.ProcessCallQueueAndWebhook(webHookUrl, callQueueProcessor);
                         }
                         catch (Exception ex)
                         {
