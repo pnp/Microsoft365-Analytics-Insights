@@ -17,20 +17,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// </summary>
     public class ChannelMessagesLoader
     {
-        // Safety cap for delta/replies paging at 200k-user scale: a single channel should
-        // never legitimately return more than this many messages in one delta window, but a
-        // misbehaving nextLink could otherwise loop forever or fill memory.
-        private const int MAX_MESSAGES_PER_CHANNEL = 100_000;
-        private const int MAX_REPLIES_PER_MESSAGE = 10_000;
-
         private readonly GraphServiceClient _client;
-        private readonly CacheConnectionManager _cacheConnectionManager;
+        private readonly ITeamChannelDeltaTokenStore _deltaTokenStore;
         private readonly ILogger _logger;
 
+        /// <summary>
+        /// Production constructor: delta tokens are cached in Redis.
+        /// </summary>
         public ChannelMessagesLoader(GraphServiceClient client, CacheConnectionManager cacheConnectionManager, ILogger logger)
+            : this(client, new RedisTeamChannelDeltaTokenStore(cacheConnectionManager, logger), logger) { }
+
+        /// <summary>
+        /// Constructor taking the delta-token store as a port, so the token handling can be exercised
+        /// without Redis. See issue #377.
+        /// </summary>
+        public ChannelMessagesLoader(GraphServiceClient client, ITeamChannelDeltaTokenStore deltaTokenStore, ILogger logger)
         {
             this._client = client;
-            this._cacheConnectionManager = cacheConnectionManager;
+            this._deltaTokenStore = deltaTokenStore ?? throw new ArgumentNullException(nameof(deltaTokenStore));
             this._logger = logger;
         }
 
@@ -41,7 +45,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         {
             if (string.IsNullOrEmpty(teamId)) throw new ArgumentException($"'{nameof(teamId)}' cannot be null or empty", nameof(teamId));
 
-            var channelDeltaInfo = await _cacheConnectionManager.GetTeamChannelDeltaTokenInfo(teamId, channel.Id);
+            var channelDeltaInfo = await _deltaTokenStore.GetDeltaToken(teamId, channel.Id);
 
             // v5+ removed QueryOption / $deltatoken support on the typed Delta request builder. To
             // keep using the SDK serialiser for ChatMessage we construct the full URL ourselves
@@ -65,7 +69,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             {
                 if (ex.Error?.Code == "BadRequest" && channelDeltaInfo != null)
                 {
-                    await _cacheConnectionManager.RemoveTeamChannelDeltaToken(teamId, channel.Id, _logger);
+                    await _deltaTokenStore.RemoveDeltaToken(teamId, channel.Id);
                     _logger.LogError(ex, $"Got bad request using delta token for messages. Removing from cache & will try full read next time.");
                 }
                 else throw;
@@ -79,14 +83,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                     {
                         rootMsgs.Add(msg);
                         loaded++;
-                        return loaded < MAX_MESSAGES_PER_CHANNEL;
+                        return TeamsCrawlPagingPolicy.ShouldContinuePaging(loaded, TeamsCrawlPagingPolicy.MaxMessagesPerChannel);
                     });
 
                 await iterator.IterateAsync();
 
                 if (iterator.State == PagingState.Paused)
                 {
-                    _logger.LogWarning($"Channel '{channel.DisplayName}' on Team '{teamId}': hit MAX_MESSAGES_PER_CHANNEL ({MAX_MESSAGES_PER_CHANNEL:N0}). Returning partial set of {rootMsgs.Count:N0} root messages.");
+                    _logger.LogWarning($"Channel '{channel.DisplayName}' on Team '{teamId}': hit MAX_MESSAGES_PER_CHANNEL ({TeamsCrawlPagingPolicy.MaxMessagesPerChannel:N0}). Returning partial set of {rootMsgs.Count:N0} root messages.");
                 }
 
                 if (!string.IsNullOrEmpty(iterator.Deltalink))
@@ -137,14 +141,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 {
                     allReplies.Add(reply);
                     loaded++;
-                    return loaded < MAX_REPLIES_PER_MESSAGE;
+                    return TeamsCrawlPagingPolicy.ShouldContinuePaging(loaded, TeamsCrawlPagingPolicy.MaxRepliesPerMessage);
                 });
 
             await iterator.IterateAsync();
 
             if (iterator.State == PagingState.Paused)
             {
-                _logger.LogWarning($"Channel {channelId} msg {messageId}: hit MAX_REPLIES_PER_MESSAGE ({MAX_REPLIES_PER_MESSAGE:N0}). Returning partial reply list of {allReplies.Count:N0}.");
+                _logger.LogWarning($"Channel {channelId} msg {messageId}: hit MAX_REPLIES_PER_MESSAGE ({TeamsCrawlPagingPolicy.MaxRepliesPerMessage:N0}). Returning partial reply list of {allReplies.Count:N0}.");
             }
 
             return allReplies;

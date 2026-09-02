@@ -45,54 +45,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         }
         /// <summary>
         /// Sets the "Messages" prop on each channel by reading each channel messages.
+        /// The crawl itself lives in <see cref="TeamsChannelCrawler"/> so it can be tested without
+        /// Graph or Redis; this overload wires up the production adapters.
         /// </summary>
         public static async Task PopulateNewMessagesAndReactions(this List<ChannelWithReactions> channels, Team team, RefreshOAuthToken refreshToken,
             CacheConnectionManager cacheConnectionManager, ILogger logger)
         {
-
-            foreach (var channel in channels)
+            // Nothing to crawl: return before building any adapter, so a team with no channels - or one
+            // we hold no user token for - still touches neither Redis, the logger nor team.Id, exactly
+            // as the original per-channel loop did (it read messages only when a token was present, and
+            // saved a delta token only when one came back).
+            if (channels.Count == 0 || refreshToken == null)
             {
-                // Load stats. Will throw ChannelMessagesReadException if token is invalid
-                var channelDelta = await channel.GetChannelMessagesAndReactions(team, refreshToken, cacheConnectionManager, logger);
-
-                // Save delta token for next read
-                if (channelDelta != null)
-                {
-                    await cacheConnectionManager.SetTeamChannelDeltaTokenInfo(team.Id, channel.Id, channelDelta, logger);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Save this channel stats. Channel object should be fully-loaded with tabs
-        /// </summary>
-        static async Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> GetChannelMessagesAndReactions(this ChannelWithReactions channel, Team parentTeam, RefreshOAuthToken refreshToken,
-            CacheConnectionManager cacheConnectionManager, ILogger logger)
-        {
-            TeamsRedisManager.TeamChannelDeltaTokenInfo channelDeltaInfo = null;
-
-            // Try and get user-delegated channel stats
-            if (refreshToken != null)
-            {
-                // Managed to get user-delegated token from refresh-token. Impersonate user.
-                // v5+ removed DelegateAuthenticationProvider — drop in our own
-                // IAuthenticationProvider that pins the supplied bearer token onto every request.
-                var _preCachedTokenClient = new GraphServiceClient(new BearerTokenAuthenticationProvider(refreshToken.AccessToken));
-
-                var channelMessagesLoader = new ChannelMessagesLoader(_preCachedTokenClient, cacheConnectionManager, logger);
-                try
-                {
-                    // Load msgs using user token
-                    channelDeltaInfo = await channelMessagesLoader.LoadTeamMessagesAndReplies(channel, parentTeam.Id);
-                }
-                catch (ODataError ex)
-                {
-                    // Assume there's an issue with the token. Parent will handle token clean-up
-                    throw new ChannelMessagesReadException(ex);
-                }
+                return;
             }
 
-            return channelDeltaInfo;
+            var deltaTokenStore = new RedisTeamChannelDeltaTokenStore(cacheConnectionManager, logger);
+            var messagesSource = new GraphChannelMessagesSourceLoader(refreshToken, deltaTokenStore, logger);
+
+            await new TeamsChannelCrawler(messagesSource, deltaTokenStore).PopulateNewMessagesAndReactions(channels, team.Id);
         }
 
         /// <summary>
