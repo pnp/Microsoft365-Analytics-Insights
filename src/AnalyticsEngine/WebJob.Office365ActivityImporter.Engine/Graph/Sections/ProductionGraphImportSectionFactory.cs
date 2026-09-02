@@ -143,10 +143,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                         var teamsImporter = new TeamsImporter(_logger, _settings, _graphClient);
 
                         // TeamsCrawlConfig is a detached POCO (two lists of ids), so the context is only
-                        // needed for the load itself. It used to be opened around every section from usage
-                        // reports onwards even though this was its only reader, so an EF context and the
-                        // entities it tracked were retained for the whole multi-hour Graph phase to serve one
-                        // query at the start of it.
+                        // needed for the load itself. It used to be created before the usage-report section
+                        // and disposed after the last section, even though this query - part way through
+                        // that span - was its only reader.
                         TeamsCrawlConfig teamsConfig;
                         using (var db = _dbContextFactory.Create())
                         {

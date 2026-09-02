@@ -45,11 +45,13 @@ namespace WebJob.Office365ActivityImporter.Engine
         }
 
         /// <summary>
-        /// The instant (UTC) at which <see cref="ShouldRun"/> starts returning true for
-        /// <paramref name="lastImported"/>. Exists so the "will import again after ..." message an operator
-        /// reads is derived from the same arithmetic as the decision: adding <paramref name="minWait"/> to the
-        /// stored LOCAL value instead would report a wall-clock time that is an hour out from the real
-        /// threshold across a daylight-saving transition.
+        /// The last instant (UTC) at which the gate is still shut for <paramref name="lastImported"/>:
+        /// <see cref="ShouldRun"/> is false at this instant and true one tick later, matching the
+        /// strictly-greater-than comparison and the word "after" in the operator-facing log line.
+        ///
+        /// Exists so that message is derived from the same arithmetic as the decision: adding
+        /// <paramref name="minWait"/> to the stored LOCAL value instead would report a wall-clock time that
+        /// is an hour out from the real threshold across a daylight-saving transition.
         /// </summary>
         public static DateTime NextRunUtc(DateTime lastImported, TimeSpan minWait)
         {

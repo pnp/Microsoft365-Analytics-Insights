@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Linq;
 using WebJob.Office365ActivityImporter.Engine;
 
 namespace Tests.UnitTests
@@ -157,9 +158,26 @@ namespace Tests.UnitTests
             // Asserted against ShouldRun itself, so the two can never drift apart.
             var lastUtc = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
 
-            foreach (var last in new[] { lastUtc, lastUtc.ToLocalTime(), DateTime.SpecifyKind(lastUtc, DateTimeKind.Unspecified).ToLocalTime() })
+            // The same instant in all three kinds the store can hand back. Utc and Local are what the two
+            // ISingleDateStore implementations actually produce; Unspecified is what an offset-less string in
+            // Redis parses to - a bare local wall-clock reading, which is why ToUniversalTime() treating
+            // Unspecified as local is the right reading of it.
+            //
+            // Note SpecifyKind(lastUtc, Unspecified).ToLocalTime() would NOT do: ToLocalTime treats
+            // Unspecified as UTC, so it just yields the Local value again.
+            var representations = new[]
+            {
+                lastUtc,
+                lastUtc.ToLocalTime(),
+                DateTime.SpecifyKind(lastUtc.ToLocalTime(), DateTimeKind.Unspecified),
+            };
+
+            foreach (var last in representations)
             {
                 var nextRun = ActivityReportsCadenceGate.NextRunUtc(last, OneDay);
+
+                Assert.AreEqual(lastUtc.Add(OneDay), nextRun,
+                    $"All three representations are the same instant, so they must announce the same threshold ({last.Kind}).");
 
                 Assert.IsFalse(ActivityReportsCadenceGate.ShouldRun(last, OneDay, nextRun.AddTicks(-1)),
                     $"One tick before the announced time the gate must still be shut ({last.Kind}).");
@@ -168,6 +186,10 @@ namespace Tests.UnitTests
                 Assert.IsTrue(ActivityReportsCadenceGate.ShouldRun(last, OneDay, nextRun.AddTicks(1)),
                     $"One tick after the announced time the gate must be open ({last.Kind}).");
             }
+
+            CollectionAssert.AreEqual(new[] { DateTimeKind.Utc, DateTimeKind.Local, DateTimeKind.Unspecified },
+                representations.Select(d => d.Kind).ToArray(),
+                "Sanity: the three fixtures must really be three different kinds, or two thirds of this test is a duplicate.");
         }
 
         [TestMethod]
