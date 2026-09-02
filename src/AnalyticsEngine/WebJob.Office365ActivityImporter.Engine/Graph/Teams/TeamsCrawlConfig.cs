@@ -25,16 +25,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         public List<string> BlacklistTeamsIds { get; set; } = new List<string>();
         public static TeamsCrawlConfig AllGroupsConfig => new TeamsCrawlConfig();
 
+        /// <summary>
+        /// Whether this group should be crawled. The rule itself lives in
+        /// <see cref="TeamsCrawlRules.ShouldCrawlGroup"/> so it can be tested without a database.
+        /// </summary>
         public bool CrawlGroup(string groupId)
         {
-            if (WhitelistTeamsIds.Count == 0)
-            {
-                return !BlacklistTeamsIds.Contains(groupId);
-            }
-            else
-            {
-                return !BlacklistTeamsIds.Contains(groupId) && WhitelistTeamsIds.Contains(groupId);
-            }
+            return TeamsCrawlRules.ShouldCrawlGroup(WhitelistTeamsIds, BlacklistTeamsIds, groupId);
         }
     }
 }
