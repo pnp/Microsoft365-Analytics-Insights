@@ -73,8 +73,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Redis. Separate from the production constructor rather than another optional parameter on it,
         /// because a trailing optional argument is baked in by the calling compiler and so is binary-breaking
         /// for already-compiled callers.
+        ///
+        /// <b>Internal deliberately.</b> An instance built this way can only run
+        /// <see cref="GetAndSaveAllGraphData"/>: it has no <see cref="GraphServiceClient"/> and no
+        /// <see cref="ISingleDateStore"/>, so <see cref="GetAndSaveActivityReportsMultiThreaded"/> would throw
+        /// on it. <c>InternalsVisibleTo("Tests.UnitTests")</c> makes it reachable from the test project, which
+        /// is its only intended caller; production composes through the constructor above.
         /// </summary>
-        public GraphImporter(AnalyticsLogger logger, AppConfig settings, IGraphImportSectionFactory sectionFactory, IImportLastRunStore lastRunStore, IClock clock)
+        internal GraphImporter(AnalyticsLogger logger, AppConfig settings, IGraphImportSectionFactory sectionFactory, IImportLastRunStore lastRunStore, IClock clock)
             : base(logger, settings)
         {
             _clock = clock ?? SystemClock.Instance;
@@ -346,7 +352,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             else
             {
                 _logger.LogInformation($"Skipping activity reports as have processed recently (less than {MIN_WAIT.TotalHours} hours ago). " +
-                    $"Will import again after {lastImportedDate.Value.Add(MIN_WAIT)}.");
+                    $"Will import again after {ActivityReportsCadenceGate.NextRunUtc(lastImportedDate.Value, MIN_WAIT).ToLocalTime()}.");
                 return false;
             }
         }

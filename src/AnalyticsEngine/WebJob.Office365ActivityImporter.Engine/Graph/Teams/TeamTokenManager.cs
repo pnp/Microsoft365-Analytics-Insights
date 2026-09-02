@@ -25,11 +25,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// so the lookup was always a miss and the add always a new entry.</description></item>
     /// </list>
     /// <para>
-    /// What it did do was leak and race. Every crawled team, on every cycle, added a fully-populated
-    /// <c>O365Team</c> (its channels, messages, members and reactions) plus a token to a dictionary that was
-    /// never read and never cleared - for the life of the WebJob process. And the Teams crawl runs teams in
+    /// What it did do was leak and race, for every team that reached the add - Redis configured, and a
+    /// refresh-token entry present for that team. Each such team, on every cycle, added a fully-populated
+    /// <c>O365Team</c> (its channels, messages, members and reactions) plus the token to a dictionary that was
+    /// never read and never cleared, for the life of the WebJob process. And the Teams crawl runs teams in
     /// parallel (<c>TeamsImporter.RefreshAndSaveAllTeamsData</c> via <c>ParallelListProcessor</c>), so that
-    /// unsynchronised <c>Dictionary.Add</c> was a genuine data race.
+    /// unsynchronised <c>Dictionary.Add</c> was a genuine data race whenever two chunks reached it at once.
     /// </para>
     /// </summary>
     public class TeamTokenManager

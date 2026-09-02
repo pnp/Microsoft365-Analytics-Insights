@@ -104,29 +104,70 @@ namespace Tests.UnitTests
             // DateTimeKind.Local. The gate must convert it to UTC before subtracting; the old inline
             // expression instead subtracted a local reading from DateTime.Now, which is the wall-clock
             // difference rather than the elapsed time.
-            var lastUtc = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
-            var offset = TimeZoneInfo.Local.GetUtcOffset(lastUtc);
-
-            if (Math.Abs(offset.TotalHours) < 1)
-            {
-                // On a host at (or within an hour of) UTC, a local and a UTC representation of the same
-                // instant have the same raw value, so no assertion here can tell the two apart. Say so
-                // rather than passing vacuously - this discriminates on any host an hour or more off UTC.
-                Assert.Inconclusive($"Host UTC offset is {offset}; local-vs-UTC handling is unobservable here.");
-            }
-
+            //
+            // Mid-June, deliberately: far from a DST transition in either hemisphere, so ToLocalTime() and
+            // ToUniversalTime() round-trip through an unambiguous offset.
+            var lastUtc = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
             var lastLocal = lastUtc.ToLocalTime();
             Assert.AreEqual(DateTimeKind.Local, lastLocal.Kind);
 
-            // 25h really elapsed. Skipping the conversion would read this as 25h minus the host offset,
-            // which is inside the window on any host east of UTC.
-            Assert.IsTrue(ActivityReportsCadenceGate.ShouldRun(lastLocal, OneDay, lastUtc.AddHours(25)),
-                "25 hours have really passed, whatever the host's timezone.");
+            // DateTime subtraction ignores Kind, so this is exactly the skew an implementation that forgot
+            // the conversion would introduce: it would test `elapsed > minWait + skew` instead of
+            // `elapsed > minWait`.
+            var skew = lastLocal - lastUtc;
+            if (skew == TimeSpan.Zero)
+            {
+                // On a host at UTC a local and a UTC representation of the same instant have identical
+                // ticks, so no assertion can tell the two apart. Say so rather than passing vacuously.
+                Assert.Inconclusive("Host is at UTC; local-vs-UTC handling is unobservable here.");
+            }
 
-            // 23h really elapsed. Skipping the conversion would read this as 23h minus the host offset,
-            // which is outside the window on any host west of UTC.
-            Assert.IsFalse(ActivityReportsCadenceGate.ShouldRun(lastLocal, OneDay, lastUtc.AddHours(23)),
-                "Only 23 hours have really passed, whatever the host's timezone.");
+            // Sweep the window on a 30-minute grid rather than picking two points either side of it. Two
+            // points only discriminate when the host offset exceeds the slack chosen, which is how an
+            // earlier version of this test passed vacuously at exactly UTC-1.
+            for (var halfHours = 0; halfHours <= 96; halfHours++)
+            {
+                var elapsed = TimeSpan.FromMinutes(30 * halfHours);
+                AssertGateAgreesWithRealElapsedTime(lastUtc, lastLocal, elapsed, skew);
+            }
+
+            // ...and one point chosen from the skew itself, which discriminates for ANY non-zero offset,
+            // in either direction, however small - so this test does not quietly depend on the host's
+            // offset happening to land on the grid. The EXPECTED answer is still real elapsed time versus
+            // the window; only the sample point is derived from the skew.
+            //
+            // At minWait + skew/2 the correct answer is "run" when skew is positive and "wait" when it is
+            // negative, and an implementation missing the conversion gives the opposite in both cases.
+            AssertGateAgreesWithRealElapsedTime(lastUtc, lastLocal, OneDay + TimeSpan.FromTicks(skew.Ticks / 2), skew);
+        }
+
+        private static void AssertGateAgreesWithRealElapsedTime(DateTime lastUtc, DateTime lastLocal, TimeSpan elapsed, TimeSpan skew)
+        {
+            Assert.AreEqual(elapsed > OneDay, ActivityReportsCadenceGate.ShouldRun(lastLocal, OneDay, lastUtc.Add(elapsed)),
+                $"After {elapsed} of real elapsed time the gate must give the same answer for a local-kind "
+                + $"stored timestamp as for a UTC one (host skew {skew}).");
+        }
+
+        [TestMethod]
+        public void ActivityReportsGate_NextRunUtc_IsExactlyWhenTheGateOpens()
+        {
+            // The "will import again after ..." line an operator reads must name the instant the gate
+            // actually opens. Adding minWait to the stored LOCAL value instead - which is what the code did
+            // before the gate moved to UTC - reports an hour out across a daylight-saving transition.
+            // Asserted against ShouldRun itself, so the two can never drift apart.
+            var lastUtc = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+
+            foreach (var last in new[] { lastUtc, lastUtc.ToLocalTime(), DateTime.SpecifyKind(lastUtc, DateTimeKind.Unspecified).ToLocalTime() })
+            {
+                var nextRun = ActivityReportsCadenceGate.NextRunUtc(last, OneDay);
+
+                Assert.IsFalse(ActivityReportsCadenceGate.ShouldRun(last, OneDay, nextRun.AddTicks(-1)),
+                    $"One tick before the announced time the gate must still be shut ({last.Kind}).");
+                Assert.IsFalse(ActivityReportsCadenceGate.ShouldRun(last, OneDay, nextRun),
+                    $"At exactly the announced time the gate is still shut - the comparison is strictly greater-than ({last.Kind}).");
+                Assert.IsTrue(ActivityReportsCadenceGate.ShouldRun(last, OneDay, nextRun.AddTicks(1)),
+                    $"One tick after the announced time the gate must be open ({last.Kind}).");
+            }
         }
 
         [TestMethod]
