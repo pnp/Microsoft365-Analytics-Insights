@@ -41,6 +41,72 @@ Confirm the root cause from the plan / DMVs **before** adding an index or blamin
 - **Index shape for a full-tuple existence check** (e.g. the Copilot merge's `NOT EXISTS … INTERSECT` accessed-resource de-dup): it needs the **whole tuple as a composite KEY** to seek. A covering `INCLUDE` index only removes key lookups — it does **not** give the tuple seek (here it was measurably *worse*). But don't over-generalise that into "`INCLUDE` is bad": it is the right shape when the extra column is only *returned* rather than *matched* — see *When `INCLUDE` is right and when a composite KEY is right*. **Validate the chosen index with a synthetic-scale reproduction** (populate a replica table, `SET STATISTICS IO, TIME ON`, compare before/after) before shipping an offline index build to prod.
 - **Use the built-in import diagnostics instead of guessing:** the per-step SQL profiler `dbo.copilot_merge_step_timings` (create the table to enable, drop to disable — zero overhead when absent; see `WebJob.Office365ActivityImporter.Engine/ActivityAPI/Copilot/SQL/copilot_merge_step_timings.sql`) and the importer's per-cycle `metadata breakdown` / `Copilot commit timing` save-timing traces (`ActivityImporter.cs`, `CopilotAuditEventManager.cs`) pinpoint the exact slow stage.
 
+### Diagnosing a Copilot Adoption page that keeps returning 202
+
+PR #412 added a privacy-safe `CopilotAdoptionLifecycle` event stream specifically for the case
+where the database appears to finish but the browser keeps polling. Do not turn on broad debug or
+EF SQL logging: request filters and SQL parameters can contain tenant data, and the lifecycle events
+already expose the useful boundaries without it.
+
+Collect these artifacts against the **same UTC window**:
+
+1. The approximate UTC start/end time, selected reporting period, visible outcome, and a HAR captured
+   without manually reloading the page.
+2. The lifecycle export below from the deployment's Application Insights resource.
+3. Azure SQL CPU, Data IO, Log IO and DTU percentages for that window. Use Query Store or
+   `sys.dm_exec_requests` to establish server execution separately, but never paste query text,
+   database names, identifiers, real row counts or raw plans into this public repository.
+
+```kusto
+let startUtc = datetime(2000-01-01T00:00:00Z); // replace out-of-band
+let endUtc   = datetime(2000-01-01T00:30:00Z); // replace out-of-band
+customEvents
+| where timestamp between (startUtc .. endUtc)
+| where name == "CopilotAdoptionLifecycle"
+| extend RunId=tostring(customDimensions.RunId),
+         InstanceId=tostring(customDimensions.InstanceId),
+         Sequence=tolong(customMeasurements.Sequence),
+         Stage=tostring(customDimensions.Stage),
+         Step=tostring(customDimensions.Step),
+         Query=tostring(customDimensions.Query),
+         Outcome=tostring(customDimensions.Outcome),
+         ExceptionType=tostring(customDimensions.ExceptionType),
+         SyncContext=tostring(customDimensions.SynchronizationContext),
+         ActiveOperations=tostring(customDimensions.ActiveOperations),
+         ElapsedMs=tolong(customMeasurements.ElapsedMs),
+         DurationMs=tolong(customMeasurements.DurationMs),
+         WorkingSetMB=round(todouble(customMeasurements.ProcessWorkingSetBytes) / 1048576.0, 1),
+         ManagedHeapMB=round(todouble(customMeasurements.ManagedHeapBytes) / 1048576.0, 1),
+         Gen2Collections=toint(customMeasurements.Gen2Collections),
+         AvailableWorkers=toint(customMeasurements.ThreadPoolAvailableWorkers),
+         HeartbeatDriftMs=tolong(customMeasurements.HeartbeatDriftMs),
+         DroppedEvents=toint(customMeasurements.DroppedEvents)
+| project timestamp, RunId, InstanceId, Sequence, Stage, Step, Query,
+          Outcome, ExceptionType, SyncContext, ActiveOperations,
+          ElapsedMs, DurationMs, WorkingSetMB, ManagedHeapMB,
+          Gen2Collections, AvailableWorkers, HeartbeatDriftMs, DroppedEvents
+| order by RunId asc, Sequence asc
+```
+
+Interpret boundaries literally:
+
+| Last evidence | What it proves |
+|---|---|
+| No `Started` event and an immediate page | Usually a 10-minute web-process result-cache hit; confirm Application Insights was otherwise receiving events |
+| `QueryStarted` without `QueryCompleted` | EF's full `ToListAsync` boundary did not return: connection acquisition, SQL execution, TDS transfer and materialisation are still combined here; Query Store decides whether SQL itself finished |
+| `QueryCompleted` without `StepCompleted` | SQL/EF returned; the C# projection for that step did not finish |
+| All analysis steps complete without `ScoringCompleted` | Final in-memory summary scoring stalled or failed |
+| `ServiceReturned` without `CachePublished` | The service returned, but cache publication did not complete |
+| `CachePublished` without `CompletionTelemetryReturned` | The result was available to callers, but legacy completion telemetry did not return |
+| Repeating `Heartbeat` | Read `ActiveOperations`, memory/GC, available threads, drift and `DroppedEvents`; heartbeat starts after 30 seconds, so a healthy fast run has none |
+| `HostStopping` during a run | A graceful AppDomain shutdown interrupted it |
+| A run stops without a terminal event and the next run has a new `InstanceId` | Treat as an abrupt AppDomain/process loss |
+
+`ElapsedMs` is time since the run began. `DurationMs` is the named query/step/cache/telemetry
+operation only. A completed analysis is cached in the web process for 10 minutes per normalised
+period and licence-override shape; the in-flight task is also shared. Azure SQL's buffer/plan caches
+are separate and can make a fresh analysis much faster even after the web application is redeployed.
+
 ## NuGet Package Management
 - When NuGet packages are added or updated, always update binding redirects in both App.Template.config and App.config for all affected projects (including test projects). App.config is generated dynamically from App.Template.config at build time, so App.Template.config is the source of truth.
 - When updating Azure SDK packages in this solution, be aware that CloudInstallEngine targets .NET Standard 2.0 while App.ControlPanel.Engine and test projects target .NET Framework 4.8. Upgrading packages in CloudInstallEngine can cause CS1705 assembly version mismatch errors in consuming .NET Framework projects that need matching direct PackageReference additions and binding redirect updates.
