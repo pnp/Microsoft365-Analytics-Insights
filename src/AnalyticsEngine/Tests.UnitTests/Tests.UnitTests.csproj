@@ -151,6 +151,7 @@
     <Compile Include="CopilotTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
+    <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeAggregateWeeklyUsageReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeSpoGraphClient.cs" />
     <Compile Include="FakeLoaderClasses\MockUserGroupsCache.cs" />
@@ -182,6 +183,7 @@
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
     <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
+    <Compile Include="CopilotUsagePersistencePortTests.cs" />
     <Compile Include="CopilotUsageReportImportTests.cs" />
     <Compile Include="DenormaliseCopilotChatUserAndTimeMigrationTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
