@@ -33,7 +33,9 @@
     <Compile Include="AppConfigDefaultsTests.cs" />
     <Compile Include="PreInstallAdvisorTests.cs" />
     <Compile Include="ImportCadenceTests.cs" />
+    <Compile Include="AppInsightsApiClientTests.cs" />
     <Compile Include="AppInsightsAuthTests.cs" />
+    <Compile Include="AppInsightsImporterOrchestrationTests.cs" />
     <Compile Include="CheckpointTableClientFactoryTests.cs" />
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
@@ -207,6 +209,7 @@
     <Compile Include="FakeEntities\FakeOfficeServicesDB.cs" />
     <Compile Include="CallRecordTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivityImporter.cs" />
+    <Compile Include="FakeLoaderClasses\FakeAppInsightsPorts.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivityReportLoader.cs" />
     <Compile Include="FakeLoaderClasses\FakeActivityReportPersistenceManager.cs" />
     <Compile Include="FakeLoaderClasses\FakeContentMetaDataLoader.cs" />

@@ -16,7 +16,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// <summary>
     /// HTTP client for App Insights calls, authenticated via Entra ID (OAuth).
     /// </summary>
-    public class AppInsightsAPIClient : IDisposable
+    public class AppInsightsAPIClient : IAppInsightsSourceLoader, IDisposable
     {
         private readonly ILogger _logger;
         private readonly string _appInsightsId;
@@ -35,8 +35,18 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         /// <param name="appInsightsConnectionString">The Application Insights connection string. The ApplicationId is parsed from it for use in the query URL.</param>
         /// <param name="credential">A TokenCredential (e.g. ClientSecretCredential) for Entra ID authentication.</param>
-        /// <param name="debugTracer">Logger instance.</param>
+        /// <param name="logger">Logger instance.</param>
         public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger logger)
+            : this(appInsightsConnectionString, credential, logger, null)
+        {
+        }
+
+        /// <summary>
+        /// As above, but with the HTTP transport supplied by the caller. Used by the tests to drive the
+        /// retry, back-off and transient-classification logic against a stub handler instead of the real
+        /// App Insights endpoint (issue #374). A <c>null</c> handler means the production transport.
+        /// </summary>
+        public AppInsightsAPIClient(string appInsightsConnectionString, TokenCredential credential, ILogger logger, HttpMessageHandler messageHandler)
         {
             if (string.IsNullOrEmpty(appInsightsConnectionString))
             {
@@ -51,6 +61,10 @@ namespace WebJob.AppInsightsImporter.Engine
                 throw new ArgumentException("Could not parse ApplicationId from the provided connection string.", nameof(appInsightsConnectionString));
             }
 
+            client = messageHandler == null
+                ? new HttpClient { Timeout = TimeSpan.FromMinutes(10) }
+                : new HttpClient(messageHandler, disposeHandler: false) { Timeout = TimeSpan.FromMinutes(10) };
+
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             _logger = logger;
@@ -63,7 +77,7 @@ namespace WebJob.AppInsightsImporter.Engine
         // Per-instance HttpClient. Cannot be made static because callers set the
         // Authorization header on DefaultRequestHeaders per token refresh; sharing
         // would race between instances. Lifetime is bounded by the importer run.
-        private HttpClient client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        private readonly HttpClient client;
 
         #endregion
 
@@ -179,6 +193,20 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         /// <summary>
+        /// <see cref="IAppInsightsSourceLoader"/>. Kept as a thin alias over the original method name so no
+        /// existing call site or test changes.
+        /// </summary>
+        public Task<PageViewCollection> GetPageViewsAsync(DateTime forDateUtc, bool saveRestResponses)
+            => GetPageViewsFromAppInsights(forDateUtc, saveRestResponses);
+
+        /// <summary>
+        /// <see cref="IAppInsightsSourceLoader"/>. Kept as a thin alias over the original method name so no
+        /// existing call site or test changes.
+        /// </summary>
+        public Task<CustomEventsResultCollection> GetCustomEventsAsync(DateTime forDateUtc, bool saveRestResponses)
+            => GetCustomEventsFromAppInsights(forDateUtc, saveRestResponses);
+
+        /// <summary>
         /// Load page-views
         /// </summary>
         public async Task<PageViewCollection> GetPageViewsFromAppInsights(DateTime forDate, bool saveRestResponses)
@@ -218,9 +246,19 @@ namespace WebJob.AppInsightsImporter.Engine
             return new CustomEventsResultCollection(result.DefaultTable, forDate, _logger);
         }
 
+        /// <summary>
+        /// The KQL time window for one UTC day.
+        ///
+        /// Formatted with <see cref="System.Globalization.CultureInfo.InvariantCulture"/> deliberately: the
+        /// current culture selects the calendar, so on a host whose culture uses a non-Gregorian calendar
+        /// this rendered a completely different date - "2569-05-30" under th-TH (Buddhist), "1447-12-13"
+        /// under ar-SA (Umm al-Qura) - and App Insights then returned no rows for the window, silently and
+        /// without an error. KQL <c>todatetime()</c> only understands Gregorian ISO dates.
+        /// </summary>
         internal string GetWhereString(DateTime forDate)
         {
-            return $"timestamp >= todatetime('{forDate.ToString("yyyy-MM-dd HH:mm:ss")}') and timestamp < todatetime('{forDate.AddDays(1).ToString("yyyy-MM-dd HH:mm:ss")}')";
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+            return $"timestamp >= todatetime('{forDate.ToString("yyyy-MM-dd HH:mm:ss", culture)}') and timestamp < todatetime('{forDate.AddDays(1).ToString("yyyy-MM-dd HH:mm:ss", culture)}')";
         }
 
         async Task<T> HandleResponse<T>(HttpResponseMessage response, bool saveRestResponses, string operationType)
