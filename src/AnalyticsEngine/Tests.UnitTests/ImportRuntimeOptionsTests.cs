@@ -178,6 +178,13 @@ namespace Tests.UnitTests
             {
                 var nextRun = ActivityReportsCadenceGate.NextRunUtc(last, OneDay);
 
+                // Kind, not just ticks: on a host at UTC all three fixtures have identical ticks, so an
+                // implementation that skipped the conversion would satisfy every value assertion below.
+                // ToUniversalTime() always yields Utc; DateTime.Add preserves the input's Kind - so this is
+                // the one assertion here that discriminates on every host, including a UTC CI runner.
+                Assert.AreEqual(DateTimeKind.Utc, nextRun.Kind,
+                    $"NextRunUtc must return a UTC instant whatever kind it was given ({last.Kind}).");
+
                 Assert.AreEqual(lastUtc.Add(OneDay), nextRun,
                     $"All three representations are the same instant, so they must announce the same threshold ({last.Kind}).");
 
