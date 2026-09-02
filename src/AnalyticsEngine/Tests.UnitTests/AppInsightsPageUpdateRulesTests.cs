@@ -172,11 +172,14 @@ namespace Tests.UnitTests
         public void PageUserEvents_EmailIsLowerCasedForTheUserLookup()
         {
             // The user cache is keyed on the address, so a mixed-case address must not create a second user.
-            var decisions = PageUserEventRules.Classify(new List<PageCommentEvent> { Comment(1, "KAΛHMEPA@Contoso.OnMicrosoft.com") },
+            // The address is ASCII on purpose: it is the signed-in user's Entra UPN, which Entra restricts
+            // to A-Z a-z 0-9 ' . - _ ! # ^ ~ (#402/#414). The culture-invariance of the lower-casing (the
+            // tr-TR dotless-i trap) is guarded separately in OrgUrlStoreTests.
+            var decisions = PageUserEventRules.Classify(new List<PageCommentEvent> { Comment(1, "KAlimera@Contoso.OnMicrosoft.com") },
                 new List<PageComment>());
 
             Assert.AreEqual(PageUserEventOutcome.New, decisions.Single().Outcome);
-            Assert.AreEqual("kaλhmepa@contoso.onmicrosoft.com", decisions.Single().NormalisedEmail);
+            Assert.AreEqual("kalimera@contoso.onmicrosoft.com", decisions.Single().NormalisedEmail);
         }
 
         [TestMethod]

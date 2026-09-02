@@ -67,10 +67,9 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(
                 new[] { "chris@contoso.onmicrosoft.com", "o'brien-smith@contoso.onmicrosoft.com" },
                 decision.Importable.Select(r => r.UserPrincipalName).ToArray(),
-                "Visible identities must still import, verbatim. The apostrophe and hyphen are the "
-                + "awkward characters Entra actually permits in a UPN (A-Z a-z 0-9 ' . - _ ! # ^ ~), so "
-                + "this fails if the path escapes or normalises the value. Entra does not permit "
-                + "non-Latin UPNs, so a Greek sample here would be unreachable input (#402/#414).");
+                "Visible identities must still import, verbatim and in order. The apostrophe and hyphen "
+                + "are awkward characters Entra genuinely permits in a UPN (A-Z a-z 0-9 ' . - _ ! # ^ ~), "
+                + "so this is reachable data - unlike a Greek UPN, which Entra disallows (#402/#414).");
         }
 
         [TestMethod]

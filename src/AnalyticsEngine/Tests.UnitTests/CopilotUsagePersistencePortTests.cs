@@ -63,6 +63,9 @@ namespace Tests.UnitTests
                 {
                     ["reportRefreshDate"] = date,
                     ["userPrincipalName"] = upn,
+                    // Realistic Graph payload shape. This importer never reads displayName, so nothing
+                    // here asserts it - it is not a Unicode guard, just a field the parser must ignore
+                    // without tripping over.
                     ["displayName"] = "Καλημέρα Κόσμε",
                     ["lastActivityDate"] = date,
                     ["copilotActivityUserDetailsByPeriod"] = new JArray
@@ -183,11 +186,11 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(1, written);
             Assert.IsTrue(store.Users.ContainsKey("o'brien-smith@contoso.onmicrosoft.com"),
-                "An identity on a recognised domain must be created, not dropped, and keyed verbatim. "
-                + "The apostrophe and hyphen are the awkward characters Entra actually permits in a UPN "
-                + "(A-Z a-z 0-9 ' . - _ ! # ^ ~), so this fails if the path escapes or normalises the "
-                + "key. Entra does not permit non-Latin UPNs (#402/#414), so a Greek sample here would "
-                + "be unreachable input; the Unicode guard in this file sits on displayName instead.");
+                "An identity on a recognised domain must be created, not dropped. The apostrophe and "
+                + "hyphen are awkward characters Entra genuinely permits in a UPN (A-Z a-z 0-9 "
+                + "' . - _ ! # ^ ~), so this is reachable data - unlike a Greek UPN, which Entra "
+                + "disallows (#402/#414). Note the assertion is domain recognition, not escaping: this "
+                + "fake keys case-insensitively, so it would not catch a case-folding change.");
         }
 
         [TestMethod]
