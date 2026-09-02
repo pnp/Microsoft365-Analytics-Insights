@@ -63,8 +63,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
     }
 
     /// <summary>
-    /// Production <see cref="IActivityStagingWriter"/>: an <c>EFInsertBatch</c> bound to the save's own EF
-    /// context, which is exactly what <c>ActivityReportSqlPersistenceManager</c> built inline before #373.
+    /// Production <see cref="IActivityStagingWriter"/>: an <c>EFInsertBatch</c> constructed from the save
+    /// context's connection string, which is exactly what <c>ActivityReportSqlPersistenceManager</c> built
+    /// inline before #373.
     /// </summary>
     internal sealed class SqlActivityStagingWriter : IActivityStagingWriter
     {
