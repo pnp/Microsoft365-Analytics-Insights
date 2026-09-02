@@ -181,9 +181,11 @@ namespace Tests.UnitTests
             var ddl = WebJob.AppInsightsImporter.Engine.Properties.Resources.Create_Searches_Import_Temp_Table;
 
             Assert.IsTrue(Regex.IsMatch(ddl, @"\[user_name\]\s*\[nvarchar\]", RegexOptions.IgnoreCase),
-                "searches staging [user_name] must be nvarchar so non-Latin UPNs (e.g. Greek) aren't corrupted to '?'.");
+                "searches staging [user_name] must be nvarchar to stay consistent with the rest of the "
+                + "staging table and with urls/search_term; see the remarks above for why it is not, on "
+                + "its own, what makes a UPN survive the merge.");
             Assert.IsFalse(Regex.IsMatch(ddl, @"\[user_name\]\s*\[varchar\]", RegexOptions.IgnoreCase),
-                "searches staging [user_name] must NOT be varchar (single-code-page corrupts Unicode UPNs).");
+                "searches staging [user_name] must NOT be varchar (single-code-page).");
             Assert.IsTrue(Regex.IsMatch(ddl, @"\[search_term\]\s*\[nvarchar\]", RegexOptions.IgnoreCase),
                 "searches staging [search_term] must be nvarchar (users search in non-Latin scripts).");
         }

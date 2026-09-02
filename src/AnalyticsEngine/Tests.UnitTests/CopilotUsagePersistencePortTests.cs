@@ -63,6 +63,9 @@ namespace Tests.UnitTests
                 {
                     ["reportRefreshDate"] = date,
                     ["userPrincipalName"] = upn,
+                    // Realistic Graph payload shape. This importer never reads displayName, so nothing
+                    // here asserts it - it is not a Unicode guard, just a field the parser must ignore
+                    // without tripping over.
                     ["displayName"] = "Καλημέρα Κόσμε",
                     ["lastActivityDate"] = date,
                     ["copilotActivityUserDetailsByPeriod"] = new JArray
@@ -178,12 +181,18 @@ namespace Tests.UnitTests
             var store = new InMemoryCopilotUsagePersistenceManager();
             store.SeedUser("someone.else@contoso.onmicrosoft.com");   // establishes the known domain
 
-            var written = await DetailLoader(UserDetailReport("καλημέρα@contoso.onmicrosoft.com", 28, 10, 2), store)
+            var written = await DetailLoader(UserDetailReport("o'brien-smith@contoso.onmicrosoft.com", 28, 10, 2), store)
                 .LoadAndSaveAsync(DetailRequest());
 
             Assert.AreEqual(1, written);
-            Assert.IsTrue(store.Users.ContainsKey("καλημέρα@contoso.onmicrosoft.com"),
-                "A non-Latin UPN on a recognised domain must be created, not dropped.");
+            Assert.IsTrue(store.Users.ContainsKey("o'brien-smith@contoso.onmicrosoft.com"),
+                "An identity on a recognised domain must be created, not dropped. The apostrophe and "
+                + "hyphen are awkward characters Entra genuinely permits in a UPN (A-Z a-z 0-9 "
+                + "' . - _ ! # ^ ~), so this is reachable data - unlike a Greek UPN, which Entra "
+                + "disallows (#402/#414). What it guards concretely: the row only reaches this path if "
+                + "LooksLikeRealUpn -> IsEmail accepts the apostrophe, so a naive-regex regression there "
+                + "would drop a real user as if it were a concealed-identity hash. It does NOT guard "
+                + "case folding - this fake keys case-insensitively.");
         }
 
         [TestMethod]

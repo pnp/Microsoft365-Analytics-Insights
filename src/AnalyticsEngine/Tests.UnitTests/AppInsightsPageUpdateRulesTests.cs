@@ -172,11 +172,17 @@ namespace Tests.UnitTests
         public void PageUserEvents_EmailIsLowerCasedForTheUserLookup()
         {
             // The user cache is keyed on the address, so a mixed-case address must not create a second user.
-            var decisions = PageUserEventRules.Classify(new List<PageCommentEvent> { Comment(1, "KAΛHMEPA@Contoso.OnMicrosoft.com") },
+            // The address is the raw SharePoint comment-author email (c.author.email, copied verbatim by
+            // the AI Tracker in SpoPagePropertyManager.ts) - PageUpdateManager assigns it to a User's
+            // UserPrincipalName, but that destination does not make the source a validated Entra UPN.
+            // It is kept ASCII because it lands in dbo.users.user_name, which is varchar(250), so a
+            // non-ASCII address would be corrupted at rest anyway (#402/#414). The culture-invariance of
+            // the lower-casing (the tr-TR dotless-i trap) is guarded separately in OrgUrlStoreTests.
+            var decisions = PageUserEventRules.Classify(new List<PageCommentEvent> { Comment(1, "KAlimera@Contoso.OnMicrosoft.com") },
                 new List<PageComment>());
 
             Assert.AreEqual(PageUserEventOutcome.New, decisions.Single().Outcome);
-            Assert.AreEqual("kaλhmepa@contoso.onmicrosoft.com", decisions.Single().NormalisedEmail);
+            Assert.AreEqual("kalimera@contoso.onmicrosoft.com", decisions.Single().NormalisedEmail);
         }
 
         [TestMethod]

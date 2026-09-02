@@ -92,23 +92,29 @@ namespace Tests.UnitTests
         /// <summary>
         /// The extraction moved to CopilotPrewarmPolicy in issue #373; the manager keeps a one-line
         /// delegating wrapper. This does NOT try to prove delegation - with a one-line wrapper that
-        /// comparison is tautological - it pins the thing that could actually regress: non-Latin context
-        /// ids and UPNs surviving the wrapper unchanged.
+        /// comparison is tautological - it pins the thing that could actually regress: a non-Latin file
+        /// URL surviving the wrapper unchanged as the dictionary key, which is what the lookup below
+        /// depends on.
+        ///
+        /// The URL is the Unicode-bearing field here and the map's value is deliberately ASCII: it is
+        /// the Copilot event's UserId, which this path consumes as an Entra UPN (it is handed to
+        /// GraphFileMetadataLoader.GetSpoFileInfo as eventUpn and on to GetUserDriveAsync), and Entra
+        /// UPNs are ASCII - see #402/#414.
         /// </summary>
         [TestMethod]
-        public void ManagerWrapper_KeepsNonLatinContextIdsAndUpnsIntact()
+        public void ManagerWrapper_KeepsNonLatinFileUrlsIntact()
         {
             var url = "https://contoso.sharepoint.com/sites/x/Καλημέρα κόσμε.docx";
             var acts = new List<AbstractAuditLogContent>
             {
-                CopilotEvent("καλημέρα@contoso.onmicrosoft.com", Chat("19:chat@thread.v2"), File(url)),
+                CopilotEvent("a@contoso.onmicrosoft.com", Chat("19:chat@thread.v2"), File(url)),
                 CopilotEvent("b@contoso.com", Meeting("19:meeting@thread.v2"), File("https://contoso.sharepoint.com/sites/x/b.docx"))
             };
 
             var viaWrapper = ActivityReportSqlPersistenceManager.ExtractCopilotFileContexts(acts);
 
             Assert.AreEqual(1, viaWrapper.Count);
-            Assert.AreEqual("καλημέρα@contoso.onmicrosoft.com", viaWrapper[url]);
+            Assert.AreEqual("a@contoso.onmicrosoft.com", viaWrapper[url]);
         }
 
         [TestMethod]
