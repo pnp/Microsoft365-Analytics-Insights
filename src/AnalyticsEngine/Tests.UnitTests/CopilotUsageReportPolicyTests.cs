@@ -69,7 +69,10 @@ namespace Tests.UnitTests
                 decision.Importable.Select(r => r.UserPrincipalName).ToArray(),
                 "Visible identities must still import, verbatim and in order. The apostrophe and hyphen "
                 + "are awkward characters Entra genuinely permits in a UPN (A-Z a-z 0-9 ' . - _ ! # ^ ~), "
-                + "so this is reachable data - unlike a Greek UPN, which Entra disallows (#402/#414).");
+                + "so this is reachable data - unlike a Greek UPN, which Entra disallows (#402/#414). "
+                + "What it guards concretely: concealment is decided by LooksLikeRealUpn -> IsEmail, so "
+                + "if that ever regressed to a naive regex that rejected an apostrophe, a real user "
+                + "would be misclassified as a pseudonym and silently dropped from the import.");
         }
 
         [TestMethod]
