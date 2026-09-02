@@ -444,11 +444,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             else
             {
-                // Fallback for edge cases where mapper isn't initialized
-                dbUser.AccountEnabled = graphUser.AccountEnabled;
-                dbUser.PostalCode = graphUser.PostalCode;
-                dbUser.AzureAdId = graphUser.Id;
-                dbUser.Mail = graphUser.Mail;
+                // Fallback for edge cases where mapper isn't initialized. Uses the same extracted
+                // mapping rule as UserDataMapper so the two copies cannot drift apart (#371).
+                var plan = UserMetadataMappingRules.BuildPlan(graphUser);
+                dbUser.AccountEnabled = plan.AccountEnabled;
+                dbUser.PostalCode = plan.PostalCode;
+                dbUser.AzureAdId = plan.AzureAdId;
+                dbUser.Mail = plan.Mail;
                 return dbUser;
             }
         }

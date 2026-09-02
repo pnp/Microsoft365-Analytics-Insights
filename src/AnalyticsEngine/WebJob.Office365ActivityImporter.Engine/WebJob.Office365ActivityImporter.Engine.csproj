@@ -224,6 +224,7 @@
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
+    <Compile Include="Graph\User\Rules\UserMetadataMappingRules.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
     <Compile Include="Graph\User\UserGroupsCache.cs" />
