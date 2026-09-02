@@ -19,6 +19,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     {
         private readonly int _maxSavesPerBatch;
         private readonly IProcessedBlobStore _processedBlobStore;
+        private readonly IActivityMetadataRecoveryStore _metadataRecoveryStore;
         private readonly int _maxConcurrentSaves;
         private int _reportSummariesTotal = 0;
         private int _reportSummariesProcessed = 0;
@@ -28,6 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         {
             _maxSavesPerBatch = maxSavesPerBatch;
             _processedBlobStore = processedBlobStore;
+            _metadataRecoveryStore = processedBlobStore as IActivityMetadataRecoveryStore;
             _maxConcurrentSaves = Math.Max(1, maxConcurrentSaves);
         }
 
@@ -80,6 +82,9 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             // best-effort OPTIMISATION: a store failure must never fail the import - we just process every
             // blob this cycle (and marking is likewise best-effort in BlobCommitTracker).
             BlobCommitTracker blobTracker = null;
+            bool checkpointStateKnown = false;
+            ISet<string> metadataRecoveryBlobIds = new HashSet<string>();
+            List<string> selectedBlobIds = new List<string>();
             if (_processedBlobStore != null)
             {
                 int beforeFilter = allSummaries.Count;
@@ -87,10 +92,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 try
                 {
                     alreadyProcessed = await _processedBlobStore.GetProcessedBlobIdsAsync();
+                    checkpointStateKnown = alreadyProcessed != null;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning($"Audit events import: blob checkpoint read failed ({ex.Message}); processing all content blobs this cycle.");
+                    if (_metadataRecoveryStore != null)
+                    {
+                        throw new InvalidOperationException(
+                            "Audit events import: blob checkpoint state could not be read; aborting before any database save so a partially committed blob cannot be mistaken for complete.",
+                            ex);
+                    }
+                    _logger.LogWarning($"Audit events import: blob checkpoint read failed ({ex.Message}); processing all content blobs, " +
+                        "but checkpoint writes are disabled this cycle because this custom store has no two-phase recovery capability.");
                 }
                 if (alreadyProcessed != null && alreadyProcessed.Count > 0)
                 {
@@ -100,7 +113,42 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 }
                 allStats.BlobsSkipped = beforeFilter - allSummaries.Count;
                 _logger.LogInformation($"Audit events import: blob checkpoint skipped {allStats.BlobsSkipped.ToString("n0")} of {beforeFilter.ToString("n0")} content blobs already committed in a previous cycle.");
-                blobTracker = new BlobCommitTracker(_processedBlobStore, _logger);
+
+                if (_metadataRecoveryStore != null)
+                {
+                    try
+                    {
+                        metadataRecoveryBlobIds =
+                            await _metadataRecoveryStore.GetMetadataRecoveryPendingBlobIdsAsync()
+                            ?? new HashSet<string>();
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException(
+                            "Audit events import: metadata-recovery checkpoint state could not be read; aborting before any database save.",
+                            ex);
+                    }
+
+                    selectedBlobIds = allSummaries
+                        .Select(s => s.BlobId)
+                        .Where(id => !string.IsNullOrEmpty(id))
+                        .Distinct()
+                        .ToList();
+                    try
+                    {
+                        await _metadataRecoveryStore.MarkMetadataRecoveryPendingAsync(selectedBlobIds);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException(
+                            "Audit events import: content blobs could not be marked recovery-pending; aborting before any database save.",
+                            ex);
+                    }
+                }
+
+                blobTracker = new BlobCommitTracker(
+                    _processedBlobStore, _logger, _metadataRecoveryStore,
+                    selectedBlobIds, checkpointStateKnown);
             }
 
             // Remember total so we can report on progress when threads finish loading a chunk
@@ -114,12 +162,22 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             {
                 try
                 {
+                    var saveSet = new WebActivityReportSet(reportChunk)
+                    {
+                        MetadataRecoveryBlobIds = checkpointStateKnown
+                            ? new HashSet<string>(
+                            reportChunk
+                                .Select(e => e.SourceContentId)
+                                .Where(id => !string.IsNullOrEmpty(id) && metadataRecoveryBlobIds.Contains(id)))
+                            : new HashSet<string>()
+                    };
+
                     // Retry transient SQL faults (a dropped/unrecoverable connection, timeout, deadlock, Azure
                     // SQL throttling/failover) so a momentary blip doesn't discard the batch and abort the
                     // cycle. CommitAll is safe to re-run: the merge SQL is idempotent (NOT EXISTS guards) and
                     // the metadata pass uses get-or-create lookups, and each attempt opens fresh connections.
                     var stats = await TransientSqlRetry.ExecuteWithRetryAsync(
-                        () => activityReportPersistenceManager.CommitAll(new WebActivityReportSet(reportChunk)),
+                        () => activityReportPersistenceManager.CommitAll(saveSet),
                         BatchSaveMaxAttempts, _logger, "Audit events import: batch save", BatchSaveRetryBaseDelay);
 
                     lock (allStats)

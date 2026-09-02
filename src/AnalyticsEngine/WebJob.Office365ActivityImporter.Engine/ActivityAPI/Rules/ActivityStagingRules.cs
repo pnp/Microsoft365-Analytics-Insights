@@ -105,11 +105,34 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules
             Func<string, Task<bool>> userInGroupsFilter,
             Action<AbstractAuditLogContent> stageRow)
         {
+            return await DecideAndRememberAsync(
+                log, decidedInThisSet, cache, urlInScope, userInGroupsFilter, stageRow,
+                ignoreProcessedCache: false);
+        }
+
+        /// <summary>
+        /// Recovery-aware form used after an earlier attempt or cycle staged this event but failed before
+        /// the whole save completed. The in-set guard still applies; only the processed cache is bypassed
+        /// so an audit row committed by the earlier attempt can drive its metadata phase again.
+        /// </summary>
+        internal static async Task<ActivityStagingDecision> DecideAndRememberAsync(
+            AbstractAuditLogContent log,
+            HashSet<Guid> decidedInThisSet,
+            ActivityImportCache cache,
+            Func<AbstractAuditLogContent, bool> urlInScope,
+            Func<string, Task<bool>> userInGroupsFilter,
+            Action<AbstractAuditLogContent> stageRow,
+            bool ignoreProcessedCache)
+        {
             if (urlInScope == null) throw new ArgumentNullException(nameof(urlInScope));
             if (userInGroupsFilter == null) throw new ArgumentNullException(nameof(userInGroupsFilter));
             if (stageRow == null) throw new ArgumentNullException(nameof(stageRow));
+            if (log == null) throw new ArgumentNullException(nameof(log));
+            if (decidedInThisSet == null) throw new ArgumentNullException(nameof(decidedInThisSet));
+            if (cache == null) throw new ArgumentNullException(nameof(cache));
 
-            if (IsAlreadyProcessed(log, decidedInThisSet, cache))
+            if (decidedInThisSet.Contains(log.Id)
+                || (!ignoreProcessedCache && cache.HaveSeenInProcessedOrIgnoredEvents(log)))
             {
                 return ActivityStagingDecision.Duplicate;
             }
