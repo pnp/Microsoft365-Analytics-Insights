@@ -9,6 +9,10 @@ installations (the AnalyticsEngine importer in
 > the shared `Common/UsageReporting` netstandard2.0 project (data contracts
 > + Cosmos save adaptor) so the wire format stays in sync.
 
+> See [`LESSONS-LEARNED.md`](LESSONS-LEARNED.md) for operational gotchas that
+> have already cost real time — verifying what is actually deployed, querying
+> this service's telemetry correctly, and the identity-configuration traps.
+
 ## What it does
 
 - Receives `TelemetryPayload` POSTs from instances of
@@ -57,10 +61,37 @@ installations (the AnalyticsEngine importer in
   rather than extends. The integration tests assert the scope is genuinely
   enforced.
 - **App Service Authentication** runs in allow-anonymous mode so it validates
-  bearer tokens and emits MISE key-discovery telemetry without becoming the
-  authorization boundary. The ASP.NET Core API still performs the scope and
-  role checks, while anonymous health, configuration and signed-upload
-  requests continue to reach the application.
+  bearer tokens without becoming the authorization boundary. The ASP.NET Core
+  API still performs the scope and role checks, while anonymous health,
+  configuration and signed-upload requests continue to reach the application.
+
+  Note that enabling it did **not** satisfy the S360 MISE Compliance KPI. It
+  was switched on (with `WEBSITE_AAD_ENABLE_MISE`) on 18 Aug 2026 and fully
+  working from 19 Aug, validated real tokens on 19, 24 and 25 Aug, and the
+  registration was still reported non-compliant on 26 Aug and again on 2 Sep —
+  two full KPI cycles. Treat platform-supplied authentication as *unproven* for
+  that KPI rather than as remediation.
+- **Key discovery is tagged with our own client ID.** `Program.cs` sets
+  `JwtBearerOptions.MetadataAddress` to
+  `…/{tenant}/v2.0/.well-known/openid-configuration?appid={clientId}` (see
+  `EntraKeyDiscovery`). Without the `appid` parameter the API fetches Entra's
+  signing keys anonymously, so Entra cannot tell which application is asking.
+  Neither Microsoft.Identity.Web nor Microsoft.IdentityModel adds it, so it has
+  to be set explicitly. Entra echoes the parameter into the `jwks_uri` it
+  returns, so the follow-up key fetch is attributed too, and the response is
+  narrowed to the keys that apply to this app.
+
+  This is a diagnosability and hygiene improvement. It is **not** remediation
+  for the MISE compliance KPI, and must not be recorded as such: that KPI also
+  requires a supported MISE version, and MISE identifies the calling app with a
+  request header rather than this query parameter.
+
+  It must be assigned in a **`Configure`** delegate, not a `PostConfigure`:
+  `JwtBearerPostConfigureOptions` builds the `ConfigurationManager` — the thing
+  that actually calls Entra — from `MetadataAddress` during `PostConfigure`, so
+  a later write would update the string while the key request still went out on
+  the old address. `EntraKeyDiscoveryTests` asserts the address survives
+  Microsoft.Identity.Web's own post-configuration.
 - **EasyAuth `allowedApplications` must be set explicitly.** If
   `defaultAuthorizationPolicy` is omitted, the platform stores
   `allowed_client_applications` as an *empty array*, which EasyAuth reads as
@@ -358,23 +389,74 @@ assigned dashboard user can otherwise be prompted for delegated
 > `deploy.ps1` for the complete Entra configuration, secure secret handling,
 > application publication and verification workflow.
 
-### MISE compliance verification
+### MISE compliance — current status
 
 The public repository intentionally keeps `Microsoft.Identity.Web` for its
-portable, public NuGet restore path. App Service Authentication supplies the
-MISE runtime and validates the same bearer tokens before the application
-performs its existing scope and role authorization.
+portable, public NuGet restore path. **MISE itself cannot be referenced from
+this repository**: `Microsoft.Identity.ServiceEssentials*` and
+`Microsoft.IdentityModel.S2S` are published to an internal feed only (they 404
+on nuget.org), and `telemetry-service.yml` builds on `ubuntu-latest` restoring
+from nuget.org, so wiring an internal feed into a public repository's workflow
+is not an option.
 
-After deploying:
+App Service Authentication was enabled as an attempted remediation. **It did not
+work** — see the auth-model section above for the timeline. The registration
+remained non-compliant across two KPI cycles while EasyAuth was validating real
+tokens, so do not record platform authentication as remediation for this KPI.
 
-1. Sign in to the dashboard and load both protected API endpoints so token
+What this repository *does* guarantee is that key discovery identifies the app
+registration, via the `appid` parameter described in the auth-model section.
+That is a diagnosability improvement only — it is explicitly **not** remediation
+for the compliance KPI, which also requires a supported MISE version and uses a
+different attribution mechanism. Do not record it as remediation.
+
+To verify attribution after deploying:
+
+1. Sign in to the dashboard and load both protected API endpoints, so token
    acquisition and key discovery occur together.
-2. Confirm the deployment script sees EasyAuth intercept `/.auth/version`.
-   Authenticated responses must report a runtime newer than `1.7.0`; Linux
-   App Service can return HTTP 401 to anonymous version requests, so the script
-   also verifies the ARM runtime selector is `~1`.
-3. Allow 3–5 days for the compliance pipeline to report the new key-discovery
-   telemetry.
+2. In Application Insights, confirm the outbound dependency URLs carry a query
+   string:
+
+   ```kusto
+   AppDependencies
+   | where TimeGenerated > ago(1d)
+   | where Target has "login.microsoftonline.com"
+   | project TimeGenerated, Data, ResultCode
+   ```
+
+   **Do not look for the literal `appid=` — you will not find it.** The
+   dependency exporter redacts query strings, so a tagged request appears as
+   `…/v2.0/.well-known/openid-configuration?*`. Presence of the `?` is the
+   signal; the value is never recorded.
+
+   **Expect a mix of tagged and untagged calls, and do not read the untagged
+   ones as failure.** Microsoft.Identity.Web runs a second, independent
+   `ConfigurationManager` through `AadIssuerValidator` to resolve the issuer,
+   and that one is not ours to configure — it will always fetch without the
+   parameter. A single token validation therefore produces both a tagged pair
+   and a bare pair, side by side.
+
+   So the check is: **does any `openid-configuration` call carry a `?`**. If
+   one does, the metadata address is applied and the matching
+   `discovery/v2.0/keys` call will carry it too, because Entra echoes the
+   parameter into `jwks_uri`. If *none* of them do, over a window in which a
+   token was definitely validated, then the address was lost — the most likely
+   cause is a Microsoft.Identity.Web upgrade changing the post-configuration
+   order, which `EntraKeyDiscoveryTests` is there to catch.
+
+   A useful before/after form, which avoids all of the above ambiguity:
+
+   ```kusto
+   AppDependencies
+   | where TimeGenerated > ago(7d)
+   | where Target has "login.microsoftonline.com"
+   | summarize total = count(), tagged = countif(Data contains "?") by bin(TimeGenerated, 1d)
+   ```
+3. Allow 3–5 days for the compliance pipeline to reflect new telemetry.
+
+Note that key discovery only happens on a cold start or when a cached
+configuration expires, so a service with very little authenticated traffic emits
+very little of this telemetry.
 
 Do not change EasyAuth to require authentication globally without preserving
 the anonymous signed-upload, health and public authentication-configuration
