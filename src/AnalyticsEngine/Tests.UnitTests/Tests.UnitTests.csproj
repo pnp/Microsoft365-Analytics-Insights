@@ -40,6 +40,7 @@
     <Compile Include="CopilotAuditLogContentSchemaTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
+    <Compile Include="CopilotMetadataPrewarmerTests.cs" />
     <Compile Include="CopilotPrewarmExtractionTests.cs" />
     <Compile Include="CopilotEventManagerSaveTests.cs" />
     <Compile Include="CopilotTestBase.cs" />
@@ -121,11 +122,13 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ActivityImportCacheProviderTests.cs" />
     <Compile Include="ActivityImportCacheWindowTests.cs" />
     <Compile Include="ActivityImporterTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="ActivitySaveConcurrencyPolicyTests.cs" />
+    <Compile Include="ActivitySavePipelineTests.cs" />
     <Compile Include="ActivityStagingRulesTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
@@ -161,6 +164,7 @@
     <Compile Include="InsertBatchOverWidthTests.cs" />
     <Compile Include="AppInsightsImportTests.cs" />
     <Compile Include="CopilotAuditEventManagerStagingTests.cs" />
+    <Compile Include="FakeLoaderClasses\FakeActivityPersistencePorts.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryStagingWriters.cs" />
     <Compile Include="PowerPlatformAuditEventManagerStagingTests.cs" />
     <Compile Include="ClockAndContextFactoryTests.cs" />
