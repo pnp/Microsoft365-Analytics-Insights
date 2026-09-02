@@ -43,9 +43,14 @@ namespace WebJob.Office365ActivityImporter
             _sentEmailMailboxSkipList = sentEmailMailboxSkipList;
         }
 
-        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl)
+        /// <summary>
+        /// Start listening for queued call notifications and make sure the Graph webhook subscription
+        /// is in place. The processor is owned by the caller because it must outlive a single import
+        /// cycle - Program.cs creates it once for the process (see issue #378).
+        /// </summary>
+        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
         {
-            var callQueueProcessor = await CallQueueProcessor.GetCallQueueProcessor(_settings, _settings.TenantGUID.ToString(), null);
+            if (callQueueProcessor is null) throw new ArgumentNullException(nameof(callQueueProcessor));
 
             // Fire and forget calls SB receiver
             _ = callQueueProcessor.BeginProcessCallsQueue();
