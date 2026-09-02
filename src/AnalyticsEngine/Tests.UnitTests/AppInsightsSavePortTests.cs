@@ -39,7 +39,11 @@ namespace Tests.UnitTests
                 Searches = new InMemorySearchesPersistenceManager(CallLog);
                 PageUpdates = new InMemoryPageUpdatePersistenceManager(CallLog);
                 Clicks = new InMemoryClicksPersistenceManager(CallLog);
+                Ports = new InMemoryEventSectionPort[] { HitUpdates, Searches, PageUpdates, Clicks };
             }
+
+            /// <summary>The four section ports in the order the saver runs them.</summary>
+            public readonly InMemoryEventSectionPort[] Ports;
 
             public Task RunAsync(CustomEventsResultCollection events)
             {
@@ -94,34 +98,46 @@ namespace Tests.UnitTests
                 h.CallLog.ToArray());
         }
 
-        [TestMethod]
-        public async Task EventSections_EachSectionCompletesBeforeTheNextOneStarts()
+        [DataTestMethod]
+        [DataRow(0)]
+        [DataRow(1)]
+        [DataRow(2)]
+        [DataRow(3)]
+        public async Task EventSections_EachSectionCompletesBeforeTheNextOneStarts(int gatedSection)
         {
             // The order test above only pins the order calls are MADE in. It would still pass if the
             // orchestration started all four sections and then awaited Task.WhenAll - which would be a
-            // real behavioural change: the sections share one AnalyticsEntitiesContext (EF6 contexts are
-            // not thread-safe) and they write overlapping lookup tables.
+            // real behavioural change:
+            //   * the clicks merge INSERTs into dbo.urls while the page-updates section UPDATEs dbo.urls
+            //     rows through EF, so concurrent sections interleave writes to the same table;
+            //   * each section already fans its staging inserts across up to
+            //     InsertBatchConcurrency.MaxConcurrentThreads threads (default 20 - the lever that exists
+            //     precisely to cap the SQL Server CPU/DTU burst on commit), so four at once multiplies it;
+            //   * the per-section JobTimer timings operators read would interleave.
             //
-            // Holding one section open makes the difference observable with no timing races. Everything
-            // up to the open gate runs synchronously on this thread, so when RunAsync returns, exactly
-            // the sections up to and including the gated one can have been invoked.
+            // Every boundary is gated in turn, because gating only one would leave the others free to
+            // overlap: gating Searches alone still passes if hit-updates and searches are started
+            // together, or if page-updates and clicks are.
+            //
+            // No polling and no timing race: everything up to the open gate runs synchronously on this
+            // thread (the ungated fakes return already-completed tasks, which continue inline), so when
+            // RunAsync returns exactly the sections up to and including the gated one can have run.
+            var sectionNames = new[] { "Hit updates", "Searches", "Page updates", "Clicks" };
             var h = new SectionHarness();
-            h.Searches.Gate = new TaskCompletionSource<int>();
+            h.Ports[gatedSection].Gate = new TaskCompletionSource<int>();
 
             var run = h.RunAsync(SomeEvents());
 
             Assert.IsFalse(run.IsCompleted, "The saver must still be waiting on the open section.");
             CollectionAssert.AreEqual(
-                new[] { "Hit updates", "Searches" },
+                sectionNames.Take(gatedSection + 1).ToArray(),
                 h.CallLog.ToArray(),
                 "Nothing after the section being awaited may have started yet.");
 
-            h.Searches.Gate.SetResult(0);
+            h.Ports[gatedSection].Gate.SetResult(0);
             await run;
 
-            CollectionAssert.AreEqual(
-                new[] { "Hit updates", "Searches", "Page updates", "Clicks" },
-                h.CallLog.ToArray());
+            CollectionAssert.AreEqual(sectionNames, h.CallLog.ToArray());
         }
 
         [TestMethod]
