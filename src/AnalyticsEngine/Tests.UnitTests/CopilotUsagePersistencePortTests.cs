@@ -189,8 +189,10 @@ namespace Tests.UnitTests
                 "An identity on a recognised domain must be created, not dropped. The apostrophe and "
                 + "hyphen are awkward characters Entra genuinely permits in a UPN (A-Z a-z 0-9 "
                 + "' . - _ ! # ^ ~), so this is reachable data - unlike a Greek UPN, which Entra "
-                + "disallows (#402/#414). Note the assertion is domain recognition, not escaping: this "
-                + "fake keys case-insensitively, so it would not catch a case-folding change.");
+                + "disallows (#402/#414). What it guards concretely: the row only reaches this path if "
+                + "LooksLikeRealUpn -> IsEmail accepts the apostrophe, so a naive-regex regression there "
+                + "would drop a real user as if it were a concealed-identity hash. It does NOT guard "
+                + "case folding - this fake keys case-insensitively.");
         }
 
         [TestMethod]
