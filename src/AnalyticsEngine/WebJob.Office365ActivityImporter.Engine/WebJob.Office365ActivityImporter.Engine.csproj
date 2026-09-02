@@ -151,6 +151,7 @@
     <Compile Include="Graph\PageableGraphLoaderExtensions.cs" />
     <Compile Include="Graph\PageableGraphResponse.cs" />
     <Compile Include="Graph\OfficeLicenseNameResolver.cs" />
+    <Compile Include="Graph\ISiteUrlStore.cs" />
     <Compile Include="Graph\SPSiteIdToUrlCache.cs" />
     <Compile Include="Graph\Teams\ChannelWithReactions.cs" />
     <Compile Include="Graph\Teams\CognitiveHelper.cs" />
@@ -224,6 +225,7 @@
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
+    <Compile Include="Graph\User\Rules\UserMetadataMappingRules.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
     <Compile Include="Graph\User\UserGraphResponse.cs" />
     <Compile Include="Graph\User\UserGroupsCache.cs" />

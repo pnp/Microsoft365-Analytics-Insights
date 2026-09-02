@@ -49,10 +49,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public Common.Entities.User UpdateDbUserFromGraphUser(Common.Entities.User dbUser, GraphUser graphUser)
         {
-            dbUser.AccountEnabled = graphUser.AccountEnabled;
-            dbUser.PostalCode = graphUser.PostalCode;
-            dbUser.AzureAdId = graphUser.Id;
-            dbUser.Mail = graphUser.Mail;
+            return ApplyDirectFields(dbUser, UserMetadataMappingRules.BuildPlan(graphUser));
+        }
+
+        /// <summary>Copies the fields that live directly on the users row (no lookup table involved).</summary>
+        private static Common.Entities.User ApplyDirectFields(Common.Entities.User dbUser, UserMetadataChangePlan plan)
+        {
+            dbUser.AccountEnabled = plan.AccountEnabled;
+            dbUser.PostalCode = plan.PostalCode;
+            dbUser.AzureAdId = plan.AzureAdId;
+            dbUser.Mail = plan.Mail;
 
             return dbUser;
         }
@@ -68,18 +74,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Dictionary<string, Common.Entities.User> dbUsersByAadId = null,
             List<Common.Entities.User> allDbUsers = null)
         {
-            UpdateDbUserFromGraphUser(dbUser, graphUser);
+            var plan = UserMetadataMappingRules.BuildPlan(graphUser);
+            ApplyDirectFields(dbUser, plan);
 
             // Update department
             // Note: Both navigation property AND FK must be set explicitly.
             // When entities are loaded with AsNoTracking() and later attached, navigation properties
             // are null (not loaded via Include), so setting them to null is a no-op. The FK column
             // retains its original DB value. Explicitly setting the FK to null ensures EF detects the change.
-            var nameMaxLengthDepartment = StringUtils.EnsureMaxLength(graphUser.Department?.Trim(), 100);
-            if (!string.IsNullOrEmpty(nameMaxLengthDepartment))
+            if (plan.DepartmentName != null)
             {
-                dbUser.Department = await _userMetaCache.DepartmentCache.GetOrCreateNewResource(nameMaxLengthDepartment,
-                    new UserDepartment { Name = nameMaxLengthDepartment });
+                dbUser.Department = await _userMetaCache.DepartmentCache.GetOrCreateNewResource(plan.DepartmentName,
+                    new UserDepartment { Name = plan.DepartmentName });
             }
             else
             {
@@ -88,11 +94,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update job title
-            var nameMaxLengthJobTitle = StringUtils.EnsureMaxLength(graphUser.JobTitle?.Trim(), 100);
-            if (!string.IsNullOrEmpty(nameMaxLengthJobTitle))
+            if (plan.JobTitleName != null)
             {
-                dbUser.JobTitle = await _userMetaCache.JobTitleCache.GetOrCreateNewResource(nameMaxLengthJobTitle,
-                    new UserJobTitle { Name = nameMaxLengthJobTitle });
+                dbUser.JobTitle = await _userMetaCache.JobTitleCache.GetOrCreateNewResource(plan.JobTitleName,
+                    new UserJobTitle { Name = plan.JobTitleName });
             }
             else
             {
@@ -101,11 +106,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update office location
-            var nameMaxLengthOfficeLocation = StringUtils.EnsureMaxLength(graphUser.OfficeLocation?.Trim(), 100);
-            if (!string.IsNullOrEmpty(nameMaxLengthOfficeLocation))
+            if (plan.OfficeLocationName != null)
             {
-                dbUser.OfficeLocation = await _userMetaCache.OfficeLocationCache.GetOrCreateNewResource(nameMaxLengthOfficeLocation,
-                    new UserOfficeLocation { Name = nameMaxLengthOfficeLocation });
+                dbUser.OfficeLocation = await _userMetaCache.OfficeLocationCache.GetOrCreateNewResource(plan.OfficeLocationName,
+                    new UserOfficeLocation { Name = plan.OfficeLocationName });
             }
             else
             {
@@ -114,11 +118,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update usage location
-            var nameMaxLengthUsageLocation = StringUtils.EnsureMaxLength(graphUser.UsageLocation?.Trim(), 100);
-            if (!string.IsNullOrEmpty(nameMaxLengthUsageLocation))
+            if (plan.UsageLocationName != null)
             {
-                dbUser.UsageLocation = await _userMetaCache.UseageLocationCache.GetOrCreateNewResource(nameMaxLengthUsageLocation,
-                    new UserUsageLocation { Name = nameMaxLengthUsageLocation });
+                dbUser.UsageLocation = await _userMetaCache.UseageLocationCache.GetOrCreateNewResource(plan.UsageLocationName,
+                    new UserUsageLocation { Name = plan.UsageLocationName });
             }
             else
             {
@@ -127,11 +130,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update country
-            var nameMaxLengthCountry = StringUtils.EnsureMaxLength(graphUser.Country?.Trim(), 100);
-            if (!string.IsNullOrEmpty(nameMaxLengthCountry))
+            if (plan.CountryName != null)
             {
-                dbUser.UserCountry = await _userMetaCache.CountryOrRegionCache.GetOrCreateNewResource(nameMaxLengthCountry,
-                    new CountryOrRegion { Name = nameMaxLengthCountry });
+                dbUser.UserCountry = await _userMetaCache.CountryOrRegionCache.GetOrCreateNewResource(plan.CountryName,
+                    new CountryOrRegion { Name = plan.CountryName });
             }
             else
             {
@@ -140,11 +142,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update state
-            var nameMaxLengthState = StringUtils.EnsureMaxLength(graphUser.State?.Trim(), 100);
-            if (!string.IsNullOrEmpty(nameMaxLengthState))
+            if (plan.StateOrProvinceName != null)
             {
-                dbUser.StateOrProvince = await _userMetaCache.StateOrProvinceCache.GetOrCreateNewResource(nameMaxLengthState,
-                    new StateOrProvince { Name = nameMaxLengthState });
+                dbUser.StateOrProvince = await _userMetaCache.StateOrProvinceCache.GetOrCreateNewResource(plan.StateOrProvinceName,
+                    new StateOrProvince { Name = plan.StateOrProvinceName });
             }
             else
             {
@@ -153,11 +154,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update company
-            var nameMaxLengthCompany = StringUtils.EnsureMaxLength(graphUser.CompanyName?.Trim(), 100);
-            if (!string.IsNullOrEmpty(nameMaxLengthCompany))
+            if (plan.CompanyName != null)
             {
-                dbUser.CompanyName = await _userMetaCache.CompanyNameCache.GetOrCreateNewResource(nameMaxLengthCompany,
-                    new CompanyName { Name = nameMaxLengthCompany });
+                dbUser.CompanyName = await _userMetaCache.CompanyNameCache.GetOrCreateNewResource(plan.CompanyName,
+                    new CompanyName { Name = plan.CompanyName });
             }
             else
             {
@@ -166,7 +166,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // Update manager
-            await UpdateUserManager(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            await UpdateUserManager(db, plan.ManagerAadId, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
 
             dbUser.LastUpdated = DateTime.Now;
         }
@@ -174,19 +174,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Update user's manager relationship
         /// </summary>
+        /// <param name="managerAadId">
+        /// The manager's Entra object id from <see cref="UserMetadataMappingRules.BuildPlan"/>, or null
+        /// when Graph reported no manager. Taking it as a parameter keeps the resolution chain readable
+        /// and means the mapping rule is the single place that reads it off the Graph user.
+        /// </param>
         private async Task UpdateUserManager(
             AnalyticsEntitiesContext db,
-            GraphUser graphUser,
+            string managerAadId,
             List<GraphUser> allGraphUsers,
             Common.Entities.User dbUser,
             Dictionary<string, Common.Entities.User> dbUsersByAadId = null,
             List<Common.Entities.User> allDbUsers = null)
         {
-            if (graphUser.DefaultManagerInfo?.Id != null)
+            if (managerAadId != null)
             {
                 // Try getting manager from DB using dictionary lookup if available
                 Common.Entities.User dbManager = null;
-                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out dbManager))
+                if (dbUsersByAadId != null && dbUsersByAadId.TryGetValue(managerAadId, out dbManager))
                 {
                     // Found manager using fast dictionary lookup
                     // CRITICAL: Ensure manager is tracked by EF before assignment
@@ -198,7 +203,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     // Fallback to LINQ query if dictionary not provided (for backwards compatibility)
                     dbManager = allDbUsers.Where(u => !string.IsNullOrEmpty(u.AzureAdId) &&
-                        new Guid(u.AzureAdId).Equals(new Guid(graphUser.DefaultManagerInfo.Id))).FirstOrDefault();
+                        new Guid(u.AzureAdId).Equals(new Guid(managerAadId))).FirstOrDefault();
 
                     if (dbManager != null)
                     {
@@ -212,11 +217,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     GraphUser graphManagerUser = null;
                     if (_graphUsersByAadId != null)
                     {
-                        _graphUsersByAadId.TryGetValue(graphUser.DefaultManagerInfo.Id, out graphManagerUser);
+                        _graphUsersByAadId.TryGetValue(managerAadId, out graphManagerUser);
                     }
                     else
                     {
-                        graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == graphUser.DefaultManagerInfo?.Id);
+                        graphManagerUser = allGraphUsers.FirstOrDefault(u => u.Id == managerAadId);
                     }
 
                     if (graphManagerUser != null)
@@ -256,7 +261,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                     else
                     {
-                        _logger.LogWarning($"Couldn't find manager with AAD ID {graphUser.DefaultManagerInfo?.Id} in Graph cache or DB");
+                        _logger.LogWarning($"Couldn't find manager with AAD ID {managerAadId} in Graph cache or DB");
                     }
                 }
                 else
