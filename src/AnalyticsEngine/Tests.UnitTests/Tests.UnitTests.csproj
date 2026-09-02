@@ -54,6 +54,11 @@
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
     <Compile Include="InstallTests\AppInsightsArmTemplateTests.cs" />
     <Compile Include="UserImportCaseSensitivityTests.cs" />
+    <Compile Include="FakeLoaderClasses\FakeUserPipelinePorts.cs" />
+    <Compile Include="UserBulkUpdateRulesTests.cs" />
+    <Compile Include="UserImportCommitPolicyTests.cs" />
+    <Compile Include="UserManagerResolutionTests.cs" />
+    <Compile Include="UserManagerPrefetchLicenceTests.cs" />
     <Compile Include="UserMetadataMappingRulesTests.cs" />
     <Compile Include="UserMetadataUpdaterBasicTests.cs" />
     <Compile Include="UserMetadataUpdaterInsertTests.cs" />

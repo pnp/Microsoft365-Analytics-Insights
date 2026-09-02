@@ -120,3 +120,28 @@ Potential areas for further enhancement:
 ## Namespace Convention
 
 All files in the `Graph\User` folder use the namespace `WebJob.Office365ActivityImporter.Engine.Graph` (not `...Graph.User`). This follows the existing convention in the project.
+
+## Ports and rules (issues #371 / #372)
+
+A second pass split the remaining SQL and Graph coupling out of the helper classes above, so the
+decisions they make can be asserted without a database. Adapters are behaviour-preserving
+relocations, not rewrites.
+
+### Pure rules — `Graph\User\Rules\`
+| Class | Extracted from | What it owns |
+|---|---|---|
+| `UserMetadataMappingRules` | `UserDataMapper.UpdateUserMetadata` | Normalising the seven de-normalised lookup values, deciding which ones to clear, and the four direct fields |
+| `UserBulkUpdateRules` | `UserBatchProcessor.BuildUpdateDataTable` | The bulk-update batch's shape, per-column values and the manager foreign-key precedence chain |
+| `ManagerResolutionRules` | `UserDataMapper.UpdateUserManager` | Which manager UPNs a batch needs to look up, and how duplicate UPN rows are resolved |
+| `UserImportCommitPolicy` | `UserMetadataUpdater.InsertAndUpdateDatabaseFromExternalUsers` | The delta token is committed only after every phase succeeded |
+
+### Ports and adapters
+| Port | Production adapter | Purpose |
+|---|---|---|
+| `IUserBulkUpdateWriter` | `SqlUserBulkUpdateWriter` | The `SqlConnection` + `SqlBulkCopy` + `#user_updates` temp table, moved out of `UserBatchProcessor` unchanged |
+| `IUserLookupStore` | `SqlUserLookupStore` | Resolves a whole batch's users by UPN in one chunked `Contains(...)` query, replacing a per-user `FirstOrDefaultAsync` |
+| `IAnalyticsDbContextFactory` | `DefaultAnalyticsDbContextFactory` | `UserMetadataUpdater` no longer news up its own `AnalyticsEntitiesContext` |
+
+`ManagerPrefetchCache` holds one batch's managers between the store and `UserDataMapper`. Its scope is
+deliberately a single batch: the entities are tracked by the import's context, and every batch ends by
+detaching them.
