@@ -53,8 +53,8 @@ namespace WebJob.AppInsightsImporter.Engine
 
         /// <summary>
         /// Maps the staging plan onto the reported result. A named seam purely so the mapping can be
-        /// asserted without a database - four same-typed ints next to each other is exactly the shape
-        /// that gets silently transposed.
+        /// asserted without a database - five same-typed ints in a row (the four plan counts plus
+        /// <paramref name="mergeRowsAffected"/>) is exactly the shape that gets silently transposed.
         /// </summary>
         internal static PageViewSaveResult FromPlan(PageViewStagingPlan plan, int mergeRowsAffected)
         {

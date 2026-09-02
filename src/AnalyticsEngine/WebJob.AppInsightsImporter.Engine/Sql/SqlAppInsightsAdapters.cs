@@ -123,9 +123,12 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     /// extension that already existed, so the SQL itself is untouched; the point is that the section
     /// orchestration above them (<see cref="CustomEventSectionSaver"/>) no longer needs a database.
     ///
-    /// Like the #374 adapters above they borrow the caller's <see cref="AnalyticsEntitiesContext"/> rather
-    /// than creating one - the one exception being <see cref="SqlPageUpdatePersistenceManager"/>, whose
-    /// path has always built its own contexts.
+    /// Each holds the <see cref="AnalyticsEntitiesContext"/> its caller passed rather than creating one,
+    /// as the #374 adapters above do. What the underlying save then does with it varies, and it is worth
+    /// knowing which: the page-view path runs the collation hack on it, while the hit-update, search and
+    /// click paths only take its connection string (EFInsertBatch and SearchesSaveExtension each open
+    /// their own connections, and SearchesSaveExtension builds its own context around one).
+    /// <see cref="SqlPageUpdatePersistenceManager"/> takes no context at all - see below.
     /// </summary>
     public sealed class SqlPageViewsPersistenceManager : IPageViewsPersistenceManager
     {

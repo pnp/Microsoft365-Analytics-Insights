@@ -94,7 +94,13 @@ namespace WebJob.AppInsightsImporter.Engine
         Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events);
     }
 
-    /// <summary>Writes the click events in a batch. Returns the row count the merge reported.</summary>
+    /// <summary>
+    /// Writes the click events in a batch. Like <see cref="ISearchesPersistenceManager"/> this is the
+    /// merge script's ADO.NET rows-affected total, not a count of clicks: "Migrate clicks from
+    /// staging.sql" inserts into <c>hits_clicked_element_class_names</c>, <c>urls</c> and
+    /// <c>hits_clicked_element_titles</c> before <c>hits_clicked_elements</c>, all in one batch with no
+    /// <c>SET NOCOUNT ON</c>.
+    /// </summary>
     public interface IClicksPersistenceManager
     {
         Task<int> SaveClicksAsync(CustomEventsResultCollection events);
