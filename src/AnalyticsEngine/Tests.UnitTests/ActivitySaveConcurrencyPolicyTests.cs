@@ -63,8 +63,11 @@ namespace Tests.UnitTests
             // ActivityImportConstants.STAGING_TABLE_ACTIVITY is a permanent "debug_"-prefixed table in DEBUG
             // builds. The sharded name has always been a "##" global temp table regardless of configuration,
             // which is what makes it visible to the merge on the same connection and self-cleaning. Deriving
-            // it from the constant would change that in one of the two configurations - and CI runs the suite
-            // in both Debug and Release, so between them this covers both.
+            // it from the constant would change that in one of the two configurations.
+            //
+            // Note this test only observes the configuration it is compiled in, and CI builds RELEASE ONLY
+            // (the Debug matrix entry is commented out in ci.yml / pr.yml / tests.yml) - so the DEBUG case
+            // is covered by local Debug runs, not by CI.
             var name = ActivitySaveConcurrencyPolicy.NewShardedStagingTableName();
             StringAssert.StartsWith(name, "##");
             StringAssert.StartsWith(name, ActivitySaveConcurrencyPolicy.ShardedStagingTablePrefix);
