@@ -2,7 +2,9 @@ using Common.Entities.Config;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
@@ -29,7 +31,7 @@ namespace Tests.UnitTests
             public readonly InMemoryAppInsightsDayPersistenceManager Persistence = new InMemoryAppInsightsDayPersistenceManager();
             public FixedClock Clock = new FixedClock(FixedNowUtc);
 
-            public Task RunAsync() => new AppInsightsImporter(
+            public Task RunAsync(int? daysBeforeOverride = null) => new AppInsightsImporter(
                 new Common.Entities.Config.AppConfig(),
                 AnalyticsLogger.ConsoleOnlyTracer(),
                 Clock,
@@ -37,7 +39,7 @@ namespace Tests.UnitTests
                 Maintenance,
                 SiteFilters,
                 Watermark,
-                Persistence).ImportAndSave(saveRestResponses: false, daysBeforeOverride: null);
+                Persistence).ImportAndSave(saveRestResponses: false, daysBeforeOverride: daysBeforeOverride);
         }
 
         [TestMethod]
@@ -86,6 +88,24 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AppInsightsImporter_DaysBeforeOverride_IsAlsoResolvedFromTheInjectedClock()
+        {
+            // ResolveOverrideStartUtc ignores its clock argument when no override is supplied, so the test
+            // above cannot see the FIRST _clock.UtcNow read in ImportAndSave. With an override it can:
+            // swapping that read for DateTime.Now would shift the window on any non-UTC host.
+            var h = new Harness { Clock = new FixedClock(new DateTime(2019, 2, 14, 6, 0, 0, DateTimeKind.Utc)) };
+            h.Watermark.NewestHitTimestampUtc = new DateTime(2019, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            await h.RunAsync(daysBeforeOverride: 2);
+
+            // The override wins over the (much older) watermark: 2 days back from the fixed clock, rewound
+            // a minute, through "today" inclusive.
+            CollectionAssert.AreEqual(
+                new[] { new DateTime(2019, 2, 12), new DateTime(2019, 2, 13), new DateTime(2019, 2, 14) },
+                h.Source.PageViewDaysRequested.ToArray());
+        }
+
+        [TestMethod]
         public async Task AppInsightsImporter_NoHitsYet_ScansTheFallbackWindow()
         {
             var h = new Harness();
@@ -97,6 +117,64 @@ namespace Tests.UnitTests
             Assert.AreEqual(FixedNowUtc.AddDays(-AppInsightsImportWindow.NoHitsFallbackDays).AddMinutes(-1).Date,
                 h.Source.PageViewDaysRequested.First());
             Assert.AreEqual(FixedNowUtc.Date, h.Source.PageViewDaysRequested.Last());
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_FatalDownloadFailure_DoesNotReportTheSectionAsFinished()
+        {
+            // Regression guard. The original code returned straight out of ImportAndSave from the download
+            // catch, so JobTimer.TrackFinishedEventAndStopTimer never ran. Extracting the day loop into its
+            // own method made that `return` exit only the inner method, which would have emitted
+            // FinishedSectionImport for a cycle that imported nothing - a false success to liveness
+            // monitoring, visible only in Release because DEBUG rethrows.
+            var h = new Harness();
+            h.Watermark.NewestHitTimestampUtc = FixedNowUtc.AddHours(-2);
+            h.Source.DaysThatFailToDownload.Add(FixedNowUtc.Date);
+
+            var console = new StringWriter();
+            var original = Console.Out;
+            Console.SetOut(console);
+            try
+            {
+#if DEBUG
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => h.RunAsync());
+#else
+                await h.RunAsync();
+#endif
+            }
+            finally
+            {
+                Console.SetOut(original);
+            }
+
+            // AnalyticsLogger.TrackEvent writes "New event '<name>'" to the console, so this is how the
+            // event is observable without a real App Insights key. Asserted in BOTH configurations: DEBUG
+            // must not track it either, because it never gets that far.
+            StringAssert.DoesNotMatch(console.ToString(), new Regex("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"),
+                "A failed download must not report the section as finished.");
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_SuccessfulRun_DoesReportTheSectionAsFinished()
+        {
+            // The other half of the guard above: without this, making the failure path skip the event could
+            // be "fixed" by never emitting it at all.
+            var h = new Harness();
+            h.Watermark.NewestHitTimestampUtc = FixedNowUtc.AddHours(-2);
+
+            var console = new StringWriter();
+            var original = Console.Out;
+            Console.SetOut(console);
+            try
+            {
+                await h.RunAsync();
+            }
+            finally
+            {
+                Console.SetOut(original);
+            }
+
+            StringAssert.Matches(console.ToString(), new Regex("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"));
         }
 
         [TestMethod]

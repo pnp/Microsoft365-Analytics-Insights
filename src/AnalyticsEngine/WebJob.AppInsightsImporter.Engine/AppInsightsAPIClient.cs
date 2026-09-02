@@ -28,6 +28,14 @@ namespace WebJob.AppInsightsImporter.Engine
         internal const int MaxRetries = 5;
         internal const int MaxBackoffSeconds = 60;
 
+        /// <summary>
+        /// How the client waits between retries. Replaceable by tests so the retry and back-off rules can be
+        /// asserted on the delays actually <b>requested</b>, rather than inferred from elapsed wall-clock
+        /// time - which measures scheduling, GC and deserialisation as well, and is therefore both flaky
+        /// under load and capable of passing after a no-back-off regression. See issue #374.
+        /// </summary>
+        internal Func<TimeSpan, Task> RetryDelay { get; set; } = Task.Delay;
+
         #region Constructors
 
         /// <summary>
@@ -151,13 +159,13 @@ namespace WebJob.AppInsightsImporter.Engine
                     _logger.LogWarning($"Transient HTTP {(int)response.StatusCode} from App Insights API. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
 
                     response.Dispose();
-                    await Task.Delay(TimeSpan.FromSeconds(backoff));
+                    await RetryDelay(TimeSpan.FromSeconds(backoff));
                 }
                 catch (Exception ex) when (IsTransientException(ex) && attempt < MaxRetries)
                 {
                     var backoff = Math.Min((int)Math.Pow(2, attempt), MaxBackoffSeconds);
                     _logger.LogWarning($"Transient error calling App Insights API: {ex.Message}. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
-                    await Task.Delay(TimeSpan.FromSeconds(backoff));
+                    await RetryDelay(TimeSpan.FromSeconds(backoff));
                 }
             }
         }

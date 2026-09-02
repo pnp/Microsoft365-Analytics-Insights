@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -94,53 +95,89 @@ namespace Tests.UnitTests
                 => new ValueTask<AccessToken>(GetToken(requestContext, cancellationToken));
         }
 
-        private static AppInsightsAPIClient NewClient(StubHandler handler, TokenCredential credential = null)
-            => new AppInsightsAPIClient(ConnectionString, credential ?? new CountingCredential(TimeSpan.FromHours(1)),
+        /// <summary>Records every retry wait the client asked for, and returns immediately.</summary>
+        private sealed class RecordingDelay
+        {
+            public List<TimeSpan> Requested { get; } = new List<TimeSpan>();
+
+            public Task Wait(TimeSpan delay)
+            {
+                Requested.Add(delay);
+                return Task.CompletedTask;
+            }
+        }
+
+        /// <summary>
+        /// The retry wait is always replaced, so no test here measures wall-clock time. Elapsed time would
+        /// include scheduling, GC and deserialisation as well as the back-off, which makes it both flaky
+        /// under CI load and capable of passing after a no-back-off regression.
+        /// </summary>
+        private static AppInsightsAPIClient NewClient(StubHandler handler, TokenCredential credential = null, RecordingDelay delay = null)
+        {
+            var client = new AppInsightsAPIClient(ConnectionString, credential ?? new CountingCredential(TimeSpan.FromHours(1)),
                 NullLogger.Instance, handler);
+            client.RetryDelay = (delay ?? new RecordingDelay()).Wait;
+            return client;
+        }
 
         private static readonly DateTime Day = new DateTime(2026, 5, 30, 0, 0, 0, DateTimeKind.Utc);
 
         [TestMethod]
-        public async Task AppInsightsClient_TransientHttpError_IsRetriedWithBackoff()
+        public async Task AppInsightsClient_TransientHttpError_IsRetriedWithExponentialBackoff()
         {
             var handler = new StubHandler()
                 .Then(() => Status(HttpStatusCode.ServiceUnavailable))
+                .Then(() => Status(HttpStatusCode.ServiceUnavailable))
+                .Then(() => Status(HttpStatusCode.ServiceUnavailable))
                 .Then(Ok);
+            var delay = new RecordingDelay();
 
-            using (var client = NewClient(handler))
+            using (var client = NewClient(handler, delay: delay))
             {
-                var sw = Stopwatch.StartNew();
                 var result = await client.GetPageViewsAsync(Day, false);
-                sw.Stop();
 
                 Assert.IsNotNull(result);
-                Assert.AreEqual(2, handler.RequestCount, "A 503 must be retried.");
+                Assert.AreEqual(4, handler.RequestCount, "A 503 must be retried.");
 
-                // First retry waits min(2^0, 60) = 1 second. Without a back-off the call would return
-                // essentially instantly, so this is what distinguishes "retried" from "retried politely".
-                Assert.IsTrue(sw.Elapsed >= TimeSpan.FromMilliseconds(900), $"Expected a ~1s back-off, waited {sw.Elapsed}.");
+                // 2^0, 2^1, 2^2 seconds. Asserted on the delays the client actually asked for, so a
+                // regression that dropped the wait - or made it constant - fails here.
+                CollectionAssert.AreEqual(
+                    new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4) },
+                    delay.Requested.ToArray());
+            }
+        }
+
+        [TestMethod]
+        public async Task AppInsightsClient_BackoffIsCappedSoAnOutageCannotStallTheWebJob()
+        {
+            var handler = new StubHandler { Fallback = () => Status(HttpStatusCode.BadGateway) };
+            var delay = new RecordingDelay();
+
+            using (var client = NewClient(handler, delay: delay))
+            {
+                await Assert.ThrowsExceptionAsync<HttpRequestException>(() => client.GetPageViewsAsync(Day, false));
+
+                Assert.IsTrue(delay.Requested.All(d => d <= TimeSpan.FromSeconds(AppInsightsAPIClient.MaxBackoffSeconds)),
+                    "No single wait may exceed the cap: " + string.Join(", ", delay.Requested));
             }
         }
 
         [TestMethod]
         public async Task AppInsightsClient_RetryAfterHeader_IsPreferredOverExponentialBackoff()
         {
-            // Two 429s that each say "retry immediately". Exponential back-off would have waited 1s then
-            // 2s, so completing well inside that proves the server's Retry-After was honoured.
+            // The server said "wait 7 seconds"; exponential back-off would have asked for 1 then 2.
             var handler = new StubHandler()
-                .Then(() => Status((HttpStatusCode)429, retryAfterSeconds: 0))
-                .Then(() => Status((HttpStatusCode)429, retryAfterSeconds: 0))
+                .Then(() => Status((HttpStatusCode)429, retryAfterSeconds: 7))
+                .Then(() => Status((HttpStatusCode)429, retryAfterSeconds: 7))
                 .Then(Ok);
+            var delay = new RecordingDelay();
 
-            using (var client = NewClient(handler))
+            using (var client = NewClient(handler, delay: delay))
             {
-                var sw = Stopwatch.StartNew();
                 await client.GetCustomEventsAsync(Day, false);
-                sw.Stop();
 
                 Assert.AreEqual(3, handler.RequestCount);
-                Assert.IsTrue(sw.Elapsed < TimeSpan.FromSeconds(2),
-                    $"Exponential back-off would have taken at least 3s; took {sw.Elapsed}.");
+                CollectionAssert.AreEqual(new[] { TimeSpan.FromSeconds(7), TimeSpan.FromSeconds(7) }, delay.Requested.ToArray());
             }
         }
 
@@ -162,7 +199,6 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task AppInsightsClient_TransientErrors_AreCappedAndTheFailureSurfaces()
         {
-            // Retry-After: 0 keeps the test fast while still exercising the cap.
             var handler = new StubHandler();
             handler.Fallback = () => Status(HttpStatusCode.BadGateway, retryAfterSeconds: 0);
 

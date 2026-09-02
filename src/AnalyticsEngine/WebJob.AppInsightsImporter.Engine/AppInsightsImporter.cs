@@ -118,7 +118,14 @@ namespace WebJob.AppInsightsImporter.Engine
 
             if (_source != null)
             {
-                await ImportDaysAndSave(_source, saveRestResponses, startDate, filterUrls, persistence, sw);
+                if (!await ImportDaysAndSave(_source, saveRestResponses, startDate, filterUrls, persistence, sw))
+                {
+                    // A fatal download failure aborted the run. The original code returned straight out of
+                    // ImportAndSave here, so the section was never reported as finished; keep that, or
+                    // liveness monitoring would see a successful section import for a cycle that imported
+                    // nothing. (Release only - DEBUG rethrows.)
+                    return;
+                }
             }
             else
             {
@@ -129,7 +136,10 @@ namespace WebJob.AppInsightsImporter.Engine
                     this._importConfig.ClientSecret);
                 using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _logger))
                 {
-                    await ImportDaysAndSave(ai, saveRestResponses, startDate, filterUrls, persistence, sw);
+                    if (!await ImportDaysAndSave(ai, saveRestResponses, startDate, filterUrls, persistence, sw))
+                    {
+                        return;
+                    }
                 }
             }
 
@@ -140,7 +150,11 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>
         /// The day loop: fetch a day, save it, and never let one bad day abort the rest of the run.
         /// </summary>
-        private async Task ImportDaysAndSave(IAppInsightsSourceLoader source, bool saveRestResponses, DateTime startDate,
+        /// <returns>
+        /// False when a download failure aborted the whole run, so the caller must NOT report the section as
+        /// finished. Only reachable in Release: the DEBUG build rethrows instead.
+        /// </returns>
+        private async Task<bool> ImportDaysAndSave(IAppInsightsSourceLoader source, bool saveRestResponses, DateTime startDate,
             List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, Stopwatch sw)
         {
             // UTC to match App Insights' UTC timestamps (see startDate above).
@@ -177,7 +191,7 @@ namespace WebJob.AppInsightsImporter.Engine
 #if DEBUG
                     throw;
 #else
-                    return;
+                    return false;
 #endif
                 }
 
@@ -230,6 +244,7 @@ namespace WebJob.AppInsightsImporter.Engine
             }
 
             _logger.LogInformation($"Import loop finished: {totalDays} days processed, {totalPageViews:n0} total page-views, {totalEvents:n0} total events");
+            return true;
         }
     }
 }
