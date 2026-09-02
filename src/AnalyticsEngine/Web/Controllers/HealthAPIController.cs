@@ -1,4 +1,5 @@
 using Common.Entities.Config;
+using System;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.Health;
@@ -17,6 +18,21 @@ namespace Web.AnalyticsWeb.Controllers
     [RoutePrefix("api/Health")]
     public class HealthAPIController : ApiController
     {
+        private readonly HealthService _health;
+
+        /// <summary>
+        /// Serves from the process-wide <see cref="HealthService.Default"/>: the per-section caches and
+        /// single-flight gates are instance state, so every request must share one instance.
+        /// </summary>
+        public HealthAPIController() : this(HealthService.Default)
+        {
+        }
+
+        public HealthAPIController(HealthService health)
+        {
+            _health = health ?? throw new ArgumentNullException(nameof(health));
+        }
+
         // GET: api/Health  (and api/Health/summary)
         // Lightweight overview: the overall traffic-light + per-section grid. Skips the heavy SQL scans
         // (only probes DB reachability), so opening the Health page stays cheap on a big tenant.
@@ -25,7 +41,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("summary")]
         public async Task<IHttpActionResult> Summary()
         {
-            return Ok(await HealthService.LoadSummaryAsync(new AppConfig()));
+            return Ok(await _health.LoadSummaryAsync(new AppConfig()));
         }
 
         // GET: api/Health/data
@@ -35,7 +51,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("data")]
         public async Task<IHttpActionResult> Data()
         {
-            return Ok(await HealthService.LoadDataAsync());
+            return Ok(await _health.LoadDataAsync());
         }
 
         // GET: api/Health/liveness
@@ -43,7 +59,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("liveness")]
         public async Task<IHttpActionResult> Liveness()
         {
-            return Ok(await HealthService.LoadLivenessAsync(new AppConfig()));
+            return Ok(await _health.LoadLivenessAsync(new AppConfig()));
         }
 
         // GET: api/Health/exceptions
@@ -51,7 +67,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("exceptions")]
         public async Task<IHttpActionResult> Exceptions()
         {
-            return Ok(await HealthService.LoadExceptionsAsync(new AppConfig()));
+            return Ok(await _health.LoadExceptionsAsync(new AppConfig()));
         }
 
         // GET: api/Health/components
@@ -59,7 +75,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("components")]
         public async Task<IHttpActionResult> Components()
         {
-            return Ok(await HealthService.LoadComponentsAsync(new AppConfig()));
+            return Ok(await _health.LoadComponentsAsync(new AppConfig()));
         }
 
         // GET: api/Health/config
@@ -67,7 +83,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("config")]
         public async Task<IHttpActionResult> Config()
         {
-            return Ok(await HealthService.LoadConfigAsync(new AppConfig()));
+            return Ok(await _health.LoadConfigAsync(new AppConfig()));
         }
     }
 }
