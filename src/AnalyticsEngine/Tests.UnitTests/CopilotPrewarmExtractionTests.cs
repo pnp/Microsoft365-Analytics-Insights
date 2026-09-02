@@ -92,11 +92,15 @@ namespace Tests.UnitTests
         /// <summary>
         /// The extraction moved to CopilotPrewarmPolicy in issue #373; the manager keeps a one-line
         /// delegating wrapper. This does NOT try to prove delegation - with a one-line wrapper that
-        /// comparison is tautological - it pins the thing that could actually regress: non-Latin context
-        /// ids and UPNs surviving the wrapper unchanged.
+        /// comparison is tautological - it pins the thing that could actually regress: non-Latin file
+        /// URLs and identifiers surviving the wrapper unchanged.
+        ///
+        /// The file URL is genuinely Unicode in a customer tenant. The identifier is the Management
+        /// Activity API's UserId, which is not an Entra UPN and is unvalidated (Entra UPNs are ASCII -
+        /// see #402/#414), so a non-ASCII value is defensible input rather than a claim about UPNs.
         /// </summary>
         [TestMethod]
-        public void ManagerWrapper_KeepsNonLatinContextIdsAndUpnsIntact()
+        public void ManagerWrapper_KeepsNonLatinFileUrlsAndIdentifiersIntact()
         {
             var url = "https://contoso.sharepoint.com/sites/x/Καλημέρα κόσμε.docx";
             var acts = new List<AbstractAuditLogContent>

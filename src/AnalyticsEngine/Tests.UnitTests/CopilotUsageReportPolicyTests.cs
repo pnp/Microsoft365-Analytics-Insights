@@ -67,7 +67,8 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(
                 new[] { "chris@contoso.onmicrosoft.com", "καλημέρα@contoso.onmicrosoft.com" },
                 decision.Importable.Select(r => r.UserPrincipalName).ToArray(),
-                "Visible identities must still import, and non-Latin ones must survive.");
+                "Visible identities must still import. The non-ASCII sample is an encoding-neutrality "
+                + "guard, not a claim that Entra permits non-Latin UPNs - it does not (#402/#414).");
         }
 
         [TestMethod]

@@ -193,12 +193,15 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task Dedup_UnicodeUpn_IsPassedToTheUserFilterUnchanged()
         {
-            // UPNs are customer text and routinely non-Latin; the rules must not normalise or mangle them.
-            const string greekUpn = "καλημέρα@contoso.onmicrosoft.com";
+            // The Management Activity API's UserId is NOT an Entra UPN - it is unvalidated and also
+            // carries app@sharepoint, SIDs and GUIDs - so a non-ASCII value is defensible input here.
+            // (Entra UPNs themselves are ASCII: see #402/#414.) This pins that the rules pass whatever
+            // arrives through to the filter verbatim, with no normalisation or ASCII folding.
+            const string nonAsciiUserId = "καλημέρα@contoso.onmicrosoft.com";
             string seenUpn = null;
 
             var cache = ActivityImportCache.GetEmptyCache();
-            var log = Event(Guid.NewGuid(), greekUpn);
+            var log = Event(Guid.NewGuid(), nonAsciiUserId);
 
             var decision = await ActivityStagingRules.DecideAndRememberAsync(
                 log, new HashSet<Guid>(), cache,
@@ -206,7 +209,7 @@ namespace Tests.UnitTests
                 upn => { seenUpn = upn; return Task.FromResult(true); },
                 l => { });
 
-            Assert.AreEqual(greekUpn, seenUpn);
+            Assert.AreEqual(nonAsciiUserId, seenUpn);
             Assert.AreEqual(SaveResultEnum.Imported, decision.Result);
         }
     }

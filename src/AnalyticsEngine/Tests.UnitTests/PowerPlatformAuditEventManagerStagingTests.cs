@@ -61,7 +61,8 @@ namespace Tests.UnitTests
             CollectionAssert.AreEquivalent(
                 new[] { "alex@contoso.onmicrosoft.com", "καλημέρα@contoso.onmicrosoft.com" },
                 new List<string> { writer.PowerAppShareRows[0].SharedWithUpn, writer.PowerAppShareRows[1].SharedWithUpn },
-                "Non-Latin recipients must survive intact.");
+                "Recipients must survive intact. Power Platform's PrincipalName is not an Entra UPN and "
+                + "is unvalidated, so a non-ASCII value is realistic input here (#414).");
         }
 
         [TestMethod]
