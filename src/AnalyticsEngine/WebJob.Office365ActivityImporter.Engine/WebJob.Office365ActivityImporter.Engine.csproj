@@ -150,6 +150,15 @@
     <Compile Include="Graph\SPSiteIdToUrlCache.cs" />
     <Compile Include="Graph\Teams\ChannelWithReactions.cs" />
     <Compile Include="Graph\Teams\CognitiveHelper.cs" />
+    <Compile Include="Graph\Teams\GraphChannelMessagesSourceLoader.cs" />
+    <Compile Include="Graph\Teams\GraphTeamsGroupSourceLoader.cs" />
+    <Compile Include="Graph\Teams\IChannelMessagesSourceLoader.cs" />
+    <Compile Include="Graph\Teams\ITeamsGroupSourceLoader.cs" />
+    <Compile Include="Graph\Teams\Rules\ChannelMessageScopeRules.cs" />
+    <Compile Include="Graph\Teams\Rules\TeamsCrawlPagingPolicy.cs" />
+    <Compile Include="Graph\Teams\Rules\TeamsCrawlRules.cs" />
+    <Compile Include="Graph\Teams\TeamChannelDeltaTokenStores.cs" />
+    <Compile Include="Graph\Teams\TeamsChannelCrawler.cs" />
     <Compile Include="Graph\Teams\Extensions\ChatMessageListExtensions.cs" />
     <Compile Include="Graph\Teams\Extensions\TeamsCognitiveExtensions.cs" />
     <Compile Include="Graph\Teams\TeamsCrawlConfig.cs" />
