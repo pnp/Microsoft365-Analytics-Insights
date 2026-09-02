@@ -298,29 +298,35 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// The service must be encoding-neutral: whatever UPN string it is handed comes back unchanged,
-        /// both on the profile and inside the SQL shown to the admin. Nothing here may normalise, fold
-        /// or ASCII-filter it.
+        /// The service must hand the UPN through unchanged on the profile, and must SQL-escape it in the
+        /// query text shown to the admin. The sample uses an apostrophe and a hyphen because those are
+        /// awkward characters Entra genuinely permits in a userPrincipalName (the permitted set is
+        /// A-Z a-z 0-9 ' . - _ ! # ^ ~), and an unescaped apostrophe would produce SQL that is broken -
+        /// and, if it were ever executed rather than displayed, injectable.
         /// </summary>
         /// <remarks>
-        /// A non-ASCII sample is used because it is the value most likely to be silently mangled by an
-        /// accidental <c>Normalize()</c> or encoding round trip - not because it is realistic data.
-        /// Entra restricts <c>userPrincipalName</c> to <c>A-Z a-z 0-9 ' . - _ ! # ^ ~</c> and disallows
-        /// accented characters, so a Greek UPN is not a real tenant case.
+        /// This deliberately does NOT use a Greek sample. Entra disallows accented and non-Latin
+        /// characters in a UPN (#402/#414), so a Greek UPN is unreachable input and asserting on it
+        /// guards nothing. The apostrophe is the realistic equivalent: it is reachable, and it crosses a
+        /// real boundary - UserDataCountSql.EscapeSqlLiteral doubles it.
         /// </remarks>
         [TestMethod]
-        public async Task Summary_UpnIsPassedThroughWithoutReEncoding()
+        public async Task Summary_UpnIsReturnedVerbatimAndSqlEscapedInTheGeneratedQuery()
         {
-            const string nonAsciiUpn = "καλημέρα.κόσμε@contoso.com";
+            const string awkwardUpn = "o'brien-smith@contoso.com";
             var store = new InMemoryUserDataLookupQuery();
-            store.AddUser(11, nonAsciiUpn);
+            store.AddUser(11, awkwardUpn);
             var service = new UserDataLookupService(store);
 
-            var result = await service.GetSummaryAsync(nonAsciiUpn, AllWorkloadsOn);
+            var result = await service.GetSummaryAsync(awkwardUpn, AllWorkloadsOn);
 
             Assert.AreEqual(UserDataLookupStatus.Ok, result.Status);
-            Assert.AreEqual(nonAsciiUpn, result.Value.Profile.UserPrincipalName);
-            StringAssert.Contains(result.Value.Categories.First().SqlQuery, "user_name = '" + nonAsciiUpn + "'");
+            Assert.AreEqual(awkwardUpn, result.Value.Profile.UserPrincipalName,
+                "The profile must carry the UPN exactly as supplied - unescaped and not folded.");
+            StringAssert.Contains(result.Value.Categories.First().SqlQuery,
+                "user_name = 'o''brien-smith@contoso.com'",
+                "The apostrophe must be doubled in the generated SQL literal, or the query the admin is "
+                + "shown is malformed.");
         }
 
         #endregion
