@@ -15,12 +15,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         private readonly AnalyticsLogger _logger;
         private readonly UserMetadataCache _userMetaCache;
+        private readonly ManagerPrefetchCache _managerPrefetch;
         private Dictionary<string, GraphUser> _graphUsersByAadId;
 
+        /// <summary>
+        /// Constructor without a lookup store: manager resolution falls back to the original
+        /// per-user database query. Kept so existing call sites and tests do not have to change.
+        /// </summary>
         public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache)
+        {
+            // Deliberately not chained to the overload below: a constructor initialiser runs before
+            // the body, so chaining would move the store's own argument checks ahead of these and
+            // change which ParamName a caller sees.
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
+            _managerPrefetch = new ManagerPrefetchCache(null);
+        }
+
+        /// <param name="userLookupStore">
+        /// Used by <see cref="PrefetchManagersForBatchAsync"/> to resolve a whole batch's managers in
+        /// one query instead of one query per user (#371).
+        /// </param>
+        public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache, IUserLookupStore userLookupStore)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
+            if (userLookupStore == null) throw new ArgumentNullException(nameof(userLookupStore));
+            _managerPrefetch = new ManagerPrefetchCache(userLookupStore);
         }
 
         /// <summary>
@@ -42,6 +63,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _graphUsersByAadId[graphUser.Id] = graphUser;
                 }
             }
+        }
+
+        /// <summary>
+        /// Loads every manager the given batch might have to look up by UPN, in a single query, so
+        /// the resolution chain below does not have to go to the database once per user.
+        /// </summary>
+        /// <remarks>
+        /// This is the fix for the N+1 called out in #371. The database-by-UPN branch of
+        /// <see cref="UpdateUserManager"/> is reached whenever a manager cannot be resolved from the
+        /// in-memory dictionaries - during insert enrichment, a manager inserted in a later batch
+        /// than their report. One chunked query per batch replaces those round trips.
+        ///
+        /// Call once per batch, before processing it: the entities returned are tracked by the
+        /// import's context and every batch ends by detaching them, so a cache kept across batches
+        /// would hand out detached entities. Each call therefore replaces the previous contents.
+        /// A no-op when no lookup store was supplied, which leaves the original per-user query in
+        /// place.
+        /// </remarks>
+        public async Task PrefetchManagersForBatchAsync(IEnumerable<GraphUser> batch)
+        {
+            await _managerPrefetch.LoadForBatchAsync(batch, _graphUsersByAadId);
         }
 
         /// <summary>
@@ -234,12 +276,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             // CRITICAL FIX: First try to find the manager in the database by UPN
                             // The AAD ID lookup might have failed due to mismatched/null AAD IDs,
                             // but the user might still exist in the database.
+                            //
+                            // Served from the batch prefetch when one was loaded
+                            // (PrefetchManagersForBatchAsync), which is what stops this being a
+                            // query per user at 200k-user scale (#371). The prefetch runs on the
+                            // same context, so the entity is tracked exactly as the query below
+                            // would return it. The query is still the fallback: it covers managers
+                            // created part-way through the batch, and the case where no lookup
+                            // store was supplied at all.
+                            //
                             // Drop LOWER() from the column predicate - the default code-first
                             // collation (Latin1_General_CI_AS) is case-insensitive, so leaving
                             // the column un-lowered keeps the predicate SARGable and lets the
                             // index on user_name be used.
-                            dbManager = await db.users
-                                .FirstOrDefaultAsync(u => u.UserPrincipalName == managerUpn);
+                            if (!_managerPrefetch.TryGet(managerUpn, out dbManager))
+                            {
+                                dbManager = await db.users
+                                    .FirstOrDefaultAsync(u => u.UserPrincipalName == managerUpn);
+                            }
 
                             if (dbManager != null)
                             {
@@ -299,7 +353,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (user.ID == 0 && !string.IsNullOrEmpty(user.UserPrincipalName))
             {
                 var upn = user.UserPrincipalName;
-                var existingUser = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
+                // Served from the batch prefetch where possible, for the same reason as the manager
+                // branch above: this ran once per user with an unsaved template entity (#371).
+                if (!_managerPrefetch.TryGet(upn, out var existingUser))
+                {
+                    existingUser = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
+                }
                 if (existingUser != null)
                 {
                     // Found the user in DB - use the tracked version

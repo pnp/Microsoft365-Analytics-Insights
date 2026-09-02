@@ -230,7 +230,15 @@
     <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
+    <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
+    <Compile Include="Graph\User\IUserLookupStore.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
+    <Compile Include="Graph\User\ManagerPrefetchCache.cs" />
+    <Compile Include="Graph\User\Rules\ManagerResolutionRules.cs" />
+    <Compile Include="Graph\User\Rules\UserBulkUpdateRules.cs" />
+    <Compile Include="Graph\User\Rules\UserImportCommitPolicy.cs" />
+    <Compile Include="Graph\User\SqlUserBulkUpdateWriter.cs" />
+    <Compile Include="Graph\User\SqlUserLookupStore.cs" />
     <Compile Include="Graph\User\UserBatchProcessor.cs" />
     <Compile Include="Graph\User\Rules\UserMetadataMappingRules.cs" />
     <Compile Include="Graph\User\UserDataMapper.cs" />
