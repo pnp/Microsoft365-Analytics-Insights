@@ -304,7 +304,7 @@ namespace Tests.UnitTests
         /// </summary>
         /// <remarks>
         /// A non-ASCII sample is used because it is the value most likely to be silently mangled by an
-        /// accidental <c>Normalize()</c> or encoding round trip - not because Entra can issue one.
+        /// accidental <c>Normalize()</c> or encoding round trip - not because it is realistic data.
         /// Entra restricts <c>userPrincipalName</c> to <c>A-Z a-z 0-9 ' . - _ ! # ^ ~</c> and disallows
         /// accented characters, so a Greek UPN is not a real tenant case.
         /// </remarks>
