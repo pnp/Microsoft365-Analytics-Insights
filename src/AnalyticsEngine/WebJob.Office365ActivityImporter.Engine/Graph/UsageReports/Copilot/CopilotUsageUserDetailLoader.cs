@@ -35,6 +35,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         private readonly ILogger _logger;
         private readonly UserGroupsCache _userGroupsCache;
         private readonly UserGroupsFilterModel _userGroupsFilter;
+        private readonly ICopilotUsagePersistenceManager _persistence;
 
         /// <summary>
         /// Rows per SaveChanges. Matches the value the other usage-report loaders settled on: small enough
@@ -45,11 +46,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
         public CopilotUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger,
             UserGroupsCache userGroupsCache = null, UserGroupsFilterModel userGroupsFilter = null)
+            : this(reportSource, logger, userGroupsCache, userGroupsFilter, null)
+        {
+        }
+
+        /// <summary>
+        /// As above, with the write side supplied (issue #370). The original signature is kept as a
+        /// delegating overload rather than gaining an optional parameter, so no already-compiled caller
+        /// breaks. When <paramref name="persistence"/> is null the db-taking <c>LoadAndSaveAsync</c>
+        /// overloads build a <see cref="SqlCopilotUsagePersistenceManager"/> over the context they are given.
+        /// </summary>
+        public CopilotUsageUserDetailLoader(ICopilotReportSource reportSource, ILogger logger,
+            UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilter,
+            ICopilotUsagePersistenceManager persistence)
         {
             _reportSource = reportSource ?? throw new ArgumentNullException(nameof(reportSource));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userGroupsCache = userGroupsCache;
             _userGroupsFilter = userGroupsFilter;
+            _persistence = persistence;
         }
 
         public Task<int> LoadAndSaveAsync(AnalyticsEntitiesContext db, string period, string version = CopilotReportVersions.V2)
@@ -58,12 +73,37 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         }
 
         /// <summary>
-        /// Downloads, parses and upserts the per-user report. Returns rows written to SQL; 0 when the tenant
-        /// conceals user information, when Graph returned nothing, or when nothing changed.
+        /// Downloads, parses and upserts the per-user report against the supplied context. Returns rows
+        /// written to SQL; 0 when the tenant conceals user information, when Graph returned nothing, or when
+        /// nothing changed.
         /// </summary>
-        public async Task<int> LoadAndSaveAsync(AnalyticsEntitiesContext db, CopilotReportRequest request)
+        public Task<int> LoadAndSaveAsync(AnalyticsEntitiesContext db, CopilotReportRequest request)
         {
-            if (db == null) throw new ArgumentNullException(nameof(db));
+            if (_persistence == null && db == null) throw new ArgumentNullException(nameof(db));
+            return LoadAndSaveCoreAsync(PersistenceFor(db), request);
+        }
+
+        /// <summary>
+        /// As above, using the <see cref="ICopilotUsagePersistenceManager"/> this loader was constructed
+        /// with. This is the overload that lets the whole import run with no database at all.
+        /// </summary>
+        public Task<int> LoadAndSaveAsync(CopilotReportRequest request)
+        {
+            if (_persistence == null)
+            {
+                throw new InvalidOperationException(
+                    $"This overload needs an {nameof(ICopilotUsagePersistenceManager)}; construct the loader with one, or call the overload that takes a database context.");
+            }
+            return LoadAndSaveCoreAsync(_persistence, request);
+        }
+
+        private ICopilotUsagePersistenceManager PersistenceFor(AnalyticsEntitiesContext db)
+        {
+            return _persistence ?? new SqlCopilotUsagePersistenceManager(db, _logger) { SaveBatchSize = SaveBatchSize };
+        }
+
+        private async Task<int> LoadAndSaveCoreAsync(ICopilotUsagePersistenceManager persistence, CopilotReportRequest request)
+        {
             if (request == null) throw new ArgumentNullException(nameof(request));
             if (request.ReportName != CopilotReportNames.UsageUserDetail)
             {
@@ -100,7 +140,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 // report endpoint doesn't exist in this cloud, so there is nothing to retry; record why.
                 importLog.RowsRead = 0;
                 importLog.Error = Truncate($"Report not available: {GraphHttpException.DescribeForStorage(ex)}", 1000);
-                await SaveImportLog(db, importLog);
+                await persistence.RecordReportLoadAsync(importLog);
 
                 _logger.LogWarning($"Copilot per-user report {request} is not available on this tenant: {ex.Message} " +
                     "These reports exist only in the global cloud (not US Government or 21Vianet). No rows were imported.");
@@ -109,7 +149,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             catch (Exception ex)
             {
                 importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
-                await SaveImportLog(db, importLog);
+                await persistence.RecordReportLoadAsync(importLog);
                 throw;
             }
 
@@ -120,7 +160,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             {
                 _logger.LogWarning($"Copilot per-user report {request} returned no rows. " +
                     "The report downloaded successfully and was genuinely empty, which is expected on a tenant with no Microsoft 365 Copilot licences.");
-                await SaveImportLog(db, importLog);
+                await persistence.RecordReportLoadAsync(importLog);
                 return 0;
             }
 
@@ -132,7 +172,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             if (concealment.Outcome == ConcealedIdentityOutcome.AbortImport)
             {
                 importLog.IsUpnObfuscated = true;
-                await SaveImportLog(db, importLog);
+                await persistence.RecordReportLoadAsync(importLog);
 
                 _logger.LogError($"Copilot per-user usage report {request} came back with concealed user identities for all {parsed.Count} row(s): " +
                     "the tenant has 'concealed user information' enabled for Microsoft 365 usage reports, so Graph replaced each user principal name with a hash. " +
@@ -168,19 +208,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             try
             {
                 importable = await FilterToUsersInScope(importable);
-                written = await SaveAsync(db, importable, request, hasVersion2Data);
+                written = await SaveAsync(persistence, importable, request, hasVersion2Data);
             }
             catch (Exception ex)
             {
                 // Persistence failures must reach the Health page too, and must be written on a FRESH context:
                 // the one that just failed a SaveChanges can be left with entities in a broken state.
                 importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
-                await SaveImportLogOnNewContext(importLog);
+                await persistence.RecordReportLoadAfterFailureAsync(importLog);
                 throw;
             }
 
             importLog.RowsSaved = written;
-            await SaveImportLog(db, importLog);
+            await persistence.RecordReportLoadAsync(importLog);
 
             _logger.LogInformation($"Copilot per-user report {request}: parsed {parsed.Count} row(s), wrote {written} to SQL.");
             return written;
@@ -226,28 +266,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             return inScope;
         }
 
-        private async Task<int> SaveAsync(AnalyticsEntitiesContext db, List<CopilotUsageUserDetailRow> rows,
+        /// <summary>
+        /// Resolves users, keys the rows by report period, and hands the survivors to the persistence port.
+        ///
+        /// Order matters and is preserved: users are resolved BEFORE the period keying, over the full row
+        /// set, so an identity that appears only on rows later dropped as unkeyable is still created exactly
+        /// as it always was.
+        /// </summary>
+        private async Task<int> SaveAsync(ICopilotUsagePersistenceManager persistence, List<CopilotUsageUserDetailRow> rows,
             CopilotReportRequest request, bool hasVersion2Data)
         {
             if (rows.Count == 0) return 0;
 
-            var userIdsByUpn = await ResolveUserIds(db, rows);
+            var resolution = await persistence.ResolveUserIdsAsync(rows.Select(r => r.UserPrincipalName));
 
             // The period is part of the key: D7 and D28 describe the SAME user and date with different prompt
             // counts, active-day counts and last-activity values, so they are different facts, not a conflict.
-            // A row that states no period and a request that can't supply one (ALL) has no key, so it is
-            // dropped rather than stored under the meaningless period 0. Filtered in place: at ~200k licensed
-            // users a second full-size list is a pointless copy of the whole report.
-            //
-            // RemoveAll rather than a reverse loop calling RemoveAt: each RemoveAt shifts every surviving
-            // element after it, so dropping a scattered subset of a 200k-row report costs O(N^2) element
-            // moves (~5 billion when half the rows are unkeyable). RemoveAll is a single O(N) compaction.
-            var requestedPeriodDays = request.PeriodDays;
-            var unkeyable = rows.RemoveAll(row =>
-            {
-                row.ReportPeriodDays = row.ReportPeriodDays ?? requestedPeriodDays;
-                return !row.ReportPeriodDays.HasValue;
-            });
+            // The rule (including the in-place filtering that keeps the caller's "parsed N row(s)" count
+            // honest) lives in CopilotUsageReportPolicy so it can be asserted without a database.
+            var unkeyable = CopilotUsageReportPolicy.ApplyPeriodKeys(rows, request.PeriodDays);
 
             if (unkeyable > 0)
             {
@@ -257,209 +294,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             if (rows.Count == 0) return 0;
 
-            var reportDates = rows.Select(r => r.ReportRefreshDate.Date).Distinct().ToList();
-            var periods = rows.Select(r => r.ReportPeriodDays.Value).Distinct().ToList();
-
-            var written = 0;
-            var autoDetectWasEnabled = db.Configuration.AutoDetectChangesEnabled;
-            db.Configuration.AutoDetectChangesEnabled = false;
-            try
-            {
-                // Work in batches of users rather than one pass over all of them. Batching bounds not just the
-                // SQL command trees but EF's change tracker: the previous shape loaded and kept every existing
-                // row for the report date tracked for the whole loop, which at ~200,000 licensed users is the
-                // memory profile that caused an OutOfMemoryException in the other usage-report loaders.
-                for (var offset = 0; offset < rows.Count; offset += SaveBatchSize)
-                {
-                    var batch = rows.GetRange(offset, Math.Min(SaveBatchSize, rows.Count - offset));
-                    written += await SaveBatchAsync(db, batch, userIdsByUpn, reportDates, periods, hasVersion2Data);
-                    DetachActivityLogs(db);
-                }
-            }
-            finally
-            {
-                db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
-                DetachActivityLogs(db);
-            }
-
-            return written;
-        }
-
-        private async Task<int> SaveBatchAsync(AnalyticsEntitiesContext db, List<CopilotUsageUserDetailRow> batch,
-            Dictionary<string, int> userIdsByUpn, List<DateTime> reportDates, List<int> periods, bool hasVersion2Data)
-        {
-            var batchUserIds = new List<int>(batch.Count);
-            foreach (var row in batch)
-            {
-                if (userIdsByUpn.TryGetValue(row.UserPrincipalName, out var id)) batchUserIds.Add(id);
-            }
-            if (batchUserIds.Count == 0) return 0;
-
-            var existingByKey = new Dictionary<string, CopilotUsageUserActivityLog>();
-            foreach (var existing in await db.CopilotUsageUserActivityLogs
-                .Where(r => reportDates.Contains(r.Date) && periods.Contains(r.ReportPeriodDays) && batchUserIds.Contains(r.UserID))
-                .ToListAsync())
-            {
-                existingByKey[KeyOf(existing.Date, existing.ReportPeriodDays, existing.UserID)] = existing;
-            }
-
-            var written = 0;
-            foreach (var row in batch)
-            {
-                if (!userIdsByUpn.TryGetValue(row.UserPrincipalName, out var userId)) continue;
-
-                var date = row.ReportRefreshDate.Date;
-                var periodDays = row.ReportPeriodDays.Value;
-                var key = KeyOf(date, periodDays, userId);
-
-                var isNew = !existingByKey.TryGetValue(key, out var log);
-                if (isNew)
-                {
-                    log = new CopilotUsageUserActivityLog { Date = date, UserID = userId, ReportPeriodDays = periodDays };
-                    existingByKey[key] = log;
-                }
-
-                var changed = Populate(log, row, hasVersion2Data);
-
-                if (isNew)
-                {
-                    db.CopilotUsageUserActivityLogs.Add(log);
-                }
-                else if (changed)
-                {
-                    db.Entry(log).State = EntityState.Modified;
-                }
-                else
-                {
-                    // Graph gap-fills the last few days, so re-imports are mostly identical rows. Skipping
-                    // unchanged UPDATEs is the difference between writing a handful of rows and rewriting
-                    // every licensed user every cycle.
-                    continue;
-                }
-
-                written++;
-            }
-
-            if (written > 0) await db.SaveChangesAsync();
-            return written;
-        }
-
-        private static void DetachActivityLogs(AnalyticsEntitiesContext db)
-        {
-            foreach (var entry in db.ChangeTracker.Entries<CopilotUsageUserActivityLog>().ToList())
-            {
-                entry.State = EntityState.Detached;
-            }
-        }
-
-        /// <summary>
-        /// Maps every report UPN to a user id, reading the existing users once and inserting only the ones we
-        /// have never seen. Comparisons are case-insensitive in memory rather than via SQL <c>LOWER()</c>,
-        /// which would make the predicate non-SARGable and force a table scan.
-        ///
-        /// A new user is only ever created when its email domain is one we already hold users for. Syntax
-        /// alone cannot prove an identity belongs to the tenant, so this - not the UPN shape check - is the
-        /// real boundary that stops a pseudonymised report from populating the users table with junk. An
-        /// identity on an unrecognised domain is skipped and counted, not invented.
-        /// </summary>
-        private async Task<Dictionary<string, int>> ResolveUserIds(AnalyticsEntitiesContext db, List<CopilotUsageUserDetailRow> rows)
-        {
-            var existingUsers = await db.users.AsNoTracking()
-                .Select(u => new { u.ID, u.UserPrincipalName })
-                .ToListAsync();
-
-            var idsByUpn = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var knownDomains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var user in existingUsers)
-            {
-                if (string.IsNullOrWhiteSpace(user.UserPrincipalName)) continue;
-                idsByUpn[user.UserPrincipalName] = user.ID;
-
-                var domain = DomainOf(user.UserPrincipalName);
-                if (domain != null) knownDomains.Add(domain);
-            }
-
-            var missing = new List<string>();
-            var unknownDomain = 0;
-            foreach (var upn in rows.Select(r => r.UserPrincipalName).Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (idsByUpn.ContainsKey(upn)) continue;
-
-                // An empty users table means there is nothing to validate against yet (a brand-new install
-                // where the user-metadata import hasn't run). Creating is then the only way to make progress,
-                // and Microsoft's concealed identities are bare hashes with no domain at all, so they are
-                // already rejected before reaching here.
-                if (knownDomains.Count > 0 && !knownDomains.Contains(DomainOf(upn) ?? string.Empty))
-                {
-                    unknownDomain++;
-                    continue;
-                }
-
-                missing.Add(upn);
-            }
-
-            if (unknownDomain > 0)
-            {
-                _logger.LogWarning($"Copilot per-user report: skipped {unknownDomain} identity(ies) on an email domain this database has no users for. " +
-                    "They were not created, because an unrecognised domain is how a pseudonymised report would look. " +
-                    "If these are genuine users, run the Graph user metadata import so they are known first.");
-            }
-
-            if (missing.Count == 0) return idsByUpn;
-
-            _logger.LogInformation($"Copilot per-user report: creating {missing.Count} user record(s) not yet known to the database.");
-
-            var autoDetectWasEnabled = db.Configuration.AutoDetectChangesEnabled;
-            db.Configuration.AutoDetectChangesEnabled = false;
-            try
-            {
-                var newUsers = new List<Common.Entities.User>(Math.Min(missing.Count, SaveBatchSize));
-                for (var i = 0; i < missing.Count; i++)
-                {
-                    // Existing loaders store UPNs lower-cased; matching that avoids creating a second user
-                    // record that differs only by case.
-                    var user = new Common.Entities.User { UserPrincipalName = missing[i].ToLowerInvariant() };
-                    db.users.Add(user);
-                    newUsers.Add(user);
-
-                    if (newUsers.Count >= SaveBatchSize)
-                    {
-                        await FlushNewUsers(db, newUsers, idsByUpn);
-                    }
-                }
-
-                await FlushNewUsers(db, newUsers, idsByUpn);
-            }
-            finally
-            {
-                db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
-            }
-
-            return idsByUpn;
-        }
-
-        /// <summary>
-        /// Commits a batch of new users, records their ids, then DETACHES them.
-        /// Detaching matters at scale: auto-detect is off, so every SaveChanges needs an explicit
-        /// DetectChanges, and DetectChanges walks every tracked entity. Leaving 200,000 added users tracked
-        /// would make the per-batch scan O(total x batches) and hold them all in memory for the rest of the
-        /// import. The ids are all we need afterwards.
-        /// </summary>
-        private static async Task FlushNewUsers(AnalyticsEntitiesContext db, List<Common.Entities.User> newUsers,
-            Dictionary<string, int> idsByUpn)
-        {
-            if (newUsers.Count == 0) return;
-
-            db.ChangeTracker.DetectChanges();
-            await db.SaveChangesAsync();
-
-            foreach (var user in newUsers)
-            {
-                idsByUpn[user.UserPrincipalName] = user.ID;
-                db.Entry(user).State = EntityState.Detached;
-            }
-
-            newUsers.Clear();
+            var upsert = await persistence.UpsertUserDetailAsync(rows, resolution.IdsByUpn, hasVersion2Data);
+            return upsert.Written;
         }
 
         /// <summary>
@@ -470,7 +306,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// "Graph didn't send prompt data", and blanking a previously captured prompt count is the more
         /// damaging of the two possible mistakes.
         /// </summary>
-        private static bool Populate(CopilotUsageUserActivityLog log, CopilotUsageUserDetailRow row, bool hasVersion2Data)
+        internal static bool Populate(CopilotUsageUserActivityLog log, CopilotUsageUserDetailRow row, bool hasVersion2Data)
         {
             var changed = false;
 
@@ -508,38 +344,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             if (EqualityComparer<T>.Default.Equals(current, incoming)) return false;
             assign(incoming);
             return true;
-        }
-
-        /// <summary>Matches the unique index on (date, user_id, report_period_days).</summary>
-        private static string KeyOf(DateTime date, int periodDays, int userId)
-        {
-            return $"{date:yyyy-MM-dd}|{periodDays}|{userId}";
-        }
-
-        private static string DomainOf(string upn)
-        {
-            if (string.IsNullOrWhiteSpace(upn)) return null;
-            var at = upn.LastIndexOf('@');
-            if (at <= 0 || at == upn.Length - 1) return null;
-            return upn.Substring(at + 1);
-        }
-
-        private static async Task SaveImportLog(AnalyticsEntitiesContext db, CopilotUsageReportImportLog importLog)
-        {
-            db.CopilotUsageReportImportLogs.Add(importLog);
-            await db.SaveChangesAsync();
-        }
-
-        /// <summary>
-        /// Records the import diagnostic on a brand-new context. Used on the failure path, where the context
-        /// that raised the error may itself be the reason a save can't succeed.
-        /// </summary>
-        private static async Task SaveImportLogOnNewContext(CopilotUsageReportImportLog importLog)
-        {
-            using (var freshDb = new AnalyticsEntitiesContext())
-            {
-                await SaveImportLog(freshDb, importLog);
-            }
         }
 
         private static string Truncate(string value, int maxLength)
