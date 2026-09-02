@@ -46,7 +46,7 @@ namespace Tests.UnitTests
             // Deliberately ASCII: dbo.users.user_name is still varchar(250), so a non-Latin UPN is
             // stored mangled (issue #402). The seeded URL below is Unicode, because urls.full_url IS
             // nvarchar and must round-trip.
-            var upn = $"userdatalookup.{DateTime.UtcNow.Ticks}@contoso.com";
+            var upn = $"userdatalookup.{Guid.NewGuid():N}@contoso.com";
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -107,7 +107,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task DisplaySql_ReproducesTheCountItIsShownNextTo()
         {
-            var upn = $"displaysql.{DateTime.UtcNow.Ticks}@contoso.com";
+            var upn = $"displaysql.{Guid.NewGuid():N}@contoso.com";
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -138,7 +138,7 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var upn = $"batchkeys.{DateTime.UtcNow.Ticks}@contoso.com";
+                var upn = $"batchkeys.{Guid.NewGuid():N}@contoso.com";
                 try
                 {
                     var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
@@ -171,7 +171,7 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                var upn = $"roundtrips.{DateTime.UtcNow.Ticks}@contoso.com";
+                var upn = $"roundtrips.{Guid.NewGuid():N}@contoso.com";
                 CommandCountingInterceptor counter = null;
                 try
                 {
@@ -218,7 +218,7 @@ namespace Tests.UnitTests
         public async Task UnknownUpn_ResolvesToNoProfileAndNoUserId()
         {
             var query = new SqlUserDataLookupQuery();
-            var upn = $"definitely-not-a-user.{DateTime.UtcNow.Ticks}@contoso.com";
+            var upn = $"definitely-not-a-user.{Guid.NewGuid():N}@contoso.com";
 
             Assert.IsNull(await query.GetProfileAsync(upn));
             Assert.IsNull(await query.GetUserIdAsync(upn));
@@ -240,7 +240,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task Profile_AndUserIdLookup_ResolveTheSameUser()
         {
-            var upn = $"profilelookup.{DateTime.UtcNow.Ticks}@contoso.com";
+            var upn = $"profilelookup.{Guid.NewGuid():N}@contoso.com";
             using (var db = new AnalyticsEntitiesContext())
             {
                 try
@@ -270,13 +270,17 @@ namespace Tests.UnitTests
         private sealed class SeededUser
         {
             /// <summary>
-            /// A value unique to this test run, embedded in every row's natural key. Cleanup is driven
-            /// off these rather than off generated ids, so it still works if a save committed but the
-            /// identity value never made it back (EF commits before <c>AcceptAllChanges</c>).
+            /// A GUID unique to this test run. Every natural key below is derived from it, and cleanup
+            /// matches on those keys rather than on generated ids, so it still works if a save committed
+            /// but the identity value never made it back (EF commits before <c>AcceptAllChanges</c>).
             /// </summary>
-            public string Tag { get; set; }
+            public string Token { get; set; }
 
             public string Upn { get; set; }
+            public string OperationName { get; set; }
+            public string LookupName { get; set; }
+            public string SessionId { get; set; }
+            public string FullUrl { get; set; }
             public int UserId { get; set; }
             public User User { get; set; }
             public EventOperation Operation { get; set; }
@@ -300,12 +304,16 @@ namespace Tests.UnitTests
         /// </summary>
         private static async Task SeedUserWithDataAsync(AnalyticsEntitiesContext db, string upn, SeededUser seeded)
         {
-            var ticks = DateTime.UtcNow.Ticks;
-
-            // Recorded BEFORE the first write: cleanup keys off these, so a save that commits without
-            // handing back its identity value still gets undone.
-            seeded.Tag = "userdatalookup-" + ticks;
+            // Every natural key this run creates is derived from one GUID, recorded BEFORE the first
+            // write. A GUID rather than DateTime.Ticks: on .NET Framework the tick counter only advances
+            // about every 15.6 ms, so two fixtures starting close together could share a key - and then
+            // one's cleanup would delete the other's rows.
+            seeded.Token = Guid.NewGuid().ToString("N");
             seeded.Upn = upn;
+            seeded.OperationName = "UserDataLookupIntegrationTest " + seeded.Token;
+            seeded.LookupName = "UserDataLookupTest " + seeded.Token;
+            seeded.SessionId = "userdatalookup-" + seeded.Token;
+            seeded.FullUrl = $"https://contoso.sharepoint.com/sites/test/Καλημέρα-{seeded.Token}.pdf";
 
             var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
             db.users.Add(user);
@@ -313,7 +321,7 @@ namespace Tests.UnitTests
             seeded.User = user;
             seeded.UserId = user.ID;
 
-            var operation = new EventOperation { Name = "UserDataLookupIntegrationTest " + seeded.Tag };
+            var operation = new EventOperation { Name = seeded.OperationName };
             db.event_operations.Add(operation);
             await db.SaveChangesAsync();
             seeded.Operation = operation;
@@ -345,8 +353,8 @@ namespace Tests.UnitTests
             AddAuditChildren(db, seeded, UserDataLookupRules.CatAuditGeneral, 4, e => db.general_audit_events.Add(new GeneralEventMetada { AuditEvent = e }));
 
             // Stream events need a client application and a video: both FK columns are non-nullable.
-            var clientApp = new O365ClientApplication { Name = "UserDataLookupTest " + seeded.Tag, ClientApplicationId = Guid.NewGuid() };
-            var video = new StreamVideo { Name = "UserDataLookupTest " + seeded.Tag, StreamID = Guid.NewGuid() };
+            var clientApp = new O365ClientApplication { Name = seeded.LookupName, ClientApplicationId = Guid.NewGuid() };
+            var video = new StreamVideo { Name = seeded.LookupName, StreamID = Guid.NewGuid() };
             db.O365ClientApplications.Add(clientApp);
             db.Streams.Add(video);
             await db.SaveChangesAsync();
@@ -371,8 +379,8 @@ namespace Tests.UnitTests
 
             // --- web hits: linked to the user indirectly, hits -> sessions -> users ---
             const int hitCount = 12;
-            var url = new Url { FullUrl = $"https://contoso.sharepoint.com/sites/test/Καλημέρα-{seeded.Tag}.pdf" };
-            var session = new UserSession { user = user, ai_session_id = seeded.Tag };
+            var url = new Url { FullUrl = seeded.FullUrl };
+            var session = new UserSession { user = user, ai_session_id = seeded.SessionId };
             db.sessions.Add(session);
             for (var i = 0; i < hitCount; i++)
             {
@@ -410,7 +418,7 @@ namespace Tests.UnitTests
                     FromAddress = fromAddress,
                     SentDate = DateTime.UtcNow.AddMinutes(-i),
                     Subject = $"Καλημέρα {i}",
-                    GraphMessageId = $"{seeded.Tag}-{i}",
+                    GraphMessageId = $"{seeded.Token}-{i}",
                 });
             }
             seeded.ExpectedCounts[UserDataLookupRules.CatSentEmails] = sentEmailCount;
@@ -451,7 +459,7 @@ namespace Tests.UnitTests
         /// </summary>
         private static async Task CleanUpAsync(SeededUser seeded)
         {
-            if (seeded?.Tag == null)
+            if (seeded?.Token == null)
             {
                 // Seeding never started, so there is nothing to undo.
                 return;
@@ -493,14 +501,18 @@ namespace Tests.UnitTests
                     userId);
 
                 // The lookup rows the deleted children pointed at, now nothing references them. Matched on
-                // this run's tag rather than on captured ids, for the same reason as the user above.
+                // this run's exact natural keys - not on captured ids, and not on a substring match that
+                // could reach another fixture's rows.
                 await db.Database.ExecuteSqlCommandAsync(
-                    @"DELETE FROM dbo.urls WHERE full_url LIKE N'%' + @p0 + N'%';
-                      DELETE FROM dbo.event_operations WHERE operation_name LIKE N'%' + @p0 + N'%';
-                      DELETE FROM dbo.o365_client_applications WHERE name LIKE N'%' + @p0 + N'%';
-                      DELETE FROM dbo.stream_videos WHERE name LIKE N'%' + @p0 + N'%';
-                      DELETE FROM dbo.email_addresses WHERE address = @p1;",
-                    seeded.Tag, seeded.Upn ?? string.Empty);
+                    @"DELETE FROM dbo.urls WHERE full_url = @p0;
+                      DELETE FROM dbo.event_operations WHERE operation_name = @p1;
+                      DELETE FROM dbo.o365_client_applications WHERE name = @p2;
+                      DELETE FROM dbo.stream_videos WHERE name = @p2;
+                      DELETE FROM dbo.email_addresses WHERE address = @p3;",
+                    seeded.FullUrl ?? string.Empty,
+                    seeded.OperationName ?? string.Empty,
+                    seeded.LookupName ?? string.Empty,
+                    seeded.Upn ?? string.Empty);
 
                 var leftOver = (await db.Database.SqlQuery<int>(
                     "SELECT COUNT(*) FROM dbo.users WHERE user_name = @p0", seeded.Upn ?? string.Empty).ToListAsync()).Single();
