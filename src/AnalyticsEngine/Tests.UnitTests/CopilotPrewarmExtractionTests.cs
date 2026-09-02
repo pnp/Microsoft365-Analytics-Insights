@@ -91,11 +91,12 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// The extraction moved to CopilotPrewarmPolicy in issue #373; the manager keeps a thin wrapper so
-        /// existing call sites are unaffected. This pins that the wrapper actually delegates rather than
-        /// leaving a second, divergent copy of the context rules behind.
+        /// existing call sites are unaffected. This pins that the wrapper produces the same map - keys AND
+        /// values - as the policy for a non-trivial input, so a second, divergent copy of the context rules
+        /// left behind the wrapper would show up here.
         /// </summary>
         [TestMethod]
-        public void ManagerWrapperDelegatesToTheExtractedPolicy()
+        public void ManagerWrapperReturnsTheSameContextsAsThePolicy()
         {
             var url = "https://contoso.sharepoint.com/sites/x/Καλημέρα κόσμε.docx";
             var acts = new List<AbstractAuditLogContent>
@@ -107,9 +108,13 @@ namespace Tests.UnitTests
             var viaWrapper = ActivityReportSqlPersistenceManager.ExtractCopilotFileContexts(acts);
             var viaPolicy = CopilotPrewarmPolicy.ExtractFileContexts(acts);
 
-            CollectionAssert.AreEquivalent(viaWrapper.Keys, viaPolicy.Keys);
-            Assert.AreEqual(1, viaPolicy.Count);
-            Assert.AreEqual("καλημέρα@contoso.onmicrosoft.com", viaPolicy[url]);
+            Assert.AreEqual(1, viaWrapper.Count);
+            Assert.AreEqual("καλημέρα@contoso.onmicrosoft.com", viaWrapper[url], "The wrapper must not mangle a non-Latin UPN.");
+            CollectionAssert.AreEquivalent(viaPolicy.Keys, viaWrapper.Keys);
+            foreach (var kvp in viaPolicy)
+            {
+                Assert.AreEqual(kvp.Value, viaWrapper[kvp.Key]);
+            }
         }
 
         [TestMethod]
