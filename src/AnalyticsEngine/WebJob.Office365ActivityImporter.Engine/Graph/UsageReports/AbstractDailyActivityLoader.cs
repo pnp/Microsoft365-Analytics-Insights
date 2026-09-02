@@ -61,10 +61,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         public int LastSaveDbWriteCount { get; private set; }
 
-        // Kept as the single source for the clamp bounds; UsageReportRefreshPolicy owns the rule itself.
-        private const int MIN_DAYS_BACK = UsageReportRefreshPolicy.MinDaysBack;
-        private const int MAX_DAYS_BACK = UsageReportRefreshPolicy.MaxDaysBack;
-
         private static int ClampDaysBack(int daysBackMax) => UsageReportRefreshPolicy.ClampDaysBack(daysBackMax);
 
         /// <summary>
