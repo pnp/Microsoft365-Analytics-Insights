@@ -12,6 +12,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
@@ -60,40 +61,41 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         public int LastSaveDbWriteCount { get; private set; }
 
-        private const int MIN_DAYS_BACK = 3;    // Activity reports don't tend to refresh until a couple of days late; always collect something useful.
-        private const int MAX_DAYS_BACK = 28;   // Graph only retains ~28 days of daily detail.
+        private static int ClampDaysBack(int daysBackMax) => UsageReportRefreshPolicy.ClampDaysBack(daysBackMax);
 
-        private static int ClampDaysBack(int daysBackMax)
-        {
-            if (daysBackMax < MIN_DAYS_BACK) return MIN_DAYS_BACK;
-            if (daysBackMax > MAX_DAYS_BACK) return MAX_DAYS_BACK;
-            return daysBackMax;
-        }
+        /// <summary>
+        /// Storage-shape questions and columnstore maintenance. Injectable so the index-aware branch and the
+        /// maintenance trigger can be exercised without SQL Server (#375); defaults to the SQL adapter over
+        /// whichever context the caller passes in.
+        /// </summary>
+        public IUsageReportStorageInspector StorageInspector { get; set; }
+
+        private IUsageReportStorageInspector InspectorFor(AnalyticsEntitiesContext db)
+            => StorageInspector ?? new SqlUsageReportStorageInspector(db);
 
         /// <summary>
         /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL, old
         /// enough that Graph will no longer change them, and covered by a previously completed import phase. These
         /// can be skipped entirely on the next import - no re-download, no re-write. Dates within the recent window
         /// or newer than the completion marker are never returned because they can still change or be partial.
+        ///
+        /// The window rule itself is <see cref="UsageReportRefreshPolicy"/>, which takes the instant as a
+        /// parameter and so can be asserted without a database (#375).
         /// </summary>
         public async Task<HashSet<DateTime>> GetFinalizedStoredDatesToSkipAsync(
             AnalyticsEntitiesContext db,
             int daysBackMax,
             DateTime? lastSuccessfulImport)
         {
-            daysBackMax = ClampDaysBack(daysBackMax);
-            if (!lastSuccessfulImport.HasValue)
+            var window = UsageReportRefreshPolicy.ResolveSkipWindow(
+                daysBackMax, lastSuccessfulImport, RefreshableRecentDays, DateTime.UtcNow);
+
+            if (!window.CanSkipAnyDate)
             {
                 // Existing rows could be from an interrupted import. Until a full usage-report
                 // phase completes, no stored date is proven complete enough to skip safely.
                 return new HashSet<DateTime>();
             }
-
-            var today = DateTime.UtcNow.Date;
-            var windowStart = today.AddDays(-daysBackMax);
-            var mutableCutoff = today.AddDays(-RefreshableRecentDays);   // dates >= this can still change; never skip them
-            var completedCutoff = lastSuccessfulImport.Value.ToUniversalTime().Date;
-            var safeCutoff = completedCutoff < mutableCutoff ? completedCutoff : mutableCutoff;
 
             var table = GetTable(db);
             if (await HasLeadingDateIndexAsync(db))
@@ -102,7 +104,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // still scans every user's row for every date (millions of rows at 200k users);
                 // bounded existence seeks touch one index entry per candidate date instead.
                 var storedFinalizedDates = new HashSet<DateTime>();
-                for (var date = windowStart; date < safeCutoff; date = date.AddDays(1))
+                foreach (var date in UsageReportRefreshPolicy.EnumerateSkipCandidates(window))
                 {
                     if (await table.AnyAsync(activity => activity.Date == date))
                     {
@@ -115,6 +117,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             // Some account/group report tables have no date-leading index. Repeated existence
             // probes would each scan the table, so use one range scan until an index is available.
+            var windowStart = window.WindowStartUtc;
+            var safeCutoff = window.SafeCutoffUtc;
             var scannedDates = await table
                 .Where(activity => activity.Date >= windowStart && activity.Date < safeCutoff)
                 .Select(activity => activity.Date)
@@ -124,91 +128,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
         }
 
-        internal async Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
-        {
-            var table = typeof(TReportDbType).GetCustomAttribute<TableAttribute>();
-            if (table == null)
-            {
-                throw new InvalidOperationException(
-                    $"{typeof(TReportDbType).Name} must declare TableAttribute to inspect its date index.");
-            }
-
-            var qualifiedTableName = $"{table.Schema ?? "dbo"}.{table.Name}";
-            const string sql = @"
-SELECT CAST(CASE WHEN EXISTS (
-    SELECT 1
-    FROM sys.indexes AS i
-    INNER JOIN sys.index_columns AS ic
-      ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-    INNER JOIN sys.columns AS c
-      ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-    WHERE i.object_id = OBJECT_ID(@tableName)
-      AND i.is_disabled = 0
-      AND i.is_hypothetical = 0
-      AND i.has_filter = 0
-      AND ic.key_ordinal = 1
-      AND c.name = N'date'
-) THEN 1 ELSE 0 END AS bit);";
-
-            return await db.Database
-                .SqlQuery<bool>(sql, new SqlParameter("@tableName", qualifiedTableName))
-                .SingleAsync();
-        }
+        internal Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
+            => InspectorFor(db).HasLeadingDateIndexAsync(UsageReportTableName.Resolve(typeof(TReportDbType)));
 
         /// <summary>
-        /// Compacts this report table's columnstore delta rowgroups, if it has a columnstore index.
-        ///
-        /// <para>
-        /// <see cref="SaveLoadedReportsToSql"/> writes per-(date, user) upserts row by row, and only a bulk
-        /// load of 102,400+ rows compresses straight into a compressed rowgroup - everything else lands in
-        /// the rowstore delta store, which is scanned uncompressed. Left alone, the delta store grows every
-        /// import cycle and the columnstore's advantage decays back towards the full-scan behaviour the
-        /// <c>ColumnstoreUsageReportMetrics</c> migration exists to remove.
-        /// </para>
-        /// <para>
-        /// Plain <c>REORGANIZE</c> rather than <c>WITH (COMPRESS_ALL_ROW_GROUPS = ON)</c>: it merges and
-        /// compresses CLOSED delta rowgroups and removes deleted rows, which is the cheap, safe operation to
-        /// run on every cycle. Forcing the currently-open rowgroup to compress as well would rewrite the
-        /// trailing day's rows on every single import for very little gain.
-        /// </para>
-        /// <para>
-        /// A no-op (single metadata read) when the table has no columnstore index - which is the case on any
-        /// server where the migration's columnstore attempt fell back to a B-tree, or was skipped entirely.
-        /// </para>
+        /// Compacts this report table's columnstore delta rowgroups, if it has a columnstore index. Skipped
+        /// entirely for an entity that declares no table. See <see cref="SqlUsageReportStorageInspector"/>
+        /// for why plain REORGANIZE, and why it runs outside a transaction.
         /// </summary>
-        internal async Task CompactColumnstoreAsync(AnalyticsEntitiesContext db)
+        internal Task CompactColumnstoreAsync(AnalyticsEntitiesContext db)
         {
-            var table = typeof(TReportDbType).GetCustomAttribute<TableAttribute>();
-            if (table == null)
+            var qualifiedTableName = UsageReportTableName.TryResolve(typeof(TReportDbType));
+            if (qualifiedTableName == null)
             {
-                return;
+                return Task.CompletedTask;
             }
 
-            var qualifiedTableName = $"{table.Schema ?? "dbo"}.{table.Name}";
-
-            // i.type = 6 is NONCLUSTERED COLUMNSTORE.
-            const string sql = @"
-DECLARE @ix sysname = (
-    SELECT TOP (1) i.name
-    FROM sys.indexes AS i
-    WHERE i.object_id = OBJECT_ID(@tableName) AND i.type = 6 AND i.is_disabled = 0);
-
-IF @ix IS NOT NULL
-BEGIN
-    DECLARE @sql nvarchar(max) =
-        N'ALTER INDEX ' + QUOTENAME(@ix) + N' ON ' + @tableName + N' REORGANIZE;';
-    EXEC sp_executesql @sql;
-END";
-
-            await db.Database.ExecuteSqlCommandAsync(
-                // DoNotEnsureTransaction: index maintenance has no business inside a transaction. EF6's
-                // default (EnsureTransaction) would wrap a potentially long REORGANIZE in one, holding it
-                // open and growing the log for no benefit. (Verified that REORGANIZE does still succeed
-                // under EF's default behaviour on current SQL Server, so this is hardening rather than a
-                // bug fix - but there is no reason to run maintenance transactionally.)
-                TransactionalBehavior.DoNotEnsureTransaction,
-                sql,
-                new SqlParameter("@tableName", qualifiedTableName));
+            return InspectorFor(db).CompactColumnstoreAsync(qualifiedTableName);
         }
 
         public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax, ISet<DateTime> datesToSkip = null)
