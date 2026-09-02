@@ -31,10 +31,11 @@ namespace Tests.UnitTests
     /// subqueries or dictionary entries were crossed produce different numbers and fail. Equal counts
     /// (or zeroes everywhere) would let a swap pass, which is the whole risk being guarded here.
     ///
-    /// Not every category is seeded: the six Teams/calls categories (memberships, ownerships, reactions,
-    /// calls organised, call sessions, call feedback) need a Team or CallRecord object graph and are left
-    /// at zero, so a swap purely between two of those six would not be caught. Every other category is
-    /// seeded with a unique count.
+    /// 21 of the 30 categories are seeded. The other nine are left at zero because they need an object
+    /// graph this test does not build: the six Teams/calls categories (memberships, ownerships,
+    /// reactions, calls organised, call sessions, call feedback) need a Team or CallRecord,
+    /// copilot-interactions needs a Copilot chat, and page-likes / page-comments need per-row URLs. A
+    /// swap purely between two of those nine would not be caught.
     /// </summary>
     [TestClass]
     public class UserDataLookupSqlIntegrationTests
@@ -74,7 +75,8 @@ namespace Tests.UnitTests
 
                     var seededCounts = seeded.ExpectedCounts.Values.ToList();
                     CollectionAssert.AllItemsAreUnique(seededCounts, "the seeded counts must all differ, or a crossed mapping could still pass");
-                    Assert.IsTrue(seededCounts.Count >= 20, $"only {seededCounts.Count} categories carry data; too few to catch a crossed mapping");
+                    Assert.AreEqual(21, seededCounts.Count,
+                        "the class comment says 21 of the 30 categories carry data; keep it honest if that changes");
                 }
                 finally
                 {
@@ -266,12 +268,11 @@ namespace Tests.UnitTests
         /// <summary>
         /// Seeds one user with a <b>distinct</b> number of rows per category, covering all three ways a
         /// table links to a user: a direct FK column, indirectly via sessions (web hits), and via
-        /// audit_events (the Copilot / event_meta_* sub-types). Distinct counts are the point: if two
-        /// categories' subqueries or dictionary entries were crossed, they would report each other's
-        /// number and the test fails.
+        /// audit_events (the event_meta_* sub-types). Distinct counts are the point: if two categories'
+        /// subqueries or dictionary entries were crossed, they would report each other's number and the
+        /// test fails.
         ///
-        /// The Teams/calls categories are not seeded - they need a Team or CallRecord object graph, and
-        /// the class doc comment says so rather than implying full coverage.
+        /// See the class comment for which nine categories are deliberately left at zero.
         /// </summary>
         private static async Task<SeededUser> SeedUserWithDataAsync(AnalyticsEntitiesContext db, string upn)
         {
