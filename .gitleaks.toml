@@ -31,6 +31,28 @@ paths = [
   '''src/SPO/.*SharePointOnPremisesConfig\.json''',
 ]
 
+# --- Synthetic delta tokens in the Teams crawl tests ---
+# gitleaks' generic-api-key rule fires on `Token = "<value>"`, so the Teams channel-crawl tests trip it
+# with their made-up delta-token literals (e.g. "previous-delta-2" - 16 characters, entropy 3.75).
+# These are hard-coded fixtures in unit tests that never talk to Graph or Redis: there is no real token
+# here to rotate, and nothing to purge from history.
+#
+# Deliberately allowlisted by the exact VALUE, not by file path. A path allowlist would suppress
+# generic-api-key across the whole file, so a genuine key pasted into those tests later would go
+# undetected - verified by injecting a canary. The anchored regex below can only ever match these
+# synthetic fixtures.
+[[allowlists]]
+description = """
+Synthetic Microsoft Graph delta-token literals used by the Teams channel-crawl unit tests ("delta-1",
+"previous-delta-2", ...). They are assigned to a property named Token, which is what trips
+generic-api-key; the values are invented test fixtures, not credentials.
+Triaged 2026-09-02 (introduced by the #377 Teams port extraction).
+"""
+targetRuleIDs = ["generic-api-key"]
+regexes = [
+  '''^(previous-)?delta-[0-9]+$''',
+]
+
 # --- Local build / IDE / dependency / generated artifacts ---
 # These are never committed (they're gitignored) and are absent from a fresh CI checkout; they only
 # appear in a local working-tree (`gitleaks dir`) scan. Allowlisting keeps the local scan meaningful.
