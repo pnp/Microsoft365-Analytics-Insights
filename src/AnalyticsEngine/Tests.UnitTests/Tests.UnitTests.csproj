@@ -54,6 +54,7 @@
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
     <Compile Include="InstallTests\AppInsightsArmTemplateTests.cs" />
     <Compile Include="UserImportCaseSensitivityTests.cs" />
+    <Compile Include="UserLicenseRefreshTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserPipelinePorts.cs" />
     <Compile Include="UserBulkUpdateRulesTests.cs" />
     <Compile Include="UserImportCommitPolicyTests.cs" />
@@ -156,6 +157,10 @@
     <Compile Include="FakeLoaderClasses\InMemoryUsageReportStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeCallsPorts.cs" />
+    <Compile Include="FakeLoaderClasses\FakeGraphImportSections.cs" />
+    <Compile Include="GraphImportOrchestrationTests.cs" />
+    <Compile Include="GraphImportSectionCompositionTests.cs" />
+    <Compile Include="ImportRuntimeOptionsTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeTeamsPorts.cs" />
     <Compile Include="OrgUrlStoreTests.cs" />
     <Compile Include="FakeLoaderClasses\FixedClock.cs" />
