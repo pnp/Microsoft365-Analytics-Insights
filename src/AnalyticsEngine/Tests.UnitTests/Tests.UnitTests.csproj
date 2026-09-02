@@ -118,9 +118,12 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ActivityImportCacheWindowTests.cs" />
     <Compile Include="ActivityImporterTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
+    <Compile Include="ActivitySaveConcurrencyPolicyTests.cs" />
+    <Compile Include="ActivityStagingRulesTests.cs" />
     <Compile Include="AppInsightsConnectionStringParserTests.cs" />
     <Compile Include="AppInsightsKqlGetWhereStringTests.cs" />
     <Compile Include="AppInsightsImportWindowTests.cs" />
