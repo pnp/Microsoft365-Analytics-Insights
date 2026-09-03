@@ -492,9 +492,9 @@ namespace Tests.UnitTests
         [TestMethod]
         public void BuildRedisDnsTargetOffersManagedRedisFirstThenClassic()
         {
-            // The installer provisions Azure Managed Redis, but reuses a pre-existing classic cache of the
-            // same name if one exists - and the saved config does not record which. Both must be offered or
-            // a healthy Managed Redis is reported as a hard ERROR (issue #325).
+            // Before the resource exists in ARM, the verifier cannot know which Redis kind will be present:
+            // the installer provisions Azure Managed Redis, but reuses a pre-existing classic cache of the
+            // same name if one exists. Both must be offered or one healthy cache kind is reported as broken.
             var target = SolutionInstallVerifier.BuildRedisDnsTarget("mycache", "westeurope");
 
             Assert.AreEqual("Redis cache", target.Label);
@@ -502,6 +502,23 @@ namespace Tests.UnitTests
                 new[] { "mycache.westeurope.redis.azure.net", "mycache.redis.cache.windows.net" },
                 target.Fqdns.ToArray());
             Assert.AreEqual("mycache.westeurope.redis.azure.net", target.Fqdn, "Managed Redis must be the primary candidate.");
+            Assert.IsTrue(target.PrivateNetworkResolutionFailureIsWarning,
+                "Redis DNS misses on private-endpoint deployments should be advisory, not hard errors.");
+        }
+
+        [TestMethod]
+        public void BuildRedisDnsTargetUsesArmHostNameWhenKnown()
+        {
+            var target = SolutionInstallVerifier.BuildRedisDnsTarget(
+                "mycache",
+                "westeurope",
+                "mycache.actual.redis.azure.net");
+
+            CollectionAssert.AreEqual(new[] { "mycache.actual.redis.azure.net" }, target.Fqdns.ToArray());
+            Assert.AreEqual("mycache.actual.redis.azure.net", target.Fqdn);
+            StringAssert.Contains(target.FailureHint, "existing Azure resource");
+            Assert.IsTrue(target.PrivateNetworkResolutionFailureIsWarning,
+                "A Redis private-endpoint DNS miss from the installer host is not by itself an install blocker.");
         }
 
         [TestMethod]

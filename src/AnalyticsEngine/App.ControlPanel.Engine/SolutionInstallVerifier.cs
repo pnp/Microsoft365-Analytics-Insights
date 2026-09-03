@@ -3,6 +3,8 @@ using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.KeyVault;
+using Azure.ResourceManager.Redis;
+using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
@@ -89,7 +91,7 @@ namespace App.ControlPanel.Engine
             // DNS resolution checks for the configured Azure resource hostnames. Catches the
             // "The remote name could not be resolved" class of failure (broken/limited DNS on the
             // installer host) up-front instead of letting it abort an install part-way through.
-            await VerifyResourceDnsResolution();
+            await VerifyResourceDnsResolution(testRg);
 
             // Key Vault data-plane reachability with the installer account (the exact call that failed
             // mid-install). Only runs when the vault already exists and installer credentials are present.
@@ -432,7 +434,7 @@ namespace App.ControlPanel.Engine
         /// installer host - the cause of "The remote name could not be resolved: '&lt;x&gt;.vault.azure.net'"
         /// install failures - are caught up-front rather than mid-install. Logs only; never throws.
         /// </summary>
-        async Task VerifyResourceDnsResolution()
+        async Task VerifyResourceDnsResolution(ResourceGroupResource testRg)
         {
             _logger.LogInformation("Checking DNS resolution for configured Azure resource hostnames...");
 
@@ -446,7 +448,7 @@ namespace App.ControlPanel.Engine
                     $"Installation will fail until DNS / network / proxy connectivity is fixed on this machine.");
             }
 
-            var targets = BuildResourceDnsTargets(Config);
+            var targets = BuildResourceDnsTargets(Config, TryGetRedisHostNameFromArm(testRg));
             if (targets.Count == 0)
             {
                 _logger.LogInformation("No named Azure resources configured to DNS-check.");
@@ -483,9 +485,17 @@ namespace App.ControlPanel.Engine
                 else if (privateOnly)
                 {
                     // Public access disabled: the host must be on the VNet to resolve the private endpoint IP.
-                    _logger.LogError(
-                        $"DNS check: could not resolve {target.Label} {failureDescription}.{hint} " +
-                        PrivateNetworkGuidance.BuildVmOnVNetGuidance($"reaching the {target.Label}", Config.NetworkConfig?.VNetName));
+                    var message = $"DNS check: could not resolve {target.Label} {failureDescription}.{hint} " +
+                        PrivateNetworkGuidance.BuildVmOnVNetGuidance($"reaching the {target.Label}", Config.NetworkConfig?.VNetName);
+
+                    if (target.PrivateNetworkResolutionFailureIsWarning)
+                    {
+                        _logger.LogWarning(message);
+                    }
+                    else
+                    {
+                        _logger.LogError(message);
+                    }
                 }
                 else
                 {
@@ -507,7 +517,7 @@ namespace App.ControlPanel.Engine
         /// enabled and has a name configured. Pure string logic so it is unit-testable without any network
         /// access.
         /// </summary>
-        public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config)
+        public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config, string redisHostNameFromArm = null)
         {
             var targets = new List<ResourceDnsTarget>();
             if (config == null) return targets;
@@ -528,7 +538,7 @@ namespace App.ControlPanel.Engine
             Add("Storage account (table)", config.StorageAccountName, DNS_SUFFIX_STORAGE_TABLE);
             Add("App Service", config.AppServiceWebAppName, DNS_SUFFIX_APP_SERVICE);
 
-            var redisTarget = BuildRedisDnsTarget(config.RedisName, config.AzureLocationName);
+            var redisTarget = BuildRedisDnsTarget(config.RedisName, config.AzureLocationName, redisHostNameFromArm);
             if (redisTarget != null)
             {
                 targets.Add(redisTarget);
@@ -547,19 +557,27 @@ namespace App.ControlPanel.Engine
         }
 
         /// <summary>
-        /// Build the Redis DNS target. The installer provisions Azure Managed Redis
-        /// (<c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c>) but reuses a pre-existing legacy classic cache
-        /// (<c>&lt;name&gt;.redis.cache.windows.net</c>) when one already exists under the same name, and the
-        /// saved config does not record which kind was deployed. Both are therefore offered as candidates and
-        /// the check passes if either resolves - otherwise a perfectly healthy Managed Redis is reported as a
-        /// hard ERROR because the classic name genuinely does not exist in DNS (see issue #325).
+        /// Build the Redis DNS target. When ARM has reported the deployed cache hostname, use that exact
+        /// hostname: it is the same value the installer writes into the runtime Redis connection string and
+        /// avoids reconstructing a name from suffix guesses. Before the cache exists, fall back to the two
+        /// possible hostnames for a current Managed Redis deployment and a reused legacy classic cache.
         /// Returns null when no cache name is configured.
         /// </summary>
-        public static ResourceDnsTarget BuildRedisDnsTarget(string redisName, string azureLocationName)
+        public static ResourceDnsTarget BuildRedisDnsTarget(string redisName, string azureLocationName, string hostNameFromArm = null)
         {
             if (string.IsNullOrWhiteSpace(redisName)) return null;
 
             var name = redisName.Trim();
+
+            if (!string.IsNullOrWhiteSpace(hostNameFromArm))
+            {
+                return new ResourceDnsTarget(
+                    "Redis cache",
+                    hostNameFromArm.Trim(),
+                    "The Redis hostname was read from the existing Azure resource.",
+                    privateNetworkResolutionFailureIsWarning: true);
+            }
+
             var candidates = new List<string>();
 
             // Managed Redis first: it is what a current install deploys, so it is the name that should be
@@ -581,7 +599,50 @@ namespace App.ControlPanel.Engine
                 : "No Azure region is configured, so only the legacy classic cache hostname could be checked. " +
                   "Select the Azure region to also check the Azure Managed Redis hostname.";
 
-            return new ResourceDnsTarget("Redis cache", candidates, hint);
+            return new ResourceDnsTarget("Redis cache", candidates, hint, privateNetworkResolutionFailureIsWarning: true);
+        }
+
+        /// <summary>
+        /// If the configured Redis resource already exists, read its actual public hostname from ARM. This
+        /// mirrors <c>RedisInstallTask</c>: a pre-existing classic cache wins over Managed Redis because the
+        /// installer reuses it instead of provisioning a replacement.
+        /// </summary>
+        string TryGetRedisHostNameFromArm(ResourceGroupResource testRg)
+        {
+            if (testRg == null || string.IsNullOrWhiteSpace(Config?.RedisName))
+            {
+                return null;
+            }
+
+            var redisName = Config.RedisName.Trim();
+
+            try
+            {
+                var classic = testRg.GetAllRedis().Where(c => c.Data.Name == redisName).SingleOrDefault();
+                if (!string.IsNullOrWhiteSpace(classic?.Data?.HostName))
+                {
+                    return classic.Data.HostName;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not read classic Redis cache hostname from ARM for '{redisName}': {ex.Message}");
+            }
+
+            try
+            {
+                var managed = testRg.GetRedisEnterpriseClusters().Where(c => c.Data.Name == redisName).SingleOrDefault();
+                if (!string.IsNullOrWhiteSpace(managed?.Data?.HostName))
+                {
+                    return managed.Data.HostName;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not read Azure Managed Redis hostname from ARM for '{redisName}': {ex.Message}");
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -960,7 +1021,20 @@ namespace App.ControlPanel.Engine
         {
         }
 
-        public ResourceDnsTarget(string label, IReadOnlyList<string> fqdns, string failureHint = null)
+        public ResourceDnsTarget(
+            string label,
+            string fqdn,
+            string failureHint,
+            bool privateNetworkResolutionFailureIsWarning)
+            : this(label, new List<string> { fqdn }, failureHint, privateNetworkResolutionFailureIsWarning)
+        {
+        }
+
+        public ResourceDnsTarget(
+            string label,
+            IReadOnlyList<string> fqdns,
+            string failureHint = null,
+            bool privateNetworkResolutionFailureIsWarning = false)
         {
             if (fqdns == null || fqdns.Count == 0)
             {
@@ -970,6 +1044,7 @@ namespace App.ControlPanel.Engine
             Label = label;
             Fqdns = fqdns;
             FailureHint = failureHint;
+            PrivateNetworkResolutionFailureIsWarning = privateNetworkResolutionFailureIsWarning;
         }
 
         /// <summary>Human-readable resource description, e.g. "Key Vault".</summary>
@@ -986,6 +1061,12 @@ namespace App.ControlPanel.Engine
         /// "the resource may not exist yet" wording cannot explain. Null when there is nothing extra to say.
         /// </summary>
         public string FailureHint { get; }
+
+        /// <summary>
+        /// True when failing to resolve this target from outside a private-endpoint deployment is advisory
+        /// rather than proof that installation will fail from that host.
+        /// </summary>
+        public bool PrivateNetworkResolutionFailureIsWarning { get; }
 
         /// <summary>Primary (most likely) public fully-qualified hostname, e.g. "myvault.vault.azure.net".</summary>
         public string Fqdn => Fqdns[0];
