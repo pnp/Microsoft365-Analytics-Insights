@@ -122,6 +122,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                             {
                                 eventMeetings++; _totalMeetingsCount++;
                             }
+                            else if (eventMeetings == 0 && eventFiles == 0 && eventChats == 0)
+                            {
+                                AddChatOnly(auditRecord, baseOfficeEvent);
+                                eventChats++; _totalChatOnlyCount++;
+                            }
                         }
                         break; // meeting ends further processing for meeting/file
                     }
@@ -140,6 +145,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                             if (await TryAddFileAsync(context.Id, auditRecord, baseOfficeEvent))
                             {
                                 eventFiles++; _totalFilesCount++;
+                            }
+                            else if (eventMeetings == 0 && eventFiles == 0 && eventChats == 0)
+                            {
+                                AddChatOnly(auditRecord, baseOfficeEvent);
+                                eventChats++; _totalChatOnlyCount++;
                             }
                         }
                         break; // after first file we break out (matching prior behaviour)
@@ -183,7 +193,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Failed to stage meeting metadata for event {baseOfficeEvent.Id} context {contextId}");
+                _logger.LogWarning(ex,
+                    $"Failed to resolve optional meeting metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without meeting enrichment.");
                 return false;
             }
         }
@@ -231,7 +242,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Failed to stage file metadata for event {baseOfficeEvent.Id} context {contextId}");
+                _logger.LogWarning(ex,
+                    $"Failed to resolve optional file metadata for event {baseOfficeEvent.Id} context {contextId}; staging the Copilot interaction without file enrichment.");
                 return false;
             }
         }
