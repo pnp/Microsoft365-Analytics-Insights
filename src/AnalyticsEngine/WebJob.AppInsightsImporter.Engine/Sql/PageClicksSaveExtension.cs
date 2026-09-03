@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.Properties;
 using WebJob.AppInsightsImporter.Engine.Sql.Models;
+using WebJob.AppInsightsImporter.Engine.Sql.Rules;
 
 namespace WebJob.AppInsightsImporter.Engine.Sql
 {
@@ -16,21 +17,13 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         {
             var logsToInsert = new EFInsertBatch<ClickTempEntity>(database, logger);
 
-            // Only process click events
-            foreach (var p in events.Rows)
+            // Pure decision logic - which clicks can be staged. See issue #369.
+            var plan = ClickEventRules.Plan(events.Rows);
+            logsToInsert.Rows.AddRange(plan.RowsToStage);
+
+            if (plan.InvalidClicks > 0)
             {
-                if (p is ClickEventAppInsightsQueryResult)
-                {
-                    var click = (ClickEventAppInsightsQueryResult)p;
-                    if (click.IsValid)
-                    {
-                        logsToInsert.Rows.Add(new ClickTempEntity(click));
-                    }
-                    else
-                    {
-                        logger.LogWarning("Found invalid click data");
-                    }
-                }
+                logger.LogWarning($"Found {plan.InvalidClicks:n0} click event(s) with invalid data; skipping those rows.");
             }
 
             const int MAX_HITS_PER_THREAD = 1000;

@@ -1,3 +1,4 @@
+using Azure;
 using Azure.Data.Tables;
 using Microsoft.Extensions.Logging;
 using System;
@@ -16,9 +17,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
     /// RowKey and the original id kept in a property. Entries older than the retention window are purged on
     /// read to keep the table bounded (a blob that old can never be re-listed by the API).
     /// </summary>
-    public class AzureTableProcessedBlobStore : IProcessedBlobStore
+    public class AzureTableProcessedBlobStore : IProcessedBlobStore, IActivityMetadataRecoveryStore
     {
-        private const string PartitionKeyValue = "auditblob";
+        private const string ProcessedPartitionKey = "auditblob";
+        private const string MetadataRecoveryPartitionKey = "auditblob-metadata-recovery";
         private const string BlobIdProperty = "BlobId";
         private const string DefaultTableName = "AuditImporterProcessedBlobs";
         private const int MaxTransaction = 100; // Azure Table batch limit (single partition).
@@ -51,13 +53,42 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
         }
 
         public async Task<ISet<string>> GetProcessedBlobIdsAsync()
+            => await GetBlobIdsAsync(ProcessedPartitionKey);
+
+        public async Task MarkProcessedAsync(IReadOnlyCollection<string> blobIds)
+            => await MarkAsync(ProcessedPartitionKey, blobIds);
+
+        public async Task<ISet<string>> GetMetadataRecoveryPendingBlobIdsAsync()
+            => await GetBlobIdsAsync(MetadataRecoveryPartitionKey);
+
+        public async Task MarkMetadataRecoveryPendingAsync(IReadOnlyCollection<string> blobIds)
+            => await MarkAsync(MetadataRecoveryPartitionKey, blobIds);
+
+        public async Task ClearMetadataRecoveryPendingAsync(IReadOnlyCollection<string> blobIds)
+        {
+            if (blobIds == null || blobIds.Count == 0) return;
+
+            var entities = blobIds
+                .Where(id => !string.IsNullOrEmpty(id))
+                .Distinct()
+                .Select(id => new TableEntity(MetadataRecoveryPartitionKey, RowKeyFor(id)) { ETag = ETag.All })
+                .ToList();
+
+            foreach (var chunk in Chunk(entities, MaxTransaction))
+            {
+                var actions = chunk.Select(e => new TableTransactionAction(TableTransactionActionType.Delete, e));
+                await _table.SubmitTransactionAsync(actions);
+            }
+        }
+
+        private async Task<ISet<string>> GetBlobIdsAsync(string partitionKey)
         {
             var cutoff = DateTimeOffset.UtcNow - _retention;
             var result = new HashSet<string>();
             var expired = new List<TableEntity>();
 
             // Single-partition scan; Timestamp is a system property maintained by the service.
-            foreach (var e in _table.Query<TableEntity>(x => x.PartitionKey == PartitionKeyValue))
+            foreach (var e in _table.Query<TableEntity>(x => x.PartitionKey == partitionKey))
             {
                 var blobId = e.GetString(BlobIdProperty);
                 if (string.IsNullOrEmpty(blobId)) continue;
@@ -69,14 +100,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
             return result;
         }
 
-        public async Task MarkProcessedAsync(IReadOnlyCollection<string> blobIds)
+        private async Task MarkAsync(string partitionKey, IReadOnlyCollection<string> blobIds)
         {
             if (blobIds == null || blobIds.Count == 0) return;
 
             var entities = blobIds
                 .Where(id => !string.IsNullOrEmpty(id))
                 .Distinct()
-                .Select(id => new TableEntity(PartitionKeyValue, RowKeyFor(id)) { { BlobIdProperty, id } })
+                .Select(id => new TableEntity(partitionKey, RowKeyFor(id)) { { BlobIdProperty, id } })
                 .ToList();
 
             foreach (var chunk in Chunk(entities, MaxTransaction))

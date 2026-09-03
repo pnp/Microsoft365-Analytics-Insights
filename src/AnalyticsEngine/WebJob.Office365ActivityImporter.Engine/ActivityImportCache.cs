@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 
 namespace WebJob.Office365ActivityImporter.Engine
@@ -25,6 +26,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         {
             ProcessedIDs = new Dictionary<int, Dictionary<Guid, DateTime>>();
             NewlyIgnoredIDs = new Dictionary<int, Dictionary<Guid, DateTime>>();
+            CurrentCycleProcessedIDs = new Dictionary<int, HashSet<Guid>>();
             AnonymisedUserNameCache = new Dictionary<string, string>();
         }
 
@@ -53,8 +55,8 @@ namespace WebJob.Office365ActivityImporter.Engine
 
             // Include an extra minute either side of cache-loading range, as EF6 assumes datetime2 which can miss some datetime edge values
             // This is easier than doing a new migration to convert every DT field.
-            cacheTo = cacheTo.AddMinutes(1);
-            cacheFrom = cacheFrom.AddMinutes(-1);
+            cacheTo = ActivityImportCacheWindow.PadTo(cacheTo);
+            cacheFrom = ActivityImportCacheWindow.PadFrom(cacheFrom);
 
 #if DEBUG
             Console.WriteLine($"DEBUG: Loading activity cache from {cacheFrom} to {cacheTo}.");
@@ -109,8 +111,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                 throw new ArgumentOutOfRangeException("cacheType");
             }
 
-            TimeSpan span = dt.Subtract(DateTime.MinValue);
-            int key = (int)Math.Round(span.TotalHours, 0);
+            int key = GetCacheChunkKey(dt);
             Dictionary<int, Dictionary<Guid, DateTime>> targetDictionary = null;
 
             // Pick type of dictionary
@@ -131,6 +132,12 @@ namespace WebJob.Office365ActivityImporter.Engine
             return targetDictionary[key];
         }
 
+        private static int GetCacheChunkKey(DateTime dt)
+        {
+            TimeSpan span = dt.Subtract(DateTime.MinValue);
+            return (int)Math.Round(span.TotalHours, 0);
+        }
+
         /// <summary>
         /// Return the cache dictionary for a specific DT
         /// </summary>
@@ -148,6 +155,24 @@ namespace WebJob.Office365ActivityImporter.Engine
                 // the cache is loaded, or the same event remembered by two concurrent save batches that now
                 // share this single run-scoped cache.
                 this.GetCacheChunkForAuditLog(processedDate, CacheType.Processed)[id] = processedDate;
+            }
+        }
+
+        internal void RememberLoadedProcessedEvent(AbstractAuditLogContent auditLogContent)
+        {
+            if (auditLogContent == null) throw new ArgumentNullException(nameof(auditLogContent));
+            AddProcessedID(auditLogContent.Id, auditLogContent.CreationTime);
+        }
+
+        internal bool WasRememberedThisCycle(AbstractAuditLogContent auditLogContent)
+        {
+            if (auditLogContent == null) throw new ArgumentNullException(nameof(auditLogContent));
+
+            lock (_lock)
+            {
+                int key = GetCacheChunkKey(auditLogContent.CreationTime);
+                return CurrentCycleProcessedIDs.TryGetValue(key, out var chunk)
+                    && chunk.Contains(auditLogContent.Id);
             }
         }
 
@@ -173,6 +198,13 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// Cached list of all processed event IDs
         /// </summary>
         private Dictionary<int, Dictionary<Guid, DateTime>> ProcessedIDs { get; set; }
+
+        /// <summary>
+        /// IDs tentatively remembered by save attempts in this cycle, chunked by hour like
+        /// <see cref="ProcessedIDs"/>. This is normally only the small incremental tail, not a second copy
+        /// of the whole historical run cache.
+        /// </summary>
+        private Dictionary<int, HashSet<Guid>> CurrentCycleProcessedIDs { get; set; }
 
         /// <summary>
         /// List of all event IDs ignored (not imported). Events also added to ProcessedIDs.
@@ -256,7 +288,9 @@ namespace WebJob.Office365ActivityImporter.Engine
         }
 
         /// <summary>
-        /// Add item to "processed" queue
+        /// Add item to "processed" queue. A save attempt uses this as a tentative reservation so another
+        /// concurrent batch does not stage the same id; the save path removes the reservation if its merge
+        /// or metadata phase fails, allowing the retry to stage the event again.
         /// </summary>
         public void RememberProcessedEvent(AbstractAuditLogContent auditLogContent)
         {
@@ -266,6 +300,58 @@ namespace WebJob.Office365ActivityImporter.Engine
                 // Indexer (not .Add): idempotent, so the shared run-scoped cache is safe when the same event
                 // id is remembered by two concurrent save batches (a duplicate .Add would throw).
                 theCache[auditLogContent.Id] = auditLogContent.CreationTime;
+                int key = GetCacheChunkKey(auditLogContent.CreationTime);
+                if (!CurrentCycleProcessedIDs.TryGetValue(key, out var currentCycleChunk))
+                {
+                    currentCycleChunk = new HashSet<Guid>();
+                    CurrentCycleProcessedIDs.Add(key, currentCycleChunk);
+                }
+                currentCycleChunk.Add(auditLogContent.Id);
+            }
+        }
+
+        /// <summary>
+        /// Release processed-id reservations made by a save attempt that did not complete. Events that were
+        /// newly staged are supplied here; on a retry-aware pass that may include an id loaded from SQL after
+        /// an earlier attempt committed the audit row but failed during metadata.
+        /// </summary>
+        internal int ForgetProcessedEvents(IEnumerable<AbstractAuditLogContent> auditLogContents)
+        {
+            if (auditLogContents == null) throw new ArgumentNullException(nameof(auditLogContents));
+
+            lock (_lock)
+            {
+                var removedIds = new HashSet<Guid>();
+                foreach (var auditLogContent in auditLogContents)
+                {
+                    if (auditLogContent == null) continue;
+
+                    // Search every chunk rather than deriving the one from CreationTime. A row reloaded
+                    // from SQL can be rounded by the datetime type across this cache's half-hour chunk
+                    // boundary, while the in-memory source value is not.
+                    foreach (var chunk in ProcessedIDs.Values)
+                    {
+                        if (chunk.Remove(auditLogContent.Id))
+                        {
+                            removedIds.Add(auditLogContent.Id);
+                        }
+                    }
+                    foreach (var chunk in CurrentCycleProcessedIDs.Values)
+                    {
+                        chunk.Remove(auditLogContent.Id);
+                    }
+                }
+
+                foreach (var emptyKey in ProcessedIDs.Where(kv => kv.Value.Count == 0).Select(kv => kv.Key).ToList())
+                {
+                    ProcessedIDs.Remove(emptyKey);
+                }
+                foreach (var emptyKey in CurrentCycleProcessedIDs.Where(kv => kv.Value.Count == 0).Select(kv => kv.Key).ToList())
+                {
+                    CurrentCycleProcessedIDs.Remove(emptyKey);
+                }
+
+                return removedIds.Count;
             }
         }
 
@@ -279,6 +365,13 @@ namespace WebJob.Office365ActivityImporter.Engine
                 // Indexer (not .Add): idempotent for the shared run-scoped cache (see RememberProcessedEvent).
                 this.GetCacheChunkForAuditLog(auditLogContent, CacheType.NewlyIgnored)[auditLogContent.Id] = auditLogContent.CreationTime;
                 this.GetCacheChunkForAuditLog(auditLogContent, CacheType.Processed)[auditLogContent.Id] = auditLogContent.CreationTime;
+                int key = GetCacheChunkKey(auditLogContent.CreationTime);
+                if (!CurrentCycleProcessedIDs.TryGetValue(key, out var currentCycleChunk))
+                {
+                    currentCycleChunk = new HashSet<Guid>();
+                    CurrentCycleProcessedIDs.Add(key, currentCycleChunk);
+                }
+                currentCycleChunk.Add(auditLogContent.Id);
             }
         }
 

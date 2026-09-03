@@ -72,9 +72,17 @@
     <Compile Include="AppInsightsAPIClient.cs" />
     <Compile Include="AppInsightsColumn.cs" />
     <Compile Include="AppInsightsImporter.cs" />
+    <Compile Include="AppInsightsImportWindow.cs" />
+    <Compile Include="CustomEventSectionSaver.cs" />
+    <Compile Include="Interfaces.cs" />
+    <Compile Include="PageViewSaveResult.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="PageUpdates\PageCommentsExtensions.cs" />
     <Compile Include="PageUpdates\PageUpdateManager.cs" />
+    <Compile Include="PageUpdates\Rules\PageUpdateGroupingRules.cs" />
+    <Compile Include="PageUpdates\Rules\PageUpdateRefreshPolicy.cs" />
+    <Compile Include="PageUpdates\Rules\PageUserEventRules.cs" />
+    <Compile Include="PageUpdates\Rules\UrlMetadataPropertyRules.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
@@ -83,11 +91,15 @@
     </Compile>
     <Compile Include="Sql\HitUpdatesSqlExtension.cs" />
     <Compile Include="Sql\ImportDbHacks.cs" />
+    <Compile Include="Sql\SqlAppInsightsAdapters.cs" />
     <Compile Include="Sql\Models\ClickTempEntity.cs" />
     <Compile Include="Sql\Models\HitTempEntity.cs" />
     <Compile Include="Sql\Models\HitUpdate.cs" />
     <Compile Include="Sql\PageClicksSaveExtension.cs" />
     <Compile Include="Sql\PageViewsSaveExtension.cs" />
+    <Compile Include="Sql\Rules\ClickEventRules.cs" />
+    <Compile Include="Sql\Rules\PageViewStagingRules.cs" />
+    <Compile Include="Sql\Rules\SearchTermRules.cs" />
     <Compile Include="Sql\PageUpdatesSaveExtension.cs" />
     <Compile Include="Sql\SearchesSaveExtension.cs" />
   </ItemGroup>
