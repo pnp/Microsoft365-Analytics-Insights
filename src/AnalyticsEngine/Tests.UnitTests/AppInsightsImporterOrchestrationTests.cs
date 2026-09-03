@@ -32,7 +32,7 @@ namespace Tests.UnitTests
             public FixedClock Clock = new FixedClock(FixedNowUtc);
 
             public Task RunAsync(int? daysBeforeOverride = null) => new AppInsightsImporter(
-                new Common.Entities.Config.AppConfig(),
+                null,
                 AnalyticsLogger.ConsoleOnlyTracer(),
                 Clock,
                 Source,
@@ -103,6 +103,36 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(
                 new[] { new DateTime(2019, 2, 12), new DateTime(2019, 2, 13), new DateTime(2019, 2, 14) },
                 h.Source.PageViewDaysRequested.ToArray());
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_FutureDatedWatermark_DoesNotWalkBackwardsAndLogsTheTimestamp()
+        {
+            var h = new Harness();
+            h.Watermark.NewestHitTimestampUtc = FixedNowUtc.AddDays(2).AddHours(3);
+
+            var console = new StringWriter();
+            var original = Console.Out;
+            Console.SetOut(console);
+            try
+            {
+                await h.RunAsync();
+            }
+            finally
+            {
+                Console.SetOut(original);
+            }
+
+            CollectionAssert.AreEqual(
+                new[] { FixedNowUtc.Date },
+                h.Source.PageViewDaysRequested.ToArray(),
+                "A future hit_timestamp must not make the importer walk backwards through future days.");
+            CollectionAssert.AreEqual(h.Source.PageViewDaysRequested.ToArray(), h.Source.CustomEventDaysRequested.ToArray());
+
+            var log = console.ToString();
+            StringAssert.Contains(log, "App Insights hit watermark is in the future");
+            StringAssert.Contains(log, h.Watermark.NewestHitTimestampUtc.Value.ToString("O"));
+            StringAssert.Contains(log, FixedNowUtc.ToString("O"));
         }
 
         [TestMethod]
