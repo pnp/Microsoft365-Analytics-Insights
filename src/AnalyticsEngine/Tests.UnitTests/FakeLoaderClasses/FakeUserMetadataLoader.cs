@@ -112,9 +112,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 await OnLoadUsersBySku(skuId);
             }
 
+            // Return a defensive copy, like LoadAllActiveUsers above: GraphUserLoader materialises a
+            // fresh list per call and the licence refresh Clear()s the result to free memory, so
+            // handing out the stored list would empty the fake's state after the first import.
             if (_fakeUsersBySku.ContainsKey(skuId))
             {
-                return _fakeUsersBySku[skuId];
+                return new List<Microsoft.Graph.Models.User>(_fakeUsersBySku[skuId]);
             }
             return new List<Microsoft.Graph.Models.User>();
         }

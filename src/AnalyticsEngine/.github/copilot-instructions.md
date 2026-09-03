@@ -15,10 +15,12 @@
 Whenever you change the **installer's saved config schema** — any add / remove / rename of a persisted property on `BaseSolutionInstallConfig`, `SolutionInstallConfig`, `TargetSolutionConfig` or `ImportTaskSettings` (a new import toggle, a new Azure-resource field, etc.) — you **must** bump `CONFIG_VERSION` in [`Common/Entities/Installer/BaseSolutionInstallConfig.cs`](../Common/Entities/Installer/BaseSolutionInstallConfig.cs). Use `Major.Minor.Patch`: **minor** for additive / back-compatible changes, **major** for breaking ones. Add a one-line entry to the `// History:` comment next to the constant describing what changed. This value becomes the `ConfigSchemaVersion` stamped into every saved `*.json` config, so keeping it in step with the schema is how config compatibility is reasoned about across upgrades. Do this in the **same** change that alters the schema — don't leave it to a follow-up.
 
 ## Character set support (Unicode / Greek)
-- **Every data structure that can hold customer text MUST support the full Unicode range, including non-Latin scripts such as Greek.** SharePoint/OneDrive URLs, file names, titles, user/display names, search terms etc. routinely contain characters like `Καλημέρα κόσμε` (e.g. `https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.pdf`).
+- **Every data structure that can hold customer text MUST support the full Unicode range, including non-Latin scripts such as Greek.** SharePoint/OneDrive URLs, file names, titles, **display** names, department / job title / office / company / country, search terms etc. routinely contain characters like `Καλημέρα κόσμε` (e.g. `https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.pdf`).
+- **Exception — `userPrincipalName` is ASCII by Entra policy, and is NOT an example of the rule above.** Entra restricts a UPN to `A-Z a-z 0-9 ' . - _ ! # ^ ~`, with accented characters explicitly disallowed; non-Latin names live in `displayName` ([docs](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/plan-connect-userprincipalname)). This is why `dbo.users.user_name` is `varchar(250)` and why that is **not** a bug — see #402 (closed as not-a-bug) and #414. Do not file "non-Latin UPNs are corrupted" issues, and do not widen `user_name` on that basis. Fields that merely *look* like UPNs but are **not schema-guaranteed to be Entra UPNs** — the Management Activity API's `UserId` (whose common schema also carries `app@sharepoint`, SIDs and GUIDs), Power Platform's `PrincipalName`, and the SharePoint comment/like author email the AI Tracker copies verbatim from `c.author.email` — are unvalidated, so rules that handle them must not *assume* ASCII, and a defensive non-ASCII sample in an **in-memory** rule test is fine. **But say where the value ends up.** All three are eventually inserted into `dbo.users.user_name` (`insert_activity_from_staging_table.sql`, `insert_power_app_share_events_from_staging_table.sql`, `PageUpdateManager`), which is `varchar(250)` — so a genuinely non-ASCII value is corrupted *at rest*, and such a test proves the rule is neutral, **not** that the value round-trips to the database. Never write a test that asserts a non-ASCII identifier survives that storage boundary. **Check how the specific workload consumes the value before classifying it either way**, because this has already been got wrong three times: `ParticipantEndpointDTO.UserEmailAddress` in the Teams call-records importer looks like free text but is `[JsonIgnore]` and is filled by `CallRecordDTO.GetEmailAddress` from Graph's `user.userPrincipalName`; the **Copilot** audit records' `UserId`, though it arrives on the same generic Management Activity envelope, is passed to `GraphFileMetadataLoader.GetSpoFileInfo` as `eventUpn` and on to `GetUserDriveAsync` / `GetUserIdFromUpn`; and conversely the page-comment author email is *not* an Entra UPN even though `PageUpdateManager` assigns it to a `User.UserPrincipalName` — the destination property does not validate the source.
 - In SQL Server / EF, this means **`nvarchar`, never `varchar`** for any column that stores text originating from a customer tenant (URLs, names, paths, free text). `varchar` is single-code-page and silently corrupts characters outside that code page to `?`. This applies to entity columns, staging/temp table columns, `SqlTypeOverride` values, `Create DB.sql`, and migration `ALTER COLUMN` statements.
 - Indexing trade-off: the SQL Server non-clustered index-key limit is 1700 bytes. `nvarchar` is 2 bytes/char, so the widest indexable Unicode string column is `nvarchar(850)`. Prefer `nvarchar(850)` (not `varchar(1700)`) when a text column must be both indexed and Unicode-safe. See migration `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` and issue #122 for the canonical example (`dbo.urls.full_url`).
-- When generating C#/JSON/serialization/test data, use real non-ASCII samples (e.g. the Greek URL above) so round-trip and truncation bugs surface in tests rather than in a customer tenant.
+- When generating C#/JSON/serialization/test data, use real non-ASCII samples (e.g. the Greek URL above) so round-trip and truncation bugs surface in tests rather than in a customer tenant. Put the sample on a field that is genuinely Unicode (a display name, department, file name or URL) — **not** on a UPN, per the exception above.
+- **A Unicode test must cross the encoding boundary it claims to guard.** If a test creates its own scratch table, that table's column types must match production (`Create DB.sql` / the migrations / the EF annotations, e.g. `AbstractEFEntityWithName.Name` is `[MaxLength(100)]`); declaring `nvarchar` in the fixture while production is `varchar` makes the assertion self-fulfilling and proves nothing. `CopilotAdoptionSqlIntegrationTests.CreateUserTables` is the worked example — it used to declare `user_name nvarchar(400)` against a production `varchar(250)`.
 
 ## Performance baseline for new / epic features
 For any new feature or epic work in this solution, **assume a tenant of ~200,000 users**. Flag performance concerns proactively in reviews and design — don't wait to be asked. In particular, any new code that touches importers, batch processing, EF queries, SQL merges or Graph paging must be evaluated against this scale.
@@ -38,6 +40,72 @@ Confirm the root cause from the plan / DMVs **before** adding an index or blamin
 - **Triage with the live request:** `sys.dm_exec_requests` showing **high `logical_reads` + ~0 `physical_reads` + `wait_type` NULL = a bad in-memory nested-loop plan** (repeated rescans) — a *plan/index* problem, **not** fragmentation (`sys.dm_db_index_physical_stats.avg_fragmentation_in_percent`) and **not** data skew (rows-per-key). Rule those two out with their own queries before doing an offline rebuild in a maintenance window.
 - **Index shape for a full-tuple existence check** (e.g. the Copilot merge's `NOT EXISTS … INTERSECT` accessed-resource de-dup): it needs the **whole tuple as a composite KEY** to seek. A covering `INCLUDE` index only removes key lookups — it does **not** give the tuple seek (here it was measurably *worse*). But don't over-generalise that into "`INCLUDE` is bad": it is the right shape when the extra column is only *returned* rather than *matched* — see *When `INCLUDE` is right and when a composite KEY is right*. **Validate the chosen index with a synthetic-scale reproduction** (populate a replica table, `SET STATISTICS IO, TIME ON`, compare before/after) before shipping an offline index build to prod.
 - **Use the built-in import diagnostics instead of guessing:** the per-step SQL profiler `dbo.copilot_merge_step_timings` (create the table to enable, drop to disable — zero overhead when absent; see `WebJob.Office365ActivityImporter.Engine/ActivityAPI/Copilot/SQL/copilot_merge_step_timings.sql`) and the importer's per-cycle `metadata breakdown` / `Copilot commit timing` save-timing traces (`ActivityImporter.cs`, `CopilotAuditEventManager.cs`) pinpoint the exact slow stage.
+
+### Diagnosing a Copilot Adoption page that keeps returning 202
+
+PR #412 added a privacy-safe `CopilotAdoptionLifecycle` event stream specifically for the case
+where the database appears to finish but the browser keeps polling. Do not turn on broad debug or
+EF SQL logging: request filters and SQL parameters can contain tenant data, and the lifecycle events
+already expose the useful boundaries without it.
+
+Collect these artifacts against the **same UTC window**:
+
+1. The approximate UTC start/end time, selected reporting period, visible outcome, and a HAR captured
+   without manually reloading the page.
+2. The lifecycle export below from the deployment's Application Insights resource.
+3. Azure SQL CPU, Data IO, Log IO and DTU percentages for that window. Use Query Store or
+   `sys.dm_exec_requests` to establish server execution separately, but never paste query text,
+   database names, identifiers, real row counts or raw plans into this public repository.
+
+```kusto
+let startUtc = datetime(2000-01-01T00:00:00Z); // replace out-of-band
+let endUtc   = datetime(2000-01-01T00:30:00Z); // replace out-of-band
+customEvents
+| where timestamp between (startUtc .. endUtc)
+| where name == "CopilotAdoptionLifecycle"
+| extend RunId=tostring(customDimensions.RunId),
+         InstanceId=tostring(customDimensions.InstanceId),
+         Sequence=tolong(customMeasurements.Sequence),
+         Stage=tostring(customDimensions.Stage),
+         Step=tostring(customDimensions.Step),
+         Query=tostring(customDimensions.Query),
+         Outcome=tostring(customDimensions.Outcome),
+         ExceptionType=tostring(customDimensions.ExceptionType),
+         SyncContext=tostring(customDimensions.SynchronizationContext),
+         ActiveOperations=tostring(customDimensions.ActiveOperations),
+         ElapsedMs=tolong(customMeasurements.ElapsedMs),
+         DurationMs=tolong(customMeasurements.DurationMs),
+         WorkingSetMB=round(todouble(customMeasurements.ProcessWorkingSetBytes) / 1048576.0, 1),
+         ManagedHeapMB=round(todouble(customMeasurements.ManagedHeapBytes) / 1048576.0, 1),
+         Gen2Collections=toint(customMeasurements.Gen2Collections),
+         AvailableWorkers=toint(customMeasurements.ThreadPoolAvailableWorkers),
+         HeartbeatDriftMs=tolong(customMeasurements.HeartbeatDriftMs),
+         DroppedEvents=toint(customMeasurements.DroppedEvents)
+| project timestamp, RunId, InstanceId, Sequence, Stage, Step, Query,
+          Outcome, ExceptionType, SyncContext, ActiveOperations,
+          ElapsedMs, DurationMs, WorkingSetMB, ManagedHeapMB,
+          Gen2Collections, AvailableWorkers, HeartbeatDriftMs, DroppedEvents
+| order by RunId asc, Sequence asc
+```
+
+Interpret boundaries literally:
+
+| Last evidence | What it proves |
+|---|---|
+| No `Started` event and an immediate page | Usually a 10-minute web-process result-cache hit; confirm Application Insights was otherwise receiving events |
+| `QueryStarted` without `QueryCompleted` | EF's full `ToListAsync` boundary did not return: connection acquisition, SQL execution, TDS transfer and materialisation are still combined here; Query Store decides whether SQL itself finished |
+| `QueryCompleted` without `StepCompleted` | SQL/EF returned; the C# projection for that step did not finish |
+| All analysis steps complete without `ScoringCompleted` | Final in-memory summary scoring stalled or failed |
+| `ServiceReturned` without `CachePublished` | The service returned, but cache publication did not complete |
+| `CachePublished` without `CompletionTelemetryReturned` | The result was available to callers, but legacy completion telemetry did not return |
+| Repeating `Heartbeat` | Read `ActiveOperations`, memory/GC, available threads, drift and `DroppedEvents`; heartbeat starts after 30 seconds, so a healthy fast run has none |
+| `HostStopping` during a run | A graceful AppDomain shutdown interrupted it |
+| A run stops without a terminal event and the next run has a new `InstanceId` | Treat as an abrupt AppDomain/process loss |
+
+`ElapsedMs` is time since the run began. `DurationMs` is the named query/step/cache/telemetry
+operation only. A completed analysis is cached in the web process for 10 minutes per normalised
+period and licence-override shape; the in-flight task is also shared. Azure SQL's buffer/plan caches
+are separate and can make a fresh analysis much faster even after the web application is redeployed.
 
 ## NuGet Package Management
 - When NuGet packages are added or updated, always update binding redirects in both App.Template.config and App.config for all affected projects (including test projects). App.config is generated dynamically from App.Template.config at build time, so App.Template.config is the source of truth.
@@ -139,13 +207,19 @@ Canonical examples: `ShrinkUrlsFullUrlColumn` / `UrlFullUrlNvarchar` (`urls.full
 7. **Ship a standalone manual SQL upgrade script with every release that has a schema migration.** Some customers/DBAs upgrade the database **by hand** (in a controlled maintenance window) instead of running the installer, so every schema migration must also be published as a runnable script and **attached to the GitHub release**. Put it next to the migration as `<migrationid>.manual.sql` (e.g. `202607101200001_IndexCopilotAccessedResourceLookups.manual.sql`) containing:
    - the migration's `Up` SQL **verbatim** (which is why the `Up_Sql` is kept as a `public const` — idempotent, guarded, edition-aware online/offline), then
    - a **guarded `__MigrationHistory` stamp** so EF (`DatabaseUpgrader` / `MigrateDatabaseToLatestVersion`) and the web-app Health page treat it as applied. When the migration reuses the previous snapshot (see rule 1), the stamp just **copies the predecessor's row** — `INSERT ... SELECT '<new id>', ContextKey, Model, ProductVersion FROM __MigrationHistory WHERE MigrationId = '<prev id>'` — because the `Model` blob is byte-identical; no need to embed it. Guard with `IF NOT EXISTS (... WHERE MigrationId = '<new id>')` and verify the predecessor row exists.
-   - Validate the script before shipping: it must apply from the prior state, stamp `__MigrationHistory` (Model matching the predecessor), and be a **no-op on re-run**.
+   - Validate the script before shipping: it must apply from the prior state, stamp `__MigrationHistory` (Model matching the predecessor), and be a **no-op on re-run**. If it backfills, also validate it **with a concurrent writer inserting rows into the target table** — that is the case customers actually hit (they do not all stop the importer), and it is the case that broke a customer upgrade; see the pre-stamp guard rule below.
    - **The `__MigrationHistory` stamp must be reached on every "already applied / nothing to do" path.** If the script's work is already done (index already exists, data already clean), fall through — or `GOTO` a stamp label — rather than `RETURN`ing before the stamp; otherwise a by-hand run against an already-up-to-date DB leaves the migration "pending". Only a genuine "prerequisite missing" guard may skip the stamp (structure the "already done" case as `IF/ELSE` that falls through, not an early `RETURN`).
+   - **A pre-stamp guard may check SCHEMA, never DATA STATE.** Verifying the columns/indexes the migration creates actually exist is correct — that catches a batch that failed mid-run, which matters because sqlcmd/SSMS continue to the next batch after a severity-16 error. Refusing to stamp because *rows* are in an unexpected state is not, and has already broken a customer upgrade. **Concurrency will always beat a data-state guard**, so a "did the data end up perfect?" check is a test the script cannot reliably pass.
+     - **The incident (do not repeat it).** `DenormaliseCopilotChatUserAndTime`'s manual script refused to stamp unless *zero* `copilot_chats` rows still had a NULL `time_stamp`. On a customer upgrade with the importer left running it aborted with `NOT stamped - the schema work did not complete: backfill incomplete (N repairable row(s) still NULL)` — where N was **a few hundred rows out of several million, far below 0.01%**, with the columns added, every pre-existing row backfilled and the index built ONLINE. The schema work had *completely succeeded*. Worse, because the manual scripts form a prerequisite chain, the unstamped migration also blocked the *next* script in the release, stranding the whole upgrade.
+     - **Why those rows are unavoidable, not a bug:** `dbo.copilot_chats` is clustered on `event_id`, a GUID taken from the audit event and therefore effectively **random**. A batched backfill that walks the clustered key with an ascending watermark will have roughly a **50% chance of missing any row inserted while it runs**, because half of them land *below* the watermark that has already passed. Any migration backfilling a randomly-clustered table has this property.
+     - **Note the asymmetry with the installer path.** EF writes the `__MigrationHistory` row itself after `Up()` returns, so the installer never had this failure — it left the same handful of rows NULL and the importer's self-healing repair fixed them, exactly as designed. A hand-written stamp guard is therefore *stricter than EF itself*, which should be the warning sign: **if the guard would reject a state the installer path treats as success, the guard is wrong.**
+     - **Do this instead:** (a) hard-fail only on missing columns/indexes; (b) if the migration backfills, add a bounded **mop-up pass** after the index exists — `WHERE <col> IS NULL` becomes a cheap seek once the new index sorts NULLs first, so it catches the stragglers the watermark walk missed; (c) report any remainder as a **warning that still stamps**, naming the self-healing repair that will clear it. Never let a handful of concurrently-inserted rows block a release's migration chain.
 8. **Adding-a-migration checklist:**
    - **A performance-motivated migration must carry its before/after benchmark** (see *Prove every schema change improves performance*) in the PR description and the migration's doc comment. No measurement = not approved for stable.
    - The migration id/timestamp (`yyyyMMddHHmmssf`, 15 digits) must sort **after** the current latest migration.
    - Register all three files in `Common/Entities/Entities.csproj`: `.cs` as `<Compile>`, `.Designer.cs` as `<Compile>` with `<DependentUpon>`, `.resx` as `<EmbeddedResource>` with `<DependentUpon>`.
    - Add the manual SQL upgrade script (rule 7) and attach it to the release.
+   - **If the migration backfills data, check the manual script's stamp guard checks schema only, and that it has a mop-up pass.** A guard that requires the data to be perfect will fail on any tenant that upgrades without stopping the importer (rule 7).
    - Update any test that hard-codes the latest migration id (`UrlFullUrlMigrationPipelineTests.LatestId`). This is the easiest item on the list to miss — the class name mentions neither "migration id" nor the area you're working in, so a filtered local test run usually won't cover it. `test_dotnet (Release)` catches it, but only after you've pushed: `Assert.AreEqual failed. Expected:<...> Actual:<...>. DB should now be at the latest migration.`
    - Some tables are created **only by migrations**, not by `Common/Entities/Resources/Create DB.sql` — check which, and update `Create DB.sql` too if the table is defined there.
 9. **C# verbatim-string gotcha:** SQL held in a C# `@"..."` string must **double every `"`** (or avoid them) — a single stray `"` (e.g. inside a SQL comment) silently terminates the string and produces confusing compile errors far from the real spot.
