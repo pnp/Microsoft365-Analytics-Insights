@@ -64,7 +64,7 @@ namespace App.ControlPanel.Engine
             // Terminate here rather than carrying a "SQL is broken" flag through the rest of the method. The
             // database step would fail anyway, but only after more work had been done, and the App Service
             // would have been stopped for it - which is the outage this whole change exists to prevent.
-            if (!sqlReachable && (Config.TasksConfig.UpgradeSchema || Config.TasksConfig.RegisterConfig))
+            if (!sqlReachable && Config.TasksConfig.UpgradeSchema)
             {
                 throw new UnexpectedInstallException(
                     "SQL Server is not reachable from this host, so the database upgrade cannot run. The App Service has " +
