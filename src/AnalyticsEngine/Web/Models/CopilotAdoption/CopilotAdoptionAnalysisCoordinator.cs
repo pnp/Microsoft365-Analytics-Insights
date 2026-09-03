@@ -132,7 +132,24 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
             Lazy<Task<CopilotAdoptionAnalysis>> candidate = null;
             candidate = new Lazy<Task<CopilotAdoptionAnalysis>>(
-                () => RunAndPublishAsync(cacheKey, candidate, windowDays, ids),
+                // Task.Run, deliberately, rather than calling RunAndPublishAsync directly.
+                //
+                // This run is SHARED and outlives the request that happened to start it: that request
+                // gives up after CopilotAdoptionAPIController.FirstResponseBudget and answers 202, and a
+                // later poll collects the result. But GetAsync is called ON a request thread, where
+                // ASP.NET has installed a request-bound SynchronizationContext. Any await in the analysis
+                // that does not say ConfigureAwait(false) would capture it and post its continuation back
+                // - and once that request has ended the context never pumps again, so the continuation
+                // simply never runs. The analysis then stops mid-flight with no exception, no timeout and
+                // no recycle, while the in-flight entry below is never cleared (its finally never runs),
+                // so every later poll joins the dead task and the page can never load again until the app
+                // restarts. That is issue #441, seen in production as a run still "alive" nearly an hour
+                // later with an idle database, an idle thread pool and nothing logged.
+                //
+                // Starting the run on the thread pool gives it no ambient SynchronizationContext at all,
+                // which fixes this for every await in the analysis - including ones not yet written -
+                // rather than relying on ~32 separate ConfigureAwait(false) calls staying correct.
+                () => Task.Run(() => RunAndPublishAsync(cacheKey, candidate, windowDays, ids)),
                 LazyThreadSafetyMode.ExecutionAndPublication);
 
             var effective = _inFlight.GetOrAdd(cacheKey, candidate);
