@@ -895,6 +895,17 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
     internal static class CopilotAdoptionTelemetryHost
     {
         private static readonly string InstanceId = Guid.NewGuid().ToString("N");
+
+        // Identifies the AppDomain, so a run that stops because the worker was recycled can be told
+        // apart from one that hung. Diagnosing issue #441 turned on exactly this: the id stayed
+        // constant across the whole stall, which is what ruled out a recycle and pointed at a
+        // stranded continuation instead.
+        //
+        // .NET Core / .NET 10 note: this still COMPILES but stops meaning anything - there are no
+        // AppDomains, and AppDomain.CurrentDomain.Id is always 1. Nothing will fail; the field just
+        // silently becomes a constant and the recycle-versus-hang signal is lost. On a migration this
+        // needs replacing with something that actually changes per process lifetime (for example a
+        // process start time or a per-process GUID) rather than being ported across as-is.
         private static readonly int AppDomainId = AppDomain.CurrentDomain.Id;
         private static readonly Stopwatch Uptime = Stopwatch.StartNew();
         private static readonly ConcurrentDictionary<string, CopilotAdoptionRunTelemetry> ActiveRuns =
