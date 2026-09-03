@@ -195,6 +195,8 @@ namespace Common.Entities
         /// <c>CONFIG_VERSION</c> bump, for a value that is recomputed on load and can never be authoritative.
         /// </para>
         /// </remarks>
+        // TODO(#355): When the Power Platform activity-import isolation fix lands, remove/update the
+        // ImportPowerPlatform exclusion note above and widen this condition only with matching tests.
         [Newtonsoft.Json.JsonIgnore]
         [System.Text.Json.Serialization.JsonIgnore]
         public bool UsesActivityApi => ActivityLog || Copilot;
