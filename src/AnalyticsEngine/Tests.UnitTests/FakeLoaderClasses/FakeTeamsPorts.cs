@@ -74,6 +74,7 @@ namespace UnitTests.FakeLoaderClasses
 
         /// <summary>Channel ids this loader was asked to read, in order.</summary>
         public List<string> ChannelsRead { get; } = new List<string>();
+        public List<string> MessageIdsReturned { get; } = new List<string>();
 
         /// <summary>Script a channel read that returns a new delta token.</summary>
         public FakeChannelMessagesSourceLoader ReturningToken(string channelId, string token)
@@ -102,8 +103,13 @@ namespace UnitTests.FakeLoaderClasses
 
             if (_failingChannelIds.Contains(channel.Id))
             {
-                throw new ChannelMessagesReadException(new InvalidOperationException("simulated expired user token"));
+                return Task.FromException<TeamsRedisManager.TeamChannelDeltaTokenInfo>(
+                    new ChannelMessagesReadException(new InvalidOperationException("simulated expired user token")));
             }
+
+            var messageId = $"{channel.Id}-message-{ChannelsRead.Count}";
+            channel.Messages.Add(new ChatMessage { Id = messageId });
+            MessageIdsReturned.Add(messageId);
 
             _tokensByChannelId.TryGetValue(channel.Id, out var token);
             return Task.FromResult(token);
