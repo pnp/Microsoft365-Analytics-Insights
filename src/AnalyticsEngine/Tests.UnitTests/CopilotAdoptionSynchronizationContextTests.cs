@@ -106,9 +106,10 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// The consequence that made this permanent rather than merely slow: a run that survives
-        /// must also clear itself from the in-flight table, so a later poll is served from cache
-        /// instead of joining a stale generation.
+        /// The consequence that made this permanent rather than merely slow: a run that survives must
+        /// also clear itself from the in-flight table. The check deliberately happens with an EMPTY
+        /// cache, because a populated one answers the follow-up poll before the in-flight table is
+        /// ever consulted - so a cached result would make this pass even with the cleanup removed.
         /// </summary>
         [TestMethod]
         public async Task AnalysisRun_LeavesNoStaleGeneration_AfterTheStartingRequestHasEnded()
@@ -126,14 +127,22 @@ namespace Tests.UnitTests
                 await WithTimeout(run, "the analysis");
             }
 
+            // The published entry reaching its TTL is the ordinary case, not an exotic one - it is a
+            // 10-minute expiry against an analysis that can run for minutes. Once it has gone, the
+            // next poll has to be able to start a FRESH run, and it can only do that if the finished
+            // generation took itself out of the in-flight table.
+            cache.Evict();
+
             var second = await WithTimeout(
-                coordinator.GetAsync(28, new List<int>()), "the follow-up poll");
+                coordinator.GetAsync(28, new List<int>()), "the follow-up analysis");
 
             Assert.IsNotNull(second);
             Assert.AreEqual(
-                1,
+                2,
                 runner.CallCount,
-                "the second poll must be served from the published cache, not start a new analysis");
+                "once the cached result had expired the coordinator had to start a new analysis; "
+                + "still seeing a single call means the finished generation was left behind in the "
+                + "in-flight table, where it would serve its stale result for ever");
         }
 
         private static async Task<CopilotAdoptionAnalysis> WithTimeout(
@@ -309,6 +318,15 @@ namespace Tests.UnitTests
                 {
                     _items[key] = analysis;
                     _setCount++;
+                }
+            }
+
+            /// <summary>Drops everything, standing in for the cache entry reaching its TTL.</summary>
+            public void Evict()
+            {
+                lock (_gate)
+                {
+                    _items.Clear();
                 }
             }
         }
