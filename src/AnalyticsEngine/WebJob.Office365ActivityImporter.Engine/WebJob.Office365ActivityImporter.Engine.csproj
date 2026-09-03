@@ -237,6 +237,7 @@
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
+    <Compile Include="Graph\User\IOfficeLicenseNameResolver.cs" />
     <Compile Include="Graph\User\IUserLicenseStore.cs" />
     <Compile Include="Graph\User\IUserLookupStore.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />

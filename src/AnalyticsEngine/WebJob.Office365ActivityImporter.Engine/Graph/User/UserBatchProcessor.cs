@@ -173,10 +173,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     return tracked.Entity;
                 }
 
-                // If still can't find, try Find() as last resort
+                // If still can't find, load the row as a last resort. Find() cannot Include the
+                // licence graph; on the per-user licence path that could hand
+                // ProcessUserLicenses a tracked User with an empty LicenseLookups list.
                 if (user.ID > 0)
                 {
-                    var found = db.users.Find(user.ID);
+                    var found = db.users
+                        .Include(u => u.LicenseLookups)
+                        .FirstOrDefault(u => u.ID == user.ID);
                     if (found != null)
                     {
                         return found;
