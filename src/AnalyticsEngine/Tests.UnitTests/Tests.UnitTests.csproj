@@ -198,6 +198,7 @@
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
+    <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />
     <Compile Include="CopilotAdoptionTests.cs" />
     <Compile Include="CopilotAdoptionWorkbookTests.cs" />
