@@ -567,13 +567,8 @@ namespace App.ControlPanel.Engine
 
         async Task VerifyRuntimeAccountAllAPIs()
         {
-            // Activity API test. Mirrors the web-job's own run condition exactly, via
-            // ImportTaskSettings.UsesActivityApi (ActivityLog || Copilot): Copilot interactions are delivered
-            // through the same Management Activity API as the SharePoint audit log, so a Copilot-only tenant
-            // still depends on it. This used to test ActivityLog alone and told such tenants "audit-data not
-            // being targeted" - a statement that was actively wrong for the newest, most-demoed workload.
-            // Power Platform is deliberately NOT part of this condition; see UsesActivityApi for why.
-            if (Config.SolutionConfig.ImportTaskSettings.UsesActivityApi)
+            // Activity API test
+            if (Config.SolutionConfig.ImportTaskSettings.ActivityLog)
             {
                 await VerifyActivityAPIImport(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
             }
@@ -608,7 +603,10 @@ namespace App.ControlPanel.Engine
                 "Office 365 Management Activity API subscription read"),
 
             new ImportToggleCoverage(nameof(ImportTaskSettings.Copilot),
-                "Office 365 Management Activity API subscription read (Copilot arrives on the Audit.General feed)"),
+                null,
+                "the Copilot audit import uses the Office 365 Management Activity API, but this verifier still "
+                + "runs the Activity API check only when SharePoint audit is enabled. A separate activity-import "
+                + "change owns widening that shared condition."),
 
             new ImportToggleCoverage(nameof(ImportTaskSettings.ImportPowerPlatform), null,
                 "Power Platform events arrive on the Audit.General feed, but the web-job's activity import "

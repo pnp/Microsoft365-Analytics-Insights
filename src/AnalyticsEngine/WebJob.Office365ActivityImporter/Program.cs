@@ -310,10 +310,7 @@ namespace WebJob.Office365ActivityImporter
 
                 // Activity import (Office 365 Management Activity API). Runs when SharePoint audit
                 // (ActivityLog) and/or Copilot interactions (delivered via Audit.General) are enabled.
-                // Routed through ImportTaskSettings.UsesActivityApi so this condition and the installer's
-                // Test Configuration check cannot drift apart again - they disagreed for Copilot-only
-                // tenants, which were told "audit-data not being targeted" (issue #329).
-                if (configuredSettings.ImportJobSettings.UsesActivityApi)
+                if (configuredSettings.ImportJobSettings.ActivityLog || configuredSettings.ImportJobSettings.Copilot)
                 {
 #if !DEBUG
                     try

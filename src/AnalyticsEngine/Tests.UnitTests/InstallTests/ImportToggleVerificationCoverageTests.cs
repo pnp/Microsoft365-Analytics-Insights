@@ -92,19 +92,6 @@ namespace Tests.UnitTests.InstallTests
             // No property name.
             Assert.ThrowsException<ArgumentException>(() => new ImportToggleCoverage(" ", "some check"));
         }
-
-        [TestMethod]
-        public void TheCopilotToggleIsDeclaredAsVerifiedByTheActivityApiCheck()
-        {
-            // Gap B in #329: the verifier tested only ActivityLog, so a Copilot-only tenant - a perfectly
-            // normal Copilot-focused deployment - was told "audit-data not being targeted" while the importer
-            // went on to depend on precisely that API.
-            var copilot = SolutionInstallVerifier.ImportToggleCoverages.Single(c => c.PropertyName == nameof(ImportTaskSettings.Copilot));
-
-            Assert.IsTrue(copilot.IsVerified, "The Copilot toggle must be covered by the Activity API check.");
-            StringAssert.Contains(copilot.VerifiedBy, "Activity API");
-        }
-
         [TestMethod]
         public void TheCopilotInteractionHistoryToggleIsDeclaredAsVerified()
         {
@@ -116,111 +103,6 @@ namespace Tests.UnitTests.InstallTests
             Assert.IsTrue(interactions.IsVerified);
             StringAssert.Contains(interactions.VerifiedBy, "AiEnterpriseInteraction.Read.All");
         }
-
-        #region UsesActivityApi - the shared runtime/verifier condition
-
-        [TestMethod]
-        public void UsesActivityApiIsTrueForEveryAuditFedImportTheJobActuallyRuns()
-        {
-            Assert.IsTrue(new ImportTaskSettings { ActivityLog = true }.UsesActivityApi,
-                "SharePoint audit is read from the Management Activity API.");
-
-            Assert.IsTrue(new ImportTaskSettings { Copilot = true }.UsesActivityApi,
-                "Copilot interactions arrive on the Audit.General feed - this is Gap B in #329, where a "
-                + "Copilot-only tenant was told 'audit-data not being targeted'.");
-        }
-
-        [TestMethod]
-        public void UsesActivityApiExcludesPowerPlatformOnPurpose()
-        {
-            // ImportPowerPlatform subscribes to Audit.General (see ToActivityApiContentTypesString) but the
-            // web-job does not run the activity import for it alone. That IS a bug, but it cannot be fixed by
-            // widening this condition: Audit.General also carries Copilot interactions and
-            // AuditLogContentDispatcher accepts WORKLOAD_COPILOT unconditionally, so doing so would import
-            // Copilot data on a tenant that never opted in. Locked down here so nobody "tidies" it later
-            // without dealing with that isolation first.
-            Assert.IsFalse(new ImportTaskSettings { ImportPowerPlatform = true }.UsesActivityApi,
-                "Widening UsesActivityApi to Power Platform would import Copilot audit data without the "
-                + "Copilot toggle. Fix AuditLogContentDispatcher's workload isolation first.");
-        }
-
-        [TestMethod]
-        public void UsesActivityApiIsFalseWhenNoAuditFedImportIsEnabled()
-        {
-            Assert.IsFalse(new ImportTaskSettings().UsesActivityApi);
-
-            Assert.IsFalse(
-                new ImportTaskSettings
-                {
-                    GraphTeams = true,
-                    GraphUsageReports = true,
-                    GraphCopilotUsageReports = true,
-                    GraphUsersMetadata = true,
-                    CopilotInteractionHistory = true,
-                    SentEmails = true,
-                    WebTraffic = true,
-                    Calls = true,
-                }.UsesActivityApi,
-                "None of the Graph-only imports touch the Management Activity API.");
-        }
-
-        [TestMethod]
-        public void UsesActivityApiIsNotSerialisedIntoTheSavedConfig()
-        {
-            // Derived state, not schema. Both serialisers write public getters by default, so without the
-            // JsonIgnore attributes this would land in every saved installer *.json and in
-            // sys_configs.ConfigJson - a persisted-schema addition needing a CONFIG_VERSION bump, for a value
-            // that is recomputed on load and can never be authoritative.
-            var settings = new ImportTaskSettings { Copilot = true };
-
-            var newtonsoft = Newtonsoft.Json.JsonConvert.SerializeObject(settings);
-            StringAssert.DoesNotMatch(newtonsoft, new System.Text.RegularExpressions.Regex(nameof(ImportTaskSettings.UsesActivityApi)),
-                $"Newtonsoft serialised {nameof(ImportTaskSettings.UsesActivityApi)}: {newtonsoft}");
-
-            var systemTextJson = System.Text.Json.JsonSerializer.Serialize(settings);
-            StringAssert.DoesNotMatch(systemTextJson, new System.Text.RegularExpressions.Regex(nameof(ImportTaskSettings.UsesActivityApi)),
-                $"System.Text.Json serialised {nameof(ImportTaskSettings.UsesActivityApi)}: {systemTextJson}");
-        }
-
-        [TestMethod]
-        public void UsesActivityApiIsNotAnImportPropSoSettingsRoundTripIsUnchanged()
-        {
-            // ToSettingsString / the parsing constructor / Equals all iterate [ImportProp]. A computed
-            // property leaking into that set would corrupt the App Service ImportJobSettings value.
-            CollectionAssert.DoesNotContain(
-                ImportTaskSettings.GetImportPropertyNames().ToList(),
-                nameof(ImportTaskSettings.UsesActivityApi));
-
-            var original = new ImportTaskSettings { Copilot = true, GraphTeams = true };
-            var roundTripped = new ImportTaskSettings(original.ToSettingsString());
-
-            Assert.IsTrue(original.Equals(roundTripped));
-            Assert.AreEqual(original.UsesActivityApi, roundTripped.UsesActivityApi);
-            StringAssert.DoesNotMatch(original.ToSettingsString(),
-                new System.Text.RegularExpressions.Regex(nameof(ImportTaskSettings.UsesActivityApi)));
-        }
-
-        [TestMethod]
-        public void EveryToggleThatUsesTheActivityApiSubscribesToAContentTypeItWillActuallyRead()
-        {
-            // The runtime must never subscribe to a feed it does not read. Asserted against literal expected
-            // values rather than recomputing the condition, so a change to either side shows up here.
-            var copilotOnly = new ImportTaskSettings { Copilot = true };
-            Assert.IsTrue(copilotOnly.UsesActivityApi);
-            Assert.AreEqual(ImportTaskSettings.CONTENT_TYPE_AUDIT_GENERAL, copilotOnly.ToActivityApiContentTypesString());
-
-            var auditOnly = new ImportTaskSettings { ActivityLog = true };
-            Assert.IsTrue(auditOnly.UsesActivityApi);
-            Assert.AreEqual(ImportTaskSettings.CONTENT_TYPE_AUDIT_SHAREPOINT, auditOnly.ToActivityApiContentTypesString());
-
-            var both = new ImportTaskSettings { ActivityLog = true, Copilot = true };
-            Assert.IsTrue(both.UsesActivityApi);
-            Assert.AreEqual(
-                $"{ImportTaskSettings.CONTENT_TYPE_AUDIT_GENERAL};{ImportTaskSettings.CONTENT_TYPE_AUDIT_SHAREPOINT}",
-                both.ToActivityApiContentTypesString());
-        }
-
-        #endregion
 
         #region IsImportEnabled
 
@@ -240,10 +122,6 @@ namespace Tests.UnitTests.InstallTests
             // no-op - the same silent-omission failure mode this whole file guards against.
             Assert.ThrowsException<ArgumentException>(
                 () => new ImportTaskSettings().IsImportEnabled("NotAToggle"));
-
-            // A real property that is deliberately NOT an [ImportProp] must be rejected too.
-            Assert.ThrowsException<ArgumentException>(
-                () => new ImportTaskSettings().IsImportEnabled(nameof(ImportTaskSettings.UsesActivityApi)));
         }
 
         [TestMethod]
@@ -291,7 +169,6 @@ namespace Tests.UnitTests.InstallTests
                 return Task.FromResult(new Azure.Core.AccessToken(_jwt, DateTimeOffset.UtcNow.AddHours(1)));
             }
         }
-
         /// <summary>Builds an unsigned JWT whose payload carries the given application roles.</summary>
         private static string JwtWithRoles(params string[] roles)
         {

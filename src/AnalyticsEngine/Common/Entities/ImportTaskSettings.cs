@@ -166,41 +166,6 @@ namespace Common.Entities
             return (bool)prop.GetValue(this);
         }
 
-        /// <summary>
-        /// Whether the web-job runs its Office 365 Management Activity API import for these settings.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// The single source of truth for that question. It exists because the answer was previously spelled
-        /// out separately in the web-job's run condition and in the installer's Test Configuration, and the
-        /// two disagreed: a tenant that enabled only Copilot was told "audit-data not being targeted" while
-        /// the importer depended on exactly that API (issue #329).
-        /// </para>
-        /// <para>
-        /// <b><see cref="ImportPowerPlatform"/> is deliberately NOT included</b>, even though
-        /// <see cref="ToActivityApiContentTypesString"/> subscribes to Audit.General for it. That mismatch is
-        /// a real bug - a Power-Platform-only tenant subscribes to a feed nothing ever reads - but it cannot
-        /// be fixed by widening this condition alone: Audit.General also carries Microsoft 365 Copilot
-        /// interactions, and <c>AuditLogContentDispatcher</c> accepts <c>WORKLOAD_COPILOT</c> unconditionally,
-        /// so simply running the activity import for Power Platform would import Copilot data on a tenant that
-        /// never opted in to it. <c>DownloadActivityData</c> would also abort every cycle with a fatal error,
-        /// because it refuses to run when <c>org_urls</c> is empty - which a Power-Platform-only deployment
-        /// legitimately is. Tracked separately; do not widen this without fixing both.
-        /// </para>
-        /// <para>
-        /// Marked with both <c>JsonIgnore</c> attributes: this is derived state, not part of the persisted
-        /// config schema. Newtonsoft (which <c>SolutionInstallConfig.ToJson</c> uses) and System.Text.Json
-        /// both serialise public getters by default, so without these it would be written into every saved
-        /// installer <c>*.json</c> and into <c>sys_configs.ConfigJson</c> - a schema addition requiring a
-        /// <c>CONFIG_VERSION</c> bump, for a value that is recomputed on load and can never be authoritative.
-        /// </para>
-        /// </remarks>
-        // TODO(#355): When the Power Platform activity-import isolation fix lands, remove/update the
-        // ImportPowerPlatform exclusion note above and widen this condition only with matching tests.
-        [Newtonsoft.Json.JsonIgnore]
-        [System.Text.Json.Serialization.JsonIgnore]
-        public bool UsesActivityApi => ActivityLog || Copilot;
-
         public string ToSettingsString()
         {
             var s = string.Empty;
