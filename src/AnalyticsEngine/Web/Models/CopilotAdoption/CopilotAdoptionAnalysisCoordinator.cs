@@ -30,10 +30,26 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
             var service = new CopilotAdoptionService(
                 options,
+                // A factory that creates its OWN context, deliberately - not one resolved from a
+                // per-request scope. This run outlives the request that started it, so a scoped
+                // context would already be disposed by the time the analysis used it.
+                //
+                // ASP.NET Core note: `AddDbContext` registers scoped by default, so resolving the
+                // context from the request's provider during a .NET migration would reintroduce
+                // exactly that. Background work needs its own scope via IServiceScopeFactory.
                 DefaultAnalyticsDbContextFactory.Instance,
                 telemetry: telemetry);
             return service.AnalyseAsync(
                 seatLicenceTypeIds.Count == 0 ? null : seatLicenceTypeIds,
+                // CancellationToken.None is load-bearing: this run is SHARED between every caller
+                // polling for the same result, so it must not be tied to any one request. A caller
+                // giving up cancels only its own wait (see CopilotAdoptionAnalysisCoordinator
+                // .TryGetAsync, where the request's token bounds Task.Delay and nothing else).
+                //
+                // ASP.NET Core note: passing HttpContext.RequestAborted here would look like good
+                // hygiene and would be a serious bug - the first poller's 202 response would cancel
+                // the analysis for everybody, reproducing the user-visible failure of issue #441
+                // through a different mechanism that Task.Run does not protect against.
                 CancellationToken.None);
         }
     }
@@ -45,6 +61,18 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         void Set(string key, CopilotAdoptionAnalysis analysis, TimeSpan ttl);
     }
 
+    /// <summary>
+    /// The completed-result cache, backed by the process-wide <see cref="MemoryCache.Default"/>.
+    /// </summary>
+    /// <remarks>
+    /// .NET Core / .NET 10 note: the replacement, <c>IMemoryCache</c>, is not a drop-in.
+    /// <see cref="MemoryCache.Default"/> is a single process-wide instance that trims itself under
+    /// memory pressure; <c>IMemoryCache</c> is an ordinary DI singleton that does NOT evict on
+    /// memory pressure unless a <c>SizeLimit</c> is configured and every entry declares a size.
+    /// Porting this across without setting that up gives a cache that grows without bound - and the
+    /// entries here are whole tenant analyses, which on a large tenant are not small. The absolute
+    /// expiry below is what bounds it today, so keep an equivalent when it moves.
+    /// </remarks>
     internal sealed class MemoryCopilotAdoptionAnalysisCache : ICopilotAdoptionAnalysisCache
     {
         public static readonly MemoryCopilotAdoptionAnalysisCache Instance =
