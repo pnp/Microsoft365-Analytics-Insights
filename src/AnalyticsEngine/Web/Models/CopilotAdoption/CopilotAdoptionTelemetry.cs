@@ -133,6 +133,44 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public Exception Exception { get; set; }
     }
 
+    internal static class CopilotAdoptionExceptionCorrelation
+    {
+        public const string RunIdDataKey = "CopilotAdoption.RunId";
+
+        public static void SetRunId(Exception exception, string runId)
+        {
+            if (exception == null || string.IsNullOrEmpty(runId)) return;
+
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                try
+                {
+                    current.Data[RunIdDataKey] = runId;
+                }
+                catch (Exception)
+                {
+                    // Some exception types expose a fixed IDictionary. The telemetry path must not fail.
+                }
+            }
+        }
+
+        public static bool TryGetRunId(Exception exception, out string runId)
+        {
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                var value = current.Data?[RunIdDataKey] as string;
+                if (!string.IsNullOrEmpty(value))
+                {
+                    runId = value;
+                    return true;
+                }
+            }
+
+            runId = null;
+            return false;
+        }
+    }
+
     internal interface ICopilotAdoptionEventSink
     {
         int DroppedEvents { get; }
@@ -171,6 +209,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 connectionString, nameof(Controllers.CopilotAdoptionAPIController));
         }
 
+        internal AppInsightsCopilotAdoptionTelemetryWriter(AnalyticsLogger logger)
+        {
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
+
         public void Write(CopilotAdoptionLifecycleEvent telemetryEvent)
         {
             _logger.TrackEvent(
@@ -195,9 +238,13 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         public void WriteFailure(CopilotAdoptionFailureEvent failure)
         {
-            _logger.TrackException(failure.Exception);
+            var properties = new Dictionary<string, string>
+            {
+                { "RunId", failure.RunId },
+            };
+            _logger.TrackException(failure.Exception, properties, failure.RunId);
             _logger.LogError(
-                $"Copilot adoption analysis failed ({failure.Exception.GetBaseException().GetType().Name}).");
+                $"Copilot adoption analysis failed ({failure.Exception.GetBaseException().GetType().Name}, RunId {failure.RunId}).");
         }
 
         public void Flush()
@@ -653,6 +700,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         public bool QueueFailure(Exception exception)
         {
+            CopilotAdoptionExceptionCorrelation.SetRunId(exception, RunId);
             var failureEvent = CreateEvent(
                 CopilotAdoptionTelemetryStages.Failed,
                 outcome: "Failed",

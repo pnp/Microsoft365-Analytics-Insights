@@ -39,6 +39,22 @@ namespace Web.AnalyticsWeb.Models.Health
     {
         public const int CacheSeconds = 60;
 
+        internal static readonly IReadOnlyDictionary<string, string> ImportLabelsBySettingProperty =
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                { nameof(ImportTaskSettings.ActivityLog), "Activity/audit" },
+                { nameof(ImportTaskSettings.Copilot), "Copilot" },
+                { nameof(ImportTaskSettings.CopilotInteractionHistory), "Copilot AI interaction history (tenant-wide unless scoped)" },
+                { nameof(ImportTaskSettings.ImportPowerPlatform), "Power Platform" },
+                { nameof(ImportTaskSettings.GraphUsersMetadata), "User metadata" },
+                { nameof(ImportTaskSettings.GraphUsageReports), "Usage reports" },
+                { nameof(ImportTaskSettings.GraphCopilotUsageReports), "Copilot usage reports (Graph)" },
+                { nameof(ImportTaskSettings.GraphTeams), "Teams" },
+                { nameof(ImportTaskSettings.WebTraffic), "Web traffic" },
+                { nameof(ImportTaskSettings.SentEmails), "Sent emails" },
+                { nameof(ImportTaskSettings.Calls), "Teams calls" },
+            };
+
         // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).
         private const int CycleSlaHours = 24;
 
@@ -237,16 +253,16 @@ namespace Web.AnalyticsWeb.Models.Health
 
                 if (config.ImportJobSettings != null)
                 {
-                    if (config.ImportJobSettings.ActivityLog) section.EnabledImports.Add("Activity/audit");
-                    if (config.ImportJobSettings.Copilot) section.EnabledImports.Add("Copilot");
-                    if (config.ImportJobSettings.ImportPowerPlatform) section.EnabledImports.Add("Power Platform");
-                    if (config.ImportJobSettings.GraphUsersMetadata) section.EnabledImports.Add("User metadata");
-                    if (config.ImportJobSettings.GraphUsageReports) section.EnabledImports.Add("Usage reports");
-                    if (config.ImportJobSettings.GraphCopilotUsageReports) section.EnabledImports.Add("Copilot usage reports (Graph)");
-                    if (config.ImportJobSettings.GraphTeams) section.EnabledImports.Add("Teams");
-                    if (config.ImportJobSettings.WebTraffic) section.EnabledImports.Add("Web traffic");
-                    if (config.ImportJobSettings.SentEmails) section.EnabledImports.Add("Sent emails");
-                    if (config.ImportJobSettings.Calls) section.EnabledImports.Add("Teams calls");
+                    foreach (var import in ImportLabelsBySettingProperty)
+                    {
+                        var property = typeof(ImportTaskSettings).GetProperty(import.Key);
+                        if (property != null
+                            && property.PropertyType == typeof(bool)
+                            && (bool)property.GetValue(config.ImportJobSettings))
+                        {
+                            section.EnabledImports.Add(import.Value);
+                        }
+                    }
                 }
 
                 var webhook = await _dataSource.GetCallWebhookStatusAsync();
