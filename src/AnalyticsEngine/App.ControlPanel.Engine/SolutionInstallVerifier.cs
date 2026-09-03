@@ -566,7 +566,7 @@ namespace App.ControlPanel.Engine
         async Task VerifyRuntimeAccountAllAPIs()
         {
             // Activity API test 
-            if (Config.SolutionConfig.ImportTaskSettings.ActivityLog)
+            if (Config.SolutionConfig.ImportTaskSettings.UsesActivityApi)
             {
                 await VerifyActivityAPIImport(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
             }

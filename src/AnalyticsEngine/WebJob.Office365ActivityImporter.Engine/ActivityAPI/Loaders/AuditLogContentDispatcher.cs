@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
@@ -27,7 +27,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         /// JSON deserialisation exceptions are intentionally not caught here - the caller already
         /// logs them with the originating workload name and continues to the next record.
         /// </summary>
-        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true)
+        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true, bool importCopilot = true)
         {
             if (reportItem == null || logBase == null)
             {
@@ -51,6 +51,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                     || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_AUTOMATE
                     || logBase.Workload == ActivityImportConstants.WORKLOAD_POWER_BI
                     || logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT_STUDIO))
+            {
+                return null;
+            }
+
+            // Microsoft 365 Copilot interactions also arrive through Audit.General, but are controlled
+            // by their own opt-in toggle. A tenant reading Audit.General for Power Platform must not import
+            // Copilot records unless Copilot import is enabled too.
+            if (!importCopilot && logBase.Workload == ActivityImportConstants.WORKLOAD_COPILOT)
             {
                 return null;
             }

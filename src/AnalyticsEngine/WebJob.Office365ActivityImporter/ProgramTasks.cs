@@ -126,18 +126,23 @@ namespace WebJob.Office365ActivityImporter
 
                 if (spFilterList.OrgUrlConfigs.Count == 0)
                 {
-                    _logger.LogCritical("FATAL ERROR: No org URLs found in database! " +
-                        "This means everything would be ignored for SharePoint audit data. Add at least one URL to the org_urls table for this to work.");
-
-                    return;
-
+                    if (_settings.ImportJobSettings.ActivityLog)
+                    {
+                        _logger.LogWarning("No org URLs found in database. SharePoint/OneDrive audit events will be treated as out of scope; non-SharePoint Activity API workloads can still import.");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("No org URLs found in database. Continuing because only non-SharePoint Activity API workloads are enabled.");
+                    }
                 }
+                else
+                {
+                    _logger.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
 
-                _logger.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
-
-                // Print URLs
-                spFilterList.Print(_logger);
-                Console.WriteLine();
+                    // Print URLs
+                    spFilterList.Print(_logger);
+                    Console.WriteLine();
+                }
 
                 _logger.LogInformation($"Starting activity import for {spFilterList.OrgUrlConfigs.Count} url filters");
 

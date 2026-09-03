@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -158,11 +158,17 @@ namespace Common.Entities
         public const string CONTENT_TYPE_AUDIT_SHAREPOINT = "Audit.SharePoint";
 
         /// <summary>
+        /// True when any enabled workload needs the Office 365 Management Activity API. SharePoint audit
+        /// events use Audit.SharePoint; Microsoft 365 Copilot and Power Platform both use Audit.General.
+        /// </summary>
+        public bool UsesActivityApi => ActivityLog || Copilot || ImportPowerPlatform;
+
+        /// <summary>
         /// Builds the "ContentTypesListAsString" value (the Office 365 Management Activity API feeds
-        /// to subscribe to) from the enabled audit-based imports: <see cref="Copilot"/> =&gt;
-        /// Audit.General, <see cref="ActivityLog"/> (SharePoint audit) =&gt; Audit.SharePoint.
-        /// Falls back to Audit.SharePoint when no audit source is selected so the runtime always has
-        /// a valid (if unused) workload list.
+        /// to subscribe to) from the enabled audit-based imports: <see cref="Copilot"/> and
+        /// <see cref="ImportPowerPlatform"/> =&gt; Audit.General, <see cref="ActivityLog"/> (SharePoint audit)
+        /// =&gt; Audit.SharePoint. Falls back to Audit.SharePoint when no audit source is selected so the
+        /// runtime always has a valid (if unused) workload list.
         /// </summary>
         public string ToActivityApiContentTypesString()
         {
