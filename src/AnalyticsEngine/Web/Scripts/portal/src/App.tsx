@@ -129,7 +129,7 @@ export default function App() {
           type="inline"
           className={styles.nav}
           selectedValue={location.pathname}
-          onNavItemSelect={(_event: unknown, data: { value?: unknown }) => navigate(String(data.value))}
+          onNavItemSelect={(_event, data) => navigate(String(data.value))}
           aria-label={`${AREAS.find((a) => a.id === currentArea)?.label} navigation`}
         >
           <NavDrawerBody>
