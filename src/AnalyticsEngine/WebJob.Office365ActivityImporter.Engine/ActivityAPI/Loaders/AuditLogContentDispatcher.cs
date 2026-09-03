@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
