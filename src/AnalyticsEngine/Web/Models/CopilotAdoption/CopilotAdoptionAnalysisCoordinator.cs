@@ -119,18 +119,21 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private readonly ICopilotAdoptionAnalysisRunner _runner;
         private readonly ICopilotAdoptionAnalysisCache _cache;
         private readonly Func<int, bool, ICopilotAdoptionAnalysisTelemetry> _telemetryFactory;
+        private readonly Action<Exception, string> _reportUnqueuedFailure;
         private readonly TimeSpan _cacheTtl;
 
         public CopilotAdoptionAnalysisCoordinator(
             ICopilotAdoptionAnalysisRunner runner,
             ICopilotAdoptionAnalysisCache cache,
             Func<int, bool, ICopilotAdoptionAnalysisTelemetry> telemetryFactory,
-            TimeSpan cacheTtl)
+            TimeSpan cacheTtl,
+            Action<Exception, string> reportUnqueuedFailure = null)
         {
             _runner = runner ?? throw new ArgumentNullException(nameof(runner));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _telemetryFactory = telemetryFactory ?? throw new ArgumentNullException(nameof(telemetryFactory));
             _cacheTtl = cacheTtl;
+            _reportUnqueuedFailure = reportUnqueuedFailure ?? WebExceptionTelemetry.Report;
         }
 
         public async Task<CopilotAdoptionAnalysis> TryGetAsync(
@@ -249,7 +252,19 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             }
             catch (Exception ex)
             {
-                telemetry.QueueFailure(ex);
+                // QueueFailure returns false when the bounded failure sink rejected the event - it is
+                // full, or the host is stopping - and the no-op telemetry used when telemetry
+                // construction failed always returns false. In that case nothing else is guaranteed to
+                // observe this failure: the request that started the run has normally already returned
+                // 202, so if no poller is awaiting the shared task the exception is never observed by
+                // anyone and the failure is invisible. Report it directly instead. WebExceptionTelemetry
+                // .Report never throws and marks the exception reported, so a poller that does await the
+                // faulted task will not report it a second time.
+                if (!telemetry.QueueFailure(ex))
+                {
+                    _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
+                }
+
                 throw;
             }
             finally
