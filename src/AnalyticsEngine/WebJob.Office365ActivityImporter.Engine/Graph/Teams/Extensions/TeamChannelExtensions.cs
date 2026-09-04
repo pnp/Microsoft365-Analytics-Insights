@@ -48,8 +48,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// The crawl itself lives in <see cref="TeamsChannelCrawler"/> so it can be tested without
         /// Graph or Redis; this overload wires up the production adapters.
         /// </summary>
-        public static async Task PopulateNewMessagesAndReactions(this List<ChannelWithReactions> channels, Team team, RefreshOAuthToken refreshToken,
-            CacheConnectionManager cacheConnectionManager, ILogger logger)
+        public static async Task<List<TeamChannelDeltaTokenCommit>> PopulateNewMessagesAndReactions(this List<ChannelWithReactions> channels, Team team, RefreshOAuthToken refreshToken,
+            CacheConnectionManager cacheConnectionManager, ILogger logger, List<TeamChannelDeltaTokenCommit> pendingDeltaTokenCommits = null)
         {
             // Nothing to crawl: return before building any adapter, so a team with no channels - or one
             // we hold no user token for - still touches neither Redis, the logger nor team.Id, exactly
@@ -57,13 +57,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // saved a delta token only when one came back).
             if (channels.Count == 0 || refreshToken == null)
             {
-                return;
+                return pendingDeltaTokenCommits ?? new List<TeamChannelDeltaTokenCommit>();
             }
 
             var deltaTokenStore = new RedisTeamChannelDeltaTokenStore(cacheConnectionManager, logger);
             var messagesSource = new GraphChannelMessagesSourceLoader(refreshToken, deltaTokenStore, logger);
 
-            await new TeamsChannelCrawler(messagesSource, deltaTokenStore).PopulateNewMessagesAndReactions(channels, team.Id);
+            return await new TeamsChannelCrawler(messagesSource).PopulateNewMessagesAndReactions(channels, team.Id, pendingDeltaTokenCommits);
         }
 
         /// <summary>

@@ -204,6 +204,18 @@ namespace Tests.UnitTests
 
         private static ChannelWithReactions Channel(string id) => new ChannelWithReactions { Id = id, DisplayName = id };
 
+        private static async Task CrawlPersistAndCommitTokens(
+            TeamsChannelCrawler crawler,
+            List<ChannelWithReactions> channels,
+            string teamId,
+            ITeamChannelDeltaTokenStore store,
+            Func<Task> persist)
+        {
+            var pendingTokens = await crawler.PopulateNewMessagesAndReactions(channels, teamId);
+            await persist();
+            await TeamChannelDeltaTokenCommitter.CommitPendingTokens(store, teamId, pendingTokens);
+        }
+
         /// <summary>
         /// A channel read that hands back no delta token must leave the stored token alone. Overwriting
         /// it with null would silently turn every later read into a full channel crawl (or, worse,
@@ -219,8 +231,13 @@ namespace Tests.UnitTests
             var store = new InMemoryTeamChannelDeltaTokenStore();
             await store.SetDeltaToken("team-1", "channel-2", new TeamsRedisManager.TeamChannelDeltaTokenInfo { Token = "previous-delta-2" });
 
-            var crawler = new TeamsChannelCrawler(source, store);
-            await crawler.PopulateNewMessagesAndReactions(new List<ChannelWithReactions> { Channel("channel-1"), Channel("channel-2") }, "team-1");
+            var crawler = new TeamsChannelCrawler(source);
+            await CrawlPersistAndCommitTokens(
+                crawler,
+                new List<ChannelWithReactions> { Channel("channel-1"), Channel("channel-2") },
+                "team-1",
+                store,
+                () => Task.CompletedTask);
 
             CollectionAssert.AreEqual(new[] { "channel-1", "channel-2" }, source.ChannelsRead.ToArray(),
                 "Every channel in the team must be crawled, in order.");
@@ -230,12 +247,12 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// An expired user-delegated token aborts the whole team's crawl (the caller deletes the team's
-        /// auth token and retries next cycle), but the channels already crawled keep their new delta
-        /// tokens so the next run doesn't re-read them from scratch.
+        /// An expired user-delegated token aborts the whole team's crawl, but tokens returned by
+        /// earlier channels stay pending so they can be committed if those earlier channels are still
+        /// persisted successfully.
         /// </summary>
         [TestMethod]
-        public async Task TeamsChannelCrawler_AbortsTheTeamOnAReadFailureButKeepsEarlierTokens()
+        public async Task TeamsChannelCrawler_AbortsTheTeamOnAReadFailureLeavingEarlierTokensPending()
         {
             var source = new FakeChannelMessagesSourceLoader()
                 .ReturningToken("channel-1", "delta-1")
@@ -243,16 +260,138 @@ namespace Tests.UnitTests
                 .ReturningToken("channel-3", "delta-3");
 
             var store = new InMemoryTeamChannelDeltaTokenStore();
-            var crawler = new TeamsChannelCrawler(source, store);
+            var crawler = new TeamsChannelCrawler(source);
+            var pendingTokens = new List<TeamChannelDeltaTokenCommit>();
 
             await Assert.ThrowsExceptionAsync<ChannelMessagesReadException>(() =>
                 crawler.PopulateNewMessagesAndReactions(
-                    new List<ChannelWithReactions> { Channel("channel-1"), Channel("channel-2"), Channel("channel-3") }, "team-1"));
+                    new List<ChannelWithReactions> { Channel("channel-1"), Channel("channel-2"), Channel("channel-3") },
+                    "team-1",
+                    pendingTokens));
 
             CollectionAssert.AreEqual(new[] { "channel-1", "channel-2" }, source.ChannelsRead.ToArray(),
                 "The crawl stops at the failing channel rather than carrying on with a token we know is bad.");
-            Assert.AreEqual("delta-1", (await store.GetDeltaToken("team-1", "channel-1"))?.Token);
+            Assert.IsNull(await store.GetDeltaToken("team-1", "channel-1"),
+                "The first channel's token must stay pending until the team's SQL changes are durable.");
             Assert.IsNull(await store.GetDeltaToken("team-1", "channel-3"));
+            CollectionAssert.AreEqual(new[] { "channel-1" }, pendingTokens.Select(t => t.ChannelId).ToArray(),
+                "The caller must be able to commit earlier-channel checkpoints after persisting that partial channel data.");
+        }
+
+        /// <summary>
+        /// If an earlier channel was loaded and then a later channel fails, the earlier channel's data
+        /// is still present on the Team and may be saved. In that partial-success case the checkpoint
+        /// is committed at the same per-channel granularity after SQL succeeds.
+        /// </summary>
+        [TestMethod]
+        public async Task TeamsChannelCrawler_CommitsEarlierChannelTokenAfterPartialCrawlPersistenceSucceeds()
+        {
+            var source = new FakeChannelMessagesSourceLoader()
+                .ReturningToken("channel-1", "delta-1")
+                .Failing("channel-2");
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            var crawler = new TeamsChannelCrawler(source);
+            var pendingTokens = new List<TeamChannelDeltaTokenCommit>();
+
+            await Assert.ThrowsExceptionAsync<ChannelMessagesReadException>(() =>
+                crawler.PopulateNewMessagesAndReactions(
+                    new List<ChannelWithReactions> { Channel("channel-1"), Channel("channel-2") },
+                    "team-1",
+                    pendingTokens));
+
+            await TeamChannelDeltaTokenCommitter.CommitPendingTokens(store, "team-1", pendingTokens);
+
+            Assert.AreEqual("delta-1", (await store.GetDeltaToken("team-1", "channel-1"))?.Token,
+                "The successfully persisted channel can advance without waiting for the failed channel.");
+            Assert.IsNull(await store.GetDeltaToken("team-1", "channel-2"));
+        }
+
+        /// <summary>
+        /// Regression for #432: a channel delta token is only a pending checkpoint until SQL
+        /// persistence succeeds. If persistence fails, the token store is left at its previous value
+        /// and the next run reads the same channel again instead of resuming past unsaved messages.
+        /// </summary>
+        [TestMethod]
+        public async Task TeamsChannelCrawler_DoesNotAdvanceDeltaTokenWhenPersistenceFails()
+        {
+            var source = new FakeChannelMessagesSourceLoader()
+                .ReturningToken("channel-1", "delta-after-message");
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            var crawler = new TeamsChannelCrawler(source);
+            var channels = new List<ChannelWithReactions> { Channel("channel-1") };
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                CrawlPersistAndCommitTokens(
+                    crawler,
+                    channels,
+                    "team-1",
+                    store,
+                    () => Task.FromException(new InvalidOperationException("simulated SQL persistence failure"))));
+
+            Assert.IsNull(await store.GetDeltaToken("team-1", "channel-1"),
+                "A failed SQL commit must not advance the channel checkpoint.");
+
+            await CrawlPersistAndCommitTokens(
+                crawler,
+                new List<ChannelWithReactions> { Channel("channel-1") },
+                "team-1",
+                store,
+                () => Task.CompletedTask);
+
+            CollectionAssert.AreEqual(new[] { "channel-1", "channel-1" }, source.ChannelsRead.ToArray(),
+                "The retry must re-fetch the same channel because no durable checkpoint was written for the failed run.");
+            CollectionAssert.AreEqual(new[] { "channel-1-message-1", "channel-1-message-2" }, source.MessageIdsReturned.ToArray(),
+                "Both runs reached message retrieval; the failed run did not let the token skip the retry.");
+            Assert.AreEqual("delta-after-message", (await store.GetDeltaToken("team-1", "channel-1"))?.Token);
+        }
+
+        /// <summary>
+        /// The happy path still writes the returned token once, but only after the persistence delegate
+        /// has completed successfully.
+        /// </summary>
+        [TestMethod]
+        public async Task TeamsChannelCrawler_AdvancesDeltaTokenExactlyOnceAfterPersistenceSucceeds()
+        {
+            var source = new FakeChannelMessagesSourceLoader()
+                .ReturningToken("channel-1", "delta-after-success");
+            var store = new CountingTeamChannelDeltaTokenStore();
+            var crawler = new TeamsChannelCrawler(source);
+            var persisted = false;
+
+            await CrawlPersistAndCommitTokens(
+                crawler,
+                new List<ChannelWithReactions> { Channel("channel-1") },
+                "team-1",
+                store,
+                () =>
+                {
+                    persisted = true;
+                    return Task.CompletedTask;
+                });
+
+            Assert.IsTrue(persisted, "The test must execute the persistence boundary before committing the token.");
+            Assert.AreEqual(1, store.SetCalls.Count, "A successful crawl should advance each returned channel token exactly once.");
+            CollectionAssert.AreEqual(new[] { "team-1/channel-1" }, store.SetCalls.ToArray());
+            Assert.AreEqual("delta-after-success", (await store.GetDeltaToken("team-1", "channel-1"))?.Token);
+        }
+
+        private class CountingTeamChannelDeltaTokenStore : ITeamChannelDeltaTokenStore
+        {
+            private readonly InMemoryTeamChannelDeltaTokenStore _inner = new InMemoryTeamChannelDeltaTokenStore();
+
+            public List<string> SetCalls { get; } = new List<string>();
+
+            public Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> GetDeltaToken(string teamId, string channelId)
+                => _inner.GetDeltaToken(teamId, channelId);
+
+            public Task SetDeltaToken(string teamId, string channelId, TeamsRedisManager.TeamChannelDeltaTokenInfo deltaTokenInfo)
+            {
+                SetCalls.Add($"{teamId}/{channelId}");
+                return _inner.SetDeltaToken(teamId, channelId, deltaTokenInfo);
+            }
+
+            public Task RemoveDeltaToken(string teamId, string channelId)
+                => _inner.RemoveDeltaToken(teamId, channelId);
         }
 
         #endregion
