@@ -191,6 +191,14 @@ namespace Common.Entities
         /// True when any enabled workload needs the Office 365 Management Activity API. SharePoint audit
         /// events use Audit.SharePoint; Microsoft 365 Copilot and Power Platform both use Audit.General.
         /// </summary>
+        /// <remarks>
+        /// Derived from the [ImportProp] toggles, so it is deliberately not persisted: this type is
+        /// serialised into the installer's saved *.json config via TargetSolutionConfig.ImportTaskSettings,
+        /// and writing a computed getter there would put a read-only field into every customer's config
+        /// file that looks settable but is silently ignored on load. Same reasoning as
+        /// BaseSolutionInstallConfig.ConfigSchemaVersion.
+        /// </remarks>
+        [Newtonsoft.Json.JsonIgnore]
         public bool UsesActivityApi => ActivityLog || Copilot || ImportPowerPlatform;
 
         /// <summary>
