@@ -86,7 +86,8 @@ namespace WebJob.AppInsightsImporter.Engine
             // DateTime.Now on a non-UTC host shifts the day boundaries and the per-day KQL filter,
             // missing or duplicating edge hits near midnight. The rule itself lives in
             // AppInsightsImportWindow so it can be tested without a database or the wall clock (#374).
-            var scanFromDateOverride = AppInsightsImportWindow.ResolveOverrideStartUtc(daysBeforeOverride, _clock.UtcNow);
+            var nowUtc = _clock.UtcNow;
+            var scanFromDateOverride = AppInsightsImportWindow.ResolveOverrideStartUtc(daysBeforeOverride, nowUtc);
 
             var sw = Stopwatch.StartNew();
 
@@ -99,12 +100,18 @@ namespace WebJob.AppInsightsImporter.Engine
             _logger.LogInformation($"Startup: loaded {filterUrls.Count} URL filters in {sw.Elapsed.TotalSeconds:N1}s");
 
             var newestHitTimestamp = await hitWatermarkStore.GetNewestHitTimestampUtcAsync();
+            var effectiveNewestHitTimestamp = AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newestHitTimestamp);
+            if (!scanFromDateOverride.HasValue && effectiveNewestHitTimestamp.HasValue && effectiveNewestHitTimestamp.Value > nowUtc)
+            {
+                _logger.LogWarning($"App Insights hit watermark is in the future: newest stored hit_timestamp {effectiveNewestHitTimestamp.Value:O} is later than importer clock {nowUtc:O}. Using the importer clock as the watermark for this run so the import window does not walk backwards.");
+                effectiveNewestHitTimestamp = nowUtc;
+            }
 
             // Figure out when to start. Either the debug override, or last hit (if there is one), or 31 days ago,
             // rewound a little to catch edge hits. hit_timestamp is stored in UTC; the clock keeps the
             // fallback on the same clock. See AppInsightsImportWindow (#374).
             var startDate = AppInsightsImportWindow.ResolveStartDateUtc(
-                scanFromDateOverride, newestHitTimestamp, _clock.UtcNow);
+                scanFromDateOverride, effectiveNewestHitTimestamp, nowUtc);
 
             var jobTimer = new JobTimer(_logger, "Hits import");
             if (newestHitTimestamp.HasValue)
