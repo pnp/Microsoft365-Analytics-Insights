@@ -224,6 +224,7 @@
     <Compile Include="CopilotUsagePersistencePortTests.cs" />
     <Compile Include="CopilotUsageReportImportTests.cs" />
     <Compile Include="DenormaliseCopilotChatUserAndTimeMigrationTests.cs" />
+    <Compile Include="DenormaliseCopilotChatUserAndTimeManualScriptTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
     <Compile Include="MigrationSnapshotTests.cs" />
     <Compile Include="UpgradeFromStableTests.cs" />
