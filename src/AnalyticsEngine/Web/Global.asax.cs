@@ -2,8 +2,10 @@
 using System.Web;
 using System.Web.Http;
 using System.Web.Mvc;
+using System.Web.Hosting;
 using System.Web.Routing;
 using System.Web.SessionState;
+using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb
 {
@@ -62,8 +64,23 @@ namespace Web.AnalyticsWeb
             WebExceptionTelemetry.Report(Server?.GetLastError(), "AspNet pipeline");
         }
 
+        /// <summary>
+        /// Drains the Copilot adoption telemetry on shutdown, recording why the host stopped.
+        /// </summary>
+        /// <remarks>
+        /// The <c>HostStopping</c> stage this emits is what separates "the worker was recycled out
+        /// from under a run" from "the run hung" when diagnosing a stuck analysis - the distinction
+        /// that identified issue #441. Losing it makes that class of fault materially harder to see.
+        /// <para>
+        /// <c>Application_End</c> and <c>HostingEnvironment.ShutdownReason</c> are System.Web only.
+        /// A move to ASP.NET Core must re-home this onto
+        /// <c>IHostApplicationLifetime.ApplicationStopping</c> (or an <c>IHostedService.StopAsync</c>),
+        /// otherwise it simply stops being called and the stage silently disappears.
+        /// </para>
+        /// </remarks>
         protected void Application_End(object sender, EventArgs e)
         {
+            CopilotAdoptionTelemetryHost.Shutdown(HostingEnvironment.ShutdownReason.ToString());
         }
     }
 }

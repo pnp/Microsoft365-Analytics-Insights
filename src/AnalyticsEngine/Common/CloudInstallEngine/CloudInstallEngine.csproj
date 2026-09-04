@@ -5,6 +5,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Lets the unit tests exercise the internal parsing helpers (public IP detection, firewall rule
+         coverage) without widening the public API of this library. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Tests.UnitTests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.ResourceManager.AppService" Version="1.5.0" />
     <PackageReference Include="Azure.ResourceManager.Authorization" Version="1.1.7" />

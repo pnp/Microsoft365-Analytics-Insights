@@ -236,8 +236,8 @@ namespace Common.Entities.CopilotAdoption
         /// How many unlicensed candidates the database ranks and returns for the opportunity list.
         /// </summary>
         /// <remarks>
-        /// Raised from 5,000 to match its sibling caps. At 5,000 this was the binding constraint on a
-        /// real tenant rather than a safety valve, and the failure mode was particularly poor: the
+        /// Raised from 5,000 to match its sibling caps. At 5,000 this can become the binding constraint
+        /// on a large tenant rather than a safety valve, and the failure mode is particularly poor: the
         /// "recommended for a licence" headline is a COUNT of this list, so a tenant with more
         /// candidates than the cap saw a headline KPI that was simply the cap value - a number that
         /// looks like a finding and is actually a limit. Since this list is what a licence-purchase

@@ -59,58 +59,33 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         /// <summary>
         /// Apply hit patches, save searches & clicks
         /// </summary>
-        public async Task SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config)
+        public Task SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config)
         {
-            using (var database = new AnalyticsEntitiesContext())
+            return SaveAllEventTypesToSql(logger, config, DefaultAnalyticsDbContextFactory.Instance);
+        }
+
+        /// <summary>
+        /// As above, with the context factory supplied (issue #368/#369). Production behaviour is
+        /// unchanged: DefaultAnalyticsDbContextFactory.Create() is `new AnalyticsEntitiesContext()`, and the
+        /// single context still spans the whole event save exactly as it did.
+        /// </summary>
+        public async Task SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
+        {
+            if (contextFactory == null) throw new ArgumentNullException(nameof(contextFactory));
+
+            using (var database = contextFactory.Create())
             {
                 // Hack to change/ensure correct DB schema. Needs moving to a migration
                 await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
 
-                // Each section runs inside its own isolation boundary (see SaveSectionSafe). A failure
-                // in one section (e.g. a page-update that trips a DbUpdateException) is logged in full
-                // but never aborts the sibling sections nor escapes to stall the whole importer.
-                var hitUpdatesCount = await SaveSectionSafe(logger, "Hit updates",
-                    () => this.SaveHitsUpdatesToSQL(logger, database));
+                // The section orchestration itself is database-free - see CustomEventSectionSaver (#369).
+                var saver = new CustomEventSectionSaver(logger,
+                    new SqlHitUpdatePersistenceManager(database, logger),
+                    new SqlSearchesPersistenceManager(database, logger),
+                    new SqlPageUpdatePersistenceManager(logger, config, contextFactory),
+                    new SqlClicksPersistenceManager(database, logger));
 
-                var searchesInserted = await SaveSectionSafe(logger, "Searches",
-                    () => this.SaveSearchesToSQL(logger, database));
-
-                var pagesUpdated = await SaveSectionSafe(logger, "Page updates",
-                    () => this.SavePageUpdatesToSQL(logger, config));
-
-                var clicks = await SaveSectionSafe(logger, "Clicks",
-                    () => this.SaveClicksToSQL(logger, database));
-
-                logger.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
-            }
-        }
-
-        /// <summary>
-        /// Runs one event-save section (hit-updates / searches / page-updates / clicks) inside its own
-        /// timer and isolation boundary. A failure in one section is logged in full and reported via
-        /// TrackException, but never propagates - so a single bad section can neither abort its sibling
-        /// sections nor escape up the call stack and stall the whole importer.
-        /// </summary>
-        private static async Task<int> SaveSectionSafe(AnalyticsLogger logger, string sectionName, Func<Task<int>> saveAction)
-        {
-            var timer = new JobTimer(logger, sectionName);
-            timer.Start();
-            try
-            {
-                var count = await saveAction();
-                timer.PrintElapsed();
-                if (count > 0)
-                {
-                    timer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
-                }
-                return count;
-            }
-            catch (Exception ex)
-            {
-                logger.TrackException(ex);
-                logger.LogError($"Failed importing '{sectionName}' section: {CommonExceptionHandler.GetErrorText(ex)}. Skipping this section and continuing.");
-                logger.LogError($"Exception detail: {ex}");
-                return 0;
+                await saver.SaveAllSectionsAsync(this);
             }
         }
     }

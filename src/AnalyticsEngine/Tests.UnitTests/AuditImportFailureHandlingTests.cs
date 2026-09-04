@@ -1,10 +1,12 @@
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Common.Entities.Config;
 using Tests.UnitTests.FailureHandling;
 using Tests.UnitTests.StressHarness;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 
 namespace Tests.UnitTests
@@ -39,6 +41,14 @@ namespace Tests.UnitTests
         }
 
         private static string Blob(int i) => FailureTestContentMetaDataLoader.BlobId(i);
+
+        [TestMethod]
+        public void InMemoryCheckpoint_DoesNotClaimDurableMetadataRecovery()
+        {
+            var store = new InMemoryProcessedBlobStore(TimeSpan.FromDays(8));
+            Assert.IsFalse(store is IActivityMetadataRecoveryStore,
+                "The in-memory fallback is process-lifetime only and must not claim restart-safe recovery.");
+        }
 
         [TestMethod]
         public async Task HealthyRun_AllBlobsImportedAndCheckpointed()
@@ -97,6 +107,10 @@ namespace Tests.UnitTests
             Assert.AreEqual(3, pm.AttemptsFor(failing), "the transient fault should be retried up to maxAttempts before giving up");
             Assert.IsFalse(store.IsProcessed(failing), "a failed batch's blob must NOT be checkpointed, so it retries next cycle");
             Assert.AreEqual(4, store.ProcessedCount, "only the four successful blobs are checkpointed");
+            Assert.IsTrue(store.IsMetadataRecoveryPending(failing),
+                "The pre-save recovery marker must remain until this blob eventually commits.");
+            Assert.IsFalse(store.IsMetadataRecoveryPending(Blob(1)),
+                "Successful blobs must clear the marker after their processed checkpoint is durable.");
         }
 
         /// <summary>
@@ -162,6 +176,88 @@ namespace Tests.UnitTests
             Assert.IsFalse(store.IsProcessed(Blob(1)));
             Assert.IsFalse(store.IsProcessed(Blob(4)));
             Assert.AreEqual(6, store.ProcessedCount);
+        }
+
+        [TestMethod]
+        public async Task ColdCheckpointStore_DoesNotReplayEveryBlobAsMetadataRecovery()
+        {
+            var store = new RecordingProcessedBlobStore();
+            var pm = new FailureInjectingPersistenceManager();
+
+            var stats = await BuildImporter(blobCount: 4, store).LoadReportsAndSave(pm);
+
+            Assert.AreEqual(4, stats.Imported);
+            Assert.IsFalse(pm.MetadataRecoveryRequestedFor(Blob(0)));
+            Assert.IsFalse(pm.MetadataRecoveryRequestedFor(Blob(1)));
+            Assert.IsFalse(pm.MetadataRecoveryRequestedFor(Blob(2)));
+            Assert.IsFalse(pm.MetadataRecoveryRequestedFor(Blob(3)));
+            Assert.AreEqual(4, store.ProcessedCount);
+            Assert.IsFalse(store.IsMetadataRecoveryPending(Blob(2)),
+                "Newly pre-marked blobs are cleared after a clean commit; they are not replay requests for this cycle.");
+        }
+
+        [TestMethod]
+        public async Task ExistingRecoveryMarker_ReplaysOnlyThatBlobAndClearsAfterSuccess()
+        {
+            var store = new RecordingProcessedBlobStore();
+            store.SeedMetadataRecovery(Blob(2));
+            var pm = new FailureInjectingPersistenceManager();
+
+            var stats = await BuildImporter(blobCount: 4, store).LoadReportsAndSave(pm);
+
+            Assert.AreEqual(4, stats.Imported);
+            Assert.IsTrue(pm.MetadataRecoveryRequestedFor(Blob(2)));
+            Assert.IsFalse(pm.MetadataRecoveryRequestedFor(Blob(1)));
+            Assert.IsFalse(store.IsMetadataRecoveryPending(Blob(2)));
+            Assert.IsTrue(store.IsProcessed(Blob(2)));
+        }
+
+        [TestMethod]
+        public async Task CheckpointReadFailure_AbortsBeforeAnyDatabaseSave()
+        {
+            var store = new RecordingProcessedBlobStore
+            {
+                ReadFailure = new InvalidOperationException("checkpoint unavailable")
+            };
+            var pm = new FailureInjectingPersistenceManager();
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => BuildImporter(blobCount: 3, store).LoadReportsAndSave(pm));
+
+            Assert.AreEqual(0, pm.TotalCommitAttempts,
+                "No SQL save may start when the two-phase checkpoint state is unknown.");
+            Assert.AreEqual(0, store.ProcessedCount);
+        }
+
+        [TestMethod]
+        public async Task RecoveryMarkerReadFailure_AbortsBeforeAnyDatabaseSave()
+        {
+            var store = new RecordingProcessedBlobStore
+            {
+                RecoveryReadFailure = new InvalidOperationException("recovery checkpoint unavailable")
+            };
+            var pm = new FailureInjectingPersistenceManager();
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => BuildImporter(blobCount: 3, store).LoadReportsAndSave(pm));
+
+            Assert.AreEqual(0, pm.TotalCommitAttempts);
+        }
+
+        [TestMethod]
+        public async Task RecoveryPreMarkFailure_AbortsBeforeAnyDatabaseSave()
+        {
+            var store = new RecordingProcessedBlobStore
+            {
+                RecoveryWriteFailure = new InvalidOperationException("recovery checkpoint unavailable")
+            };
+            var pm = new FailureInjectingPersistenceManager();
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => BuildImporter(blobCount: 3, store).LoadReportsAndSave(pm));
+
+            Assert.AreEqual(0, pm.TotalCommitAttempts,
+                "The recovery marker must be durable before the first SQL save can partially commit.");
         }
     }
 }

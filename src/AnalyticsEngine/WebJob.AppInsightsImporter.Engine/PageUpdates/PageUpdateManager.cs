@@ -15,6 +15,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.PageUpdates;
+using WebJob.AppInsightsImporter.Engine.PageUpdates.Rules;
 using WebJob.AppInsightsImporter.Engine.Sql;
 using static WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents.PageUpdateEventAppInsightsQueryResult;
 
@@ -29,15 +30,29 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly int _chunkSize;
         private readonly CognitiveServicesClient _cognitiveClient = null;
         private readonly AppConfig _config;
+        private readonly IClock _clock;
+        private readonly IAnalyticsDbContextFactory _contextFactory;
 
-        public PageUpdateManager(ILogger logger, AppConfig config) : this(logger, 1000, config)
+        public PageUpdateManager(ILogger logger, AppConfig config, IClock clock = null) : this(logger, 1000, config, clock)
         {
         }
-        public PageUpdateManager(ILogger logger, int chunkSize, AppConfig config)
+        public PageUpdateManager(ILogger logger, int chunkSize, AppConfig config, IClock clock = null)
+            : this(logger, chunkSize, config, clock, null)
+        {
+        }
+
+        /// <summary>
+        /// The full constructor. <paramref name="contextFactory"/> is required here rather than a trailing
+        /// optional parameter on the overloads above, because an optional argument is baked in by the
+        /// calling compiler and adding one would break already-compiled callers (#381's convention).
+        /// </summary>
+        public PageUpdateManager(ILogger logger, int chunkSize, AppConfig config, IClock clock, IAnalyticsDbContextFactory contextFactory)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _chunkSize = chunkSize;
             _config = config;
+            _clock = clock ?? SystemClock.Instance;
+            _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             if (chunkSize < 0)
             {
                 throw new ArgumentOutOfRangeException("Chunk size must be > 0", nameof(chunkSize));
@@ -55,7 +70,11 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             var updatedUrls = new List<string>();
 
-            // Process all page update events in chunks of 1000 at a time, all in parallel
+            // Process page-update events in _chunkSize-sized chunks (1000 in production - see
+            // PageUpdatesSaveExtension). ListBatchProcessor's two-argument constructor defaults
+            // maxConcurrentBatches to 1, so the chunks run strictly SERIALLY: the comment here used to
+            // say "all in parallel", which was never true. Corrected while adding the context factory
+            // below, because SqlPageUpdatePersistenceManager's doc had inherited the same wrong claim.
             var listProc = new ListBatchProcessor<PageUpdateEventAppInsightsQueryResult>(_chunkSize,
                 async chunk => await SaveChunk(chunk, updatedUrls));
 
@@ -70,8 +89,8 @@ namespace WebJob.AppInsightsImporter.Engine
             if (uniqueUpdatedUrls.Count > 0)
             {
                 const int URL_LOOKUP_BATCH = 1000;
-                var now = DateTime.UtcNow;
-                using (var db = new AnalyticsEntitiesContext())
+                var now = _clock.UtcNow;
+                using (var db = _contextFactory.Create())
                 {
                     db.Configuration.AutoDetectChangesEnabled = false;
                     for (int i = 0; i < uniqueUpdatedUrls.Count; i += URL_LOOKUP_BATCH)
@@ -104,7 +123,7 @@ namespace WebJob.AppInsightsImporter.Engine
 #if DEBUG
             _logger.LogInformation($"DEBUG: Updating {chunk.Count} URLs on new thread");
 #endif
-            using (var context = new AnalyticsEntitiesContext())
+            using (var context = _contextFactory.Create())
             {
                 var urlMetadataFieldNameCache = new UrlMetadataFieldNameCache(context);
 
@@ -116,25 +135,13 @@ namespace WebJob.AppInsightsImporter.Engine
                 // Old code: for each matched URL, ran chunk.Where(...).ToList() which re-invokes
                 // GetUrlBaseAddressIfValidUrl on every event for every URL -> O(events * urls).
                 // At 200k users and large chunk sizes this is the dominant cost.
-                var chunkByUrl = new Dictionary<string, List<PageUpdateEventAppInsightsQueryResult>>(StringComparer.OrdinalIgnoreCase);
-                foreach (var e in chunk)
-                {
-                    var key = StringUtils.GetUrlBaseAddressIfValidUrl(e.CustomProperties?.Url);
-                    if (string.IsNullOrEmpty(key))
-                        continue;
-                    if (!chunkByUrl.TryGetValue(key, out var list))
-                    {
-                        list = new List<PageUpdateEventAppInsightsQueryResult>();
-                        chunkByUrl[key] = list;
-                    }
-                    list.Add(e);
-                }
+                var chunkByUrl = PageUpdateGroupingRules.GroupByUrl(chunk);
                 var urlsForPageUpdateChunk = chunkByUrl.Keys.ToList();
 
                 // Get all URLs that have not been updated recently
-                var minusMetadataRefreshMinutes = _config.MetadataRefreshMinutes * -1;
+                var staleBeforeUtc = PageUpdateRefreshPolicy.StaleBeforeUtc(_config.MetadataRefreshMinutes, _clock.UtcNow);
                 var matchingUrlsNotUpdatedRecently = await context.urls
-                    .Where(u => urlsForPageUpdateChunk.Contains(u.FullUrl) && (u.MetadataLastRefreshed == null || u.MetadataLastRefreshed < DbFunctions.AddMinutes(DateTime.UtcNow, minusMetadataRefreshMinutes)))
+                    .Where(u => urlsForPageUpdateChunk.Contains(u.FullUrl) && (u.MetadataLastRefreshed == null || u.MetadataLastRefreshed < staleBeforeUtc))
                     .ToListAsync();
 
                 foreach (var urlToUpdate in matchingUrlsNotUpdatedRecently)
@@ -208,11 +215,11 @@ namespace WebJob.AppInsightsImporter.Engine
                     await db.SaveChangesAsync();
                 }
                 newComments.Add(commentEvent, new PageCommentTemp
-                    (commentEvent.Comment, commentEvent.Created ?? DateTime.UtcNow, user.ID, commentEvent.SharePointId.Value, url.ID, commentEvent.ParentSharePointId));
+                    (commentEvent.Comment, commentEvent.Created ?? _clock.UtcNow, user.ID, commentEvent.SharePointId.Value, url.ID, commentEvent.ParentSharePointId));
             });
 
             // Get sentiment scores for new comments, if we have cognitive services configured
-            if (_cognitiveClient != null && newComments.Count > 0)
+            if (PageUserEventRules.ShouldRequestSentiment(_cognitiveClient != null, newComments.Count))
             {
                 var cognitiveResults = await newComments.Keys
                     .ToTextAnalysisSampleList()
@@ -248,7 +255,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     Url = url,
                     User = await userCache.GetOrCreateNewResource(email, new User { UserPrincipalName = email }),
-                    Created = like.Created ?? DateTime.UtcNow,
+                    Created = like.Created ?? _clock.UtcNow,
                     SpID = like.SharePointId.Value
                 };
 
@@ -264,24 +271,22 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             var updatesMade = false;
 
-            // Insert new not seen before
-            foreach (var eventVal in eventValues)
+            // Insert new not seen before. The validation + de-duplication rule lives in PageUserEventRules
+            // so it can be asserted without a database; the decisions come back in input order, so the log
+            // sequence and the "what has already happened when a create throws" behaviour are unchanged.
+            foreach (var decision in PageUserEventRules.Classify(eventValues, dbValues))
             {
-                if (!string.IsNullOrEmpty(eventVal.Email) && eventVal.SharePointId.HasValue)
+                if (decision.Outcome == PageUserEventOutcome.Invalid)
                 {
-                    var email = eventVal.Email.ToLowerInvariant();
-
-                    // Hack: should be an index here preventing multiple records with the same SPID for URL, but apparently it's possible to have mulitple likes/comments from the same user on the same URL
-                    var existingDbRecord = dbValues.Where(c => c.SpID == eventVal.SharePointId).FirstOrDefault();
-                    if (existingDbRecord == null)
-                    {
-                        updatesMade = true;
-                        await callBackOnNew.Invoke(eventVal, email);
-                    }
+                    _logger.LogError($"WARNING: Invalid comment/like metadata in event: {decision.Event}");
+                    continue;
                 }
-                else
+
+                // Hack: should be an index here preventing multiple records with the same SPID for URL, but apparently it's possible to have mulitple likes/comments from the same user on the same URL
+                if (decision.Outcome == PageUserEventOutcome.New)
                 {
-                    _logger.LogError($"WARNING: Invalid comment/like metadata in event: {eventVal}");
+                    updatesMade = true;
+                    await callBackOnNew.Invoke(decision.Event, decision.NormalisedEmail);
                 }
             }
 
@@ -325,7 +330,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         db.FileMetadataPropertyValues.Add(urlPropVal);
                     }
                     urlPropVal.FieldValue = taxonomyProp.Label;
-                    urlPropVal.Updated = DateTime.UtcNow;
+                    urlPropVal.Updated = _clock.UtcNow;
                     updatesMade = true;
                 }
             }
@@ -342,7 +347,7 @@ namespace WebJob.AppInsightsImporter.Engine
             // Standard props
             foreach (var prop in correspondingPageUpdate.CustomProperties.SimplePropsDic)
             {
-                if (prop.Key.Length < 100 && !prop.Key.StartsWith("vti_x005f"))     // Ignore system & over-sized fields (usually the same)
+                if (UrlMetadataPropertyRules.IsImportableSimpleProp(prop.Key))
                 {
                     // Get/create field def
                     var urlPropNameDef = await urlMetadataFieldNameCache.GetResource(prop.Key, () =>
@@ -386,7 +391,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     if (urlPropVal.TagGuid == null)
                     {
                         urlPropVal.FieldValue = prop.Value;
-                        urlPropVal.Updated = DateTime.UtcNow;
+                        urlPropVal.Updated = _clock.UtcNow;
                         updatesMade = true;
                     }
                 }

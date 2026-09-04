@@ -2,6 +2,7 @@
 using DataUtils;
 using System;
 using System.Web.Http.ExceptionHandling;
+using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb
 {
@@ -72,18 +73,37 @@ namespace Web.AnalyticsWeb
         /// </param>
         public static void Report(Exception ex, string context)
         {
+            Report(ex, context, ctx =>
+            {
+                var config = new AppConfig();
+                return new AnalyticsLogger(config.AppInsightsConnectionString, ctx);
+            });
+        }
+
+        internal static void Report(
+            Exception ex,
+            string context,
+            Func<string, AnalyticsLogger> loggerFactory)
+        {
             if (ex == null || AlreadyReported(ex)) return;
 
             try
             {
-                var config = new AppConfig();
-                var logger = new AnalyticsLogger(config.AppInsightsConnectionString, context);
+                var logger = loggerFactory(context);
+                CopilotAdoptionExceptionCorrelation.TryGetRunId(ex, out var runId);
+                var properties = string.IsNullOrEmpty(runId)
+                    ? null
+                    : new System.Collections.Generic.Dictionary<string, string>
+                    {
+                        { "RunId", runId },
+                    };
 
-                logger.TrackException(ex);
+                logger.TrackException(ex, properties, runId);
 
                 // The exception telemetry carries the type and stack, but a searchable line of text is
                 // what an operator actually greps for when a customer reports "it just returns a 500".
-                logger.LogError($"Unhandled web request error in {context}: {ex.GetBaseException().Message}");
+                var correlation = string.IsNullOrEmpty(runId) ? string.Empty : $" RunId {runId}.";
+                logger.LogError($"Unhandled web request error in {context}.{correlation} {ex.GetBaseException().Message}");
 
                 MarkReported(ex);
             }

@@ -13,11 +13,20 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     public static class PageUpdatesSaveExtension
     {
 
-        public static async Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AppConfig config)
+        public static Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AppConfig config)
+        {
+            return SavePageUpdatesToSQL(eventList, logger, config, DefaultAnalyticsDbContextFactory.Instance);
+        }
+
+        /// <summary>
+        /// As above, with the context factory supplied (#368/#369). A new overload rather than a trailing
+        /// optional parameter, which would be binary-breaking for already-compiled callers.
+        /// </summary>
+        public static async Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
         {
             if (eventList.Rows.Count == 0) return 0;
 
-            var updateManager = new PageUpdateManager(logger, config);
+            var updateManager = new PageUpdateManager(logger, 1000, config, null, contextFactory);
 
             // Filter from custom events which are page-updates
             var pageUpdates = eventList.Rows

@@ -120,13 +120,23 @@ namespace Tests.UnitTests.FailureHandling
     /// test can assert that FAILED batches' blobs are NOT marked processed (and therefore retried next cycle)
     /// while successful ones are.
     /// </summary>
-    public class RecordingProcessedBlobStore : IProcessedBlobStore
+    public class RecordingProcessedBlobStore : IProcessedBlobStore, IActivityMetadataRecoveryStore
     {
         private readonly HashSet<string> _processed = new HashSet<string>();
+        private readonly HashSet<string> _metadataRecoveryPending = new HashSet<string>();
         private readonly object _lock = new object();
+
+        public Exception ReadFailure { get; set; }
+        public Exception RecoveryReadFailure { get; set; }
+        public Exception RecoveryWriteFailure { get; set; }
 
         public Task<ISet<string>> GetProcessedBlobIdsAsync()
         {
+            if (ReadFailure != null)
+            {
+                return Task.FromException<ISet<string>>(ReadFailure);
+            }
+
             lock (_lock)
             {
                 return Task.FromResult<ISet<string>>(new HashSet<string>(_processed));
@@ -140,6 +150,52 @@ namespace Tests.UnitTests.FailureHandling
                 foreach (var b in blobIds) _processed.Add(b);
             }
             return Task.CompletedTask;
+        }
+
+        public Task<ISet<string>> GetMetadataRecoveryPendingBlobIdsAsync()
+        {
+            if (RecoveryReadFailure != null)
+            {
+                return Task.FromException<ISet<string>>(RecoveryReadFailure);
+            }
+
+            lock (_lock)
+            {
+                return Task.FromResult<ISet<string>>(new HashSet<string>(_metadataRecoveryPending));
+            }
+        }
+
+        public Task MarkMetadataRecoveryPendingAsync(IReadOnlyCollection<string> blobIds)
+        {
+            if (RecoveryWriteFailure != null)
+            {
+                return Task.FromException(RecoveryWriteFailure);
+            }
+
+            lock (_lock)
+            {
+                foreach (var b in blobIds) _metadataRecoveryPending.Add(b);
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task ClearMetadataRecoveryPendingAsync(IReadOnlyCollection<string> blobIds)
+        {
+            lock (_lock)
+            {
+                foreach (var b in blobIds) _metadataRecoveryPending.Remove(b);
+            }
+            return Task.CompletedTask;
+        }
+
+        public void SeedMetadataRecovery(string blobId)
+        {
+            lock (_lock) { _metadataRecoveryPending.Add(blobId); }
+        }
+
+        public bool IsMetadataRecoveryPending(string blobId)
+        {
+            lock (_lock) { return _metadataRecoveryPending.Contains(blobId); }
         }
 
         public bool IsProcessed(string blobId)
@@ -178,6 +234,8 @@ namespace Tests.UnitTests.FailureHandling
         private readonly HashSet<string> _constraintFailBlobs;
 
         private readonly ConcurrentDictionary<string, int> _attempts = new ConcurrentDictionary<string, int>();
+        private readonly ConcurrentDictionary<string, bool> _metadataRecoveryRequested =
+            new ConcurrentDictionary<string, bool>();
         private int _committedEvents;
         private int _committedBatches;
 
@@ -193,6 +251,8 @@ namespace Tests.UnitTests.FailureHandling
         public int TotalCommitAttempts => _attempts.Values.Sum();
         public int CommittedEvents => Interlocked.CompareExchange(ref _committedEvents, 0, 0);
         public int CommittedBatches => Interlocked.CompareExchange(ref _committedBatches, 0, 0);
+        public bool MetadataRecoveryRequestedFor(string blobId)
+            => _metadataRecoveryRequested.TryGetValue(blobId, out var requested) && requested;
 
         public async Task<ImportStat> CommitAll(ActivityReportSet activities)
         {
@@ -200,6 +260,7 @@ namespace Tests.UnitTests.FailureHandling
             // first event's SourceContentId identifies the batch's blob.
             var blobId = activities.FirstOrDefault()?.SourceContentId ?? "(no-source-content-id)";
             int attempt = _attempts.AddOrUpdate(blobId, 1, (k, v) => v + 1);
+            _metadataRecoveryRequested[blobId] = activities.Any(activities.RequiresMetadataRecovery);
 
             if (_constraintFailBlobs.Contains(blobId))
             {

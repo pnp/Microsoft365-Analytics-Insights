@@ -4,9 +4,11 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Linq;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -311,6 +313,109 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task CopilotEventManager_FileAndMeetingMetadata_AreIdempotentAcrossRetries()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await ClearEvents(db);
+
+                var suffix = Guid.NewGuid().ToString("N");
+                var user = new User
+                {
+                    AzureAdId = "retry-user-" + suffix,
+                    UserPrincipalName = "retry.user." + suffix + "@contoso.onmicrosoft.com"
+                };
+                var fileEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.UtcNow,
+                    Operation = new EventOperation { Name = "Copilot file retry " + suffix },
+                    User = user,
+                    Id = Guid.NewGuid()
+                };
+                var meetingEvent = new CommonAuditEvent
+                {
+                    TimeStamp = DateTime.UtcNow,
+                    Operation = new EventOperation { Name = "Copilot meeting retry " + suffix },
+                    User = user,
+                    Id = Guid.NewGuid()
+                };
+
+                db.AuditEventsCommon.AddRange(new[] { fileEvent, meetingEvent });
+                await db.SaveChangesAsync();
+
+                var fileContent = new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Word",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = _config.TestCopilotDocContextIdSpSite,
+                                Type = _config.TeamSiteFileExtension
+                            }
+                        }
+                    },
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = null, IsPrompt = true, Size = 111 }
+                        }
+                    }
+                };
+                var meetingContent = new CopilotAuditLogContent
+                {
+                    CopilotEventData = new CopilotEventData
+                    {
+                        AppHost = "Teams",
+                        Contexts = new List<Context>
+                        {
+                            new Context
+                            {
+                                Id = "https://microsoft.teams.com/threads/19:meeting_retry_" + suffix + "@thread.v2",
+                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING
+                            }
+                        }
+                    },
+                    ParsedAuditEvent = new CopilotAuditEvent
+                    {
+                        Messages = new List<Message>
+                        {
+                            new Message { Id = null, IsPrompt = false, Size = 222 }
+                        }
+                    }
+                };
+
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    var manager = new CopilotAuditEventManager(
+                        _config.ConnectionStrings.DatabaseConnectionString,
+                        new FakeCopilotMetadataLoader(),
+                        _logger);
+                    await manager.SaveSingleCopilotEventToSqlStaging(fileContent, fileEvent);
+                    await manager.SaveSingleCopilotEventToSqlStaging(meetingContent, meetingEvent);
+                    await manager.CommitAllChanges();
+                }
+
+                Assert.AreEqual(1,
+                    await db.CopilotEventMetadataFiles.CountAsync(f => f.ChatId == fileEvent.Id),
+                    "Retrying metadata must not duplicate the one resolved file row for an interaction.");
+                Assert.AreEqual(1,
+                    await db.CopilotEventMetadataMeetings.CountAsync(m => m.ChatId == meetingEvent.Id),
+                    "Retrying metadata must not duplicate the one resolved meeting row for an interaction.");
+                var messages = await db.CopilotMessages
+                    .Where(m => m.ChatId == fileEvent.Id || m.ChatId == meetingEvent.Id)
+                    .ToListAsync();
+                Assert.AreEqual(2, messages.Count,
+                    "Retrying metadata must not duplicate messages whose source payload omitted an Id.");
+                Assert.IsTrue(messages.All(m => m.MessageId.StartsWith("missing:", StringComparison.Ordinal)),
+                    "Missing message IDs need a deterministic retry key rather than a fresh GUID per attempt.");
+            }
+        }
+
         /// <summary>
         /// When an event has a meeting context followed by a chat context the meeting
         /// context takes priority and the loop breaks — no chat-only row should be created.
@@ -510,82 +615,74 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// When the metadata loader throws for meeting/file contexts the manager should
-        /// catch the exception and not stage any meeting/file rows, while still allowing
-        /// CommitAllChanges to succeed.
+        /// When the metadata loader throws for meeting/file contexts the manager should catch the
+        /// exception, omit only the failed enrichment, and still stage the Copilot interaction.
         /// </summary>
         [TestMethod]
         public async Task CopilotEventManagerMetadataLoaderExceptionHandledGracefully()
         {
-            using (var db = new AnalyticsEntitiesContext())
+            var writer = new InMemoryCopilotStagingWriter();
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var copilotEventManager = new CopilotAuditEventManager(
+                writer,
+                new ThrowingCopilotMetadataLoader(),
+                logger);
+
+            var meetingEvent = new CommonAuditEvent
             {
-                await ClearEvents(db);
+                TimeStamp = DateTime.Now,
+                Operation = new EventOperation { Name = "ThrowMeeting Test" + DateTime.Now.Ticks },
+                User = new User { AzureAdId = "test", UserPrincipalName = "test@throwmeeting.com" + DateTime.Now.Ticks },
+                Id = Guid.NewGuid()
+            };
+            var fileEvent = new CommonAuditEvent
+            {
+                TimeStamp = DateTime.Now,
+                Operation = new EventOperation { Name = "ThrowFile Test" + DateTime.Now.Ticks },
+                User = new User { AzureAdId = "test", UserPrincipalName = "test@throwfile.com" + DateTime.Now.Ticks },
+                Id = Guid.NewGuid()
+            };
 
-                var copilotEventManager = new CopilotAuditEventManager(
-                    _config.ConnectionStrings.DatabaseConnectionString,
-                    new ThrowingCopilotMetadataLoader(),
-                    _logger);
-
-                var meetingEvent = new CommonAuditEvent
+            // Meeting context — loader will throw on GetUserIdFromUpn
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+            {
+                CopilotEventData = new CopilotEventData
                 {
-                    TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "ThrowMeeting Test" + DateTime.Now.Ticks },
-                    User = new User { AzureAdId = "test", UserPrincipalName = "test@throwmeeting.com" + DateTime.Now.Ticks },
-                    Id = Guid.NewGuid()
-                };
-                var fileEvent = new CommonAuditEvent
+                AppHost = "Teams",
+                Contexts = new List<Context>
                 {
-                    TimeStamp = DateTime.Now,
-                    Operation = new EventOperation { Name = "ThrowFile Test" + DateTime.Now.Ticks },
-                    User = new User { AzureAdId = "test", UserPrincipalName = "test@throwfile.com" + DateTime.Now.Ticks },
-                    Id = Guid.NewGuid()
-                };
-
-                db.AuditEventsCommon.AddRange(new[] { meetingEvent, fileEvent });
-                await db.SaveChangesAsync();
-
-                // Meeting context — loader will throw on GetUserIdFromUpn
-                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
-                {
-                    CopilotEventData = new CopilotEventData
+                    new Context
                     {
-                        AppHost = "Teams",
-                        Contexts = new List<Context>
-                        {
-                            new Context
-                            {
-                                Id = "https://microsoft.teams.com/threads/19:meeting_throw@thread.v2",
-                                Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING
-                            }
-                        }
+                        Id = "https://microsoft.teams.com/threads/19:meeting_throw@thread.v2",
+                        Type = ActivityImportConstants.COPILOT_CONTEXT_TYPE_TEAMS_MEETING
                     }
-                }, meetingEvent);
+                }
+                }
+            }, meetingEvent);
 
-                // File context — loader will throw on GetSpoFileInfo
-                await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+            // File context — loader will throw on GetSpoFileInfo
+            await copilotEventManager.SaveSingleCopilotEventToSqlStaging(new CopilotAuditLogContent
+            {
+                CopilotEventData = new CopilotEventData
                 {
-                    CopilotEventData = new CopilotEventData
+                AppHost = "Word",
+                Contexts = new List<Context>
+                {
+                    new Context
                     {
-                        AppHost = "Word",
-                        Contexts = new List<Context>
-                        {
-                            new Context
-                            {
-                                Id = "https://contoso.sharepoint.com/sites/test/doc.docx",
-                                Type = "docx"
-                            }
-                        }
+                        Id = "https://contoso.sharepoint.com/sites/test/doc.docx",
+                        Type = "docx"
                     }
-                }, fileEvent);
+                }
+                }
+            }, fileEvent);
 
-                // CommitAllChanges should succeed even though no rows were staged
-                await copilotEventManager.CommitAllChanges();
-
-                var meetingCount = await db.CopilotEventMetadataMeetings.CountAsync();
-                var fileCount = await db.CopilotEventMetadataFiles.CountAsync();
-                Assert.AreEqual(0, meetingCount, "No meeting rows should be staged when the loader throws.");
-                Assert.AreEqual(0, fileCount, "No file rows should be staged when the loader throws.");
-            }
+            Assert.AreEqual(0, writer.TeamsRows.Count, "No meeting enrichment row should be staged when the loader throws.");
+            Assert.AreEqual(0, writer.SharePointRows.Count, "No file enrichment row should be staged when the loader throws.");
+            Assert.AreEqual(2, writer.ChatOnlyRows.Count,
+                "Optional metadata resolution failures must not discard the underlying Copilot interactions.");
+            Assert.AreEqual(2, logger.Entries.Count(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning),
+                "Each failed optional metadata resolution should be visible to operators.");
         }
 
         /// <summary>

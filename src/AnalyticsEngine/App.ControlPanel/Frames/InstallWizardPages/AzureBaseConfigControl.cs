@@ -23,9 +23,17 @@ namespace App.ControlPanel.Frames.InstallWizardPages
             InitializeComponent();
             cmbEnvType.Items.Clear();
             cmbEnvType.Items.AddRange(new string[] { PERF_TIER_TESTING, PERF_TIER_PROD });
+            cmbLocation.SelectedIndexChanged += (s, e) => AzureLocationChanged?.Invoke(this, AzureLocationString);
         }
 
         public event EventHandler<bool> LoadingSubscriptionStateChange;
+
+        /// <summary>
+        /// Raised with the newly selected Azure region short name whenever the region picker changes.
+        /// Other wizard pages preview region-qualified hostnames (Azure Managed Redis is
+        /// <c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c>) and need to stay in step with it.
+        /// </summary>
+        public event EventHandler<string> AzureLocationChanged;
 
         public Func<AppRegistrationCredentials> OnNeedAppRegistrationCredentials;
 

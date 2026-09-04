@@ -758,30 +758,20 @@ namespace Common.Entities.CopilotAdoption
                 //
                 // This was a CTE called AgentUse that four aggregates then selected from, with a comment
                 // claiming it was "one projected pass". It was not: SQL Server does not materialise a CTE,
-                // it expands it at every reference, so the 120-day scan happened four times over. Measured
-                // on a customer database at production scale, the two shapes side by side:
-                //
-                //   copilot_chats logical reads   234,007  ->  33,945   (6.9x fewer)
-                //   spool (worktable) reads        13,223  ->       0
-                //   CPU                          6,845 ms  ->  1,861 ms (3.7x less)
-                //   elapsed                      2,127 ms  ->    920 ms (2.3x faster)
-                //
-                // Verified row-for-row identical against the previous shape with EXCEPT in both
-                // directions, on that same database. In the app this step had been sitting at the 90s
-                // command timeout and silently dropping the whole agent section from the report.
+                // it expands it at every reference, so the 120-day scan happened four times over. A
+                // representative large-data A/B showed fewer fact-table reads, no spool, lower CPU and
+                // lower elapsed time. Exact environment measurements remain out-of-band. Row-for-row
+                // equivalence was proven with EXCEPT in both directions.
                 //
                 // A temp table rather than another CTE on purpose. Rolling the four aggregates up with
                 // COUNT(DISTINCT) over a single CTE was also tried and was 4.6x WORSE: it reintroduced
                 // exactly the spool the original four-CTE shape had been written to avoid. Materialising
                 // once is what gets both - no repeated scan AND no spool.
                 //
-                // Caveat for whoever benchmarks this next: the synthetic bench does NOT show this win, and
-                // measured it slightly slower. Its generated agent traffic produces roughly one grain row
-                // per interaction, where real usage repeats - the customer data collapsed several
-                // interactions into each grain row. When the grain does not compress there is nothing to
-                // gain from materialising it, so the bench measures the worst case rather than the real
-                // one. Trust the production numbers above, and fix the generator before using the bench
-                // to judge this query again.
+                // Caveat for whoever benchmarks this next: the current synthetic generator produces
+                // roughly one grain row per interaction. When the grain does not compress there is nothing
+                // to gain from materialising it, so fix that data shape before using the synthetic bench
+                // to judge this query.
                 "SELECT c.agent_id AS agent_id,\r\n" +
                 "       c.user_id AS user_id,\r\n" +
                 "       CAST(c.time_stamp AS date) AS active_date,\r\n" +
@@ -909,16 +899,12 @@ namespace Common.Entities.CopilotAdoption
                 //
                 // The Unlicensed CTE was previously selected from by four separate aggregates. SQL Server
                 // does not materialise a CTE - it expands it at every reference - so the window scan, and
-                // both of the NOT EXISTS lookups above, ran four times over. Measured on a customer
-                // database, this step was the single most expensive thing the report did:
-                //
-                //   logical reads   150,506,448  ->  26,037
-                //   duration      1,066,710 ms   ->   3,370 ms
-                //
-                // The read collapse is far larger than the 4x the repeated reference alone accounts for,
-                // because evaluating the CTE four times also pushed the optimiser into a much worse plan
-                // for the licence and guest lookups. Verified row-for-row identical against the previous
-                // shape with EXCEPT in both directions on that database.
+                // both of the NOT EXISTS lookups above, ran four times over. A representative large-data
+                // A/B showed substantially fewer reads and lower elapsed time; exact environment
+                // measurements remain out-of-band. The improvement was larger than the repeated reference
+                // alone accounts for because the repeated shape also pushed the optimiser into a worse
+                // plan for the licence and guest lookups. The new shape was verified row-for-row identical
+                // with EXCEPT in both directions.
                 //
                 // See AgentUsageSql for why this is a temp table rather than another CTE.
                 "SELECT user_id,\r\n" +

@@ -1,5 +1,6 @@
 ﻿using DataUtils.Health;
 using Microsoft.ApplicationInsights;
+using Microsoft.ApplicationInsights.DataContracts;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -34,6 +35,16 @@ namespace DataUtils
         private AnalyticsLogger() : this(string.Empty, string.Empty)
         {
         }
+
+        public AnalyticsLogger(TelemetryClient appInsights, string context)
+        {
+            AppInsights = appInsights;
+            if (AppInsights != null && !string.IsNullOrEmpty(context))
+            {
+                AppInsights.Context.Operation.Name = context;
+            }
+        }
+
         public AnalyticsLogger(string appInsightsConnectionString, string context)
         {
             if (!string.IsNullOrEmpty(appInsightsConnectionString))
@@ -61,9 +72,34 @@ namespace DataUtils
 
         public void TrackException(Exception ex)
         {
+            TrackException(ex, null, null);
+        }
+
+        public void TrackException(
+            Exception ex,
+            IDictionary<string, string> properties,
+            string operationId)
+        {
             if (AppInsights != null)
             {
-                AppInsights.TrackException(ex);
+                var telemetry = new ExceptionTelemetry(ex);
+                if (!string.IsNullOrEmpty(operationId))
+                {
+                    telemetry.Context.Operation.Id = operationId;
+                }
+                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                {
+                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                }
+                if (properties != null)
+                {
+                    foreach (var property in properties)
+                    {
+                        telemetry.Properties[property.Key] = property.Value;
+                    }
+                }
+
+                AppInsights.TrackException(telemetry);
             }
         }
 
@@ -123,6 +159,23 @@ namespace DataUtils
         /// </summary>
         public void TrackEvent(AnalyticsEvent analyticsEvent, Dictionary<string, string> context, Dictionary<string, double> metrics)
         {
+            TrackEvent(analyticsEvent, context, metrics, null, null);
+        }
+
+        /// <summary>
+        /// Tracks an event with an explicit operation id and occurrence time.
+        ///
+        /// The id is applied to the event item, not to the shared client context, so concurrent callers
+        /// cannot overwrite each other's correlation. The explicit timestamp preserves when an event
+        /// happened when a non-blocking dispatcher submits it later.
+        /// </summary>
+        public void TrackEvent(
+            AnalyticsEvent analyticsEvent,
+            Dictionary<string, string> context,
+            Dictionary<string, double> metrics,
+            string operationId,
+            DateTimeOffset? timestamp)
+        {
             const string SEP = ";";
             var contextString = string.Empty;
             if (context != null && context.Count > 0)
@@ -138,15 +191,45 @@ namespace DataUtils
             if (AppInsights != null)
             {
                 string eventName = Enum.GetName(typeof(AnalyticsEvent), analyticsEvent);
+                var telemetry = new EventTelemetry(eventName);
+                if (timestamp.HasValue)
+                {
+                    telemetry.Timestamp = timestamp.Value;
+                }
+                if (!string.IsNullOrEmpty(operationId))
+                {
+                    telemetry.Context.Operation.Id = operationId;
+                }
+                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                {
+                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                }
                 if (context != null)
                 {
-                    AppInsights.TrackEvent(eventName, context, metrics);
+                    foreach (var item in context)
+                    {
+                        telemetry.Properties[item.Key] = item.Value;
+                    }
                 }
-                else
+                if (metrics != null)
                 {
-                    AppInsights.TrackEvent(eventName);
+                    foreach (var item in metrics)
+                    {
+                        telemetry.Metrics[item.Key] = item.Value;
+                    }
                 }
+
+                AppInsights.TrackEvent(telemetry);
             }
+        }
+
+        /// <summary>
+        /// Requests immediate transmission of buffered telemetry. The SDK call is non-blocking; callers
+        /// that are shutting down must allow their own bounded drain interval afterwards.
+        /// </summary>
+        public void Flush()
+        {
+            AppInsights?.Flush();
         }
 
         /// <summary>
@@ -219,7 +302,8 @@ namespace DataUtils
             IDictionary<string, long> stepDurationsMs,
             int warningCount,
             bool timedOut,
-            string slowestStep)
+            string slowestStep,
+            string operationId = null)
         {
             var context = new Dictionary<string, string>
             {
@@ -242,7 +326,7 @@ namespace DataUtils
                 }
             }
 
-            TrackEvent(AnalyticsEvent.CopilotAdoptionAnalysis, context, metrics);
+            TrackEvent(AnalyticsEvent.CopilotAdoptionAnalysis, context, metrics, operationId, null);
         }
 
         public override void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
@@ -292,7 +376,8 @@ namespace DataUtils
             FinishedImportCycle,
             HealthCheck,
             ImporterHeartbeat,
-            CopilotAdoptionAnalysis
+            CopilotAdoptionAnalysis,
+            CopilotAdoptionLifecycle
         }
     }
 }

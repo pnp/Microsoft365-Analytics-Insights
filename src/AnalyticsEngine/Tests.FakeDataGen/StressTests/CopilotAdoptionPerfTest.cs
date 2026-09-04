@@ -63,8 +63,8 @@ namespace Tests.FakeDataGen.StressTests
         private const int DefaultRepeats = 3;
 
         /// <summary>
-        /// Windows the page offers. 28 is the default the customer was on, but the window drives how much
-        /// of copilot_chats each query reads, so a fix that only helps one window is not a fix.
+        /// Windows the page offers. The window drives how much of copilot_chats each query reads, so a fix
+        /// that only helps the default 28-day window is not a fix.
         /// </summary>
         private static readonly int[] DefaultWindows = { 7, 28, 90, 180 };
 

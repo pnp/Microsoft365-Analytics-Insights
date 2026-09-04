@@ -4,14 +4,11 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Entity;
-using System.Data.Entity.Infrastructure;
-using System.Data.SqlClient;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 {
@@ -60,51 +57,73 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         public int LastSaveDbWriteCount { get; private set; }
 
-        private const int MIN_DAYS_BACK = 3;    // Activity reports don't tend to refresh until a couple of days late; always collect something useful.
-        private const int MAX_DAYS_BACK = 28;   // Graph only retains ~28 days of daily detail.
+        private static int ClampDaysBack(int daysBackMax) => UsageReportRefreshPolicy.ClampDaysBack(daysBackMax);
 
-        private static int ClampDaysBack(int daysBackMax)
-        {
-            if (daysBackMax < MIN_DAYS_BACK) return MIN_DAYS_BACK;
-            if (daysBackMax > MAX_DAYS_BACK) return MAX_DAYS_BACK;
-            return daysBackMax;
-        }
+        /// <summary>
+        /// Storage-shape questions and columnstore maintenance. Injectable so the index-aware branch and the
+        /// maintenance trigger can be exercised without SQL Server (#375); defaults to the SQL adapter over
+        /// whichever context the caller passes in.
+        /// </summary>
+        public IUsageReportStorageInspector StorageInspector { get; set; }
+
+        private IUsageReportStorageInspector InspectorFor(AnalyticsEntitiesContext db)
+            => StorageInspector ?? new SqlUsageReportStorageInspector(db);
+
+        /// <summary>
+        /// Reads and writes for this report's table. Injectable so the whole finalized-date scan and the
+        /// entire save loop - the upsert, the scope/lookup filters, the dirty check, the batch boundary -
+        /// can be exercised without SQL Server (#375); defaults to the EF adapter over whichever context
+        /// the caller passes in.
+        /// </summary>
+        public IUsageReportStore<TReportDbType> ReportStore { get; set; }
+
+        // Note the `??`: when a store is injected, the right-hand side is never evaluated, so GetTable(db)
+        // is not called and a null context is never dereferenced.
+        private IUsageReportStore<TReportDbType> StoreFor(AnalyticsEntitiesContext db)
+            => ReportStore ?? new SqlUsageReportStore<TReportDbType>(db, GetTable(db));
+
+        /// <summary>
+        /// Source of "now" for the import window and the finalized-date scan. Defaults to
+        /// <see cref="SystemClock"/>, i.e. <c>DateTime.UtcNow</c>, so behaviour is unchanged; injectable
+        /// (#368/#375) so a test asserting exact window bounds cannot disagree with the loader's own clock
+        /// read when the two straddle UTC midnight.
+        /// </summary>
+        public IClock Clock { get; set; } = SystemClock.Instance;
 
         /// <summary>
         /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL, old
         /// enough that Graph will no longer change them, and covered by a previously completed import phase. These
         /// can be skipped entirely on the next import - no re-download, no re-write. Dates within the recent window
         /// or newer than the completion marker are never returned because they can still change or be partial.
+        ///
+        /// The window rule itself is <see cref="UsageReportRefreshPolicy"/>, which takes the instant as a
+        /// parameter and so can be asserted without a database (#375).
         /// </summary>
         public async Task<HashSet<DateTime>> GetFinalizedStoredDatesToSkipAsync(
             AnalyticsEntitiesContext db,
             int daysBackMax,
             DateTime? lastSuccessfulImport)
         {
-            daysBackMax = ClampDaysBack(daysBackMax);
-            if (!lastSuccessfulImport.HasValue)
+            var window = UsageReportRefreshPolicy.ResolveSkipWindow(
+                daysBackMax, lastSuccessfulImport, RefreshableRecentDays, Clock.UtcNow);
+
+            if (!window.CanSkipAnyDate)
             {
                 // Existing rows could be from an interrupted import. Until a full usage-report
                 // phase completes, no stored date is proven complete enough to skip safely.
                 return new HashSet<DateTime>();
             }
 
-            var today = DateTime.UtcNow.Date;
-            var windowStart = today.AddDays(-daysBackMax);
-            var mutableCutoff = today.AddDays(-RefreshableRecentDays);   // dates >= this can still change; never skip them
-            var completedCutoff = lastSuccessfulImport.Value.ToUniversalTime().Date;
-            var safeCutoff = completedCutoff < mutableCutoff ? completedCutoff : mutableCutoff;
-
-            var table = GetTable(db);
+            var store = StoreFor(db);
             if (await HasLeadingDateIndexAsync(db))
             {
                 // The window contains at most 25 finalized dates. DISTINCT over an indexed range
                 // still scans every user's row for every date (millions of rows at 200k users);
                 // bounded existence seeks touch one index entry per candidate date instead.
                 var storedFinalizedDates = new HashSet<DateTime>();
-                for (var date = windowStart; date < safeCutoff; date = date.AddDays(1))
+                foreach (var date in UsageReportRefreshPolicy.EnumerateSkipCandidates(window))
                 {
-                    if (await table.AnyAsync(activity => activity.Date == date))
+                    if (await store.HasAnyRowForDateAsync(date))
                     {
                         storedFinalizedDates.Add(date);
                     }
@@ -115,100 +134,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             // Some account/group report tables have no date-leading index. Repeated existence
             // probes would each scan the table, so use one range scan until an index is available.
-            var scannedDates = await table
-                .Where(activity => activity.Date >= windowStart && activity.Date < safeCutoff)
-                .Select(activity => activity.Date)
-                .Distinct()
-                .ToListAsync();
+            var scannedDates = await store.GetStoredDatesInRangeAsync(window.WindowStartUtc, window.SafeCutoffUtc);
 
             return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
         }
 
-        internal async Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
-        {
-            var table = typeof(TReportDbType).GetCustomAttribute<TableAttribute>();
-            if (table == null)
-            {
-                throw new InvalidOperationException(
-                    $"{typeof(TReportDbType).Name} must declare TableAttribute to inspect its date index.");
-            }
-
-            var qualifiedTableName = $"{table.Schema ?? "dbo"}.{table.Name}";
-            const string sql = @"
-SELECT CAST(CASE WHEN EXISTS (
-    SELECT 1
-    FROM sys.indexes AS i
-    INNER JOIN sys.index_columns AS ic
-      ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-    INNER JOIN sys.columns AS c
-      ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-    WHERE i.object_id = OBJECT_ID(@tableName)
-      AND i.is_disabled = 0
-      AND i.is_hypothetical = 0
-      AND i.has_filter = 0
-      AND ic.key_ordinal = 1
-      AND c.name = N'date'
-) THEN 1 ELSE 0 END AS bit);";
-
-            return await db.Database
-                .SqlQuery<bool>(sql, new SqlParameter("@tableName", qualifiedTableName))
-                .SingleAsync();
-        }
+        internal Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
+            => InspectorFor(db).HasLeadingDateIndexAsync(UsageReportTableName.Resolve(typeof(TReportDbType)));
 
         /// <summary>
-        /// Compacts this report table's columnstore delta rowgroups, if it has a columnstore index.
-        ///
-        /// <para>
-        /// <see cref="SaveLoadedReportsToSql"/> writes per-(date, user) upserts row by row, and only a bulk
-        /// load of 102,400+ rows compresses straight into a compressed rowgroup - everything else lands in
-        /// the rowstore delta store, which is scanned uncompressed. Left alone, the delta store grows every
-        /// import cycle and the columnstore's advantage decays back towards the full-scan behaviour the
-        /// <c>ColumnstoreUsageReportMetrics</c> migration exists to remove.
-        /// </para>
-        /// <para>
-        /// Plain <c>REORGANIZE</c> rather than <c>WITH (COMPRESS_ALL_ROW_GROUPS = ON)</c>: it merges and
-        /// compresses CLOSED delta rowgroups and removes deleted rows, which is the cheap, safe operation to
-        /// run on every cycle. Forcing the currently-open rowgroup to compress as well would rewrite the
-        /// trailing day's rows on every single import for very little gain.
-        /// </para>
-        /// <para>
-        /// A no-op (single metadata read) when the table has no columnstore index - which is the case on any
-        /// server where the migration's columnstore attempt fell back to a B-tree, or was skipped entirely.
-        /// </para>
+        /// Compacts this report table's columnstore delta rowgroups, if it has a columnstore index. Skipped
+        /// entirely for an entity that declares no table. See <see cref="SqlUsageReportStorageInspector"/>
+        /// for why plain REORGANIZE, and why it runs outside a transaction.
         /// </summary>
-        internal async Task CompactColumnstoreAsync(AnalyticsEntitiesContext db)
+        internal Task CompactColumnstoreAsync(AnalyticsEntitiesContext db)
         {
-            var table = typeof(TReportDbType).GetCustomAttribute<TableAttribute>();
-            if (table == null)
+            var qualifiedTableName = UsageReportTableName.TryResolve(typeof(TReportDbType));
+            if (qualifiedTableName == null)
             {
-                return;
+                return Task.CompletedTask;
             }
 
-            var qualifiedTableName = $"{table.Schema ?? "dbo"}.{table.Name}";
-
-            // i.type = 6 is NONCLUSTERED COLUMNSTORE.
-            const string sql = @"
-DECLARE @ix sysname = (
-    SELECT TOP (1) i.name
-    FROM sys.indexes AS i
-    WHERE i.object_id = OBJECT_ID(@tableName) AND i.type = 6 AND i.is_disabled = 0);
-
-IF @ix IS NOT NULL
-BEGIN
-    DECLARE @sql nvarchar(max) =
-        N'ALTER INDEX ' + QUOTENAME(@ix) + N' ON ' + @tableName + N' REORGANIZE;';
-    EXEC sp_executesql @sql;
-END";
-
-            await db.Database.ExecuteSqlCommandAsync(
-                // DoNotEnsureTransaction: index maintenance has no business inside a transaction. EF6's
-                // default (EnsureTransaction) would wrap a potentially long REORGANIZE in one, holding it
-                // open and growing the log for no benefit. (Verified that REORGANIZE does still succeed
-                // under EF's default behaviour on current SQL Server, so this is hardening rather than a
-                // bug fix - but there is no reason to run maintenance transactionally.)
-                TransactionalBehavior.DoNotEnsureTransaction,
-                sql,
-                new SqlParameter("@tableName", qualifiedTableName));
+            return InspectorFor(db).CompactColumnstoreAsync(qualifiedTableName);
         }
 
         public async Task PopulateLoadedReportPagesFromGraph(int daysBackMax, ISet<DateTime> datesToSkip = null)
@@ -223,8 +170,8 @@ END";
                 // Example: Message: {"error":{"code":"InvalidArgument","message":"Invalid date value specified: $DateTime.Now. Only support data for the past 28 days."}}
                 var daysBack = (daysBackIdx + 1) * -1;
                 // Graph Usage Reports API operates in UTC; DateTime.Now on a non-UTC server
-                // produces the wrong date bucket near midnight.
-                var dt = DateTime.UtcNow.AddDays(daysBack);
+                // produces the wrong date bucket near midnight. Read per iteration, as before.
+                var dt = Clock.UtcNow.AddDays(daysBack);
 
                 // Finalized days we already hold don't change in Graph - skip the (often slow) paged download entirely.
                 if (datesToSkip != null && datesToSkip.Contains(dt.Date))
@@ -299,16 +246,15 @@ END";
             // O(n) instead of O(n^2). AssociatedLookupId is [NotMapped] (it maps to UserID / YammerGroupID per
             // subclass), so existing rows can only be filtered in SQL by the mapped Date column - we key them by
             // lookup id in memory.
-            var autoDetectWasEnabled = db.Configuration.AutoDetectChangesEnabled;
-            db.Configuration.AutoDetectChangesEnabled = false;
-            try
+            var store = StoreFor(db);
+            using (store.BeginBulkWrite())
             {
                 foreach (var dateTime in LoadedReportPages.Keys)
                 {
                     // This day's existing rows, tracked (so updates go through the identity map without attach
                     // conflicts), keyed in memory by the [NotMapped] AssociatedLookupId.
                     var existingByLookupId = new Dictionary<int, TReportDbType>();
-                    foreach (var existingRow in await GetTable(db).Where(t => t.Date == dateTime.Date).ToListAsync())
+                    foreach (var existingRow in await store.GetRowsForDateAsync(dateTime.Date))
                     {
                         // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.
                         existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
@@ -375,16 +321,12 @@ END";
                         bool willWrite;
                         if (isNewLog)
                         {
-                            GetTable(db).Add(dateRequestedLog);
+                            store.AddRow(dateRequestedLog);
                             willWrite = true;
                         }
                         else
                         {
-                            willWrite = HasMappedValueChanged(db.Entry(dateRequestedLog));
-                            if (willWrite)
-                            {
-                                db.Entry(dateRequestedLog).State = EntityState.Modified;
-                            }
+                            willWrite = store.MarkUpdatedIfChanged(dateRequestedLog);
                         }
 
                         i++;
@@ -394,7 +336,7 @@ END";
                             pendingChanges++;
                             if (pendingChanges >= SaveBatchSize)
                             {
-                                await db.SaveChangesAsync();
+                                await store.SaveChangesAsync();
                                 pendingChanges = 0;
                             }
                         }
@@ -402,16 +344,12 @@ END";
 
                     if (pendingChanges > 0)
                     {
-                        await db.SaveChangesAsync();
+                        await store.SaveChangesAsync();
                     }
 
                     // Release this day's tracked rows before moving to the next day.
-                    DetachReportLogEntities(db);
+                    store.ReleaseSavedRows();
                 }
-            }
-            finally
-            {
-                db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
             }
 
             LastSaveDbWriteCount = dbWrites;
@@ -450,36 +388,6 @@ END";
                 }
             }
             return lookupId.Value;
-        }
-
-        // Detach the day's saved usage-log entities so the EF6 change tracker (and the memory it holds) is
-        // released before the next day. Lookup entities (users/groups) are intentionally left tracked so the
-        // shared id cache keeps working.
-        private static void DetachReportLogEntities(AnalyticsEntitiesContext db)
-        {
-            foreach (var entry in db.ChangeTracker.Entries<AbstractUsageActivityLog>().ToList())
-            {
-                entry.State = EntityState.Detached;
-            }
-        }
-
-        // True if any mapped scalar value on the tracked entity differs from the value originally loaded from the
-        // DB. Compares the EF6 original/current value snapshots directly so it works with
-        // AutoDetectChangesEnabled = false (auto-detect is deliberately off to keep bulk saves O(n)). Navigation
-        // properties and [NotMapped] members (e.g. AssociatedLookupId) are not in these snapshots, so only real
-        // column changes trigger an UPDATE.
-        private static bool HasMappedValueChanged(DbEntityEntry entry)
-        {
-            var current = entry.CurrentValues;
-            var original = entry.OriginalValues;
-            foreach (var propertyName in current.PropertyNames)
-            {
-                if (!object.Equals(original[propertyName], current[propertyName]))
-                {
-                    return true;
-                }
-            }
-            return false;
         }
 
         protected virtual Task<bool> IdInScope(string lookupId)

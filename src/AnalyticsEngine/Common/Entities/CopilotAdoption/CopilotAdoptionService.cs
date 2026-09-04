@@ -69,15 +69,18 @@ namespace Common.Entities.CopilotAdoption
         private readonly CopilotAdoptionOptions _options;
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly int _maxConcurrentSteps;
+        private readonly ICopilotAdoptionRunTelemetry _telemetry;
 
         public CopilotAdoptionService(
             CopilotAdoptionOptions options = null,
             IAnalyticsDbContextFactory contextFactory = null,
-            int? maxConcurrentSteps = null)
+            int? maxConcurrentSteps = null,
+            ICopilotAdoptionRunTelemetry telemetry = null)
         {
             _options = options ?? CopilotAdoptionOptions.Default;
             _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             _maxConcurrentSteps = Math.Max(1, maxConcurrentSteps ?? MaxConcurrentSteps);
+            _telemetry = telemetry ?? NullCopilotAdoptionRunTelemetry.Instance;
         }
 
         public CopilotAdoptionOptions Options => _options;
@@ -113,9 +116,12 @@ namespace Common.Entities.CopilotAdoption
             summary.Options = _options;
 
             // ----- 1. Which licence types count as a Copilot seat -------------------------------
+            var licenceTypesOperation = _telemetry.StepStarted(CopilotAdoptionSteps.LicenceTypes);
             var licenceTypesWatch = System.Diagnostics.Stopwatch.StartNew();
             var licenceTypes = await SafeAsync(
                 () => QueryAsync<LicenceTypeRow>(CopilotAdoptionSql.LicenceTypesSql, cancellationToken),
+                CopilotAdoptionSteps.LicenceTypes,
+                CopilotAdoptionQueries.LicenceTypes,
                 summary.Warnings,
                 "licence types", cancellationToken);
             licenceTypesWatch.Stop();
@@ -126,6 +132,11 @@ namespace Common.Entities.CopilotAdoption
             // share of the total and left the first two database round trips invisible to an operator.
             summary.Diagnostics.Record(
                 CopilotAdoptionSteps.LicenceTypes, licenceTypesWatch.ElapsedMilliseconds, licenceTypes == null);
+            _telemetry.StepCompleted(
+                licenceTypesOperation,
+                CopilotAdoptionSteps.LicenceTypes,
+                licenceTypesWatch.ElapsedMilliseconds,
+                licenceTypes == null);
 
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
@@ -169,6 +180,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             // ----- 2. Availability probes -------------------------------------------------------
+            var probesOperation = _telemetry.StepStarted(CopilotAdoptionSteps.DataSourceProbes);
             var probeWatch = System.Diagnostics.Stopwatch.StartNew();
 
             // Each of these decides whether a whole DATA SOURCE is used. A failure here degrades to the
@@ -177,6 +189,8 @@ namespace Common.Entities.CopilotAdoption
             // issue #360 defect one level up, so every probe failure marks the figures incomplete.
             summary.DataSources.AuditAvailable = await SafeScalarAsync(
                 CopilotAdoptionSql.HasCopilotAuditDataSql,
+                CopilotAdoptionSteps.DataSourceProbes,
+                CopilotAdoptionQueries.AuditDataProbe,
                 summary.Warnings,
                 "Copilot audit data probe",
                 () => summary.MarkFiguresIncomplete("Copilot audit data"),
@@ -191,6 +205,8 @@ namespace Common.Entities.CopilotAdoption
             // lesson of issue #360.
             var backfillPending = await SafeScalarAsync(
                 CopilotAdoptionSql.PendingCopilotBackfillSql,
+                CopilotAdoptionSteps.DataSourceProbes,
+                CopilotAdoptionQueries.PendingBackfillProbe,
                 summary.Warnings,
                 "Copilot interaction backfill probe",
                 () => summary.MarkFiguresIncomplete("Copilot interaction backfill check"),
@@ -208,6 +224,8 @@ namespace Common.Entities.CopilotAdoption
 
             summary.DataSources.CopilotUsageReportDate = await SafeDateAsync(
                 CopilotAdoptionSql.LatestCopilotReportDateSql,
+                CopilotAdoptionSteps.DataSourceProbes,
+                CopilotAdoptionQueries.CopilotReportDate,
                 summary.Warnings,
                 "Copilot usage-report snapshot date",
                 () => summary.MarkFiguresIncomplete("Copilot usage report"),
@@ -221,6 +239,8 @@ namespace Common.Entities.CopilotAdoption
                 // licensed user out across D7/D28/D90/D180 - see LatestCopilotReportPeriodSql.
                 summary.DataSources.CopilotUsageReportPeriodDays = await SafeScalarAsync(
                     CopilotAdoptionSql.LatestCopilotReportPeriodSql,
+                    CopilotAdoptionSteps.DataSourceProbes,
+                    CopilotAdoptionQueries.CopilotReportPeriod,
                     summary.Warnings,
                     "Copilot usage-report snapshot period",
                     // Failing to zero here does NOT disable the report join - it pins it to
@@ -234,6 +254,8 @@ namespace Common.Entities.CopilotAdoption
 
             summary.DataSources.M365UsageReportDate = await SafeDateAsync(
                 CopilotAdoptionSql.LatestM365ReportDateSql,
+                CopilotAdoptionSteps.DataSourceProbes,
+                CopilotAdoptionQueries.M365ReportDate,
                 summary.Warnings,
                 "Microsoft 365 usage-report snapshot date",
                 () => summary.MarkFiguresIncomplete("Microsoft 365 usage reports"),
@@ -243,6 +265,8 @@ namespace Common.Entities.CopilotAdoption
 
             summary.DataSources.CopilotUsageReportObfuscated = await SafeScalarAsync(
                 CopilotAdoptionSql.CopilotReportObfuscatedSql,
+                CopilotAdoptionSteps.DataSourceProbes,
+                CopilotAdoptionQueries.CopilotReportAnonymisation,
                 summary.Warnings,
                 "Copilot usage-report anonymisation check",
                 // Left defaulting to "not obfuscated" on failure rather than failing closed: flipping it
@@ -258,6 +282,11 @@ namespace Common.Entities.CopilotAdoption
             // sequential on purpose: they are cheap existence probes, and the licensed-user and
             // opportunity queries below cannot be shaped until their answers are known.
             summary.Diagnostics.Record(CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds);
+            _telemetry.StepCompleted(
+                probesOperation,
+                CopilotAdoptionSteps.DataSourceProbes,
+                probeWatch.ElapsedMilliseconds,
+                false);
 
             if (summary.DataSources.CopilotUsageReportObfuscated)
             {
@@ -323,10 +352,35 @@ namespace Common.Entities.CopilotAdoption
 
             await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
 
+            var scoringOperation = _telemetry.StepStarted(CopilotAdoptionSteps.Scoring);
+            _telemetry.Checkpoint(CopilotAdoptionTelemetryStages.ScoringStarted);
             var scoringWatch = System.Diagnostics.Stopwatch.StartNew();
-            FinaliseSummary(analysis);
-            scoringWatch.Stop();
-            summary.Diagnostics.Record(CopilotAdoptionSteps.Scoring, scoringWatch.ElapsedMilliseconds);
+            var scoringFailed = false;
+            string scoringExceptionType = null;
+            try
+            {
+                FinaliseSummary(analysis);
+            }
+            catch (Exception ex)
+            {
+                scoringFailed = true;
+                scoringExceptionType = ex.GetBaseException().GetType().Name;
+                throw;
+            }
+            finally
+            {
+                scoringWatch.Stop();
+                summary.Diagnostics.Record(
+                    CopilotAdoptionSteps.Scoring, scoringWatch.ElapsedMilliseconds, scoringFailed);
+                _telemetry.StepCompleted(
+                    scoringOperation,
+                    CopilotAdoptionSteps.Scoring,
+                    scoringWatch.ElapsedMilliseconds,
+                    scoringFailed,
+                    scoringExceptionType);
+                _telemetry.Checkpoint(
+                    CopilotAdoptionTelemetryStages.ScoringCompleted, scoringWatch.ElapsedMilliseconds);
+            }
 
             summary.Diagnostics.TotalMs = (long)(DateTime.UtcNow - nowUtc).TotalMilliseconds;
             return analysis;
@@ -423,7 +477,7 @@ namespace Common.Entities.CopilotAdoption
         /// warnings the others produced are still the honest description of what was gathered.
         /// </para>
         /// </remarks>
-        private static async Task RunStepsAsync(
+        private async Task RunStepsAsync(
             CopilotAdoptionAnalysis analysis, List<AnalysisStep> steps, int maxConcurrency, CancellationToken cancellationToken)
         {
             if (steps.Count == 0) return;
@@ -463,19 +517,22 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>Runs and times one step, holding a slot in the concurrency gate while it works.</summary>
-        private static async Task RunOneStepAsync(
+        private async Task RunOneStepAsync(
             AnalysisStep step, SemaphoreSlim gate, CancellationToken cancellationToken)
         {
             await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
+            var operationId = _telemetry.StepStarted(step.Name);
             var watch = System.Diagnostics.Stopwatch.StartNew();
+            string exceptionType = null;
             try
             {
                 await step.Work(step.Output);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 step.Failed = true;
+                exceptionType = ex.GetBaseException().GetType().Name;
                 throw;
             }
             finally
@@ -488,6 +545,12 @@ namespace Common.Entities.CopilotAdoption
                 // report the step as successful - see StepOutput.QueryFailed.
                 if (step.Output.QueryFailed) step.Failed = true;
 
+                _telemetry.StepCompleted(
+                    operationId,
+                    step.Name,
+                    step.DurationMs,
+                    step.Failed,
+                    exceptionType);
                 gate.Release();
             }
         }
@@ -531,6 +594,8 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<AgentUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.AgentEstate,
+                CopilotAdoptionQueries.AgentUsage,
                 output,
                 "Copilot agent usage", cancellationToken);
 
@@ -559,6 +624,8 @@ namespace Common.Entities.CopilotAdoption
 
             var byDept = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(byDeptSql, cancellationToken, ToSqlParameters(byDeptParameters)),
+                CopilotAdoptionSteps.AgentEstate,
+                CopilotAdoptionQueries.AgentUsageByDepartment,
                 output,
                 "agent usage by department", cancellationToken);
 
@@ -597,6 +664,8 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUsageQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.UnlicensedPopulation,
+                CopilotAdoptionQueries.UnlicensedUsage,
                 output,
                 "unlicensed Copilot usage", cancellationToken);
 
@@ -623,6 +692,8 @@ namespace Common.Entities.CopilotAdoption
 
             var apps = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(appSql, cancellationToken, ToSqlParameters(appParameters)),
+                CopilotAdoptionSteps.UnlicensedPopulation,
+                CopilotAdoptionQueries.UnlicensedUsageByApp,
                 output,
                 "unlicensed Copilot usage by app", cancellationToken);
 
@@ -655,6 +726,8 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.ResourceTypes,
+                CopilotAdoptionQueries.ResourceTypes,
                 output,
                 "Copilot accessed resource types", cancellationToken);
 
@@ -688,6 +761,8 @@ namespace Common.Entities.CopilotAdoption
 
             var assignments = await SafeAsync(
                 () => QueryAsync<SeatAssignmentRow>(assignmentsSql, cancellationToken),
+                CopilotAdoptionSteps.LicensedUsers,
+                CopilotAdoptionQueries.SeatAssignments,
                 output,
                 "Copilot licence assignments", cancellationToken);
 
@@ -715,6 +790,8 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
+                CopilotAdoptionSteps.LicensedUsers,
+                CopilotAdoptionQueries.CoworkAgentLookup,
                 output,
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
@@ -737,6 +814,8 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<LicensedUserUsageRow>(detailSql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.LicensedUsers,
+                CopilotAdoptionQueries.LicensedUserDetail,
                 output,
                 "licensed user detail", cancellationToken);
 
@@ -797,6 +876,8 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<CategoryQueryRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.UsageByApp,
+                CopilotAdoptionQueries.LicensedUsageByApp,
                 output,
                 "Copilot usage by app", cancellationToken);
 
@@ -821,6 +902,8 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkAgentIds = await SafeAsync(
                 () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
+                CopilotAdoptionSteps.WeeklyTrend,
+                CopilotAdoptionQueries.CoworkAgentLookup,
                 output,
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
@@ -830,6 +913,8 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<NamedWeekRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.WeeklyTrend,
+                CopilotAdoptionQueries.WeeklyTrend,
                 output,
                 "weekly adoption trend", cancellationToken);
 
@@ -884,6 +969,8 @@ namespace Common.Entities.CopilotAdoption
 
                 summary.UnlicensedActiveUsers = await SafeScalarAsync(
                     unlicensedSql,
+                    CopilotAdoptionSteps.LicenceOpportunities,
+                    CopilotAdoptionQueries.UnlicensedActiveUsers,
                     output,
                     "unlicensed Copilot users",
                     // Published as a headline KPI, and zero is a meaningful answer here - so a failure that
@@ -923,6 +1010,8 @@ namespace Common.Entities.CopilotAdoption
 
             var rows = await SafeAsync(
                 () => QueryAsync<UnlicensedUserSignalRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.LicenceOpportunities,
+                CopilotAdoptionQueries.LicenceOpportunities,
                 output,
                 "licence opportunities", cancellationToken);
 
@@ -1459,18 +1548,27 @@ namespace Common.Entities.CopilotAdoption
         /// Runs a query, turning any failure into a warning on the result. One heavy query timing out
         /// should cost that one chart, not the whole licence review.
         /// </summary>
-        private static async Task<List<T>> SafeAsync<T>(
+        private async Task<List<T>> SafeAsync<T>(
             Func<Task<List<T>>> query,
+            string step,
+            string queryName,
             List<string> warnings,
             string description,
             CancellationToken cancellationToken)
         {
+            var operationId = _telemetry.QueryStarted(step, queryName);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var failed = false;
+            string exceptionType = null;
             try
             {
                 return await query();
             }
             catch (Exception ex)
             {
+                failed = true;
+                exceptionType = ex.GetBaseException().GetType().Name;
+
                 // Cancellation is decided by the TOKEN, not by the exception type. A token-triggered
                 // abort surfaces from EF6 / SqlClient as any of TaskCanceledException, SqlException
                 // ("Operation cancelled by user") or InvalidOperationException, so type-matching here
@@ -1497,38 +1595,57 @@ namespace Common.Entities.CopilotAdoption
                 warnings.Add($"Could not load {description}: {InnermostMessage(ex)}");
                 return null;
             }
+            finally
+            {
+                watch.Stop();
+                _telemetry.QueryCompleted(
+                    operationId,
+                    step,
+                    queryName,
+                    watch.ElapsedMilliseconds,
+                    failed,
+                    exceptionType);
+            }
         }
 
         /// <summary>
         /// As above, for a step running in the concurrent phase: also records that the query failed, so
         /// the step's diagnostics say so instead of reporting a silent degradation as a success.
         /// </summary>
-        private static async Task<List<T>> SafeAsync<T>(
+        private async Task<List<T>> SafeAsync<T>(
             Func<Task<List<T>>> query,
+            string step,
+            string queryName,
             StepOutput output,
             string description,
             CancellationToken cancellationToken)
         {
             // SafeAsync returns null exactly when it swallowed a failure, which is what makes this work
             // without every call site having to remember to report it.
-            var rows = await SafeAsync(query, output.Warnings, description, cancellationToken);
+            var rows = await SafeAsync(
+                query, step, queryName, output.Warnings, description, cancellationToken);
             if (rows == null) output.MarkQueryFailed();
             return rows;
         }
 
         private async Task<int> SafeScalarAsync(
             string sql,
+            string step,
+            string queryName,
             List<string> warnings,
             string description,
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)
         {
-            return await SafeScalarAsync(sql, warnings, description, null, cancellationToken, parameters);
+            return await SafeScalarAsync(
+                sql, step, queryName, warnings, description, null, cancellationToken, parameters);
         }
 
         /// <summary>Step-scoped <see cref="SafeScalarAsync(string, List{string}, string, Action, CancellationToken, SqlParameter[])"/>.</summary>
         private async Task<int> SafeScalarAsync(
             string sql,
+            string step,
+            string queryName,
             StepOutput output,
             string description,
             Action onFailure,
@@ -1536,7 +1653,12 @@ namespace Common.Entities.CopilotAdoption
             params SqlParameter[] parameters)
         {
             var rows = await SafeAsync(
-                () => QueryAsync<int?>(sql, cancellationToken, parameters), output, description, cancellationToken);
+                () => QueryAsync<int?>(sql, cancellationToken, parameters),
+                step,
+                queryName,
+                output,
+                description,
+                cancellationToken);
 
             if (rows == null)
             {
@@ -1558,6 +1680,8 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         private async Task<int> SafeScalarAsync(
             string sql,
+            string step,
+            string queryName,
             List<string> warnings,
             string description,
             Action onFailure,
@@ -1566,6 +1690,8 @@ namespace Common.Entities.CopilotAdoption
         {
             var rows = await SafeAsync(
                 () => QueryAsync<int?>(sql, cancellationToken, parameters),
+                step,
+                queryName,
                 warnings,
                 description,
                 cancellationToken);
@@ -1581,12 +1707,15 @@ namespace Common.Entities.CopilotAdoption
 
         private async Task<DateTime?> SafeDateAsync(
             string sql,
+            string step,
+            string queryName,
             List<string> warnings,
             string description,
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)
         {
-            return await SafeDateAsync(sql, warnings, description, null, cancellationToken, parameters);
+            return await SafeDateAsync(
+                sql, step, queryName, warnings, description, null, cancellationToken, parameters);
         }
 
         /// <summary>
@@ -1600,6 +1729,8 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         private async Task<DateTime?> SafeDateAsync(
             string sql,
+            string step,
+            string queryName,
             List<string> warnings,
             string description,
             Action onFailure,
@@ -1608,6 +1739,8 @@ namespace Common.Entities.CopilotAdoption
         {
             var rows = await SafeAsync(
                 () => QueryAsync<DateTime?>(sql, cancellationToken, parameters),
+                step,
+                queryName,
                 warnings,
                 description,
                 cancellationToken);

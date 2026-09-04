@@ -1,12 +1,16 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Common.Entities;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
+using System.Linq;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests
@@ -20,7 +24,7 @@ namespace Tests.UnitTests
     /// The pre-existing CopilotTests suite still covers the SQL merge end to end.
     /// </summary>
     [TestClass]
-    public class CopilotAuditEventManagerStagingTests
+    public class CopilotAuditEventManagerStagingTests : CopilotTestBase
     {
         // Must contain the literal "19:meeting_" - StringUtils.GetMeetingIdFragmentFromMeetingThreadUrl
         // parses from there, and throws (so the row is not staged) for anything else.
@@ -215,27 +219,9 @@ namespace Tests.UnitTests
             // stages only a chat-only row and asserts final copilot_chats counts, which stay correct
             // even if the lists were never cleared, because the common merge de-duplicates chats.
             //
-            // The consequence of losing those Clear() calls differs per table, and is worse than mere
-            // repeated work for two of the three:
-            //   * chat-only - the root copilot_chats row is de-duplicated by the merge, so the usual
-            //     cost is an unboundedly growing batch on the hot path. It is NOT purely cost, though:
-            //     common_upsert_copilot_agents.sql deliberately does not de-duplicate messages that
-            //     have no Id (ISNULL(pm.message_id, NEWID()) plus "WHERE pm.message_id IS NULL"), so a
-            //     retained chat-only row carrying such a message inserts a fresh copilot_event_messages
-            //     row on every commit. Cost-only holds only when the event has no messages, or every
-            //     message has a stable Id;
-            //   * SharePoint and Teams - insert_sp_copilot_events_from_staging_table.sql and
-            //     insert_teams_copilot_events_from_staging_table.sql insert into copilot_event_files /
-            //     copilot_event_meetings with NO NOT EXISTS guard, and both inherit [Key] on
-            //     copilot_chat_id from BaseCopilotSpecificEvent - so a retained row THAT SUCCESSFULLY
-            //     INSERTED its metadata can make the NEXT commit fail on a duplicate primary key.
-            //     (Both managers deliberately stage rows even when Graph resolution returns null; those
-            //     rows fail the workload scripts' inner joins against the lookup tables, so they never
-            //     inserted a metadata row and have no key to collide with.)
-            //
-            // A guard needs a real database: under the current hard-wired InsertBatch design, staging is
-            // only List.Add, but committing a non-empty batch opens a connection. It must cover all
-            // three tables, not just the existing chat-only reset case.
+            // The SQL adapter's own Rows.Clear() calls need a DB-backed guard because staging is only
+            // List.Add, but committing a non-empty batch opens a connection. That separate guard covers
+            // all three concrete staging batches.
             var writer = new InMemoryCopilotStagingWriter();
             var manager = NewManager(writer);
 
@@ -253,6 +239,138 @@ namespace Tests.UnitTests
         public void CopilotEventManager_NullStagingWriter_Throws()
         {
             new CopilotAuditEventManager((ICopilotStagingWriter)null, new FakeCopilotMetadataLoader(), NullLogger.Instance);
+        }
+
+        [TestMethod]
+        public async Task SqlCopilotStagingWriter_CommitAllChanges_ClearsAllThreeStagedBatches()
+        {
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var meetingEventId = Guid.NewGuid();
+            var fileEventId = Guid.NewGuid();
+            var chatEventId = Guid.NewGuid();
+            var suffix = DateTime.UtcNow.Ticks.ToString();
+            var meetingUpn = "meeting-clear-" + suffix + "@contoso.onmicrosoft.com";
+            var fileUpn = "file-clear-" + suffix + "@contoso.onmicrosoft.com";
+            var chatUpn = "chat-clear-" + suffix + "@contoso.onmicrosoft.com";
+
+            using (var con = new SqlConnection(_config.ConnectionStrings.DatabaseConnectionString))
+            {
+                con.Open();
+                try
+                {
+                    InsertAuditEvent(con, meetingEventId, meetingUpn);
+                    InsertAuditEvent(con, fileEventId, fileUpn);
+                    InsertAuditEvent(con, chatEventId, chatUpn);
+
+                    var writer = new SqlCopilotStagingWriter(_config.ConnectionStrings.DatabaseConnectionString, logger);
+                    writer.StageTeams(new TeamsCopilotLogTempEntity
+                    {
+                        EventId = meetingEventId,
+                        AppHost = "Teams",
+                        MeetingId = "19:meeting-clear@thread.v2",
+                        MeetingCreatedUTC = new DateTime(2026, 4, 1, 9, 30, 0, DateTimeKind.Utc),
+                        MeetingName = "Contoso release sync"
+                    });
+                    writer.StageSharePoint(new SPCopilotLogTempEntity
+                    {
+                        EventId = fileEventId,
+                        AppHost = "Word",
+                        FileName = "Καλημέρα κόσμε",
+                        FileExtension = "docx",
+                        Url = "https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.docx",
+                        UrlBase = "https://contoso.sharepoint.com/sites/example"
+                    });
+                    writer.StageChatOnly(new ChatOnlyCopilotLogTempEntity
+                    {
+                        EventId = chatEventId,
+                        AppHost = "Teams"
+                    });
+
+                    await writer.CommitAllChanges();
+
+                    var logEntryCountAfterFirstCommit = logger.Entries.Count;
+                    var chatCountAfterFirstCommit = CountChats(con, meetingEventId, fileEventId, chatEventId);
+
+                    await writer.CommitAllChanges();
+
+                    var secondCommitInsertLogs = logger.Entries
+                        .Skip(logEntryCountAfterFirstCommit)
+                        .Where(IsInsertBatchLog)
+                        .Select(e => e.Message)
+                        .ToList();
+                    Assert.AreEqual(0, secondCommitInsertLogs.Count,
+                        "An empty second commit must not re-save any retained SharePoint, Teams or chat-only rows: "
+                        + string.Join(Environment.NewLine, secondCommitInsertLogs));
+
+                    Assert.AreEqual(chatCountAfterFirstCommit, CountChats(con, meetingEventId, fileEventId, chatEventId));
+                }
+                finally
+                {
+                    DeleteAuditEvents(con, meetingEventId, fileEventId, chatEventId, meetingUpn, fileUpn, chatUpn);
+                }
+            }
+        }
+
+        private static void InsertAuditEvent(SqlConnection con, Guid eventId, string upn)
+        {
+            using (var cmd = con.CreateCommand())
+            {
+                cmd.CommandText = @"
+IF NOT EXISTS (SELECT 1 FROM dbo.users WHERE user_name = @upn)
+    INSERT INTO dbo.users (user_name, azure_ad_id) VALUES (@upn, @azureAdId);
+
+INSERT INTO dbo.audit_events (id, time_stamp, user_id)
+SELECT @eventId, @timestamp, u.id
+FROM dbo.users u
+WHERE u.user_name = @upn;";
+                cmd.Parameters.AddWithValue("@upn", upn);
+                cmd.Parameters.AddWithValue("@azureAdId", "00000000-0000-0000-0000-000000000000");
+                cmd.Parameters.AddWithValue("@eventId", eventId);
+                cmd.Parameters.AddWithValue("@timestamp", new DateTime(2026, 4, 1, 9, 0, 0, DateTimeKind.Utc));
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static int CountChats(SqlConnection con, Guid meetingEventId, Guid fileEventId, Guid chatEventId)
+        {
+            using (var cmd = con.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT COUNT(*)
+FROM dbo.copilot_chats
+WHERE event_id IN (@meetingEventId, @fileEventId, @chatEventId);";
+                cmd.Parameters.AddWithValue("@meetingEventId", meetingEventId);
+                cmd.Parameters.AddWithValue("@fileEventId", fileEventId);
+                cmd.Parameters.AddWithValue("@chatEventId", chatEventId);
+                return Convert.ToInt32(cmd.ExecuteScalar());
+            }
+        }
+
+        private static void DeleteAuditEvents(SqlConnection con, Guid meetingEventId, Guid fileEventId, Guid chatEventId, string meetingUpn, string fileUpn, string chatUpn)
+        {
+            using (var cmd = con.CreateCommand())
+            {
+                cmd.CommandText = @"
+DELETE FROM dbo.copilot_event_files WHERE copilot_chat_id IN (@meetingEventId, @fileEventId, @chatEventId);
+DELETE FROM dbo.copilot_event_meetings WHERE copilot_chat_id IN (@meetingEventId, @fileEventId, @chatEventId);
+DELETE FROM dbo.copilot_chats WHERE event_id IN (@meetingEventId, @fileEventId, @chatEventId);
+DELETE FROM dbo.audit_events WHERE id IN (@meetingEventId, @fileEventId, @chatEventId);
+DELETE FROM dbo.users WHERE user_name IN (@meetingUpn, @fileUpn, @chatUpn);";
+                cmd.Parameters.AddWithValue("@meetingEventId", meetingEventId);
+                cmd.Parameters.AddWithValue("@fileEventId", fileEventId);
+                cmd.Parameters.AddWithValue("@chatEventId", chatEventId);
+                cmd.Parameters.AddWithValue("@meetingUpn", meetingUpn);
+                cmd.Parameters.AddWithValue("@fileUpn", fileUpn);
+                cmd.Parameters.AddWithValue("@chatUpn", chatUpn);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static bool IsInsertBatchLog(Tests.UnitTests.FakeLoaderClasses.RecordingLogger.Entry entry)
+        {
+            return entry.Level == LogLevel.Information
+                && entry.Message.StartsWith("Inserting ", StringComparison.Ordinal)
+                && entry.Message.Contains(" records into ");
         }
     }
 }

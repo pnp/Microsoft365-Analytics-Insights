@@ -19,6 +19,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
+using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.StatsUploader;
 #endregion
@@ -198,6 +199,11 @@ namespace WebJob.Office365ActivityImporter
             // usage-report phase every cycle, even without Redis).
             ISingleDateStore activityReportsLastImportedStore = ActivityReportsLastImportedStoreFactory.Create(configuredSettings, logger);
 
+            // Per-report completion stamps, feeding the finalized-date skip list. Also created ONCE here for
+            // the same reason: the in-memory fallback must survive across cycles or every report re-downloads
+            // its full window every time.
+            IReportCompletionStore reportCompletionStore = ReportCompletionStoreFactory.Create(configuredSettings, logger);
+
             // Cadence-gate store for the non-fresh Graph imports (user metadata, user apps, Teams).
             // Created ONCE here, outside the cycle loop, so the in-memory fallback retains its "last run"
             // timestamps across cycles (mirrors statsDatesLoader above). Redis when configured (gate also
@@ -245,12 +251,21 @@ namespace WebJob.Office365ActivityImporter
                 sentEmailMailboxSkipList = new InMemorySentEmailMailboxSkipList();
             }
 
+            // Service Bus listener for Teams call notifications. Created ONCE here, outside the cycle
+            // loop, because the processor must outlive a single import cycle - ProgramTasks is rebuilt
+            // every cycle, so holding it there would create (and leak) a new Service Bus client and
+            // message pump every time. This replaces the process-wide static singleton that used to
+            // live inside CallQueueProcessor (issue #378); it is only built on the first cycle that
+            // actually needs it, and only published after Init() succeeds, so a failed start-up is
+            // retried on the next cycle exactly as before.
+            CallQueueProcessor callQueueProcessor = null;
+
             // Run app
             while (runAgain)
             {
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList);
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
@@ -263,7 +278,14 @@ namespace WebJob.Office365ActivityImporter
                     {
                         try
                         {
-                            await tasks.ProcessCallQueueAndWebhook(webHookUrl);
+                            if (callQueueProcessor == null)
+                            {
+                                var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString());
+                                await newProcessor.Init();
+                                callQueueProcessor = newProcessor;
+                            }
+
+                            await tasks.ProcessCallQueueAndWebhook(webHookUrl, callQueueProcessor);
                         }
                         catch (Exception ex)
                         {
@@ -291,9 +313,9 @@ namespace WebJob.Office365ActivityImporter
 #endif
                 }
 
-                // Activity import (Office 365 Management Activity API). Runs when SharePoint audit
-                // (ActivityLog) and/or Copilot interactions (delivered via Audit.General) are enabled.
-                if (configuredSettings.ImportJobSettings.ActivityLog || configuredSettings.ImportJobSettings.Copilot)
+                // Activity import (Office 365 Management Activity API). Runs when any workload needs
+                // Audit.SharePoint or Audit.General (SharePoint audit, Copilot, or Power Platform).
+                if (configuredSettings.ImportJobSettings.UsesActivityApi)
                 {
 #if !DEBUG
                     try

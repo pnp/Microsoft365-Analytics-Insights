@@ -22,16 +22,22 @@ The `UserMetadataUpdater` class has been refactored to improve code organization
 **Purpose**: Handles all license and SKU processing operations for users.
 
 **Key Responsibilities**:
-- Process tenant-level SKUs for all users
-- Add SKU licenses to specific users
+- Reconcile tenant-level SKUs against the stored licence lookups for all users
+- Build the set of licence assignments a specific SKU implies
 - Handle user-specific license processing when tenant-level SKUs are unavailable
 - Resolve SKU part numbers to friendly license type names
 
 **Key Methods**:
-- `ProcessSKUsForAllUsers()` - Processes all tenant SKUs and assigns to users
-- `AddSkuForUsers()` - Adds a specific SKU to a list of users
+- `ProcessSKUsForAllUsers()` - Reconciles `user_license_type_lookups` against all tenant SKUs
+- `AddSkuAssignments()` - Adds the assignments implied by one SKU to the desired-state set
 - `ProcessUserLicenses()` - Processes licenses for individual users
 - `GetLicenseType()` - Gets or creates license type from SKU part number
+
+Reads and writes of `user_license_type_lookups` go through `IUserLicenseStore`
+(`SqlUserLicenseStore` in production), and the add/remove plan is computed by the
+database-free `UserLicenseAssignmentDelta`. See issue #392 - this step used to delete
+every licence lookup and refill it SKU by SKU, leaving reports to see a tenant with no
+licences for minutes at a time.
 
 ### 3. **UserDataMapper.cs**
 **Purpose**: Handles mapping and updating of user data between Graph and database entities.
@@ -120,3 +126,28 @@ Potential areas for further enhancement:
 ## Namespace Convention
 
 All files in the `Graph\User` folder use the namespace `WebJob.Office365ActivityImporter.Engine.Graph` (not `...Graph.User`). This follows the existing convention in the project.
+
+## Ports and rules (issues #371 / #372)
+
+A second pass split the remaining SQL and Graph coupling out of the helper classes above, so the
+decisions they make can be asserted without a database. Adapters are behaviour-preserving
+relocations, not rewrites.
+
+### Pure rules — `Graph\User\Rules\`
+| Class | Extracted from | What it owns |
+|---|---|---|
+| `UserMetadataMappingRules` | `UserDataMapper.UpdateUserMetadata` | Normalising the seven de-normalised lookup values, deciding which ones to clear, and the four direct fields |
+| `UserBulkUpdateRules` | `UserBatchProcessor.BuildUpdateDataTable` | The bulk-update batch's shape, per-column values and the manager foreign-key precedence chain |
+| `ManagerResolutionRules` | `UserDataMapper.UpdateUserManager` | Which manager UPNs a batch needs to look up, and how duplicate UPN rows are resolved |
+| `UserImportCommitPolicy` | `UserMetadataUpdater.InsertAndUpdateDatabaseFromExternalUsers` | The delta token is committed only after every phase succeeded |
+
+### Ports and adapters
+| Port | Production adapter | Purpose |
+|---|---|---|
+| `IUserBulkUpdateWriter` | `SqlUserBulkUpdateWriter` | The `SqlConnection` + `SqlBulkCopy` + `#user_updates` temp table, moved out of `UserBatchProcessor` unchanged |
+| `IUserLookupStore` | `SqlUserLookupStore` | Resolves a whole batch's users by UPN in one chunked `Contains(...)` query, replacing a per-user `FirstOrDefaultAsync` |
+| `IAnalyticsDbContextFactory` | `DefaultAnalyticsDbContextFactory` | `UserMetadataUpdater` no longer news up its own `AnalyticsEntitiesContext` |
+
+`ManagerPrefetchCache` holds one batch's managers between the store and `UserDataMapper`. Its scope is
+deliberately a single batch: the entities are tracked by the import's context, and every batch ends by
+detaching them.

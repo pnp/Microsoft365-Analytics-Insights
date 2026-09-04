@@ -61,7 +61,13 @@ namespace Tests.UnitTests
             CollectionAssert.AreEquivalent(
                 new[] { "alex@contoso.onmicrosoft.com", "καλημέρα@contoso.onmicrosoft.com" },
                 new List<string> { writer.PowerAppShareRows[0].SharedWithUpn, writer.PowerAppShareRows[1].SharedWithUpn },
-                "Non-Latin recipients must survive intact.");
+                "Recipients must survive intact through staging. Power Platform's PrincipalName is not "
+                + "schema-guaranteed to be an Entra UPN and nothing validates it, so this rule must not "
+                + "assume ASCII. Scope note: this is the in-memory staging step only - the value is "
+                + "later inserted into dbo.users.user_name, which is varchar(250) "
+                + "(insert_power_app_share_events_from_staging_table.sql), so a truly non-ASCII "
+                + "recipient would be corrupted at rest. That is a storage property, not this rule's "
+                + "(#402/#414).");
         }
 
         [TestMethod]
