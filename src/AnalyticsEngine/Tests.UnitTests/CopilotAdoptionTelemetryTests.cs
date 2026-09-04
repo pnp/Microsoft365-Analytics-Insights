@@ -423,6 +423,51 @@ namespace Tests.UnitTests
                 "The lifecycle sink already has it; reporting again would double-count the failure.");
         }
 
+        [TestMethod]
+        public async Task AnalysisFailure_AcceptedByTheSink_IsNotReportedAgainByAWaitingRequest()
+        {
+            // The analysis is SHARED, so awaiting the faulted task rethrows the SAME exception instance
+            // to every waiting request, and each of those reaches AnalyticsWebApiExceptionLogger. Without
+            // a marker one failure is reported once by the analysis and then once more per waiter, which
+            // buries the real failure count - the duplication MarkReported exists to prevent.
+            var channel = new RecordingTelemetryChannel();
+            var configuration = new TelemetryConfiguration
+            {
+                TelemetryChannel = channel,
+                ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+            };
+            var logger = new AnalyticsLogger(new TelemetryClient(configuration), "WebApiTest");
+
+            var boom = new InvalidOperationException("analysis failed");
+            var coordinator = new AdoptionCoordinator(
+                new SequencedRunner(Task.FromException<CopilotAdoptionAnalysis>(boom)),
+                new InMemoryAnalysisCache(),
+                (window, hasOverride) => new AcceptingTelemetry(),
+                TimeSpan.FromMinutes(10));
+
+            Exception observed = null;
+            try
+            {
+                await coordinator.GetAsync(28, new List<int>());
+                Assert.Fail("the fake analysis should fail");
+            }
+            catch (InvalidOperationException ex)
+            {
+                observed = ex;
+            }
+
+            Assert.AreSame(boom, observed, "every waiter observes the one shared instance");
+
+            // Exactly what a request awaiting the shared run does next.
+            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => logger);
+            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => logger);
+
+            Assert.AreEqual(
+                0,
+                channel.Sent.OfType<ExceptionTelemetry>().Count(),
+                "The lifecycle sink already reported this failure; a waiting request must not report it again.");
+        }
+
         private class RejectingTelemetry : StubAnalysisTelemetry
         {
             public override bool QueueFailure(Exception exception) => false;

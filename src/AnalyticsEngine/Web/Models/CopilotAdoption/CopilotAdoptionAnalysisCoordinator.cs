@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.CopilotAdoption;
 using System;
 using System.Collections.Concurrent;
@@ -263,6 +263,14 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 if (!telemetry.QueueFailure(ex))
                 {
                     _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
+                }
+                else
+                {
+                    // The sink accepted it and writes its own ExceptionTelemetry. Mark the instance so
+                    // the Web API exception logger does not report the SAME exception again for every
+                    // request that was awaiting this shared run - awaiting a faulted task rethrows one
+                    // instance to all of them. That is the duplication MarkReported exists to prevent.
+                    WebExceptionTelemetry.MarkReported(ex);
                 }
 
                 throw;
