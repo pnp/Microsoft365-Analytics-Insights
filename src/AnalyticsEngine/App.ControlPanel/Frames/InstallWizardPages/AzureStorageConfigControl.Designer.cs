@@ -80,7 +80,7 @@
             this.lblRedisName.Name = "lblRedisName";
             this.lblRedisName.Size = new System.Drawing.Size(235, 13);
             this.lblRedisName.TabIndex = 175;
-            this.lblRedisName.Text = "spoinsightsdemocache.redis.cache.windows.net";
+            this.lblRedisName.Text = "spoinsightsdemocache.westeurope.redis.azure.net";
             // 
             // lblServiceBusName
             // 

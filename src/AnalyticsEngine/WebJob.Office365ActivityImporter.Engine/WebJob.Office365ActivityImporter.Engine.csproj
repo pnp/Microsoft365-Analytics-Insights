@@ -173,6 +173,7 @@
     <Compile Include="Graph\Teams\Rules\ChannelMessageScopeRules.cs" />
     <Compile Include="Graph\Teams\Rules\TeamsCrawlPagingPolicy.cs" />
     <Compile Include="Graph\Teams\Rules\TeamsCrawlRules.cs" />
+    <Compile Include="Graph\Teams\TeamChannelDeltaTokenCommit.cs" />
     <Compile Include="Graph\Teams\TeamChannelDeltaTokenStores.cs" />
     <Compile Include="Graph\Teams\TeamsChannelCrawler.cs" />
     <Compile Include="Graph\Teams\Extensions\ChatMessageListExtensions.cs" />
@@ -237,6 +238,7 @@
     <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
     <Compile Include="Graph\User\GraphUserLoader.cs" />
     <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
+    <Compile Include="Graph\User\IOfficeLicenseNameResolver.cs" />
     <Compile Include="Graph\User\IUserLicenseStore.cs" />
     <Compile Include="Graph\User\IUserLookupStore.cs" />
     <Compile Include="Graph\User\IUserMetadataLoader.cs" />
@@ -266,6 +268,7 @@
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
     <Compile Include="RedisSingleDateLoader.cs" />
+    <Compile Include="ReportCompletionStore.cs" />
     <Compile Include="SingleDateStore.cs" />
     <Compile Include="StatsUploader\AnonUsageStatsModelLoader.cs" />
     <Compile Include="StatsUploader\BaseClasses.cs" />

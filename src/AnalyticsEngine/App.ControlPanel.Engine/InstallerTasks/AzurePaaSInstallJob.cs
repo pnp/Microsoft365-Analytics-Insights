@@ -22,6 +22,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class AzurePaaSInstallJob : BaseAnalyticsSolutionInstallJob
     {
+        /// <summary>
+        /// Name of the Azure SQL firewall rule the installer owns. Public so the database step can repair it
+        /// when Azure reports this host as blocked (issue #326) - it must be the same rule, not a second one.
+        /// </summary>
+        public const string INSTALLER_FIREWALL_RULE_NAME = "O365 Adv Analytics Setup Rule";
+
         private readonly GetOrCreateResourceGroupTask _rgCreateTask;
         private readonly AutomationAccountTask _automationAccountTask;
 
@@ -122,7 +128,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var sqlServerConfig = TaskConfig.GetConfigForName(config.SQLServerName)
                 .AddSetting(SqlServerTask.CONFIG_KEY_USERNAME, config.SQLServerAdminUsername)
                 .AddSetting(SqlServerTask.CONFIG_KEY_PASSWORD, config.SQLServerAdminPassword);
-            const string FIREWALL_RULE_NAME = "O365 Adv Analytics Setup Rule";
+            const string FIREWALL_RULE_NAME = INSTALLER_FIREWALL_RULE_NAME;
 
             _sqlServerTask = new SqlServerTask(sqlServerConfig, logger, Location, tagDic, allowPublicAccess);
 
@@ -134,7 +140,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // 'DenyPublicEndpointEnabled' and connectivity is expected to come via private endpoint.
             if (allowPublicAccess)
             {
-                _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location);
+                _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location, config.KeyVaultName);
                 this.AddTask(_sqlServerTask, _sqlServerFirewallConfigTask, _sqlDatabaseTask);
             }
             else

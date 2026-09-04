@@ -199,6 +199,11 @@ namespace WebJob.Office365ActivityImporter
             // usage-report phase every cycle, even without Redis).
             ISingleDateStore activityReportsLastImportedStore = ActivityReportsLastImportedStoreFactory.Create(configuredSettings, logger);
 
+            // Per-report completion stamps, feeding the finalized-date skip list. Also created ONCE here for
+            // the same reason: the in-memory fallback must survive across cycles or every report re-downloads
+            // its full window every time.
+            IReportCompletionStore reportCompletionStore = ReportCompletionStoreFactory.Create(configuredSettings, logger);
+
             // Cadence-gate store for the non-fresh Graph imports (user metadata, user apps, Teams).
             // Created ONCE here, outside the cycle loop, so the in-memory fallback retains its "last run"
             // timestamps across cycles (mirrors statsDatesLoader above). Redis when configured (gate also
@@ -260,7 +265,7 @@ namespace WebJob.Office365ActivityImporter
             {
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
-                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList);
+                var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore);
 
                 // Start listening for SB messages & register notifications web-hook with Graph 
                 if (webHookUrl != null && configuredSettings.ImportJobSettings.Calls)
@@ -308,9 +313,9 @@ namespace WebJob.Office365ActivityImporter
 #endif
                 }
 
-                // Activity import (Office 365 Management Activity API). Runs when SharePoint audit
-                // (ActivityLog) and/or Copilot interactions (delivered via Audit.General) are enabled.
-                if (configuredSettings.ImportJobSettings.ActivityLog || configuredSettings.ImportJobSettings.Copilot)
+                // Activity import (Office 365 Management Activity API). Runs when any workload needs
+                // Audit.SharePoint or Audit.General (SharePoint audit, Copilot, or Power Platform).
+                if (configuredSettings.ImportJobSettings.UsesActivityApi)
                 {
 #if !DEBUG
                     try

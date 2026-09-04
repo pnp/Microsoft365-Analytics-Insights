@@ -133,6 +133,44 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public Exception Exception { get; set; }
     }
 
+    internal static class CopilotAdoptionExceptionCorrelation
+    {
+        public const string RunIdDataKey = "CopilotAdoption.RunId";
+
+        public static void SetRunId(Exception exception, string runId)
+        {
+            if (exception == null || string.IsNullOrEmpty(runId)) return;
+
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                try
+                {
+                    current.Data[RunIdDataKey] = runId;
+                }
+                catch (Exception)
+                {
+                    // Some exception types expose a fixed IDictionary. The telemetry path must not fail.
+                }
+            }
+        }
+
+        public static bool TryGetRunId(Exception exception, out string runId)
+        {
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                var value = current.Data?[RunIdDataKey] as string;
+                if (!string.IsNullOrEmpty(value))
+                {
+                    runId = value;
+                    return true;
+                }
+            }
+
+            runId = null;
+            return false;
+        }
+    }
+
     internal interface ICopilotAdoptionEventSink
     {
         int DroppedEvents { get; }
@@ -171,6 +209,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 connectionString, nameof(Controllers.CopilotAdoptionAPIController));
         }
 
+        internal AppInsightsCopilotAdoptionTelemetryWriter(AnalyticsLogger logger)
+        {
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
+
         public void Write(CopilotAdoptionLifecycleEvent telemetryEvent)
         {
             _logger.TrackEvent(
@@ -195,9 +238,13 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         public void WriteFailure(CopilotAdoptionFailureEvent failure)
         {
-            _logger.TrackException(failure.Exception);
+            var properties = new Dictionary<string, string>
+            {
+                { "RunId", failure.RunId },
+            };
+            _logger.TrackException(failure.Exception, properties, failure.RunId);
             _logger.LogError(
-                $"Copilot adoption analysis failed ({failure.Exception.GetBaseException().GetType().Name}).");
+                $"Copilot adoption analysis failed ({failure.Exception.GetBaseException().GetType().Name}, RunId {failure.RunId}).");
         }
 
         public void Flush()
@@ -653,6 +700,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         public bool QueueFailure(Exception exception)
         {
+            CopilotAdoptionExceptionCorrelation.SetRunId(exception, RunId);
             var failureEvent = CreateEvent(
                 CopilotAdoptionTelemetryStages.Failed,
                 outcome: "Failed",
@@ -895,6 +943,17 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
     internal static class CopilotAdoptionTelemetryHost
     {
         private static readonly string InstanceId = Guid.NewGuid().ToString("N");
+
+        // Identifies the AppDomain, so a run that stops because the worker was recycled can be told
+        // apart from one that hung. Diagnosing issue #441 turned on exactly this: the id stayed
+        // constant across the whole stall, which is what ruled out a recycle and pointed at a
+        // stranded continuation instead.
+        //
+        // .NET Core / .NET 10 note: this still COMPILES but stops meaning anything - there are no
+        // AppDomains, and AppDomain.CurrentDomain.Id is always 1. Nothing will fail; the field just
+        // silently becomes a constant and the recycle-versus-hang signal is lost. On a migration this
+        // needs replacing with something that actually changes per process lifetime (for example a
+        // process start time or a per-process GUID) rather than being ported across as-is.
         private static readonly int AppDomainId = AppDomain.CurrentDomain.Id;
         private static readonly Stopwatch Uptime = Stopwatch.StartNew();
         private static readonly ConcurrentDictionary<string, CopilotAdoptionRunTelemetry> ActiveRuns =

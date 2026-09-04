@@ -30,10 +30,18 @@ namespace WebJob.Office365ActivityImporter
         private ManualGraphCallClient _manualGraphCallClient = null;
         private GraphUserGroupsCache _graphUserGroupsCache = null;
         private readonly ISingleDateStore _activityReportsLastImportedStore;
+        // Per-report completion stamps. Like the store above this MUST be process-lifetime: a fresh instance
+        // per cycle would always look "never completed" and empty the finalized-date skip list every run.
+        private readonly IReportCompletionStore _reportCompletionStore;
         private readonly IImportLastRunStore _graphLastRunStore;
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
 
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
+            : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
+        {
+        }
+
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore graphLastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IReportCompletionStore reportCompletionStore)
         {
             _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             _logger = logger;
@@ -41,6 +49,7 @@ namespace WebJob.Office365ActivityImporter
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
             _graphLastRunStore = graphLastRunStore;
             _sentEmailMailboxSkipList = sentEmailMailboxSkipList;
+            _reportCompletionStore = reportCompletionStore;
         }
 
         /// <summary>
@@ -70,7 +79,7 @@ namespace WebJob.Office365ActivityImporter
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList);
+            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore);
 
             try
             {
@@ -126,18 +135,23 @@ namespace WebJob.Office365ActivityImporter
 
                 if (spFilterList.OrgUrlConfigs.Count == 0)
                 {
-                    _logger.LogCritical("FATAL ERROR: No org URLs found in database! " +
-                        "This means everything would be ignored for SharePoint audit data. Add at least one URL to the org_urls table for this to work.");
-
-                    return;
-
+                    if (_settings.ImportJobSettings.ActivityLog)
+                    {
+                        _logger.LogWarning("No org URLs found in database. SharePoint/OneDrive audit events will be treated as out of scope; non-SharePoint Activity API workloads can still import.");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("No org URLs found in database. Continuing because only non-SharePoint Activity API workloads are enabled.");
+                    }
                 }
+                else
+                {
+                    _logger.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
 
-                _logger.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
-
-                // Print URLs
-                spFilterList.Print(_logger);
-                Console.WriteLine();
+                    // Print URLs
+                    spFilterList.Print(_logger);
+                    Console.WriteLine();
+                }
 
                 _logger.LogInformation($"Starting activity import for {spFilterList.OrgUrlConfigs.Count} url filters");
 

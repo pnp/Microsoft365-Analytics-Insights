@@ -67,6 +67,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         public bool HasRefreshToken { get; set; }
         public DateTime? LastRefreshed { get; set; }
+        public List<TeamChannelDeltaTokenCommit> PendingChannelDeltaTokenCommits { get; set; } = new List<TeamChannelDeltaTokenCommit>();
 
         #endregion
 
@@ -159,23 +160,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             catch (System.Data.Entity.Infrastructure.DbUpdateException ex)
             {
                 logger.LogError(ex, $"Got SQL exception saving Team: {ex.Message}. Will try again next cycle.");
-                await ClearChannelDeltaTokens(logger, appConfig);
                 return null;
             }
 
-            return dbTeam;
-        }
-
-        async Task ClearChannelDeltaTokens(ILogger logger, AppConfig appConfig)
-        {
-            var teamTokenManager = new TeamTokenManager(this, appConfig, logger);
-            foreach (var c in this.Channels)
+            if (this.PendingChannelDeltaTokenCommits.Count > 0 && teamTokenManager.CacheConnectionManager != null)
             {
-                if (teamTokenManager.CacheConnectionManager != null)
-                {
-                    await teamTokenManager.CacheConnectionManager.RemoveTeamChannelDeltaToken(this.Id, c.Id, logger);
-                }
+                var deltaTokenStore = new RedisTeamChannelDeltaTokenStore(teamTokenManager.CacheConnectionManager, logger);
+                await TeamChannelDeltaTokenCommitter.CommitPendingTokens(deltaTokenStore, this.Id, this.PendingChannelDeltaTokenCommits);
             }
+
+            return dbTeam;
         }
 
         /// <summary>
@@ -269,12 +263,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             else
             {
                 // We have a token. Load channel msgs/replies/reactions
+                var pendingDeltaTokenCommits = new List<TeamChannelDeltaTokenCommit>();
                 try
                 {
-                    await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.CacheConnectionManager, logger);
+                    fullTeam.PendingChannelDeltaTokenCommits = await fullTeam.Channels.PopulateNewMessagesAndReactions(team, teamRefreshOAuthToken, teamTokenManager.CacheConnectionManager, logger, pendingDeltaTokenCommits);
                 }
                 catch (ChannelMessagesReadException ex)
                 {
+                    fullTeam.PendingChannelDeltaTokenCommits = pendingDeltaTokenCommits;
                     logger.LogError(ex, $"Couldn't get channel messages via cached token. '{ex.Message}'. Deleting token.");
                     await teamTokenManager.CacheConnectionManager.RemoveTeamAuthToken(team.Id);
                     teamRefreshOAuthToken = null;

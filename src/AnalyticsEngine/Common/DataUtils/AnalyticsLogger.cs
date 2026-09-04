@@ -35,6 +35,16 @@ namespace DataUtils
         private AnalyticsLogger() : this(string.Empty, string.Empty)
         {
         }
+
+        public AnalyticsLogger(TelemetryClient appInsights, string context)
+        {
+            AppInsights = appInsights;
+            if (AppInsights != null && !string.IsNullOrEmpty(context))
+            {
+                AppInsights.Context.Operation.Name = context;
+            }
+        }
+
         public AnalyticsLogger(string appInsightsConnectionString, string context)
         {
             if (!string.IsNullOrEmpty(appInsightsConnectionString))
@@ -62,9 +72,34 @@ namespace DataUtils
 
         public void TrackException(Exception ex)
         {
+            TrackException(ex, null, null);
+        }
+
+        public void TrackException(
+            Exception ex,
+            IDictionary<string, string> properties,
+            string operationId)
+        {
             if (AppInsights != null)
             {
-                AppInsights.TrackException(ex);
+                var telemetry = new ExceptionTelemetry(ex);
+                if (!string.IsNullOrEmpty(operationId))
+                {
+                    telemetry.Context.Operation.Id = operationId;
+                }
+                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                {
+                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                }
+                if (properties != null)
+                {
+                    foreach (var property in properties)
+                    {
+                        telemetry.Properties[property.Key] = property.Value;
+                    }
+                }
+
+                AppInsights.TrackException(telemetry);
             }
         }
 

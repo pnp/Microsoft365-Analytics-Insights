@@ -48,6 +48,10 @@ namespace Tests.UnitTests
             Assert.IsFalse(settings.ActivityLog, "ActivityLog should default to false");
             Assert.IsFalse(settings.WebTraffic, "WebTraffic should default to false");
             Assert.IsFalse(settings.SentEmails, "SentEmails should default to false");
+            Assert.IsFalse(settings.Copilot, "Copilot should default to false");
+            Assert.IsFalse(settings.ImportPowerPlatform, "ImportPowerPlatform should default to false");
+            Assert.IsFalse(settings.GraphCopilotUsageReports, "GraphCopilotUsageReports should default to false");
+            Assert.IsFalse(settings.CopilotInteractionHistory, "CopilotInteractionHistory should default to false");
         }
 
         [TestMethod]
@@ -75,7 +79,8 @@ namespace Tests.UnitTests
             // Parse honours =True for every [ImportProp] (opt-in model).
             var settings = new ImportTaskSettings(
                 "Calls=True;GraphUsersMetadata=True;GraphUsageReports=True;" +
-                "GraphTeams=True;ActivityLog=True;WebTraffic=True;SentEmails=True");
+                "GraphTeams=True;ActivityLog=True;WebTraffic=True;SentEmails=True;" +
+                "Copilot=True;ImportPowerPlatform=True;GraphCopilotUsageReports=True;CopilotInteractionHistory=True");
 
             Assert.IsTrue(settings.Calls);
             Assert.IsTrue(settings.GraphUsersMetadata);
@@ -84,6 +89,10 @@ namespace Tests.UnitTests
             Assert.IsTrue(settings.ActivityLog);
             Assert.IsTrue(settings.WebTraffic);
             Assert.IsTrue(settings.SentEmails);
+            Assert.IsTrue(settings.Copilot);
+            Assert.IsTrue(settings.ImportPowerPlatform);
+            Assert.IsTrue(settings.GraphCopilotUsageReports);
+            Assert.IsTrue(settings.CopilotInteractionHistory);
         }
 
         [TestMethod]
@@ -155,6 +164,10 @@ namespace Tests.UnitTests
                 ActivityLog = true,
                 WebTraffic = false,
                 SentEmails = true,
+                Copilot = true,
+                ImportPowerPlatform = true,
+                GraphCopilotUsageReports = false,
+                CopilotInteractionHistory = true,
             };
 
             var reloaded = new ImportTaskSettings(original.ToSettingsString());
@@ -167,6 +180,10 @@ namespace Tests.UnitTests
             Assert.AreEqual(original.ActivityLog, reloaded.ActivityLog);
             Assert.AreEqual(original.WebTraffic, reloaded.WebTraffic);
             Assert.AreEqual(original.SentEmails, reloaded.SentEmails);
+            Assert.AreEqual(original.Copilot, reloaded.Copilot);
+            Assert.AreEqual(original.ImportPowerPlatform, reloaded.ImportPowerPlatform);
+            Assert.AreEqual(original.GraphCopilotUsageReports, reloaded.GraphCopilotUsageReports);
+            Assert.AreEqual(original.CopilotInteractionHistory, reloaded.CopilotInteractionHistory);
         }
 
         [TestMethod]
@@ -177,6 +194,7 @@ namespace Tests.UnitTests
             {
                 "Calls", "GraphUsersMetadata", "GraphUsageReports",
                 "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
+                "ImportPowerPlatform", "GraphCopilotUsageReports", "CopilotInteractionHistory",
             })
             {
                 Assert.IsTrue(settingsString.Contains(propName + "="),
@@ -193,6 +211,7 @@ namespace Tests.UnitTests
             {
                 "Calls", "GraphUsersMetadata", "GraphUsageReports",
                 "GraphTeams", "ActivityLog", "WebTraffic", "SentEmails", "Copilot",
+                "ImportPowerPlatform", "GraphCopilotUsageReports", "CopilotInteractionHistory",
             })
             {
                 Assert.IsTrue(settingsString.Contains(propName + "=False"),
@@ -264,6 +283,9 @@ namespace Tests.UnitTests
             Assert.IsTrue(new ImportTaskSettings { WebTraffic = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { SentEmails = true }.HaveSomethingToDo());
             Assert.IsTrue(new ImportTaskSettings { Copilot = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { ImportPowerPlatform = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { GraphCopilotUsageReports = true }.HaveSomethingToDo());
+            Assert.IsTrue(new ImportTaskSettings { CopilotInteractionHistory = true }.HaveSomethingToDo());
         }
 
         [TestMethod]
@@ -277,9 +299,13 @@ namespace Tests.UnitTests
             Assert.AreEqual("Audit.General",
                 new ImportTaskSettings { Copilot = true }.ToActivityApiContentTypesString());
 
-            // Copilot + SharePoint -> Audit.General;Audit.SharePoint
+            // Power Platform only -> Audit.General
+            Assert.AreEqual("Audit.General",
+                new ImportTaskSettings { ImportPowerPlatform = true }.ToActivityApiContentTypesString());
+
+            // Copilot + Power Platform + SharePoint -> Audit.General;Audit.SharePoint (no duplicate Audit.General)
             Assert.AreEqual("Audit.General;Audit.SharePoint",
-                new ImportTaskSettings { Copilot = true, ActivityLog = true }.ToActivityApiContentTypesString());
+                new ImportTaskSettings { Copilot = true, ImportPowerPlatform = true, ActivityLog = true }.ToActivityApiContentTypesString());
 
             // Neither audit source -> safe non-empty default so the runtime workload list is valid
             Assert.AreEqual("Audit.SharePoint",

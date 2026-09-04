@@ -292,6 +292,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             if (!_managerPrefetch.TryGet(managerUpn, out dbManager))
                             {
                                 dbManager = await db.users
+                                    .Include(u => u.LicenseLookups)
                                     .FirstOrDefaultAsync(u => u.UserPrincipalName == managerUpn);
                             }
 
@@ -357,7 +358,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // branch above: this ran once per user with an unsaved template entity (#371).
                 if (!_managerPrefetch.TryGet(upn, out var existingUser))
                 {
-                    existingUser = await db.users.FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
+                    existingUser = await db.users
+                        .Include(u => u.LicenseLookups)
+                        .FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
                 }
                 if (existingUser != null)
                 {
@@ -400,10 +403,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return trackedUser;
             }
 
-            // No tracked entity found - use Find() which will return tracked entity from DB
-            // This is more reliable than Attach() as it handles cases where the entity
-            // might have been modified in the database since it was loaded
-            var foundUser = db.users.Find(user.ID);
+            // No tracked entity found - query the tracked entity from DB with the same licence
+            // graph as the per-user licence path. Find() cannot Include navigation properties, and
+            // an empty User.LicenseLookups list would stop ProcessUserLicenses deleting stored rows
+            // before it re-adds the current Graph answer.
+            var foundUser = await db.users
+                .Include(u => u.LicenseLookups)
+                .FirstOrDefaultAsync(u => u.ID == user.ID);
 
             if (foundUser != null)
             {
