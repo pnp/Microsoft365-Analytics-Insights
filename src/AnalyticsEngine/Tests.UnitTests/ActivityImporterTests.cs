@@ -563,6 +563,20 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             Assert.IsTrue(spFilterConfig.InScope(new PowerAutomateAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_AUTOMATE, ObjectId = string.Empty }));
         }
 
+        [TestMethod]
+        public void OrgURLsFilter_EmptyUrlList_DropsSharePointOnly()
+        {
+            var spFilterConfig = new SharePointOrgUrlsFilterConfig();
+
+            var spEvent = DataGenerators.GetRandomSharePointLog();
+            spEvent.ObjectId = "https://contoso.sharepoint.com/sites/example/Shared Documents/file.docx";
+
+            Assert.IsFalse(spFilterConfig.InScope(spEvent),
+                "With no org_urls rows, SharePoint/OneDrive audit events must not fall through to the generic empty-list allow-all URL rule.");
+            Assert.IsTrue(spFilterConfig.InScope(new PowerAppsAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_APPS, ObjectId = "00000000-0000-0000-0000-000000000015" }),
+                "The empty SharePoint URL whitelist must not block non-SharePoint workloads delivered by the same Activity API cycle.");
+        }
+
         /// <summary>
         /// SharePoint events without a URL (e.g. ManagedSyncClientAllowed) have nothing to match
         /// against the org-URL whitelist, so the SharePoint filter treats them as out of scope.
@@ -752,6 +766,12 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             try
             {
                 var s = new AppConfig();
+                s.ImportJobSettings = new ImportTaskSettings
+                {
+                    ActivityLog = true,
+                    Copilot = true,
+                    ImportPowerPlatform = true,
+                };
                 return s;
             }
             catch (FormatException)
