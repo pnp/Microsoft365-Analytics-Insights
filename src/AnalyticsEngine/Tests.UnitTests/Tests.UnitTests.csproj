@@ -262,6 +262,7 @@
     <Compile Include="ReportCompletionStoreTests.cs" />
     <Compile Include="TeamsCrawlTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
+    <Compile Include="InstallTests\ImportToggleVerificationCoverageTests.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
     <Compile Include="InstallTests\ServiceBusNamespaceInstallTaskTests.cs" />
