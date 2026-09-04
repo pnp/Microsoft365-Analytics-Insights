@@ -161,6 +161,7 @@
     <Compile Include="GraphImportOrchestrationTests.cs" />
     <Compile Include="GraphImportSectionCompositionTests.cs" />
     <Compile Include="ImportRuntimeOptionsTests.cs" />
+    <Compile Include="ImportStatTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeTeamsPorts.cs" />
     <Compile Include="OrgUrlStoreTests.cs" />
     <Compile Include="FakeLoaderClasses\FixedClock.cs" />

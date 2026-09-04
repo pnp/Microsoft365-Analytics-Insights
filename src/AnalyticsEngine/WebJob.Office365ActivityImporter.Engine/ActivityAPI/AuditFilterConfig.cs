@@ -39,6 +39,11 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
                 return false;
             }
 
+            if (OrgUrlConfigs.Count == 0)
+            {
+                return false;
+            }
+
             // Analyse all org URLs to see which one matches this hit.
             return OrgUrlConfigs.UrlInScope(spContent.SiteUrl, spContent.ObjectId);
         }

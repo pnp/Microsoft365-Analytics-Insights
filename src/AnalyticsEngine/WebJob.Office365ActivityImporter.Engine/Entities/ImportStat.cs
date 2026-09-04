@@ -89,6 +89,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
             this.ProcessedAlready += statsToAdd.ProcessedAlready;
             this.Imported += statsToAdd.Imported;
             this.URLsOutOfScope += statsToAdd.URLsOutOfScope;
+            this.UsersOutOfScope += statsToAdd.UsersOutOfScope;
             this.DownloadErrors += statsToAdd.DownloadErrors;
             this.MetadataDownloadErrors += statsToAdd.MetadataDownloadErrors;
             this.ReportDownloadErrors += statsToAdd.ReportDownloadErrors;
