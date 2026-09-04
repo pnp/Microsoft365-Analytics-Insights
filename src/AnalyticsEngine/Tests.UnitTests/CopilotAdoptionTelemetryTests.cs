@@ -15,6 +15,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdoptionCache = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisCache;
+using AdoptionAnalysisTelemetry = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisTelemetry;
 using AdoptionCoordinator = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator;
 using AdoptionEvent = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionLifecycleEvent;
 using AdoptionFailure = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionFailureEvent;
@@ -361,6 +362,176 @@ namespace Tests.UnitTests
                 runner.CallCount,
                 "telemetry construction must not leave a faulted generation in-flight");
             Assert.AreEqual(1, cache.SetCount);
+        }
+
+        [TestMethod]
+        public async Task AnalysisFailure_RejectedByTheSink_IsStillReportedByTheFallback()
+        {
+            // The run that fails has normally outlived the request that started it (that request
+            // returned 202 at the first-response budget). If the bounded failure sink also rejects the
+            // event, nothing else observes the exception, so the failure would be completely invisible.
+            var boom = new InvalidOperationException("analysis failed");
+            var reported = new List<Tuple<Exception, string>>();
+            var coordinator = new AdoptionCoordinator(
+                new SequencedRunner(Task.FromException<CopilotAdoptionAnalysis>(boom)),
+                new InMemoryAnalysisCache(),
+                (window, hasOverride) => new RejectingTelemetry(),
+                TimeSpan.FromMinutes(10),
+                (ex, context) => reported.Add(Tuple.Create(ex, context)));
+
+            try
+            {
+                await coordinator.GetAsync(28, new List<int>());
+                Assert.Fail("the fake analysis should fail");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.AreEqual(
+                1,
+                reported.Count,
+                "A failure the sink refused must fall back to direct reporting, or it is never seen.");
+            Assert.AreSame(boom, reported[0].Item1);
+        }
+
+        [TestMethod]
+        public async Task AnalysisFailure_AcceptedByTheSink_IsNotReportedTwice()
+        {
+            var reported = new List<Tuple<Exception, string>>();
+            var coordinator = new AdoptionCoordinator(
+                new SequencedRunner(
+                    Task.FromException<CopilotAdoptionAnalysis>(
+                        new InvalidOperationException("analysis failed"))),
+                new InMemoryAnalysisCache(),
+                (window, hasOverride) => new AcceptingTelemetry(),
+                TimeSpan.FromMinutes(10),
+                (ex, context) => reported.Add(Tuple.Create(ex, context)));
+
+            try
+            {
+                await coordinator.GetAsync(28, new List<int>());
+                Assert.Fail("the fake analysis should fail");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.AreEqual(
+                0,
+                reported.Count,
+                "The lifecycle sink already has it; reporting again would double-count the failure.");
+        }
+
+        [TestMethod]
+        public async Task AnalysisFailure_AcceptedByTheSink_IsStillVisibleToAWaitingRequest()
+        {
+            // Deliberate trade-off, pinned so it is not "tidied" into silence later.
+            //
+            // Acceptance is not delivery: QueueFailure returning true means the failure was added to an
+            // in-memory queue whose worker can drop it. Marking the exception reported on acceptance
+            // would suppress reporting by waiting requests without anything having confirmed the failure
+            // was reported.
+            //
+            // So an accepted failure stays unmarked and a waiting request can still report it. That can
+            // duplicate the sink's own report, which is noise; removing the duplicate needs delivery
+            // acknowledgement from the sink - see issue #454.
+            var channel = new RecordingTelemetryChannel();
+            var configuration = new TelemetryConfiguration
+            {
+                TelemetryChannel = channel,
+                ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+            };
+            var logger = new AnalyticsLogger(new TelemetryClient(configuration), "WebApiTest");
+
+            var boom = new InvalidOperationException("analysis failed");
+            var coordinator = new AdoptionCoordinator(
+                new SequencedRunner(Task.FromException<CopilotAdoptionAnalysis>(boom)),
+                new InMemoryAnalysisCache(),
+                (window, hasOverride) => new AcceptingTelemetry(),
+                TimeSpan.FromMinutes(10));
+
+            Exception observed = null;
+            try
+            {
+                await coordinator.GetAsync(28, new List<int>());
+                Assert.Fail("the fake analysis should fail");
+            }
+            catch (InvalidOperationException ex)
+            {
+                observed = ex;
+            }
+
+            Assert.AreSame(boom, observed, "every waiter observes the one shared instance");
+
+            // Exactly what a request awaiting the shared run does next.
+            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => logger);
+            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => logger);
+
+            Assert.AreEqual(
+                1,
+                channel.Sent.OfType<ExceptionTelemetry>().Count(),
+                "An accepted failure must remain visible to a waiting request - once, not zero and not per waiter.");
+        }
+
+        private class RejectingTelemetry : StubAnalysisTelemetry
+        {
+            public override bool QueueFailure(Exception exception) => false;
+        }
+
+        private class AcceptingTelemetry : StubAnalysisTelemetry
+        {
+            public override bool QueueFailure(Exception exception) => true;
+        }
+
+        /// <summary>
+        /// Does nothing except let a test decide what <c>QueueFailure</c> answers, which is the only
+        /// thing the fallback-reporting decision depends on.
+        /// </summary>
+        private abstract class StubAnalysisTelemetry : AdoptionAnalysisTelemetry
+        {
+            public string RunId => "00000000000000000000000000000001";
+
+            public long StepStarted(string step) => 0;
+
+            public void StepCompleted(
+                long operationId,
+                string step,
+                long durationMs,
+                bool failed,
+                string exceptionType = null)
+            {
+            }
+
+            public long QueryStarted(string step, string query) => 0;
+
+            public void QueryCompleted(
+                long operationId,
+                string step,
+                string query,
+                long durationMs,
+                bool failed,
+                string exceptionType = null)
+            {
+            }
+
+            public void Checkpoint(string stage, long durationMs = 0)
+            {
+            }
+
+            public void QueueCompletion(CopilotAdoptionAnalysis analysis)
+            {
+            }
+
+            public abstract bool QueueFailure(Exception exception);
+
+            public void HostStopping(string reason)
+            {
+            }
+
+            public void Dispose()
+            {
+            }
         }
 
         [TestMethod]
