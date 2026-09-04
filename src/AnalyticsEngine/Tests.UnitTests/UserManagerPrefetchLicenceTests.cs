@@ -120,6 +120,109 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task ManagerFallback_ManagerIsLaterReconciled_KeepsItsLicenceGraph()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var tag = Guid.NewGuid().ToString("N");
+            var managerUpn = $"fallbackmanager{tag}@test.com";
+            var reportUpn = $"fallbackreport{tag}@test.com";
+            var managerAadId = Guid.NewGuid().ToString();
+            var reportAadId = Guid.NewGuid().ToString();
+            var testSku = $"FALLBACK_TEST_SKU_{tag}";
+
+            await RemoveTestUsers(managerUpn, reportUpn);
+            try
+            {
+                using (var seed = new AnalyticsEntitiesContext())
+                {
+                    var licence = new LicenseType { Name = testSku, SKUID = testSku };
+                    var manager = new Common.Entities.User
+                    {
+                        UserPrincipalName = managerUpn,
+                        AzureAdId = managerAadId,
+                        AccountEnabled = true
+                    };
+                    var report = new Common.Entities.User
+                    {
+                        UserPrincipalName = reportUpn,
+                        AzureAdId = reportAadId,
+                        AccountEnabled = true
+                    };
+
+                    seed.LicenseTypes.Add(licence);
+                    seed.users.Add(manager);
+                    seed.users.Add(report);
+                    seed.UserLicenseTypeLookups.Add(new UserLicenseTypeLookup { User = manager, License = licence });
+                    await seed.SaveChangesAsync();
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var snapshots = await db.users.AsNoTracking()
+                        .Include(u => u.LicenseLookups)
+                        .Where(u => u.UserPrincipalName == managerUpn || u.UserPrincipalName == reportUpn)
+                        .ToListAsync();
+                    var reportSnapshot = snapshots.Single(u => u.UserPrincipalName == reportUpn);
+
+                    var managerGraph = new GraphUser
+                    {
+                        Id = managerAadId,
+                        UserPrincipalName = managerUpn,
+                        AccountEnabled = true,
+                        Mail = managerUpn,
+                    };
+                    var reportGraph = new GraphUser
+                    {
+                        Id = reportAadId,
+                        UserPrincipalName = reportUpn,
+                        AccountEnabled = true,
+                        Mail = reportUpn,
+                        ManagerInfo = new List<ManagerInfo> { new ManagerInfo { Id = managerAadId } },
+                    };
+
+                    var mapper = new UserDataMapper(logger, new UserMetadataCache(db));
+                    mapper.SetGraphUserLookup(new List<GraphUser> { managerGraph, reportGraph });
+
+                    await mapper.UpdateUserMetadata(
+                        db,
+                        reportGraph,
+                        new List<GraphUser> { managerGraph, reportGraph },
+                        reportSnapshot,
+                        new Dictionary<string, Common.Entities.User>(StringComparer.OrdinalIgnoreCase),
+                        new List<Common.Entities.User>());
+
+                    var trackedManager = db.ChangeTracker.Entries<Common.Entities.User>()
+                        .Single(e => e.Entity.UserPrincipalName == managerUpn)
+                        .Entity;
+
+                    var loader = new FakeUserMetadataLoader(
+                        new List<GraphUser> { managerGraph, reportGraph },
+                        fakeSkus: null,
+                        fakeUsersBySku: null,
+                        fakeLicenseDetails: new Dictionary<string, List<LicenseDetails>>
+                        {
+                            { managerAadId, new List<LicenseDetails> { new LicenseDetails { SkuId = Guid.NewGuid(), SkuPartNumber = testSku } } },
+                        });
+
+                    await new UserLicenseProcessor(logger, loader, new UserMetadataCache(db))
+                        .ProcessUserLicenses(db, managerGraph, trackedManager);
+                    await db.SaveChangesAsync();
+                }
+
+                using (var verify = new AnalyticsEntitiesContext())
+                {
+                    Assert.AreEqual(1, await CountLicences(verify, managerUpn),
+                        "The fallback by-UPN manager query must load existing licence lookups before later per-user reconciliation reuses the tracked manager.");
+                }
+            }
+            finally
+            {
+                await RemoveTestUsers(managerUpn, reportUpn);
+                await RemoveTestLicences(testSku);
+            }
+        }
+
         private static async Task<int> CountLicences(AnalyticsEntitiesContext db, string upn)
         {
             return await db.UserLicenseTypeLookups.CountAsync(l => l.User.UserPrincipalName == upn);
@@ -157,6 +260,19 @@ namespace Tests.UnitTests
                     db.UserLicenseTypeLookups.RemoveRange(user.LicenseLookups);
                 }
                 db.users.RemoveRange(users);
+                await db.SaveChangesAsync();
+            }
+        }
+
+        private static async Task RemoveTestLicences(params string[] skuIds)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var licences = await db.LicenseTypes
+                    .Where(l => skuIds.Contains(l.SKUID) &&
+                        !db.UserLicenseTypeLookups.Any(lookup => lookup.LicenseTypeId == l.ID))
+                    .ToListAsync();
+                db.LicenseTypes.RemoveRange(licences);
                 await db.SaveChangesAsync();
             }
         }

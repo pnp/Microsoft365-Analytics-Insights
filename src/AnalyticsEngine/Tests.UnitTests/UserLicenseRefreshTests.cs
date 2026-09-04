@@ -424,6 +424,73 @@ namespace Tests.UnitTests
 
         #region Processor-level: what actually gets written
 
+        [TestMethod]
+        public async Task UserLicenseProcessor_InjectedResolver_UsesSameKnownSkuMapping()
+        {
+            const string skuPartNumber = "ENTERPRISEPACK";
+            var expectedName = new OfficeLicenseNameResolver().GetDisplayNameFor(skuPartNumber);
+            var resolver = new RecordingLicenseNameResolver(new OfficeLicenseNameResolver());
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var processor = new UserLicenseProcessor(
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    new FakeUserMetadataLoader(null, null, null),
+                    new UserMetadataCache(db),
+                    resolver);
+
+                var licence = await processor.GetLicenseType(skuPartNumber);
+
+                Assert.AreEqual(expectedName, licence.Name);
+                Assert.AreEqual(skuPartNumber, licence.SKUID);
+                CollectionAssert.AreEqual(new[] { skuPartNumber }, resolver.RequestedSkuPartNumbers.ToArray());
+            }
+        }
+
+        [TestMethod]
+        public async Task UserLicenseProcessor_InjectedResolver_UnknownSkuFallsBackToSkuPartNumber()
+        {
+            var skuPartNumber = $"UNKNOWN_TEST_SKU_{Guid.NewGuid():N}";
+
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var processor = new UserLicenseProcessor(
+                        AnalyticsLogger.ConsoleOnlyTracer(),
+                        new FakeUserMetadataLoader(null, null, null),
+                        new UserMetadataCache(db),
+                        new FixedLicenseNameResolver(null));
+
+                    var licence = await processor.GetLicenseType(skuPartNumber);
+
+                    Assert.AreEqual(skuPartNumber, licence.Name);
+                    Assert.AreEqual(skuPartNumber, licence.SKUID);
+                }
+            }
+            finally
+            {
+                await RemoveTestLicences(skuPartNumber);
+            }
+        }
+
+        [TestMethod]
+        public async Task UserLicenseProcessor_ProductionConstructor_StillResolvesSkuNames()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var processor = new UserLicenseProcessor(
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    new FakeUserMetadataLoader(null, null, null),
+                    new UserMetadataCache(db));
+
+                var licence = await processor.GetLicenseType("ENTERPRISEPACK");
+
+                Assert.AreEqual("Office 365 E3", licence.Name);
+                Assert.AreEqual("ENTERPRISEPACK", licence.SKUID);
+            }
+        }
+
         /// <summary>
         /// A run where nothing changed must not write anything at all. The old implementation
         /// rewrote every row on every cycle, which is both the source of the outage window and,
@@ -686,6 +753,36 @@ namespace Tests.UnitTests
             }
         }
 
+        private class RecordingLicenseNameResolver : IOfficeLicenseNameResolver
+        {
+            private readonly IOfficeLicenseNameResolver _inner;
+
+            public RecordingLicenseNameResolver(IOfficeLicenseNameResolver inner)
+            {
+                _inner = inner;
+            }
+
+            public List<string> RequestedSkuPartNumbers { get; } = new List<string>();
+
+            public string GetDisplayNameFor(string id)
+            {
+                RequestedSkuPartNumbers.Add(id);
+                return _inner.GetDisplayNameFor(id);
+            }
+        }
+
+        private class FixedLicenseNameResolver : IOfficeLicenseNameResolver
+        {
+            private readonly string _displayName;
+
+            public FixedLicenseNameResolver(string displayName)
+            {
+                _displayName = displayName;
+            }
+
+            public string GetDisplayNameFor(string id) => _displayName;
+        }
+
         private static FakeUserMetadataLoader BuildLoader(
             (string Upn, string AadId)[] users,
             (Guid SkuId, string PartNumber, string[] LicensedUpns)[] skus)
@@ -748,6 +845,19 @@ namespace Tests.UnitTests
                 var lookups = await db.UserLicenseTypeLookups.Where(l => ids.Contains(l.UserId)).ToListAsync();
                 db.UserLicenseTypeLookups.RemoveRange(lookups);
                 db.users.RemoveRange(users);
+                await db.SaveChangesAsync();
+            }
+        }
+
+        private static async Task RemoveTestLicences(params string[] skuIds)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var licences = await db.LicenseTypes
+                    .Where(l => skuIds.Contains(l.SKUID) &&
+                        !db.UserLicenseTypeLookups.Any(lookup => lookup.LicenseTypeId == l.ID))
+                    .ToListAsync();
+                db.LicenseTypes.RemoveRange(licences);
                 await db.SaveChangesAsync();
             }
         }

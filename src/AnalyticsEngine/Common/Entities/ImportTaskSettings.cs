@@ -136,6 +136,36 @@ namespace Common.Entities
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));
         }
 
+        /// <summary>
+        /// Every <see cref="ImportPropAttribute"/> toggle on this class, for callers that need to reason
+        /// about the whole set generically rather than naming toggles one at a time - such as the installer's
+        /// Test Configuration coverage check, which asserts no toggle ships without a verification decision.
+        /// </summary>
+        public static IReadOnlyList<PropertyInfo> GetImportPropertyInfos()
+        {
+            return typeof(ImportTaskSettings).GetProperties()
+                .Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)))
+                .ToList();
+        }
+
+        /// <summary>Names of every <see cref="ImportPropAttribute"/> toggle on this class.</summary>
+        public static IReadOnlyList<string> GetImportPropertyNames()
+        {
+            return GetImportPropertyInfos().Select(p => p.Name).ToList();
+        }
+
+        /// <summary>
+        /// Whether the named <see cref="ImportPropAttribute"/> toggle is enabled. Throws for an unknown name
+        /// rather than silently answering false, so a rename cannot quietly turn a check into a no-op.
+        /// </summary>
+        public bool IsImportEnabled(string importPropertyName)
+        {
+            var prop = GetImportPropertyInfos().SingleOrDefault(p => p.Name == importPropertyName)
+                ?? throw new ArgumentException($"'{importPropertyName}' is not an [ImportProp] on {nameof(ImportTaskSettings)}.", nameof(importPropertyName));
+
+            return (bool)prop.GetValue(this);
+        }
+
         public string ToSettingsString()
         {
             var s = string.Empty;
@@ -158,11 +188,25 @@ namespace Common.Entities
         public const string CONTENT_TYPE_AUDIT_SHAREPOINT = "Audit.SharePoint";
 
         /// <summary>
+        /// True when any enabled workload needs the Office 365 Management Activity API. SharePoint audit
+        /// events use Audit.SharePoint; Microsoft 365 Copilot and Power Platform both use Audit.General.
+        /// </summary>
+        /// <remarks>
+        /// Derived from the [ImportProp] toggles, so it is deliberately not persisted: this type is
+        /// serialised into the installer's saved *.json config via TargetSolutionConfig.ImportTaskSettings,
+        /// and writing a computed getter there would put a read-only field into every customer's config
+        /// file that looks settable but is silently ignored on load. Same reasoning as
+        /// BaseSolutionInstallConfig.ConfigSchemaVersion.
+        /// </remarks>
+        [Newtonsoft.Json.JsonIgnore]
+        public bool UsesActivityApi => ActivityLog || Copilot || ImportPowerPlatform;
+
+        /// <summary>
         /// Builds the "ContentTypesListAsString" value (the Office 365 Management Activity API feeds
-        /// to subscribe to) from the enabled audit-based imports: <see cref="Copilot"/> =&gt;
-        /// Audit.General, <see cref="ActivityLog"/> (SharePoint audit) =&gt; Audit.SharePoint.
-        /// Falls back to Audit.SharePoint when no audit source is selected so the runtime always has
-        /// a valid (if unused) workload list.
+        /// to subscribe to) from the enabled audit-based imports: <see cref="Copilot"/> and
+        /// <see cref="ImportPowerPlatform"/> =&gt; Audit.General, <see cref="ActivityLog"/> (SharePoint audit)
+        /// =&gt; Audit.SharePoint. Falls back to Audit.SharePoint when no audit source is selected so the
+        /// runtime always has a valid (if unused) workload list.
         /// </summary>
         public string ToActivityApiContentTypesString()
         {
@@ -172,7 +216,6 @@ namespace Common.Entities
             if (ActivityLog) types.Add(CONTENT_TYPE_AUDIT_SHAREPOINT);
             return types.Count > 0 ? string.Join(SEP, types) : CONTENT_TYPE_AUDIT_SHAREPOINT;
         }
-
         public bool HaveSomethingToDo()
         {
             foreach (var p in GetImportProps())

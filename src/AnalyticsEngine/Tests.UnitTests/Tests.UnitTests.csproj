@@ -161,6 +161,7 @@
     <Compile Include="GraphImportOrchestrationTests.cs" />
     <Compile Include="GraphImportSectionCompositionTests.cs" />
     <Compile Include="ImportRuntimeOptionsTests.cs" />
+    <Compile Include="ImportStatTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeTeamsPorts.cs" />
     <Compile Include="OrgUrlStoreTests.cs" />
     <Compile Include="FakeLoaderClasses\FixedClock.cs" />
@@ -198,6 +199,7 @@
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
+    <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />
     <Compile Include="CopilotAdoptionTests.cs" />
     <Compile Include="CopilotAdoptionWorkbookTests.cs" />
@@ -223,6 +225,7 @@
     <Compile Include="CopilotUsagePersistencePortTests.cs" />
     <Compile Include="CopilotUsageReportImportTests.cs" />
     <Compile Include="DenormaliseCopilotChatUserAndTimeMigrationTests.cs" />
+    <Compile Include="DenormaliseCopilotChatUserAndTimeManualScriptTests.cs" />
     <Compile Include="IndexReportDateQueriesMigrationTests.cs" />
     <Compile Include="MigrationSnapshotTests.cs" />
     <Compile Include="UpgradeFromStableTests.cs" />
@@ -256,13 +259,16 @@
     <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="CallsImportTests.cs" />
     <Compile Include="GraphImportTests.cs" />
+    <Compile Include="ReportCompletionStoreTests.cs" />
     <Compile Include="TeamsCrawlTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
+    <Compile Include="InstallTests\ImportToggleVerificationCoverageTests.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
     <Compile Include="InstallTests\ServiceBusNamespaceInstallTaskTests.cs" />
     <Compile Include="InstallTests\RbacPermissionProbeTests.cs" />
     <Compile Include="InstallTests\TeamsUserActivityReportUrlTests.cs" />
+    <Compile Include="InstallTests\SqlFirewallSelfHealTests.cs" />
     <Compile Include="InstallTests\SpoInstallTests.cs" />
     <Compile Include="InstallTests\SpoAuthAndAppCatalogTests.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

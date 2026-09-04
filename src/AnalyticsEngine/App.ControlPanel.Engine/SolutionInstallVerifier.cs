@@ -3,9 +3,12 @@ using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.KeyVault;
+using Azure.ResourceManager.Redis;
+using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
+using Common.Entities;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
@@ -20,6 +23,7 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
+using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
 using static App.ControlPanel.Engine.Models.AutodetectedSqlDetails;
@@ -89,7 +93,7 @@ namespace App.ControlPanel.Engine
             // DNS resolution checks for the configured Azure resource hostnames. Catches the
             // "The remote name could not be resolved" class of failure (broken/limited DNS on the
             // installer host) up-front instead of letting it abort an install part-way through.
-            await VerifyResourceDnsResolution();
+            await VerifyResourceDnsResolution(testRg);
 
             // Key Vault data-plane reachability with the installer account (the exact call that failed
             // mid-install). Only runs when the vault already exists and installer credentials are present.
@@ -403,7 +407,18 @@ namespace App.ControlPanel.Engine
         private const string DNS_SUFFIX_STORAGE_BLOB = ".blob.core.windows.net";
         private const string DNS_SUFFIX_STORAGE_TABLE = ".table.core.windows.net";
         private const string DNS_SUFFIX_APP_SERVICE = ".azurewebsites.net";
-        private const string DNS_SUFFIX_REDIS = ".redis.cache.windows.net";
+
+        /// <summary>
+        /// Public DNS suffix for Azure Managed Redis (Redis Enterprise), which the installer provisions
+        /// by default. The full name is region-qualified: <c>&lt;name&gt;.&lt;region&gt;.redis.azure.net</c>.
+        /// </summary>
+        private const string DNS_SUFFIX_REDIS_MANAGED = ".redis.azure.net";
+
+        /// <summary>
+        /// Public DNS suffix for legacy classic Azure Cache for Redis. Only relevant when the installer
+        /// detects and reuses a pre-existing classic cache (see <c>RedisInstallTask</c>).
+        /// </summary>
+        private const string DNS_SUFFIX_REDIS_CLASSIC = ".redis.cache.windows.net";
         private const string DNS_SUFFIX_SERVICE_BUS = ".servicebus.windows.net";
         private const string DNS_SUFFIX_COGNITIVE = ".cognitiveservices.azure.com";
 
@@ -421,7 +436,7 @@ namespace App.ControlPanel.Engine
         /// installer host - the cause of "The remote name could not be resolved: '&lt;x&gt;.vault.azure.net'"
         /// install failures - are caught up-front rather than mid-install. Logs only; never throws.
         /// </summary>
-        async Task VerifyResourceDnsResolution()
+        async Task VerifyResourceDnsResolution(ResourceGroupResource testRg)
         {
             _logger.LogInformation("Checking DNS resolution for configured Azure resource hostnames...");
 
@@ -435,7 +450,7 @@ namespace App.ControlPanel.Engine
                     $"Installation will fail until DNS / network / proxy connectivity is fixed on this machine.");
             }
 
-            var targets = BuildResourceDnsTargets(Config);
+            var targets = BuildResourceDnsTargets(Config, TryGetRedisHostNameFromArm(testRg));
             if (targets.Count == 0)
             {
                 _logger.LogInformation("No named Azure resources configured to DNS-check.");
@@ -446,31 +461,50 @@ namespace App.ControlPanel.Engine
 
             foreach (var target in targets)
             {
-                var (ok, error) = await TryResolveHost(target.Fqdn);
+                // A target can carry more than one candidate hostname (Redis, where the same configured
+                // name is either Azure Managed Redis or a reused legacy classic cache). Resolving any one
+                // of them proves the resource is reachable, so only report a failure when all of them fail.
+                var (ok, resolvedHost, failureDetail) = await TryResolveAnyHost(target.Fqdns);
                 if (ok)
                 {
-                    _logger.LogInformation($"DNS OK: {target.Label} '{target.Fqdn}' resolved.");
+                    _logger.LogInformation($"DNS OK: {target.Label} '{resolvedHost}' resolved.");
                     continue;
                 }
+
+                // "hostname 'x' (reason)" for a single candidate; "hostname - tried 'x' (reason), 'y' (reason)"
+                // when there are several, so the admin can see every name that was attempted and why each failed.
+                var failureDescription = target.Fqdns.Count == 1
+                    ? $"hostname {failureDetail}"
+                    : $"hostname - tried {failureDetail}";
+
+                var hint = string.IsNullOrEmpty(target.FailureHint) ? string.Empty : " " + target.FailureHint;
 
                 if (!controlOk)
                 {
                     // Root cause already reported above; don't repeat the per-resource guidance.
-                    _logger.LogError($"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}).");
+                    _logger.LogError($"DNS check: could not resolve {target.Label} {failureDescription}.{hint}");
                 }
                 else if (privateOnly)
                 {
                     // Public access disabled: the host must be on the VNet to resolve the private endpoint IP.
-                    _logger.LogError(
-                        $"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}). " +
-                        PrivateNetworkGuidance.BuildVmOnVNetGuidance($"reaching the {target.Label}", Config.NetworkConfig?.VNetName));
+                    var message = $"DNS check: could not resolve {target.Label} {failureDescription}.{hint} " +
+                        PrivateNetworkGuidance.BuildVmOnVNetGuidance($"reaching the {target.Label}", Config.NetworkConfig?.VNetName);
+
+                    if (target.PrivateNetworkResolutionFailureIsWarning)
+                    {
+                        _logger.LogWarning(message);
+                    }
+                    else
+                    {
+                        _logger.LogError(message);
+                    }
                 }
                 else
                 {
                     // Public access path: if the resource already exists this is a real DNS / network problem
                     // that will break the install; if it has not been created yet, it is expected.
                     _logger.LogError(
-                        $"DNS check: could not resolve {target.Label} hostname '{target.Fqdn}' ({error}). " +
+                        $"DNS check: could not resolve {target.Label} {failureDescription}.{hint} " +
                         $"If this resource has not been created yet this is expected and can be ignored; " +
                         $"if it already exists, the installer host cannot reach it and data-plane steps " +
                         $"(e.g. Key Vault secret upload) will fail.");
@@ -481,10 +515,11 @@ namespace App.ControlPanel.Engine
         }
 
         /// <summary>
-        /// Build the list of (resource, public-FQDN) DNS targets for every resource that is both enabled
-        /// and has a name configured. Pure string logic so it is unit-testable without any network access.
+        /// Build the list of (resource, public-FQDN candidates) DNS targets for every resource that is both
+        /// enabled and has a name configured. Pure string logic so it is unit-testable without any network
+        /// access.
         /// </summary>
-        public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config)
+        public static List<ResourceDnsTarget> BuildResourceDnsTargets(SolutionInstallConfig config, string redisHostNameFromArm = null)
         {
             var targets = new List<ResourceDnsTarget>();
             if (config == null) return targets;
@@ -504,7 +539,13 @@ namespace App.ControlPanel.Engine
             // private endpoint / DNS zone on private deployments - check it resolves too (see #207 / AzurePaaSInstallJob).
             Add("Storage account (table)", config.StorageAccountName, DNS_SUFFIX_STORAGE_TABLE);
             Add("App Service", config.AppServiceWebAppName, DNS_SUFFIX_APP_SERVICE);
-            Add("Redis cache", config.RedisName, DNS_SUFFIX_REDIS);
+
+            var redisTarget = BuildRedisDnsTarget(config.RedisName, config.AzureLocationName, redisHostNameFromArm);
+            if (redisTarget != null)
+            {
+                targets.Add(redisTarget);
+            }
+
             if (config.ServiceBusEnabled)
             {
                 Add("Service Bus", config.ServiceBusName, DNS_SUFFIX_SERVICE_BUS);
@@ -515,6 +556,133 @@ namespace App.ControlPanel.Engine
             }
 
             return targets;
+        }
+
+        /// <summary>
+        /// Build the Redis DNS target. When ARM has reported the deployed cache hostname, use that exact
+        /// hostname: it is the same value the installer writes into the runtime Redis connection string and
+        /// avoids reconstructing a name from suffix guesses. Before the cache exists, fall back to the two
+        /// possible hostnames for a current Managed Redis deployment and a reused legacy classic cache.
+        /// Returns null when no cache name is configured.
+        /// </summary>
+        public static ResourceDnsTarget BuildRedisDnsTarget(string redisName, string azureLocationName, string hostNameFromArm = null)
+        {
+            if (string.IsNullOrWhiteSpace(redisName)) return null;
+
+            var name = redisName.Trim();
+
+            if (!string.IsNullOrWhiteSpace(hostNameFromArm))
+            {
+                return new ResourceDnsTarget(
+                    "Redis cache",
+                    hostNameFromArm.Trim(),
+                    "The Redis hostname was read from the existing Azure resource.",
+                    privateNetworkResolutionFailureIsWarning: true);
+            }
+
+            var candidates = new List<string>();
+
+            // Managed Redis first: it is what a current install deploys, so it is the name that should be
+            // reported when neither resolves. Needs the region, which older configs may not have.
+            var region = NormaliseAzureRegionForDns(azureLocationName);
+            if (region != null)
+            {
+                candidates.Add($"{name}.{region}{DNS_SUFFIX_REDIS_MANAGED}");
+            }
+
+            candidates.Add(name + DNS_SUFFIX_REDIS_CLASSIC);
+
+            // The managed name is region-qualified and the region is taken from this config, not from ARM. An
+            // existing cache that lives in a different region than the config now says would fail both
+            // candidates, so name that possibility rather than leaving the admin to guess.
+            var hint = region != null
+                ? $"The Azure Managed Redis hostname is built from the configured region '{region}'; " +
+                  $"if the cache exists in a different region, correct the region on the Azure tab."
+                : "No Azure region is configured, so only the legacy classic cache hostname could be checked. " +
+                  "Select the Azure region to also check the Azure Managed Redis hostname.";
+
+            return new ResourceDnsTarget("Redis cache", candidates, hint, privateNetworkResolutionFailureIsWarning: true);
+        }
+
+        /// <summary>
+        /// If the configured Redis resource already exists, read its actual public hostname from ARM. This
+        /// mirrors <c>RedisInstallTask</c>: a pre-existing classic cache wins over Managed Redis because the
+        /// installer reuses it instead of provisioning a replacement.
+        /// </summary>
+        string TryGetRedisHostNameFromArm(ResourceGroupResource testRg)
+        {
+            if (testRg == null || string.IsNullOrWhiteSpace(Config?.RedisName))
+            {
+                return null;
+            }
+
+            var redisName = Config.RedisName.Trim();
+
+            try
+            {
+                var classic = testRg.GetAllRedis().Where(c => c.Data.Name == redisName).SingleOrDefault();
+                if (!string.IsNullOrWhiteSpace(classic?.Data?.HostName))
+                {
+                    return classic.Data.HostName;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not read classic Redis cache hostname from ARM for '{redisName}': {ex.Message}");
+            }
+
+            try
+            {
+                var managed = testRg.GetRedisEnterpriseClusters().Where(c => c.Data.Name == redisName).SingleOrDefault();
+                if (!string.IsNullOrWhiteSpace(managed?.Data?.HostName))
+                {
+                    return managed.Data.HostName;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not read Azure Managed Redis hostname from ARM for '{redisName}': {ex.Message}");
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Turn a configured Azure location into the region segment of an Azure Managed Redis FQDN, or null
+        /// when it cannot be one. <c>AzureLocationName</c> normally holds the short name already
+        /// (<c>westeurope</c>), but it is a free-text string on the config: it can hold the display name
+        /// ("West Europe" - same value once spaces are stripped), the installer's "no region selected"
+        /// placeholder, or nothing at all on an older config.
+        /// </summary>
+        static string NormaliseAzureRegionForDns(string azureLocationName)
+        {
+            if (string.IsNullOrWhiteSpace(azureLocationName)) return null;
+
+            var normalised = azureLocationName.Trim().Replace(" ", string.Empty).ToLowerInvariant();
+
+            // Every Azure region short name is lowercase alphanumeric (westeurope, uksouth, eastus2). Anything
+            // else - notably the "---" placeholder - is not a region and must not be baked into a hostname.
+            return System.Text.RegularExpressions.Regex.IsMatch(normalised, "^[a-z0-9]+$") ? normalised : null;
+        }
+
+        /// <summary>
+        /// Resolve the first host name that resolves out of <paramref name="hosts"/>. Returns
+        /// (true, the host that resolved, null) on success, and (false, null, detail) when none resolve -
+        /// where detail lists every candidate tried and why each failed, e.g.
+        /// <c>'a.redis.azure.net' (No such host is known), 'a.redis.cache.windows.net' (No such host is known)</c>.
+        /// Reporting only the last candidate's error would hide, say, a timeout on the name that actually
+        /// matters behind an NXDOMAIN on the legacy fallback. Never throws.
+        /// </summary>
+        static async Task<(bool ok, string resolvedHost, string failureDetail)> TryResolveAnyHost(IReadOnlyList<string> hosts)
+        {
+            var failures = new List<string>();
+            foreach (var host in hosts)
+            {
+                var (ok, error) = await TryResolveHost(host);
+                if (ok) return (true, host, null);
+                failures.Add($"'{host}' ({error})");
+            }
+            return (false, null, string.Join(", ", failures));
         }
 
         /// <summary>
@@ -565,8 +733,11 @@ namespace App.ControlPanel.Engine
 
         async Task VerifyRuntimeAccountAllAPIs()
         {
-            // Activity API test 
-            if (Config.SolutionConfig.ImportTaskSettings.ActivityLog)
+            // Activity API test. Gated by ImportTaskSettings.UsesActivityApi (ActivityLog || Copilot ||
+            // ImportPowerPlatform) - the same condition the web-job runs its activity import on - so a
+            // Copilot-only or Power-Platform-only tenant is checked here instead of being told "audit-data
+            // not being targeted" (issue #329).
+            if (Config.SolutionConfig.ImportTaskSettings.UsesActivityApi)
             {
                 await VerifyActivityAPIImport(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
             }
@@ -575,7 +746,94 @@ namespace App.ControlPanel.Engine
 
             // Teams & Groups enumeration (All Graph tests). Individual tests skipped below
             await VerifyTeamsAndUserActivityImport(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
+
+            // Finally, say out loud which enabled imports Test Configuration could NOT check, so an admin is
+            // never left assuming a green run proves every toggle is ready.
+            ReportUnverifiedEnabledImports();
         }
+
+        #region Import-toggle verification coverage
+
+        /// <summary>
+        /// Declares, for every <c>ImportTaskSettings</c> <c>[ImportProp]</c> toggle, whether Test Configuration
+        /// can verify it and - when it cannot - why not.
+        /// </summary>
+        /// <remarks>
+        /// This exists because toggles have three times now shipped with no Test Configuration check at all,
+        /// silently: the omission is invisible in the test output, so a green run reads as "everything is
+        /// ready" when it is not. A unit test asserts this table covers exactly the toggles that exist, so
+        /// adding a toggle without deciding how it is verified fails the build rather than shipping unnoticed.
+        /// It is not just documentation - <see cref="ReportUnverifiedEnabledImports"/> logs the unverifiable
+        /// ones so the admin sees the gap too.
+        /// </remarks>
+        public static readonly IReadOnlyList<ImportToggleCoverage> ImportToggleCoverages = new List<ImportToggleCoverage>
+        {
+            new ImportToggleCoverage(nameof(ImportTaskSettings.ActivityLog),
+                "Office 365 Management Activity API subscription read"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.Copilot),
+                "Office 365 Management Activity API subscription read (Copilot arrives on the Audit.General feed)"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.ImportPowerPlatform),
+                "Office 365 Management Activity API subscription read (Power Platform arrives on the Audit.General feed)"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsageReports),
+                "Microsoft 365 usage reports via Reports.Read.All"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphCopilotUsageReports),
+                "Microsoft 365 usage reports via Reports.Read.All"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphTeams),
+                "Graph group enumeration and Teams channel read"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotInteractionHistory),
+                "AiEnterpriseInteraction.Read.All on the runtime app token"),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.WebTraffic), null,
+                "there is no runtime API permission to check - page traffic is pushed to the web app by the "
+                + "in-page AI Tracker script, so correctness depends on the SharePoint deployment rather than "
+                + "on a Graph or Management API grant."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsersMetadata), null,
+                "no check exercises the Graph user-metadata read (User.Read.All); a missing grant would first "
+                + "appear at runtime."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.Calls), null,
+                "the Teams call-records import needs a Graph change-notification subscription pointed at the "
+                + "web app plus a Service Bus queue, neither of which exists until the install has finished."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.SentEmails), null,
+                "no check exercises the Graph mailbox read (Mail.Read); a missing grant would first appear at "
+                + "runtime."),
+        };
+
+        /// <summary>
+        /// The ENABLED import toggles that Test Configuration cannot verify. Pure, so it is unit-testable.
+        /// </summary>
+        internal static IReadOnlyList<ImportToggleCoverage> GetUnverifiedEnabledImports(ImportTaskSettings settings)
+        {
+            if (settings == null) return new List<ImportToggleCoverage>();
+
+            return ImportToggleCoverages
+                .Where(c => !c.IsVerified && settings.IsImportEnabled(c.PropertyName))
+                .ToList();
+        }
+
+        /// <summary>
+        /// Logs every ENABLED import toggle that Test Configuration cannot verify, so a clean run is never
+        /// mistaken for "every workload is proven ready". Disabled toggles are not mentioned - they are already
+        /// covered by the per-check "not being targeted" lines.
+        /// </summary>
+        void ReportUnverifiedEnabledImports()
+        {
+            foreach (var toggle in GetUnverifiedEnabledImports(Config.SolutionConfig.ImportTaskSettings))
+            {
+                _logger.LogWarning(
+                    $"No Test Configuration check exists for the '{toggle.PropertyName}' import: {toggle.NotVerifiedReason}");
+            }
+        }
+
+        #endregion
 
         async Task VerifyActivityAPIImport(string clientId, string tenantId, string clientSecret)
         {
@@ -604,8 +862,9 @@ namespace App.ControlPanel.Engine
             await auth.InitClientCredential();
 
             var graphClient = new Microsoft.Graph.GraphServiceClient(auth.Creds);
+            var manualGraphClient = new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, logger);
 
-            var teamsUserUsageLoader = new TeamsUserUsageLoader(new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(auth, logger),
+            var teamsUserUsageLoader = new TeamsUserUsageLoader(manualGraphClient,
                 new NoUsersHaveGroupsUserGroupsCache(_logger),
                 new Common.Entities.Config.UserGroupsFilterModel(string.Empty),
                 logger);
@@ -626,6 +885,118 @@ namespace App.ControlPanel.Engine
                 await VerifyTeamsImport(graphClient);
             }
             else _logger.LogInformation("Skipping verifying Graph API for Teams import as not being targeted");
+
+            // Copilot AI interaction history
+            if (Config.SolutionConfig.ImportTaskSettings.CopilotInteractionHistory)
+            {
+                await VerifyCopilotInteractionHistoryImport(auth, manualGraphClient);
+            }
+            else _logger.LogInformation("Skipping verifying Copilot AI interaction history import as not being targeted");
+        }
+
+        /// <summary>
+        /// Verifies the runtime app registration actually holds <c>AiEnterpriseInteraction.Read.All</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is the only import whose permission the installer does not grant - it needs separate, explicit
+        /// admin consent on the app registration - which makes it simultaneously the most likely toggle to be
+        /// misconfigured and, until now, the only one Test Configuration said nothing about.
+        /// </para>
+        /// <para>
+        /// The failure is silent by design at runtime: <c>CopilotInteractionHistoryImporter.ImportAsync</c>
+        /// logs a warning and returns, so a missing grant surfaces only as an empty table and a line buried in
+        /// web-job logs, hours after the install finished.
+        /// </para>
+        /// <para>
+        /// Deliberately reuses <c>GraphAiInteractionSourceLoader</c>'s permission check - the exact logic the
+        /// importer itself gates on - so a passing test guarantees the importer will actually run, which is a
+        /// stronger guarantee than most of the other checks give. It reads the <c>roles</c> claim off the app
+        /// token: one token acquisition, no Graph call, no tenant data read. The tri-state
+        /// <c>GetInteractionReadAccessAsync</c> is used rather than the importer's boolean form, so "could not
+        /// tell" is never reported to the admin as "definitely not granted".
+        /// </para>
+        /// </remarks>
+        async Task VerifyCopilotInteractionHistoryImport(
+            GraphAppIndentityOAuthContext auth,
+            WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient graphClient)
+        {
+            _logger.LogInformation("Verifying Copilot AI interaction history import permissions...");
+
+            if (auth == null)
+            {
+                // HasInteractionReadAccessAsync fails OPEN on a null identity, which is right for the importer
+                // (let the per-user calls report the truth) but wrong for a verifier, whose whole job is to
+                // prove the permission is there. Never report "couldn't determine" as a pass.
+                _logger.LogWarning(
+                    "Could not verify the Copilot AI interaction history permission: no runtime app identity was available.");
+                return;
+            }
+
+            InteractionReadAccess access;
+            try
+            {
+                var loader = new GraphAiInteractionSourceLoader(graphClient, auth, _logger);
+                access = await loader.GetInteractionReadAccessAsync();
+            }
+            catch (Exception ex)
+            {
+                // GetInteractionReadAccessAsync catches its own failures, so this is belt-and-braces against a
+                // future change; a verifier must never let an unexpected throw read as a pass.
+                _logger.LogWarning(
+                    $"Could not verify whether the runtime account holds 'AiEnterpriseInteraction.Read.All': {ex.Message}. " +
+                    "Confirm the grant by hand on the app registration before relying on the Copilot AI interaction history import.");
+                return;
+            }
+
+            var (level, message) = DescribeInteractionReadAccess(access);
+            _logger.Log(level, message);
+
+            if (access != InteractionReadAccess.Granted) return;
+
+            // Scope warning, only worth making once the permission is actually in place. UserGroupsFilter is
+            // an App Service application setting, not part of the installer config, so it cannot be checked
+            // here - but an unscoped run is a per-user Graph call for every enabled user in the tenant, and
+            // where Cognitive Services is configured it also sends their prompt text to Azure AI Language.
+            // Worth saying plainly at install time rather than after the first cycle.
+            _logger.LogWarning(
+                "Copilot AI interaction history is tenant-wide unless scoped. This import makes one Graph call PER USER per cycle, " +
+                "so on a large tenant it should be narrowed to a pilot group with the 'UserGroupsFilter' App Service application " +
+                "setting (it is not exposed in this wizard and must be set by hand on the web app).");
+        }
+
+        /// <summary>
+        /// Maps a permission-check outcome to the log level and message Test Configuration reports.
+        /// </summary>
+        /// <remarks>
+        /// Pure and separate from the check itself so the mapping is unit-testable. The levels are the point
+        /// of the whole exercise: only a token that was read successfully and lacks the role is an ERROR.
+        /// "Could not tell" must be a warning, or an admin is sent off to re-consent a permission they may
+        /// already hold; and it must not be silence either, because the check did not actually prove anything.
+        /// </remarks>
+        internal static (LogLevel level, string message) DescribeInteractionReadAccess(InteractionReadAccess access)
+        {
+            switch (access)
+            {
+                case InteractionReadAccess.Granted:
+                    return (LogLevel.Information,
+                        "Successfully verified 'AiEnterpriseInteraction.Read.All' for the Copilot AI interaction history import.");
+
+                case InteractionReadAccess.NotGranted:
+                    return (LogLevel.Error,
+                        "ERROR: the runtime account does not hold the 'AiEnterpriseInteraction.Read.All' application permission, " +
+                        "so the Copilot AI interaction history import will do nothing (it logs a warning and skips, rather than failing). " +
+                        "IMPORTANT: unlike every other import, the installer does NOT grant this permission - add it to the runtime " +
+                        "app registration as an APPLICATION permission and grant admin consent, then re-run these tests. " +
+                        "Note it also requires the M365_COPILOT_BUSINESS_CHAT service plan on each user you expect data for.");
+
+                default:
+                    // Unknown / NoIdentityToInspect. Not a failure of the grant itself, and not a pass either.
+                    return (LogLevel.Warning,
+                        "Could not confirm whether the runtime account holds 'AiEnterpriseInteraction.Read.All' - the check could " +
+                        "not read the app token's permissions. This is NOT a failure of the grant itself; verify it by hand on the " +
+                        "app registration. Note the installer does not grant this permission, so it does need explicit admin consent.");
+            }
         }
 
         async Task VerifyTeamsImport(Microsoft.Graph.GraphServiceClient graphClient)
@@ -844,21 +1215,103 @@ namespace App.ControlPanel.Engine
     }
 
     /// <summary>
-    /// A configured Azure resource and the public hostname that must resolve for the installer / runtime
+    /// Whether the installer's Test Configuration can verify one <c>ImportTaskSettings</c> import toggle, and
+    /// - when it cannot - the reason, so the gap is stated rather than silently absent from the test output.
+    /// </summary>
+    public class ImportToggleCoverage
+    {
+        public ImportToggleCoverage(string propertyName, string verifiedBy, string notVerifiedReason = null)
+        {
+            if (string.IsNullOrWhiteSpace(propertyName))
+                throw new ArgumentException("An import toggle needs a property name.", nameof(propertyName));
+
+            var isVerified = !string.IsNullOrWhiteSpace(verifiedBy);
+            if (isVerified == !string.IsNullOrWhiteSpace(notVerifiedReason))
+            {
+                // Exactly one must be supplied. Both would be contradictory; neither would let a toggle be
+                // registered as "covered" while saying nothing about how - the very gap this table exists for.
+                throw new ArgumentException(
+                    $"Import toggle '{propertyName}' must declare either what verifies it or why nothing can.",
+                    nameof(verifiedBy));
+            }
+
+            PropertyName = propertyName;
+            VerifiedBy = verifiedBy;
+            NotVerifiedReason = notVerifiedReason;
+        }
+
+        /// <summary>The <c>ImportTaskSettings</c> property name this covers, e.g. "CopilotInteractionHistory".</summary>
+        public string PropertyName { get; }
+
+        /// <summary>What Test Configuration checks for this toggle, or null when nothing can be checked.</summary>
+        public string VerifiedBy { get; }
+
+        /// <summary>Why nothing is checked. Set only when <see cref="VerifiedBy"/> is null.</summary>
+        public string NotVerifiedReason { get; }
+
+        public bool IsVerified => !string.IsNullOrWhiteSpace(VerifiedBy);
+    }
+
+    /// <summary>
+    /// A configured Azure resource and the public hostname(s) that must resolve for the installer / runtime
     /// to reach it. Built by <see cref="SolutionInstallVerifier.BuildResourceDnsTargets"/>.
+    /// Most resources have exactly one candidate; Redis has two because the same configured name is either
+    /// Azure Managed Redis or a reused legacy classic cache, and the config does not record which.
     /// </summary>
     public class ResourceDnsTarget
     {
-        public ResourceDnsTarget(string label, string fqdn)
+        public ResourceDnsTarget(string label, string fqdn) : this(label, new List<string> { fqdn }, null)
         {
+        }
+
+        public ResourceDnsTarget(
+            string label,
+            string fqdn,
+            string failureHint,
+            bool privateNetworkResolutionFailureIsWarning)
+            : this(label, new List<string> { fqdn }, failureHint, privateNetworkResolutionFailureIsWarning)
+        {
+        }
+
+        public ResourceDnsTarget(
+            string label,
+            IReadOnlyList<string> fqdns,
+            string failureHint = null,
+            bool privateNetworkResolutionFailureIsWarning = false)
+        {
+            if (fqdns == null || fqdns.Count == 0)
+            {
+                throw new ArgumentException("A DNS target needs at least one candidate hostname.", nameof(fqdns));
+            }
+
             Label = label;
-            Fqdn = fqdn;
+            Fqdns = fqdns;
+            FailureHint = failureHint;
+            PrivateNetworkResolutionFailureIsWarning = privateNetworkResolutionFailureIsWarning;
         }
 
         /// <summary>Human-readable resource description, e.g. "Key Vault".</summary>
         public string Label { get; }
 
-        /// <summary>Public fully-qualified hostname, e.g. "myvault.vault.azure.net".</summary>
-        public string Fqdn { get; }
+        /// <summary>
+        /// Candidate fully-qualified hostnames, in preference order. The resource is considered reachable
+        /// when any one of them resolves.
+        /// </summary>
+        public IReadOnlyList<string> Fqdns { get; }
+
+        /// <summary>
+        /// Optional resource-specific guidance appended to the failure message, for anything the generic
+        /// "the resource may not exist yet" wording cannot explain. Null when there is nothing extra to say.
+        /// </summary>
+        public string FailureHint { get; }
+
+        /// <summary>
+        /// True when failing to resolve this target from outside a private-endpoint deployment is advisory
+        /// rather than proof that installation will fail from that host.
+        /// </summary>
+        public bool PrivateNetworkResolutionFailureIsWarning { get; }
+
+        /// <summary>Primary (most likely) public fully-qualified hostname, e.g. "myvault.vault.azure.net".</summary>
+        public string Fqdn => Fqdns[0];
     }
 }

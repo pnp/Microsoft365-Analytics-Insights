@@ -11,7 +11,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// <summary>
     /// CSV wrapper for license names
     /// </summary>
-    public class OfficeLicenseNameResolver
+    public class OfficeLicenseNameResolver : IOfficeLicenseNameResolver
     {
         private List<OfficeNamesCsvImportLine> _records = new List<OfficeNamesCsvImportLine>();
         public OfficeLicenseNameResolver()
