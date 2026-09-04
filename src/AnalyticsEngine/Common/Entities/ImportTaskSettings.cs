@@ -136,6 +136,36 @@ namespace Common.Entities
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));
         }
 
+        /// <summary>
+        /// Every <see cref="ImportPropAttribute"/> toggle on this class, for callers that need to reason
+        /// about the whole set generically rather than naming toggles one at a time - such as the installer's
+        /// Test Configuration coverage check, which asserts no toggle ships without a verification decision.
+        /// </summary>
+        public static IReadOnlyList<PropertyInfo> GetImportPropertyInfos()
+        {
+            return typeof(ImportTaskSettings).GetProperties()
+                .Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)))
+                .ToList();
+        }
+
+        /// <summary>Names of every <see cref="ImportPropAttribute"/> toggle on this class.</summary>
+        public static IReadOnlyList<string> GetImportPropertyNames()
+        {
+            return GetImportPropertyInfos().Select(p => p.Name).ToList();
+        }
+
+        /// <summary>
+        /// Whether the named <see cref="ImportPropAttribute"/> toggle is enabled. Throws for an unknown name
+        /// rather than silently answering false, so a rename cannot quietly turn a check into a no-op.
+        /// </summary>
+        public bool IsImportEnabled(string importPropertyName)
+        {
+            var prop = GetImportPropertyInfos().SingleOrDefault(p => p.Name == importPropertyName)
+                ?? throw new ArgumentException($"'{importPropertyName}' is not an [ImportProp] on {nameof(ImportTaskSettings)}.", nameof(importPropertyName));
+
+            return (bool)prop.GetValue(this);
+        }
+
         public string ToSettingsString()
         {
             var s = string.Empty;
@@ -178,7 +208,6 @@ namespace Common.Entities
             if (ActivityLog) types.Add(CONTENT_TYPE_AUDIT_SHAREPOINT);
             return types.Count > 0 ? string.Join(SEP, types) : CONTENT_TYPE_AUDIT_SHAREPOINT;
         }
-
         public bool HaveSomethingToDo()
         {
             foreach (var p in GetImportProps())
