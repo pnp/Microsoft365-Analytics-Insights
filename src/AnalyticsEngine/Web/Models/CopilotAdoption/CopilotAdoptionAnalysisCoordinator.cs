@@ -257,18 +257,15 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // construction failed always returns false. In that case nothing else is guaranteed to
                 // observe this failure: the request that started the run has normally already returned
                 // 202, so if no poller is awaiting the shared task the exception is never observed by
-                // anyone. Report it directly instead. The default reporter is best-effort - it swallows
-                // its own failures - and marks the exception once its reporting calls have returned, so
-                // a poller that later awaits the faulted task will normally not report it again.
+                // anyone. Report it directly instead. The reporter is best-effort and swallows its own
+                // failures.
                 //
-                // The accepted path is deliberately NOT marked. QueueFailure returning true means the
-                // event was ENQUEUED, not written: QueuedCopilotAdoptionEventSink's worker drops an item
-                // permanently if the writer cannot be constructed or the write throws, and an ungraceful
-                // teardown discards whatever is still queued. Marking here would suppress every waiting
-                // request's report before anything had even attempted to report it. A waiting request
-                // may therefore still report an accepted failure, which duplicates the sink's own
-                // report; removing that duplicate needs delivery acknowledgement from the sink - see
-                // issue #454.
+                // The accepted path is deliberately NOT marked as reported. Acceptance is not delivery:
+                // the event has only been added to an in-memory queue whose worker can drop it. Marking
+                // here would suppress reporting by waiting requests without anything having confirmed
+                // the failure was reported. An accepted failure may therefore be reported by a waiting
+                // request as well as by the sink; removing that duplicate needs delivery acknowledgement
+                // from the sink - see issue #454.
                 if (!telemetry.QueueFailure(ex))
                 {
                     _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
