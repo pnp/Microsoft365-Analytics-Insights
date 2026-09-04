@@ -1,3 +1,5 @@
+extern alias AnalyticsWeb;
+
 using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Models;
 using Common.Entities;
@@ -7,8 +9,11 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
+using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
+using WebCorsAttribute = AnalyticsWeb::Web.AnalyticsWeb.AllowCorsForOrgUrlsAttribute;
 
 namespace Tests.UnitTests
 {
@@ -150,6 +155,32 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, store.Inserts.Count);
             Assert.AreEqual("https://contoso.sharepoint.com/sites/καλημέρα", store.Inserts[0].UrlBase,
                 "Values are normalised to lower case on write, for Greek as well as Latin.");
+        }
+
+        [TestMethod]
+        public async Task CorsPolicy_NormalisesCachedOrgUrlsToBrowserOrigins()
+        {
+            var loadCount = 0;
+            var provider = new WebCorsAttribute(() =>
+            {
+                loadCount++;
+                return Task.FromResult(new List<string>
+                {
+                    "HTTPS://CONTOSO.SHAREPOINT.COM/",
+                    "contoso.sharepoint.com/sites/ignored-by-origin",
+                    "ftp://contoso.sharepoint.com",
+                });
+            });
+
+            var first = await provider.GetCorsPolicyAsync(new HttpRequestMessage(), CancellationToken.None);
+            var second = await provider.GetCorsPolicyAsync(new HttpRequestMessage(), CancellationToken.None);
+
+            CollectionAssert.AreEquivalent(
+                new[] { "https://contoso.sharepoint.com" },
+                first.Origins.ToArray(),
+                "CORS origins are ordinal/case-sensitive, so cached org_urls rows must be normalised on read.");
+            CollectionAssert.AreEquivalent(first.Origins.ToArray(), second.Origins.ToArray());
+            Assert.AreEqual(1, loadCount, "Normalisation must happen while populating the existing cache, not per request.");
         }
 
         [TestMethod]

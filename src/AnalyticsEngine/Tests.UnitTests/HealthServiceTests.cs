@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.Health;
+using Common.Entities;
 using Common.Entities.Entities.UsageReports;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -445,6 +446,50 @@ namespace Tests.UnitTests
             Assert.AreEqual(false, section.SchemaUpToDate);
             CollectionAssert.AreEqual(new[] { "202601010000001_SomethingNew" }, section.PendingMigrations);
             Assert.IsNull(section.SchemaError);
+        }
+
+        [TestMethod]
+        public async Task Config_EveryImportToggleHasAnEnabledImportBadge()
+        {
+            var importToggleNames = typeof(ImportTaskSettings)
+                .GetProperties()
+                .Where(property => property.PropertyType == typeof(bool)
+                                   && Attribute.IsDefined(
+                                       property,
+                                       typeof(ImportTaskSettings.ImportPropAttribute)))
+                .Select(property => property.Name)
+                .OrderBy(name => name)
+                .ToArray();
+
+            CollectionAssert.AreEqual(
+                importToggleNames,
+                HealthService.ImportLabelsBySettingProperty.Keys.OrderBy(name => name).ToArray(),
+                "Every public bool ImportTaskSettings import toggle must have a Health page label.");
+
+            var config = new TestsAppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings(),
+            };
+            foreach (var propertyName in importToggleNames)
+            {
+                typeof(ImportTaskSettings).GetProperty(propertyName)
+                    .SetValue(config.ImportJobSettings, true);
+            }
+
+            var source = new FakeHealthDataSource
+            {
+                PendingMigrations = new List<string>(),
+            };
+            var service = Build(source, new InMemoryHealthCache());
+
+            var section = await service.LoadConfigAsync(config);
+
+            CollectionAssert.AreEquivalent(
+                HealthService.ImportLabelsBySettingProperty.Values.ToArray(),
+                section.EnabledImports.ToArray());
+            CollectionAssert.Contains(
+                section.EnabledImports,
+                "Copilot AI interaction history (tenant-wide unless scoped)");
         }
 
         #endregion

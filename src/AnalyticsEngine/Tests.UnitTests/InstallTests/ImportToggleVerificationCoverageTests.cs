@@ -104,6 +104,27 @@ namespace Tests.UnitTests.InstallTests
             StringAssert.Contains(interactions.VerifiedBy, "AiEnterpriseInteraction.Read.All");
         }
 
+        [TestMethod]
+        public void TheAuditFeedTogglesAreDeclaredAsVerifiedByTheActivityApiCheck()
+        {
+            // The installer's Activity API check runs whenever ImportTaskSettings.UsesActivityApi is true
+            // (ActivityLog || Copilot || ImportPowerPlatform - the same condition the web-job imports on),
+            // so every toggle in that condition is verified by that single check. Gap B in #329: a
+            // Copilot-only (or Power-Platform-only) tenant must not be told "audit-data not being targeted"
+            // while the importer goes on to depend on precisely that API.
+            foreach (var name in new[]
+            {
+                nameof(ImportTaskSettings.ActivityLog),
+                nameof(ImportTaskSettings.Copilot),
+                nameof(ImportTaskSettings.ImportPowerPlatform),
+            })
+            {
+                var coverage = SolutionInstallVerifier.ImportToggleCoverages.Single(c => c.PropertyName == name);
+                Assert.IsTrue(coverage.IsVerified, $"'{name}' must be covered by the Activity API check.");
+                StringAssert.Contains(coverage.VerifiedBy, "Activity API");
+            }
+        }
+
         #region IsImportEnabled
 
         [TestMethod]

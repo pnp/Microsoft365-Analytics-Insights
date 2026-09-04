@@ -49,9 +49,34 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         public static DateTime ResolveStartDateUtc(DateTime? overrideStartUtc, DateTime? newestHitUtc, DateTime nowUtc)
         {
-            var startDate = overrideStartUtc ?? newestHitUtc ?? nowUtc.AddDays(-NoHitsFallbackDays);
+            var startDate = overrideStartUtc ?? NormalizeStoredHitTimestampUtc(newestHitUtc) ?? nowUtc.AddDays(-NoHitsFallbackDays);
 
             return startDate.AddMinutes(-EdgeHitRewindMinutes);
+        }
+
+        /// <summary>
+        /// SQL Server <c>datetime</c> values come back as <see cref="DateTimeKind.Unspecified"/> even
+        /// though <c>hits.hit_timestamp</c> is stored in UTC; local values supplied by tests/fakes are
+        /// converted so comparisons with the UTC clock remain meaningful.
+        /// </summary>
+        public static DateTime? NormalizeStoredHitTimestampUtc(DateTime? newestHitUtc)
+        {
+            if (!newestHitUtc.HasValue)
+            {
+                return null;
+            }
+
+            var timestamp = newestHitUtc.Value;
+            if (timestamp.Kind == DateTimeKind.Local)
+            {
+                return timestamp.ToUniversalTime();
+            }
+            if (timestamp.Kind == DateTimeKind.Unspecified)
+            {
+                return DateTime.SpecifyKind(timestamp, DateTimeKind.Utc);
+            }
+
+            return timestamp;
         }
 
         /// <summary>
@@ -59,10 +84,9 @@ namespace WebJob.AppInsightsImporter.Engine
         ///
         /// Delegates to <c>DateTimeUtils.EachDay</c> so the behaviour is exactly what the importer had.
         /// Note that includes its quirk: when <paramref name="startUtc"/> is AFTER
-        /// <paramref name="endUtc"/> the sequence runs BACKWARDS rather than being empty. That cannot
-        /// normally happen (the end is "now" and the start is derived from a stored timestamp), but a
-        /// future-dated hit_timestamp - clock skew on the writing host, or bad data - would produce it.
-        /// Preserved deliberately rather than changed here; see the PR for #374.
+        /// <paramref name="endUtc"/> the sequence runs BACKWARDS rather than being empty. The importer
+        /// guards its future-watermark call site before it gets here, leaving the shared helper's
+        /// pre-existing descending mode unchanged.
         /// </summary>
         public static IReadOnlyList<DateTime> EnumerateDays(DateTime startUtc, DateTime endUtc)
         {

@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
+using DataUtils;
 using WebJob.AppInsightsImporter.Engine;
 
 namespace Tests.UnitTests
@@ -54,6 +55,38 @@ namespace Tests.UnitTests
             var start = AppInsightsImportWindow.ResolveStartDateUtc(null, newestHit, Now);
 
             Assert.AreEqual(newestHit.AddMinutes(-1), start);
+            Assert.AreEqual(DateTimeKind.Utc, start.Kind);
+        }
+
+        [TestMethod]
+        public void ImportWindow_UnspecifiedSqlWatermark_IsTreatedAsUtc()
+        {
+            var newestHitFromSql = new DateTime(2026, 5, 19, 8, 0, 0, DateTimeKind.Unspecified);
+
+            var normalized = AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newestHitFromSql);
+            var start = AppInsightsImportWindow.ResolveStartDateUtc(null, newestHitFromSql, Now);
+
+            Assert.AreEqual(new DateTime(2026, 5, 19, 8, 0, 0, DateTimeKind.Utc), normalized.Value);
+            Assert.AreEqual(DateTimeKind.Utc, normalized.Value.Kind,
+                "SQL datetime strips Kind; the importer must restore UTC rather than leave it unspecified.");
+            Assert.AreEqual(new DateTime(2026, 5, 19, 7, 59, 0, DateTimeKind.Utc), start);
+            Assert.AreEqual(DateTimeKind.Utc, start.Kind);
+        }
+
+        [TestMethod]
+        public void ImportWindow_LocalWatermark_IsConvertedToUtcBeforeItIsComparedWithTheUtcClock()
+        {
+            if (TimeZoneInfo.Local.GetUtcOffset(Now) == TimeSpan.Zero)
+            {
+                Assert.Inconclusive("This conversion test only proves a tick change on a non-UTC host.");
+            }
+
+            var localHit = new DateTime(2026, 5, 19, 8, 0, 0, DateTimeKind.Local);
+
+            var normalized = AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(localHit);
+
+            Assert.AreEqual(localHit.ToUniversalTime(), normalized.Value);
+            Assert.AreEqual(DateTimeKind.Utc, normalized.Value.Kind);
         }
 
         [TestMethod]
@@ -128,16 +161,22 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ImportWindow_StartAfterEnd_EnumeratesBackwards_WhichIsAKnownHazard()
+        public void DateTimeUtils_EachDay_StartAfterEnd_StillEnumeratesBackwards()
         {
-            // #374 proposed asserting this returns NO days. It does not - DateTimeUtils.EachDay walks
-            // backwards when from > thru, and this test pins the behaviour that actually ships rather
-            // than the behaviour the issue assumed.
-            //
-            // It is normally unreachable: the end is "now" and the start is derived from a stored
-            // timestamp. But a future-dated hit_timestamp - clock skew on the writing host, or bad data -
-            // makes the importer walk days in reverse, re-requesting a run of future dates. Preserved
-            // here deliberately (no behavioural change) and raised separately.
+            // DateTimeUtils.EachDay is shared code. Its descending mode is not changed here; the
+            // App Insights importer guards its own future-watermark call site instead.
+            var days = new DateTime(2026, 5, 22, 0, 0, 0, DateTimeKind.Utc).EachDay(
+                new DateTime(2026, 5, 20, 0, 0, 0, DateTimeKind.Utc));
+
+            CollectionAssert.AreEqual(
+                new[] { new DateTime(2026, 5, 22), new DateTime(2026, 5, 21), new DateTime(2026, 5, 20) },
+                days.ToArray(),
+                "Documents the shared helper's descending enumeration; it is not an endorsement of using it for import windows.");
+        }
+
+        [TestMethod]
+        public void ImportWindow_StartAfterEnd_StillDelegatesToTheSharedEachDayHelper()
+        {
             var days = AppInsightsImportWindow.EnumerateDays(
                 new DateTime(2026, 5, 22, 0, 0, 0, DateTimeKind.Utc),
                 new DateTime(2026, 5, 20, 0, 0, 0, DateTimeKind.Utc));

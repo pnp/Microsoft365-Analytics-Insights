@@ -30,6 +30,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         // Two independent markers: one proves the usage-report phase completed (so finalized dates can be
         // skipped safely), the other gates how often the non-fresh Graph sections re-run.
         private readonly ISingleDateStore _activityReportsLastImportedStore;
+        // Per-report completion stamps. The phase marker above cannot answer "is THIS report's stored data
+        // complete?" - withholding it after one report fails also emptied the skip list for the ten that
+        // succeeded, making them re-download their full window every cycle (issue #311).
+        private readonly IReportCompletionStore _reportCompletionStore;
         private readonly IImportLastRunStore _lastRunStore;
 
         private readonly IGraphImportSectionFactory _sectionFactory;
@@ -47,11 +51,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// signature so no call site breaks.
         /// </param>
         public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore lastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null, IClock clock = null)
+            : this(logger, userGroupsCache, graphAppIndentityOAuthContext, graphClient, settings, activityReportsLastImportedStore, lastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null, clock: clock)
+        {
+        }
+
+        public GraphImporter(AnalyticsLogger logger, UserGroupsCache userGroupsCache, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore lastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IClock clock, IReportCompletionStore reportCompletionStore)
             : base(logger, settings)
         {
             _clock = clock ?? SystemClock.Instance;
             _graphClient = graphClient;
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
+            _reportCompletionStore = reportCompletionStore;
 
             // Defensive: a per-instance in-memory store still works (just doesn't persist the gate
             // across cycles). Production passes the process-lifetime store hoisted in Program.cs.
@@ -191,6 +201,71 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
 
+        /// <summary>
+        /// Stable per-report key for <see cref="IReportCompletionStore"/>. Derived from the loader type name
+        /// rather than the human-readable report label, so renaming a log message cannot silently orphan a
+        /// stamp and trigger a full re-download.
+        /// </summary>
+        internal static string GetReportKey(Type loaderType) => loaderType.Name;
+
+        /// <summary>
+        /// The completion date that feeds one report's finalized-date skip list.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately does NOT fall back to the phase-level marker when a per-report stamp is absent. That
+        /// marker is an unversioned Redis key that predates the strict-paging fixes (#285 / #310); an older
+        /// build could write it after a report had saved a partial day, and skipping a partially-stored date
+        /// loses rows permanently once Graph's ~28-day retention passes. One extra full download per report on
+        /// the first upgraded cycle is a bounded, one-off cost.
+        ///
+        /// The phase marker is still used when no per-report store is supplied at all, which keeps existing
+        /// behaviour for those callers.
+        /// </remarks>
+        internal async Task<DateTime?> ResolveReportSkipListInputAsync(string reportKey, DateTime? phaseMarker)
+        {
+            if (_reportCompletionStore == null) return phaseMarker;
+
+            return await _reportCompletionStore.GetLastSuccessAsync(reportKey);
+        }
+
+        /// <summary>
+        /// Whether a report that has no finalized-date skip list of its own is due to run again.
+        /// </summary>
+        internal async Task<bool> IsReportDueAsync(string reportKey, TimeSpan minWait)
+        {
+            if (_reportCompletionStore == null) return true;
+            if (_settings.ForceUsageReportsImport) return true;
+
+            var lastSuccess = await _reportCompletionStore.GetLastSuccessAsync(reportKey);
+            return lastSuccess == null || _clock.UtcNow.Subtract(lastSuccess.Value.ToUniversalTime()) > minWait;
+        }
+
+        private async Task RunWeeklyReportIfDueAsync(SharePointSitesWeeklyUsageReportLoader loader, TimeSpan minWait)
+        {
+            var reportKey = GetReportKey(loader.GetType());
+
+            if (!await IsReportDueAsync(reportKey, minWait))
+            {
+                _logger.LogInformation(
+                    "SharePoint sites weekly usage: skipping - it completed within the last " +
+                    $"{minWait.TotalHours} hours. It has no finalized-date skip list, so re-running it while " +
+                    "another report retries would re-download the whole report for nothing.");
+                return;
+            }
+
+            if (_reportCompletionStore != null)
+            {
+                await _reportCompletionStore.ClearAsync(reportKey);
+            }
+
+            await loader.LoadAndSaveLastWeeksReportsIfRefreshOnDay(System.DayOfWeek.Sunday);
+
+            if (_reportCompletionStore != null)
+            {
+                await _reportCompletionStore.SaveSuccessAsync(reportKey);
+            }
+        }
+
         public async Task<bool> GetAndSaveActivityReportsMultiThreaded(int daysBackMax, ManualGraphCallClient client, UserGroupsCache userGroupsCache, UserGroupsFilterModel userGroupsFilterModel)        {
             var MIN_WAIT = TimeSpan.FromDays(1);
 
@@ -313,7 +388,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     var sharePointSitesWeeklyUsageReportLoader = new SharePointSitesWeeklyUsageReportLoader(db, client, _logger, new GraphSPSiteIdToUrlCache(_graphClient, db, _logger));
 
-                    importTasks.Add(RunReportSafely("SharePoint sites weekly usage", () => sharePointSitesWeeklyUsageReportLoader.LoadAndSaveLastWeeksReportsIfRefreshOnDay(System.DayOfWeek.Sunday)));
+                    importTasks.Add(RunReportSafely("SharePoint sites weekly usage",
+                        () => RunWeeklyReportIfDueAsync(sharePointSitesWeeklyUsageReportLoader, MIN_WAIT)));
                     await Task.WhenAll(importTasks);
                 }
 
@@ -336,8 +412,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     _logger.LogError($"Activity reports did NOT fully import - {failedReports.Count} of {importTasks.Count} report(s) failed: " +
                         string.Join(", ", failedReports.OrderBy(r => r)) + ". " +
-                        "Reports that succeeded have been saved; each failed report saved nothing. This phase has NOT been marked complete and will retry on the next cycle - " +
-                        "note that until it succeeds the once-a-day throttle stays disarmed, so the phase re-runs every cycle and re-downloads the full window. " +
+                        "Reports that succeeded have been saved AND stamped complete, so on the next cycle they re-import only the most recent " +
+                        "days that Graph can still change - the failed report(s) retry their own full window. This phase has NOT been marked " +
+                        "complete, so the once-a-day throttle stays disarmed and it re-runs every cycle until every report succeeds. " +
                         "If this repeats, check the runtime account has the Reports.Read.All application permission granted and admin-consented.");
                     return false;
                 }
@@ -361,13 +438,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         async Task<int> LoadAndSaveDailyImportReport<TReportDbType, TUserActivityUserDetail, TLookupType, CACHETYPE>
             (AbstractDailyActivityLoader<TReportDbType, TUserActivityUserDetail, TLookupType, CACHETYPE> abstractActivityLoader,
             int daysBackMax, string thingWeAreImporting, ILogger logger, ConcurrentLookupDbIdsCache userEmailToDbIdCache,
-            DateTime? lastSuccessfulImport)
+            DateTime? lastSuccessfulPhaseImport)
             where TReportDbType : AbstractUsageActivityLog, new()
             where TUserActivityUserDetail : AbstractActivityRecord<TLookupType>
             where TLookupType : AbstractEFEntity
             where CACHETYPE : DBLookupCache<TLookupType>
         {
             logger.LogInformation($"Importing {thingWeAreImporting} reports...");
+
+            var reportKey = GetReportKey(abstractActivityLoader.GetType());
+            var lastSuccessfulImport = await ResolveReportSkipListInputAsync(reportKey, lastSuccessfulPhaseImport);
+
+            if (_reportCompletionStore != null)
+            {
+                // Clear before any writes, for the same reason the phase marker is cleared: if this report
+                // fails part-way through its save, the next cycle must re-import rather than trust a stamp
+                // that claims a window it only partly wrote.
+                await _reportCompletionStore.ClearAsync(reportKey);
+            }
 
             // Graph usage data is stable once finalized (~2-3 day latency), so days we already hold and that can no
             // longer change don't need re-downloading or re-writing. Skip them unless a forced full re-import is set.
@@ -413,6 +501,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             var total = abstractActivityLoader.LoadedReportPages.SelectMany(r => r.Value).Count();
             logger.LogInformation($"Imported {total.ToString("N0")} {thingWeAreImporting} reports.");
+
+            // Only reached when the download AND the save both completed - anything else threw and is caught
+            // by RunReportSafely, leaving this report's stamp cleared so its window is retried next cycle.
+            if (_reportCompletionStore != null)
+            {
+                await _reportCompletionStore.SaveSuccessAsync(reportKey);
+            }
 
             return total;
         }

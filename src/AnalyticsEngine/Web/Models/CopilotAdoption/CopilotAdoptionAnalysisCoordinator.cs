@@ -30,10 +30,26 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
             var service = new CopilotAdoptionService(
                 options,
+                // A factory that creates its OWN context, deliberately - not one resolved from a
+                // per-request scope. This run outlives the request that started it, so a scoped
+                // context would already be disposed by the time the analysis used it.
+                //
+                // ASP.NET Core note: `AddDbContext` registers scoped by default, so resolving the
+                // context from the request's provider during a .NET migration would reintroduce
+                // exactly that. Background work needs its own scope via IServiceScopeFactory.
                 DefaultAnalyticsDbContextFactory.Instance,
                 telemetry: telemetry);
             return service.AnalyseAsync(
                 seatLicenceTypeIds.Count == 0 ? null : seatLicenceTypeIds,
+                // CancellationToken.None is load-bearing: this run is SHARED between every caller
+                // polling for the same result, so it must not be tied to any one request. A caller
+                // giving up cancels only its own wait (see CopilotAdoptionAnalysisCoordinator
+                // .TryGetAsync, where the request's token bounds Task.Delay and nothing else).
+                //
+                // ASP.NET Core note: passing HttpContext.RequestAborted here would look like good
+                // hygiene and would be a serious bug - the first poller's 202 response would cancel
+                // the analysis for everybody, reproducing the user-visible failure of issue #441
+                // through a different mechanism that Task.Run does not protect against.
                 CancellationToken.None);
         }
     }
@@ -45,6 +61,18 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         void Set(string key, CopilotAdoptionAnalysis analysis, TimeSpan ttl);
     }
 
+    /// <summary>
+    /// The completed-result cache, backed by the process-wide <see cref="MemoryCache.Default"/>.
+    /// </summary>
+    /// <remarks>
+    /// .NET Core / .NET 10 note: the replacement, <c>IMemoryCache</c>, is not a drop-in.
+    /// <see cref="MemoryCache.Default"/> is a single process-wide instance that trims itself under
+    /// memory pressure; <c>IMemoryCache</c> is an ordinary DI singleton that does NOT evict on
+    /// memory pressure unless a <c>SizeLimit</c> is configured and every entry declares a size.
+    /// Porting this across without setting that up gives a cache that grows without bound - and the
+    /// entries here are whole tenant analyses, which on a large tenant are not small. The absolute
+    /// expiry below is what bounds it today, so keep an equivalent when it moves.
+    /// </remarks>
     internal sealed class MemoryCopilotAdoptionAnalysisCache : ICopilotAdoptionAnalysisCache
     {
         public static readonly MemoryCopilotAdoptionAnalysisCache Instance =
@@ -132,7 +160,24 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
             Lazy<Task<CopilotAdoptionAnalysis>> candidate = null;
             candidate = new Lazy<Task<CopilotAdoptionAnalysis>>(
-                () => RunAndPublishAsync(cacheKey, candidate, windowDays, ids),
+                // Task.Run, deliberately, rather than calling RunAndPublishAsync directly.
+                //
+                // This run is SHARED and outlives the request that happened to start it: that request
+                // gives up after CopilotAdoptionAPIController.FirstResponseBudget and answers 202, and a
+                // later poll collects the result. But GetAsync is called ON a request thread, where
+                // ASP.NET has installed a request-bound SynchronizationContext. Any await in the analysis
+                // that does not say ConfigureAwait(false) would capture it and post its continuation back
+                // - and once that request has ended the context never pumps again, so the continuation
+                // simply never runs. The analysis then stops mid-flight with no exception, no timeout and
+                // no recycle, while the in-flight entry below is never cleared (its finally never runs),
+                // so every later poll joins the dead task and the page can never load again until the app
+                // restarts. That is issue #441, seen in production as a run still "alive" nearly an hour
+                // later with an idle database, an idle thread pool and nothing logged.
+                //
+                // Starting the run on the thread pool gives it no ambient SynchronizationContext at all,
+                // which fixes this for every await in the analysis - including ones not yet written -
+                // rather than relying on ~32 separate ConfigureAwait(false) calls staying correct.
+                () => Task.Run(() => RunAndPublishAsync(cacheKey, candidate, windowDays, ids)),
                 LazyThreadSafetyMode.ExecutionAndPublication);
 
             var effective = _inFlight.GetOrAdd(cacheKey, candidate);
