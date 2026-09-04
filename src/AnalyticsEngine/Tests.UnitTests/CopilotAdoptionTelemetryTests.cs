@@ -1,6 +1,11 @@
 extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
+using DataUtils;
+using Microsoft.ApplicationInsights;
+using Microsoft.ApplicationInsights.Channel;
+using Microsoft.ApplicationInsights.DataContracts;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Concurrent;
@@ -18,8 +23,11 @@ using AdoptionRunner = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICo
 using AdoptionRunTelemetry = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionRunTelemetry;
 using AdoptionSink = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionEventSink;
 using AdoptionCompletion = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionCompletionEvent;
+using AdoptionCorrelation = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionExceptionCorrelation;
 using AdoptionQueuedSink = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.QueuedCopilotAdoptionEventSink;
 using AdoptionWriter = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionTelemetryWriter;
+using AppInsightsAdoptionWriter = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.AppInsightsCopilotAdoptionTelemetryWriter;
+using WebExceptionTelemetry = AnalyticsWeb::Web.AnalyticsWeb.WebExceptionTelemetry;
 
 namespace Tests.UnitTests
 {
@@ -258,6 +266,70 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void FailureWriter_EmitsExceptionTelemetryWithRunId()
+        {
+            var channel = new RecordingTelemetryChannel();
+            var configuration = new TelemetryConfiguration
+            {
+                TelemetryChannel = channel,
+                ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+            };
+            var logger = new AnalyticsLogger(new TelemetryClient(configuration), "CopilotAdoptionTest");
+            var writer = new AppInsightsAdoptionWriter(logger);
+            var runId = "00000000000000000000000000000004";
+
+            writer.WriteFailure(new AdoptionFailure
+            {
+                RunId = runId,
+                WindowDays = 28,
+                Exception = new InvalidOperationException("synthetic failure"),
+            });
+
+            var exception = channel.Sent.OfType<ExceptionTelemetry>().Single();
+            Assert.AreEqual(runId, exception.Context.Operation.Id);
+            Assert.AreEqual(runId, exception.Properties["RunId"]);
+            Assert.AreEqual("CopilotAdoptionTest", exception.Context.Operation.Name);
+            Assert.IsTrue(
+                channel.Sent.OfType<TraceTelemetry>()
+                    .Any(trace => trace.Message.Contains("RunId " + runId)),
+                "The searchable fallback trace must carry the same RunId as exception telemetry.");
+        }
+
+        [TestMethod]
+        public void FailedRun_AttachesRunIdSoWebExceptionFallbackStillReportsWhenQueueRejects()
+        {
+            var channel = new RecordingTelemetryChannel();
+            var configuration = new TelemetryConfiguration
+            {
+                TelemetryChannel = channel,
+                ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+            };
+            var logger = new AnalyticsLogger(new TelemetryClient(configuration), "WebApiTest");
+            var sink = new RejectingSink();
+            var heartbeat = new ManualHeartbeatFactory();
+            var telemetry = NewTelemetry(sink, heartbeat);
+            var exception = new InvalidOperationException("synthetic rejected failure");
+
+            Assert.IsFalse(telemetry.QueueFailure(exception), "The fake must reject the queued failure.");
+            Assert.IsTrue(AdoptionCorrelation.TryGetRunId(exception, out var runId));
+
+            WebExceptionTelemetry.Report(exception, "WebApi /api/copilotadoption", _ => logger);
+            WebExceptionTelemetry.Report(exception, "WebApi /api/copilotadoption", _ => logger);
+
+            var exceptionTelemetry = channel.Sent.OfType<ExceptionTelemetry>().ToList();
+            Assert.AreEqual(
+                1,
+                exceptionTelemetry.Count,
+                "A rejected queue item must still be reported by the Web API fallback, but only once.");
+            Assert.AreEqual(runId, exceptionTelemetry[0].Context.Operation.Id);
+            Assert.AreEqual(runId, exceptionTelemetry[0].Properties["RunId"]);
+            Assert.IsTrue(
+                channel.Sent.OfType<TraceTelemetry>()
+                    .Any(trace => trace.Message.Contains("RunId " + runId)),
+                "The fallback trace must be joinable to the lifecycle failure by RunId.");
+        }
+
+        [TestMethod]
         public async Task TelemetryFactoryFailure_DoesNotStopOrPoisonTheAnalysis()
         {
             var runner = new SequencedRunner(
@@ -478,6 +550,56 @@ namespace Tests.UnitTests
             }
 
             public void Shutdown(TimeSpan timeout)
+            {
+            }
+        }
+
+        private sealed class RejectingSink : AdoptionSink
+        {
+            public int DroppedEvents => 1;
+
+            public void Track(AdoptionEvent telemetryEvent)
+            {
+            }
+
+            public void TrackCompletion(
+                AdoptionCompletion completion,
+                AdoptionEvent submittedEvent)
+            {
+            }
+
+            public bool TrackFailure(
+                AdoptionFailure failure,
+                AdoptionEvent failureEvent)
+            {
+                return false;
+            }
+
+            public void Shutdown(TimeSpan timeout)
+            {
+            }
+        }
+
+        private sealed class RecordingTelemetryChannel : ITelemetryChannel
+        {
+            private readonly List<ITelemetry> _sent = new List<ITelemetry>();
+
+            public IList<ITelemetry> Sent => _sent;
+
+            public bool? DeveloperMode { get; set; }
+
+            public string EndpointAddress { get; set; }
+
+            public void Send(ITelemetry item)
+            {
+                _sent.Add(item);
+            }
+
+            public void Flush()
+            {
+            }
+
+            public void Dispose()
             {
             }
         }
