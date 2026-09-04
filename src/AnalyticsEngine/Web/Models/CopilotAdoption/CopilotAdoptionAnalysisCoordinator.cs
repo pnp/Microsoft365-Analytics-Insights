@@ -260,17 +260,17 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // anyone and the failure is invisible. Report it directly instead. WebExceptionTelemetry
                 // .Report never throws and marks the exception reported, so a poller that does await the
                 // faulted task will not report it a second time.
+                //
+                // The accepted path is deliberately NOT marked as reported. QueueFailure returning true
+                // means the event was ENQUEUED, not written: QueuedCopilotAdoptionEventSink's worker
+                // drops an item permanently if the writer cannot be constructed or the write throws.
+                // Marking here would suppress every waiting request's report and leave no exception
+                // telemetry at all. That trades a duplicate for silence, and silence is the failure this
+                // release exists to remove - so a request awaiting the shared run may still report it.
+                // Removing the duplicate needs delivery acknowledgement from the sink; see issue #454.
                 if (!telemetry.QueueFailure(ex))
                 {
                     _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
-                }
-                else
-                {
-                    // The sink accepted it and writes its own ExceptionTelemetry. Mark the instance so
-                    // the Web API exception logger does not report the SAME exception again for every
-                    // request that was awaiting this shared run - awaiting a faulted task rethrows one
-                    // instance to all of them. That is the duplication MarkReported exists to prevent.
-                    WebExceptionTelemetry.MarkReported(ex);
                 }
 
                 throw;

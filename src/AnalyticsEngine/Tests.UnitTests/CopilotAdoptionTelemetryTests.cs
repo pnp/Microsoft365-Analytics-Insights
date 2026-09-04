@@ -424,12 +424,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task AnalysisFailure_AcceptedByTheSink_IsNotReportedAgainByAWaitingRequest()
+        public async Task AnalysisFailure_AcceptedByTheSink_IsStillVisibleToAWaitingRequest()
         {
-            // The analysis is SHARED, so awaiting the faulted task rethrows the SAME exception instance
-            // to every waiting request, and each of those reaches AnalyticsWebApiExceptionLogger. Without
-            // a marker one failure is reported once by the analysis and then once more per waiter, which
-            // buries the real failure count - the duplication MarkReported exists to prevent.
+            // Deliberate trade-off, pinned so it is not "tidied" into silence later.
+            //
+            // QueueFailure returning true means the failure was ENQUEUED, not written: the sink's worker
+            // drops an item permanently if the writer cannot be constructed or the write throws. If the
+            // coordinator marked the exception reported on acceptance, those drops would suppress every
+            // waiting request too and the failure would produce no exception telemetry at all.
+            //
+            // So an accepted failure stays unmarked and a waiting request can still report it. That can
+            // duplicate the sink's own report, which is noise; being unable to see a failure at all is
+            // the fault this release exists to remove. Removing the duplicate needs delivery
+            // acknowledgement from the sink - see issue #454.
             var channel = new RecordingTelemetryChannel();
             var configuration = new TelemetryConfiguration
             {
@@ -463,9 +470,9 @@ namespace Tests.UnitTests
             WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => logger);
 
             Assert.AreEqual(
-                0,
+                1,
                 channel.Sent.OfType<ExceptionTelemetry>().Count(),
-                "The lifecycle sink already reported this failure; a waiting request must not report it again.");
+                "An accepted failure must remain visible to a waiting request - once, not zero and not per waiter.");
         }
 
         private class RejectingTelemetry : StubAnalysisTelemetry
