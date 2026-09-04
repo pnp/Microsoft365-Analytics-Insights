@@ -263,11 +263,13 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 //
                 // The accepted path is deliberately NOT marked as reported. QueueFailure returning true
                 // means the event was ENQUEUED, not written: QueuedCopilotAdoptionEventSink's worker
-                // drops an item permanently if the writer cannot be constructed or the write throws.
-                // Marking here would suppress every waiting request's report and leave no exception
-                // telemetry at all. That trades a duplicate for silence, and silence is the failure this
-                // release exists to remove - so a request awaiting the shared run may still report it.
-                // Removing the duplicate needs delivery acknowledgement from the sink; see issue #454.
+                // drops an item permanently if the writer cannot be constructed or the write throws, and
+                // an ungraceful teardown discards whatever is still queued. Marking on acceptance would
+                // therefore break the invariant Report relies on - that the marker means the exception
+                // really was reported - and would suppress every waiting request's report on the strength
+                // of a hand-off that may never complete. A request awaiting the shared run may still
+                // report it, which duplicates the sink's own report; removing that duplicate needs
+                // delivery acknowledgement from the sink, so it is deferred to issue #454.
                 if (!telemetry.QueueFailure(ex))
                 {
                     _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
