@@ -257,19 +257,18 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // construction failed always returns false. In that case nothing else is guaranteed to
                 // observe this failure: the request that started the run has normally already returned
                 // 202, so if no poller is awaiting the shared task the exception is never observed by
-                // anyone and the failure is invisible. Report it directly instead. WebExceptionTelemetry
-                // .Report never throws and marks the exception reported, so a poller that does await the
-                // faulted task will not report it a second time.
+                // anyone. Report it directly instead. The default reporter is best-effort - it swallows
+                // its own failures - and marks the exception once its reporting calls have returned, so
+                // a poller that later awaits the faulted task will normally not report it again.
                 //
-                // The accepted path is deliberately NOT marked as reported. QueueFailure returning true
-                // means the event was ENQUEUED, not written: QueuedCopilotAdoptionEventSink's worker
-                // drops an item permanently if the writer cannot be constructed or the write throws, and
-                // an ungraceful teardown discards whatever is still queued. Marking on acceptance would
-                // therefore break the invariant Report relies on - that the marker means the exception
-                // really was reported - and would suppress every waiting request's report on the strength
-                // of a hand-off that may never complete. A request awaiting the shared run may still
-                // report it, which duplicates the sink's own report; removing that duplicate needs
-                // delivery acknowledgement from the sink, so it is deferred to issue #454.
+                // The accepted path is deliberately NOT marked. QueueFailure returning true means the
+                // event was ENQUEUED, not written: QueuedCopilotAdoptionEventSink's worker drops an item
+                // permanently if the writer cannot be constructed or the write throws, and an ungraceful
+                // teardown discards whatever is still queued. Marking here would suppress every waiting
+                // request's report before anything had even attempted to report it. A waiting request
+                // may therefore still report an accepted failure, which duplicates the sink's own
+                // report; removing that duplicate needs delivery acknowledgement from the sink - see
+                // issue #454.
                 if (!telemetry.QueueFailure(ex))
                 {
                     _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");

@@ -430,10 +430,9 @@ namespace Tests.UnitTests
             //
             // QueueFailure returning true means the failure was ENQUEUED, not written: the sink's worker
             // drops an item permanently if the writer cannot be constructed or the write throws, and an
-            // ungraceful teardown discards whatever is still queued. If the coordinator marked the
-            // exception reported on acceptance, the marker would no longer mean what Report's marker
-            // means, and waiting requests would be suppressed on the strength of a hand-off that may
-            // never complete.
+            // ungraceful teardown discards whatever is still queued. Marking the exception reported on
+            // acceptance would suppress every waiting request before anything had even attempted to
+            // report it.
             //
             // So an accepted failure stays unmarked and a waiting request can still report it. That can
             // duplicate the sink's own report, which is noise; removing the duplicate needs delivery
