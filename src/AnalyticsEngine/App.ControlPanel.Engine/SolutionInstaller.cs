@@ -91,7 +91,8 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.Redis,
                     azureBackeEndCreationJob.CognitiveServicesInfo,
                     azureBackeEndCreationJob.KeyVault,
-                    azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription
+                    azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription,
+                    azureBackeEndCreationJob.CreatedSqlServer
                 );
 
                 ct.ThrowIfCancellationRequested();
