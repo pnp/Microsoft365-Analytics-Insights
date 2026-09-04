@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.CopilotAdoption;
 using System;
 using System.Collections.Concurrent;
@@ -119,18 +119,21 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private readonly ICopilotAdoptionAnalysisRunner _runner;
         private readonly ICopilotAdoptionAnalysisCache _cache;
         private readonly Func<int, bool, ICopilotAdoptionAnalysisTelemetry> _telemetryFactory;
+        private readonly Action<Exception, string> _reportUnqueuedFailure;
         private readonly TimeSpan _cacheTtl;
 
         public CopilotAdoptionAnalysisCoordinator(
             ICopilotAdoptionAnalysisRunner runner,
             ICopilotAdoptionAnalysisCache cache,
             Func<int, bool, ICopilotAdoptionAnalysisTelemetry> telemetryFactory,
-            TimeSpan cacheTtl)
+            TimeSpan cacheTtl,
+            Action<Exception, string> reportUnqueuedFailure = null)
         {
             _runner = runner ?? throw new ArgumentNullException(nameof(runner));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _telemetryFactory = telemetryFactory ?? throw new ArgumentNullException(nameof(telemetryFactory));
             _cacheTtl = cacheTtl;
+            _reportUnqueuedFailure = reportUnqueuedFailure ?? WebExceptionTelemetry.Report;
         }
 
         public async Task<CopilotAdoptionAnalysis> TryGetAsync(
@@ -249,7 +252,25 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             }
             catch (Exception ex)
             {
-                telemetry.QueueFailure(ex);
+                // QueueFailure returns false when the bounded failure sink rejected the event - it is
+                // full, or the host is stopping - and the no-op telemetry used when telemetry
+                // construction failed always returns false. In that case nothing else is guaranteed to
+                // observe this failure: the request that started the run has normally already returned
+                // 202, so if no poller is awaiting the shared task the exception is never observed by
+                // anyone. Report it directly instead. The reporter is best-effort and swallows its own
+                // failures.
+                //
+                // The accepted path is deliberately NOT marked as reported. Acceptance is not delivery:
+                // the event has only been added to an in-memory queue whose worker can drop it. Marking
+                // here would suppress reporting by waiting requests without anything having confirmed
+                // the failure was reported. An accepted failure may therefore be reported by a waiting
+                // request as well as by the sink; removing that duplicate needs delivery acknowledgement
+                // from the sink - see issue #454.
+                if (!telemetry.QueueFailure(ex))
+                {
+                    _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
+                }
+
                 throw;
             }
             finally
