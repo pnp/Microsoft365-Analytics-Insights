@@ -30,10 +30,18 @@ namespace WebJob.Office365ActivityImporter
         private ManualGraphCallClient _manualGraphCallClient = null;
         private GraphUserGroupsCache _graphUserGroupsCache = null;
         private readonly ISingleDateStore _activityReportsLastImportedStore;
+        // Per-report completion stamps. Like the store above this MUST be process-lifetime: a fresh instance
+        // per cycle would always look "never completed" and empty the finalized-date skip list every run.
+        private readonly IReportCompletionStore _reportCompletionStore;
         private readonly IImportLastRunStore _graphLastRunStore;
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
 
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
+            : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
+        {
+        }
+
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore graphLastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IReportCompletionStore reportCompletionStore)
         {
             _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             _logger = logger;
@@ -41,6 +49,7 @@ namespace WebJob.Office365ActivityImporter
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
             _graphLastRunStore = graphLastRunStore;
             _sentEmailMailboxSkipList = sentEmailMailboxSkipList;
+            _reportCompletionStore = reportCompletionStore;
         }
 
         /// <summary>
@@ -70,7 +79,7 @@ namespace WebJob.Office365ActivityImporter
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList);
+            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore);
 
             try
             {
