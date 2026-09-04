@@ -1,4 +1,5 @@
 using Common.Entities;
+using Common.Entities.Installer;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -89,6 +90,37 @@ namespace Tests.UnitTests
             Assert.IsTrue(new ImportTaskSettings { Copilot = true }.UsesActivityApi, "Copilot uses Audit.General.");
             Assert.IsTrue(new ImportTaskSettings { ImportPowerPlatform = true }.UsesActivityApi, "Power Platform uses Audit.General.");
             Assert.IsFalse(new ImportTaskSettings().UsesActivityApi, "No audit-feed toggle enabled means the Activity API loop should be skipped.");
+        }
+
+        [TestMethod]
+        public void ImportTaskSettings_SerialisedConfig_ContainsOnlyPersistedImportToggles()
+        {
+            // ImportTaskSettings is serialised into the installer's saved *.json config through
+            // TargetSolutionConfig.ImportTaskSettings. Only the [ImportProp] toggles are persisted state;
+            // a computed getter such as UsesActivityApi must not leak in, or every customer's config file
+            // gains a read-only field that looks settable but is silently discarded on load.
+            var settings = new ImportTaskSettings { ActivityLog = true, Copilot = true, ImportPowerPlatform = true };
+
+            var serialised = JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(settings));
+
+            var expected = ImportTaskSettings.GetImportPropertyNames().OrderBy(name => name).ToArray();
+            var actual = serialised.Properties().Select(p => p.Name).OrderBy(name => name).ToArray();
+
+            CollectionAssert.AreEqual(
+                expected,
+                actual,
+                "Saved installer config must serialise exactly the [ImportProp] toggles. Unexpected: "
+                    + string.Join(", ", actual.Except(expected)));
+
+            // Round-trip through the config type the installer actually writes, to prove the guard holds
+            // where it matters rather than only on the settings object in isolation.
+            var configJson = JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(
+                new TargetSolutionConfig { ImportTaskSettings = settings }));
+
+            CollectionAssert.DoesNotContain(
+                ((JObject)configJson[nameof(TargetSolutionConfig.ImportTaskSettings)]).Properties().Select(p => p.Name).ToArray(),
+                nameof(ImportTaskSettings.UsesActivityApi),
+                "UsesActivityApi is derived from the toggles and must stay out of the saved config.");
         }
 
         [TestMethod]
