@@ -16,7 +16,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     internal class UserLicenseProcessor
     {
         private readonly AnalyticsLogger _logger;
-        private readonly OfficeLicenseNameResolver _officeLicenseNameResolver;
+        private readonly IOfficeLicenseNameResolver _officeLicenseNameResolver;
         private readonly IUserMetadataLoader _userLoader;
         private readonly UserMetadataCache _userMetaCache;
         private readonly Func<AnalyticsEntitiesContext, IUserLicenseStore> _licenseStoreFactory;
@@ -24,14 +24,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public UserLicenseProcessor(
             AnalyticsLogger logger,
             IUserMetadataLoader userLoader,
+            UserMetadataCache userMetaCache)
+            : this(logger, userLoader, userMetaCache, new OfficeLicenseNameResolver(), null)
+        {
+        }
+
+        public UserLicenseProcessor(
+            AnalyticsLogger logger,
+            IUserMetadataLoader userLoader,
             UserMetadataCache userMetaCache,
+            Func<AnalyticsEntitiesContext, IUserLicenseStore> licenseStoreFactory)
+            : this(logger, userLoader, userMetaCache, new OfficeLicenseNameResolver(), licenseStoreFactory)
+        {
+        }
+
+        internal UserLicenseProcessor(
+            AnalyticsLogger logger,
+            IUserMetadataLoader userLoader,
+            UserMetadataCache userMetaCache,
+            IOfficeLicenseNameResolver officeLicenseNameResolver,
             Func<AnalyticsEntitiesContext, IUserLicenseStore> licenseStoreFactory = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userLoader = userLoader ?? throw new ArgumentNullException(nameof(userLoader));
             _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
+            _officeLicenseNameResolver = officeLicenseNameResolver ?? throw new ArgumentNullException(nameof(officeLicenseNameResolver));
             _licenseStoreFactory = licenseStoreFactory ?? (db => new SqlUserLicenseStore(db, logger));
-            _officeLicenseNameResolver = new OfficeLicenseNameResolver();
         }
 
         /// <summary>
