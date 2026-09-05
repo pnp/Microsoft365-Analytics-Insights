@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using Tests.FakeDataGen.Copilot;
+using Tests.FakeDataGen.Demo;
 using Tests.FakeDataGen.Office365;
 using Tests.FakeDataGen.StressTests;
 using Tests.FakeDataGen.StressTests.LoadTest;
@@ -54,6 +55,12 @@ namespace Tests.FakeDataGen
         {
             PrintBanner();
 
+            if (args.Length > 0 && args[0].Equals("demo", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.ExitCode = DemoCommand.Run(args.Skip(1).ToArray());
+                return;
+            }
+
             // Non-interactive load-test mode (issue #161 / PR #162). Usage:
             //   Tests.FakeDataGen.exe loadtest "<SQL Connection String>" [targetItemsPerArea] [csvPath]
             if (args.Length >= 2 && args[0].Equals("loadtest", StringComparison.OrdinalIgnoreCase))
@@ -79,6 +86,7 @@ namespace Tests.FakeDataGen
                 Console.WriteLine("No SQL connection string provided.");
                 Console.WriteLine("Stress tests that don't need SQL will still run; everything else will be disabled.");
                 Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|copilotadoption|activityapi|activityapidb|powerplatform|sentemail|useractivity>]");
+                Console.WriteLine("Safe one-command demo: Tests.FakeDataGen.exe demo --help");
             }
             Console.WriteLine();
 

@@ -145,6 +145,38 @@
     <Compile Include="AppInsightsSavePortTests.cs" />
     <Compile Include="AppInsightsSearchRulesTests.cs" />
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
+    <Compile Include="DemoGeneratorTests.cs" />
+    <Compile Include="DemoGeneratorSqlTests.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCalendar.cs">
+      <Link>DemoGenerator\DemoCalendar.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCommand.cs">
+      <Link>DemoGenerator\DemoCommand.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoGenerator.cs">
+      <Link>DemoGenerator\DemoGenerator.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoOptions.cs">
+      <Link>DemoGenerator\DemoOptions.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPopulation.cs">
+      <Link>DemoGenerator\DemoPopulation.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs">
+      <Link>DemoGenerator\DemoTables.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTimeline.cs">
+      <Link>DemoGenerator\DemoTimeline.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\SqlDemoDatabase.cs">
+      <Link>DemoGenerator\SqlDemoDatabase.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotAdoptionPersonas.cs">
+      <Link>DemoGenerator\CopilotAdoptionPersonas.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Seeding\SeedDataCatalogue.cs">
+      <Link>DemoGenerator\SeedDataCatalogue.cs</Link>
+    </Compile>
     <Compile Include="CopilotExtendedDataTests.cs" />
     <Compile Include="DBLookupCacheDuplicateKeyErrorTests.cs" />
     <Compile Include="DBLookupCacheTests.cs" />
