@@ -267,6 +267,12 @@ export default function UsersDrillDown({
 
   const { data, loading, error, reload } = useUsersQuery(params);
 
+  const totalPages = data ? Math.max(1, Math.ceil(data.totalUsers / PAGE_SIZE)) : 1;
+  // Preserve a renewed page only while it still exists. Adjust during render so an expired
+  // population's empty out-of-range page is never displayed or published as the export snapshot;
+  // the scope-bound hook will fetch the last valid page (page 1 for an empty population).
+  if (data && page > totalPages) setPage(totalPages);
+
   // A parent-driven forced refresh (e.g. after an export 410). Re-mint the current view's snapshot
   // without changing any params, so the licence/workload/page/filters the admin is looking at are all
   // preserved. Skip the initial mount (token 0/undefined) so this never double-fetches on first load.
@@ -283,7 +289,6 @@ export default function UsersDrillDown({
     onUsersSnapshot(data?.snapshotId ?? null);
   }, [data?.snapshotId, onUsersSnapshot]);
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.totalUsers / PAGE_SIZE)) : 1;
   const retry = describeError(error, '').kind === 'expired' ? onRefreshOverview : reload;
 
   return (

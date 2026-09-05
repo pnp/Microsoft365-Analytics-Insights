@@ -363,6 +363,45 @@ describe('UsersDrillDown', () => {
     });
   });
 
+  it.each([40, 0])('reloads a valid page when a renewed population shrinks to %i users', async (remaining) => {
+    mockUsers.mockImplementation(async (params) => {
+      const result = usersResponse(params);
+      if (params.overviewId === 'ov2') {
+        result.totalUsers = remaining;
+        result.rankedUsers = remaining;
+        result.users = params.page === 1 && remaining > 0 ? result.users : [];
+      }
+      return result;
+    });
+    const onUsersSnapshot = vi.fn();
+    const { rerender } = renderDrill([], { overviewScope: 'scope-a', onUsersSnapshot });
+    await waitFor(() => expect(mockUsers).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ overviewId: 'ov1', page: 2 }));
+    onUsersSnapshot.mockClear();
+
+    rerender(
+      <UsersDrillDown
+        overviewId="ov2"
+        overviewScope="scope-a"
+        licence={licence}
+        coverage={[]}
+        onUsersSnapshot={onUsersSnapshot}
+        onRefreshOverview={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(lastParams()).toMatchObject({ overviewId: 'ov2', page: 1 }));
+    await waitFor(() => {
+      const calls = onUsersSnapshot.mock.calls;
+      expect(calls[calls.length - 1][0]).toBe('snap-ov2-1-10-teams');
+    });
+    expect(onUsersSnapshot.mock.calls.some(([id]) => id === 'snap-ov2-2-10-teams')).toBe(false);
+    expect(screen.queryByText('Page 2 of 1')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing 51/)).not.toBeInTheDocument();
+    if (remaining > 0) expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
+  });
+
   // The opposite direction: a genuine logical-scope change (a new reporting window or demographic
   // filter, surfaced here as a changed `overviewScope`) MUST reset to page 1, and the fresh fetch
   // must go against the new snapshot - no old page, no old rows carried over.
