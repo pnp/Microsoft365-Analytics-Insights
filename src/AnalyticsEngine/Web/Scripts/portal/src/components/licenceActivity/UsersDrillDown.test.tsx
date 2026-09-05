@@ -253,6 +253,29 @@ describe('UsersDrillDown', () => {
     await waitFor(() => expect(lastParams()).toMatchObject({ search: 'ada@contoso.com' }));
   });
 
+  it('strips C1 controls too, but leaves accented letters alone', async () => {
+    // .NET char.IsControl - which is what the server tests - covers C0, DEL AND C1 (U+0080-U+009F).
+    // The first version of this sanitiser stopped at DEL, so a pasted U+0085 NEL still reached the
+    // server and still produced the 400 the sanitiser exists to prevent. The positive direction
+    // matters just as much: U+00A0 and the accented Latin-1 letters just above the C1 block are NOT
+    // controls, and eating them would corrupt perfectly valid non-English UPN searches.
+    renderDrill();
+    await waitFor(() => expect(mockUsers).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'ada\u0085smith' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ search: 'ada smith' }));
+  });
+
+  it('leaves non-ASCII letters in a search untouched', async () => {
+    renderDrill();
+    await waitFor(() => expect(mockUsers).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'ándré.Καλημέρα@contoso.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ search: 'ándré.Καλημέρα@contoso.com' }));
+  });
+
   it('explains why a workload cannot be ranked when its coverage is incomplete', async () => {
     renderDrill([coverageEntry({ workload: 'teams', status: 'notImported' })]);
     // The selected workload defaults to Teams, whose coverage is notImported here.
