@@ -197,12 +197,17 @@ export default function UsersDrillDown({
 
   // Never let the box hold a term the server is guaranteed to reject. LicenceActivityQuery.Create
   // throws (=> HTTP 400) for a search over MAX_SEARCH characters or containing ANY control character,
-  // and .trim() alone does not remove a control character embedded in the middle of a pasted value -
-  // a two-line paste used to produce an unrecoverable 400. Sanitising on the way in keeps the client
-  // inside the server's contract instead of discovering it by failing.
-  const sanitiseSearch = (value: string) =>
+  // and a single-line <input> only strips CR/LF for us - the other C0/C1 controls survive a paste.
+  //
+  // Two functions, deliberately: trimming WHILE EDITING would make the space bar unusable, because
+  // `searchDraft` is fed straight back into the controlled input, so " " typed after "ada" would be
+  // erased before the next keystroke and "ada smith" could never be typed. So editing only removes
+  // what is genuinely un-submittable (control characters, over-length), and trimming happens once, at
+  // commit.
+  const sanitiseDraft = (value: string) =>
     // eslint-disable-next-line no-control-regex
-    value.replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, MAX_SEARCH).trim();
+    value.replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, MAX_SEARCH);
+  const commitSearch = (value: string) => setSearch(sanitiseDraft(value).trim());
   const [sort, setSort] = useState<UsersSortKey>('activity');
   const [direction, setDirection] = useState<SortDirection>('desc');
   const [page, setPage] = useState(1);
@@ -419,12 +424,12 @@ export default function UsersDrillDown({
                 maxLength={MAX_SEARCH}
                 placeholder="Search UPN or email"
                 aria-label="Search users"
-                onChange={(_e, d) => setSearchDraft(sanitiseSearch(d.value))}
+                onChange={(_e, d) => setSearchDraft(sanitiseDraft(d.value))}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') setSearch(sanitiseSearch(searchDraft));
+                  if (e.key === 'Enter') commitSearch(searchDraft);
                 }}
               />
-              <Button size="small" onClick={() => setSearch(sanitiseSearch(searchDraft))}>
+              <Button size="small" onClick={() => commitSearch(searchDraft)}>
                 Search
               </Button>
               <Select
