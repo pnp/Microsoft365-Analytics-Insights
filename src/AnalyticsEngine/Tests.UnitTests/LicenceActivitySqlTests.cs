@@ -715,6 +715,23 @@ VALUES
                 Assert.IsFalse(users.MostActive.Any(u => u.UserId == 5));
                 CollectionAssert.AreEquivalent(new[] { 1, 2, 4 },
                     users.LeastActive.Select(u => u.UserId).ToArray());
+
+                // Selecting another workload takes the bounded #ReturnedUsers/#CopilotReportIds
+                // supporting-evidence path rather than Copilot's #EligibleUsers ranking path.
+                var nonCopilot = await fixture.Store().LoadUsersAsync(
+                    overview, query.ForUsers(1, "teams", null, "upn", "asc", 5, 1, 20,
+                        LicenceActivitySqlFixture.NowUtc),
+                    sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                foreach (var expectedUser in users.Users)
+                {
+                    var expected = expectedUser.Workloads.Single(w => w.Workload == "copilot");
+                    var supporting = nonCopilot.Users.Single(u => u.UserId == expectedUser.UserId)
+                        .Workloads.Single(w => w.Workload == "copilot");
+                    Assert.AreEqual(expected.Band, supporting.Band);
+                    Assert.AreEqual(expected.ActiveSamples, supporting.ActiveSamples);
+                    Assert.AreEqual(expected.ObservedSamples, supporting.ObservedSamples);
+                    Assert.AreEqual(expected.AverageActions, supporting.AverageActions);
+                }
             }
         }
 
