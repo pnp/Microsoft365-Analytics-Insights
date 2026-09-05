@@ -196,8 +196,12 @@ export default function UsersDrillDown({
   const [search, setSearch] = useState('');
 
   // Never let the box hold a term the server is guaranteed to reject. LicenceActivityQuery.Create
-  // throws (=> HTTP 400) for a search over MAX_SEARCH characters or containing ANY control character,
-  // and a single-line <input> only strips CR/LF for us - the other C0/C1 controls survive a paste.
+  // throws (=> HTTP 400) for a search over MAX_SEARCH characters or containing ANY control character.
+  // "Control" must mean exactly what .NET's char.IsControl means, which is C0 (U+0000-U+001F), DEL
+  // (U+007F) AND C1 (U+0080-U+009F) - an earlier version of this regex stopped at DEL, so a pasted
+  // C1 character such as U+0085 NEL (common from Windows-1252 and PDF copy) still produced a 400.
+  // The range deliberately ends at U+009F: U+00A0 NBSP and the accented Latin-1 letters above it are
+  // NOT controls and must survive untouched.
   //
   // Two functions, deliberately: trimming WHILE EDITING would make the space bar unusable, because
   // `searchDraft` is fed straight back into the controlled input, so " " typed after "ada" would be
@@ -206,7 +210,7 @@ export default function UsersDrillDown({
   // commit.
   const sanitiseDraft = (value: string) =>
     // eslint-disable-next-line no-control-regex
-    value.replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, MAX_SEARCH);
+    value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').slice(0, MAX_SEARCH);
   const commitSearch = (value: string) => setSearch(sanitiseDraft(value).trim());
   const [sort, setSort] = useState<UsersSortKey>('activity');
   const [direction, setDirection] = useState<SortDirection>('desc');
