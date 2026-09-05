@@ -99,21 +99,68 @@ namespace Tests.UnitTests
                             "wide",
                             StringComparison.OrdinalIgnoreCase);
                         var diagnosticQuery = diagnosticWide ? wideQuery : narrowQuery;
+                        if (int.TryParse(Environment.GetEnvironmentVariable(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_DEPARTMENT"), out var diagnosticDepartment))
+                        {
+                            diagnosticQuery = LicenceActivityQuery.Create(
+                                diagnosticQuery.From, diagnosticQuery.To, LicenceActivitySqlFixture.NowUtc,
+                                departmentId: diagnosticDepartment);
+                        }
                         var diagnosticScenario = diagnosticWide
                             ? "overview-wide-180d"
                             : "overview-narrow-7d";
+                        if (string.Equals(Environment.GetEnvironmentVariable(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_HTTP"), "1", StringComparison.Ordinal))
+                        {
+                            await DiagnoseHttpOverview(fixture, diagnosticQuery, sources);
+                            Assert.Inconclusive(
+                                "HTTP overview preflight only, with production SQL/response limits; "
+                                + "the complete acceptance matrix has NOT run.");
+                        }
                         var diagnostic = new LicenceActivitySqlMeasurement();
+                        var diagnosticUsers = string.Equals(
+                            Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_USERS"),
+                            "1", StringComparison.Ordinal);
+                        LicenceActivityOverview diagnosticOverview = null;
+                        if (diagnosticUsers)
+                        {
+                            diagnosticOverview = await fixture.Store(new SqlLicenceActivityStoreInstrumentation
+                                { CommandTimeoutSeconds = diagnosticTimeout })
+                                .LoadOverviewAsync(diagnosticQuery, sources,
+                                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                            diagnosticScenario = "users-" + diagnosticScenario;
+                        }
                         var includeShowplan = string.Equals(
                             Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_SHOWPLAN"),
                             "1",
                             StringComparison.Ordinal);
                         var diagnosticWatch = Stopwatch.StartNew();
-                        await fixture.Store(diagnostic.Instrumentation(
-                                includeShowplan: includeShowplan,
-                                commandTimeoutSeconds: diagnosticTimeout))
-                            .LoadOverviewAsync(
+                        var diagnosticStore = fixture.Store(diagnostic.Instrumentation(
+                            includeShowplan: includeShowplan, commandTimeoutSeconds: diagnosticTimeout));
+                        if (diagnosticUsers)
+                        {
+                            var sku = int.TryParse(Environment.GetEnvironmentVariable(
+                                "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_SKU"), out var configuredSku) ? configuredSku : 2;
+                            var workload = Environment.GetEnvironmentVariable(
+                                "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_WORKLOAD") ?? "teams";
+                            var users = await diagnosticStore.LoadUsersAsync(diagnosticOverview,
+                                diagnosticQuery.ForUsers(sku, workload, null, "activity", "desc",
+                                    100, 1, 100, LicenceActivitySqlFixture.NowUtc),
+                                sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                            var licence = diagnosticOverview.Licences.Single(l => l.LicenceTypeId == sku);
+                            var distribution = licence.Workloads.Single(w => w.Workload == workload);
+                            var positive = distribution.High + distribution.Moderate + distribution.Low;
+                            Assert.AreEqual(licence.AssignedUsers, users.TotalUsers);
+                            Assert.AreEqual(Math.Min(100, positive + distribution.Zero), users.LeastActive.Count);
+                            Assert.IsTrue(users.MostActive.Count >= Math.Min(100, positive));
+                            diagnosticScenario += "-sku" + sku + "-" + workload;
+                        }
+                        else
+                        {
+                            await diagnosticStore.LoadOverviewAsync(
                                 diagnosticQuery, sources,
                                 NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                        }
                         diagnosticWatch.Stop();
                         Console.WriteLine(
                             "LICENCE_ACTIVITY_PERF_DIAGNOSTIC scenario={0} elapsedMs={1} logicalReads={2} readsByOperation={3} operations={4}",
@@ -134,6 +181,10 @@ namespace Tests.UnitTests
                                         message.Split(
                                             (char[])null,
                                             StringSplitOptions.RemoveEmptyEntries)))));
+                        Console.WriteLine(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC innerSqlPeakCommands={0} innerSqlPeakConnections={1} activeCommands={2} activeConnections={3}",
+                            diagnostic.PeakCommands, diagnostic.PeakConnections,
+                            diagnostic.ActiveCommands, diagnostic.ActiveConnections);
                         if (includeShowplan)
                         {
                             Console.WriteLine(
@@ -247,13 +298,16 @@ namespace Tests.UnitTests
                     () => loadMeasurement.TotalLogicalReads,
                     message => Console.WriteLine("LICENCE_ACTIVITY_PERF " + message));
                     Console.WriteLine(
-                        "LICENCE_ACTIVITY_PERF httpLoadMs={0} assignments={1} peakConcurrentSql={2} "
-                        + "managedHeapDelta={3} privateMemoryDelta={4}",
+                        "LICENCE_ACTIVITY_PERF httpLoadMs={0} assignments={1} peakSharedReportLoads={2} "
+                        + "managedHeapDelta={3} privateMemoryDelta={4} innerSqlPeakCommands={5} innerSqlPeakConnections={6}",
                         load.ElapsedMs,
                         load.Assignments,
                         load.PeakConcurrentSqlLoads,
                         load.ManagedHeapDeltaBytes,
-                        load.PrivateMemoryDeltaBytes);
+                        load.PrivateMemoryDeltaBytes,
+                        loadMeasurement.PeakCommands, loadMeasurement.PeakConnections);
+                    Assert.AreEqual(0, loadMeasurement.ActiveCommands);
+                    Assert.AreEqual(0, loadMeasurement.ActiveConnections);
                 }
             }
             finally
@@ -330,6 +384,45 @@ namespace Tests.UnitTests
                 measurement.PlanCount,
                 measurement.Operators);
             return measurement;
+        }
+
+        private static async Task DiagnoseHttpOverview(
+            LicenceActivitySqlFixture fixture, LicenceActivityQuery query, LicenceActivitySources sources)
+        {
+            var measurement = new LicenceActivitySqlMeasurement();
+            var clock = Stopwatch.StartNew();
+            using (var host = new LicenceActivityHttpHost(
+                fixture.Store(measurement.Instrumentation(includeShowplan: false)), sources,
+                () => sources.NowUtc.Add(clock.Elapsed)))
+            {
+                var path = "api/LicenceActivity/overview?from=" + query.From + "&to=" + query.To;
+                if (query.DepartmentId.HasValue) path += "&departmentId=" + query.DepartmentId.Value;
+                if (query.CountryId.HasValue) path += "&countryId=" + query.CountryId.Value;
+                foreach (var temperature in new[] { "cold", "warm" })
+                {
+                    var reads = measurement.TotalLogicalReads;
+                    var watch = Stopwatch.StartNew();
+                    using (var response = await host.Client.GetAsync(path))
+                    {
+                        var content = await response.Content.ReadAsByteArrayAsync();
+                        watch.Stop();
+                        Console.WriteLine(
+                            "LICENCE_ACTIVITY_PERF_HTTP_PREFLIGHT state={0} status={1} elapsedMs={2} bytes={3} logicalReads={4} innerSqlPeakCommands={5} innerSqlPeakConnections={6}",
+                            temperature, (int)response.StatusCode, watch.ElapsedMilliseconds, content.Length,
+                            measurement.TotalLogicalReads - reads, measurement.PeakCommands, measurement.PeakConnections);
+                        if (!response.IsSuccessStatusCode) break;
+                        if (temperature == "warm")
+                            Assert.AreEqual(0L, measurement.TotalLogicalReads - reads,
+                                "A warm preflight must not re-read SQL.");
+                    }
+                }
+                var drain = Stopwatch.StartNew();
+                while ((measurement.ActiveCommands != 0 || measurement.ActiveConnections != 0)
+                    && drain.Elapsed < TimeSpan.FromMinutes(1))
+                    await Task.Delay(50);
+                Assert.AreEqual(0, measurement.ActiveCommands);
+                Assert.AreEqual(0, measurement.ActiveConnections);
+            }
         }
 
         private static void AssertMeasured(Measurement measurement)

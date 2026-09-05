@@ -11,8 +11,9 @@ using System.Threading.Tasks;
 namespace Common.Entities.LicenceActivity
 {
     /// <summary>
-    /// Bounded ADO.NET adapter for licence activity. Each call owns one short-lived SQL connection and
-    /// executes one batch; no EF context or request synchronization context is shared.
+    /// Bounded ADO.NET adapter for licence activity. User calls own one connection and batch; overview
+    /// calls own a shared-scope connection and independently bounded workload connections.
+    /// No EF context or request synchronization context is shared.
     /// </summary>
     public sealed class SqlLicenceActivityStore : ILicenceActivityStore
     {
@@ -148,6 +149,7 @@ namespace Common.Entities.LicenceActivity
                     var sqlWatch = Stopwatch.StartNew();
                     diagnostics.Stage("UsersSqlStarted");
 
+                    using (_instrumentation?.TrackCommand())
                     using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                     {
                         var materialisationWatch = Stopwatch.StartNew();
@@ -192,7 +194,8 @@ namespace Common.Entities.LicenceActivity
                 })
                 {
                     AddScopeParameters(command, query, sources);
-                    await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    using (_instrumentation?.TrackCommand())
+                        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
                 return connection;
             }
@@ -203,7 +206,7 @@ namespace Common.Entities.LicenceActivity
             }
         }
 
-        private static Task DropSharedEligibleUsersAsync(
+        private Task DropSharedEligibleUsersAsync(
             SqlConnection connection,
             string tableName)
         {
@@ -213,7 +216,8 @@ namespace Common.Entities.LicenceActivity
                 CommandTimeout = LicenceActivitySql.CommandTimeoutSeconds
             })
             {
-                command.ExecuteNonQuery();
+                using (_instrumentation?.TrackCommand())
+                    command.ExecuteNonQuery();
             }
             return Task.CompletedTask;
         }
@@ -508,6 +512,7 @@ namespace Common.Entities.LicenceActivity
                             })
                             {
                                 AddScopeParameters(command, query, sources);
+                                using (_instrumentation?.TrackCommand())
                                 using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                                     return await materialize(reader).ConfigureAwait(false);
                             }
@@ -1327,5 +1332,27 @@ namespace Common.Entities.LicenceActivity
         internal Action<string, long> OperationCompleted { get; set; }
         internal Action<string> ShowplanReceived { get; set; }
         internal int? CommandTimeoutSeconds { get; set; }
+        internal Action<bool> CommandActiveChanged { get; set; }
+
+        internal IDisposable TrackCommand()
+        {
+            return new CommandLifetime(CommandActiveChanged);
+        }
+
+        private sealed class CommandLifetime : IDisposable
+        {
+            private readonly Action<bool> _changed;
+
+            internal CommandLifetime(Action<bool> changed)
+            {
+                _changed = changed;
+                _changed?.Invoke(true);
+            }
+
+            public void Dispose()
+            {
+                _changed?.Invoke(false);
+            }
+        }
     }
 }

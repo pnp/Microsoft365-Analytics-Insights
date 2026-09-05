@@ -193,6 +193,67 @@ INSERT dbo.user_license_type_lookups (user_id, license_type_id) VALUES (1, 1);")
             }
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task CustomSampleWindows_DeduplicateReportDaysAndPreserveMissingVersusZero(bool columnstore)
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create(
+                "LicenceSampleWindows", columnstore
+                    ? LicenceActivityUsageIndexMode.Columnstore
+                    : LicenceActivityUsageIndexMode.BTreeFallback))
+            {
+                SeedDirectory(fixture);
+                SeedOneUsageTable(fixture, "onedrive_user_activity_log",
+                    new[] { "2000-06-18", "2000-06-23" });
+                fixture.Execute(@"
+INSERT dbo.onedrive_user_activity_log
+    (viewed_or_edited, synced, shared_internally, shared_externally, user_id, [date], last_activity_date)
+VALUES
+    (20, 0, 0, 0, 1, '2000-06-18T12:00:00', '2000-06-18T23:59:59'),
+    (3000, 0, 0, 0, 2, '2000-06-16', '2000-06-16'),
+    (3000, 0, 0, 0, 2, '2000-06-24', '2000-06-24');
+UPDATE dbo.onedrive_user_activity_log
+SET last_activity_date = CASE WHEN [date] = '2000-06-18'
+                             THEN '2000-06-13' ELSE '2000-06-24' END
+WHERE user_id = 2 AND [date] IN ('2000-06-18', '2000-06-23');
+UPDATE dbo.onedrive_user_activity_log SET last_activity_date = '2000-06-19'
+WHERE user_id = 4;
+DELETE dbo.onedrive_user_activity_log WHERE user_id = 3 AND [date] = '2000-06-23';");
+
+                var query = LicenceActivityQuery.Create(
+                    "2000-06-14", "2000-06-23", LicenceActivitySqlFixture.NowUtc);
+                var sources = Sources(usageReports: true);
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    query, sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
+                    .Workloads.Single(w => w.Workload == "onedrive");
+                Assert.AreEqual(1, distribution.High);
+                Assert.AreEqual(1, distribution.Moderate);
+                Assert.AreEqual(2, distribution.Zero);
+                Assert.AreEqual(1, distribution.Unknown);
+                CollectionAssert.AreEqual(new[] { "2000-06-18", "2000-06-23" },
+                    overview.Coverage.Single(c => c.Workload == "onedrive")
+                        .SnapshotDates.Select(d => d.ToString("yyyy-MM-dd")).ToArray());
+
+                var users = await fixture.Store().LoadUsersAsync(overview,
+                    query.ForUsers(1, "onedrive", null, "upn", "asc", 5, 1, 20,
+                        LicenceActivitySqlFixture.NowUtc),
+                    sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var active = users.Users.Single(u => u.UserId == 1)
+                    .Workloads.Single(w => w.Workload == "onedrive");
+                Assert.AreEqual(2, active.ActiveSamples);
+                Assert.AreEqual(12d, active.AverageActions.Value,
+                    "Average the per-day maxima (20 and 4), never sum or double-count duplicate snapshots.");
+                Assert.AreEqual(0, users.Users.Single(u => u.UserId == 2)
+                    .Workloads.Single(w => w.Workload == "onedrive").ActiveSamples);
+                Assert.IsTrue(users.MostActive.Any(u => u.UserId == 3),
+                    "A missing sample must not erase positive partial evidence.");
+                Assert.IsFalse(users.LeastActive.Any(u => u.UserId == 3));
+                Assert.AreEqual(4, users.LeastActive.Count);
+            }
+        }
+
         [TestMethod]
         public async Task ConcurrentConnections_DoNotCollideOnTempTableConstraintNames()
         {
@@ -218,6 +279,33 @@ CREATE TABLE #probe
                         NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
                     Assert.AreEqual(3, overview.Licences.Count);
                 }
+            }
+        }
+
+        [TestMethod]
+        public async Task SqlCommandMeasurements_DrainOnSuccessAndSiblingFailure()
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create("LicenceSqlLifetime"))
+            {
+                SeedDirectory(fixture);
+                var measurement = new LicenceActivitySqlMeasurement();
+                var store = fixture.Store(measurement.Instrumentation(includeShowplan: false));
+                await store.LoadOverviewAsync(
+                    OverviewQuery(), Sources(usageReports: true),
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                Assert.AreEqual(0, measurement.ActiveCommands);
+                Assert.AreEqual(0, measurement.ActiveConnections);
+                Assert.IsTrue(measurement.PeakCommands >= 1);
+                Assert.IsTrue(measurement.PeakConnections >= 2);
+
+                fixture.Execute("DROP TABLE dbo.onedrive_user_activity_log;");
+                await Assert.ThrowsExceptionAsync<SqlException>(() => store.LoadOverviewAsync(
+                    OverviewQuery(), Sources(usageReports: true),
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None));
+                Assert.AreEqual(0, measurement.ActiveCommands,
+                    "All sibling commands must drain before the store reports failure.");
+                Assert.AreEqual(0, measurement.ActiveConnections,
+                    "The shared eligibility connection must also be disposed after failure.");
             }
         }
 
