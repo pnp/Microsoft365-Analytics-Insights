@@ -11,7 +11,7 @@ namespace Tests.FakeDataGen.Copilot
     /// department treemap, the intensity scatter and the "where to target enablement" panels all
     /// look broken, because they exist precisely to show variation.
     /// </summary>
-    public enum DepartmentMaturity
+    internal enum DepartmentMaturity
     {
         /// <summary>Mostly Champions and Established users, a few stragglers.</summary>
         Leading = 0,
@@ -36,7 +36,7 @@ namespace Tests.FakeDataGen.Copilot
     /// target of 3 apps). Every persona below records the score that arithmetic produces, so if a
     /// tuning default changes, the expected band here is checkable rather than folklore.
     /// </remarks>
-    public sealed class AdoptionPersona
+    internal sealed class AdoptionPersona
     {
         public AdoptionPersona(
             string name,
@@ -103,7 +103,7 @@ namespace Tests.FakeDataGen.Copilot
     /// the radar/profile visuals exist to tell them apart - which can only be demonstrated on data
     /// that actually contains all three.
     /// </summary>
-    public static class CopilotAdoptionPersonas
+    internal static class CopilotAdoptionPersonas
     {
         // --- Champions ------------------------------------------------------------------------
         // 18 days, 8/day, 5 apps -> every component capped at 1.0 -> 100.0
