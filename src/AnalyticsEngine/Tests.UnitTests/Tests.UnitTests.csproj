@@ -31,6 +31,13 @@
   <ItemGroup>
     <Compile Remove="Generated\**" />
     <Compile Include="AppConfigDefaultsTests.cs" />
+    <Compile Include="LicenceActivityTests.cs" />
+    <Compile Include="LicenceActivityApiTests.cs" />
+    <Compile Include="LicenceActivityHttpHost.cs" />
+    <Compile Include="LicenceActivityLoadTests.cs" />
+    <Compile Include="LicenceActivitySqlFixture.cs" />
+    <Compile Include="LicenceActivitySqlTests.cs" />
+    <Compile Include="LicenceActivityPerformanceTests.cs" />
     <Compile Include="PreInstallAdvisorTests.cs" />
     <Compile Include="ImportCadenceTests.cs" />
     <Compile Include="AppInsightsApiClientTests.cs" />
