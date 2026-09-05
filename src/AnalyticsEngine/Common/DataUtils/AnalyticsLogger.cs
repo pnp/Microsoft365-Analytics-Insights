@@ -377,7 +377,8 @@ namespace DataUtils
             HealthCheck,
             ImporterHeartbeat,
             CopilotAdoptionAnalysis,
-            CopilotAdoptionLifecycle
+            CopilotAdoptionLifecycle,
+            LicenceActivityLifecycle
         }
     }
 }

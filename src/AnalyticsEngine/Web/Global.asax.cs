@@ -80,6 +80,7 @@ namespace Web.AnalyticsWeb
         /// </remarks>
         protected void Application_End(object sender, EventArgs e)
         {
+            Models.LicenceActivity.LicenceActivityTelemetry.Shutdown();
             CopilotAdoptionTelemetryHost.Shutdown(HostingEnvironment.ShutdownReason.ToString());
         }
     }
