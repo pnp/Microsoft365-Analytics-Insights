@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { ComponentProps } from 'react';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import UsersDrillDown from './UsersDrillDown';
@@ -52,7 +53,7 @@ function user(upn: string, workload: string): LicenceActivityUser {
 
 function usersResponse(params: UsersParams): LicenceActivityUsers {
   return {
-    snapshotId: `snap-${params.page}-${params.top}-${params.workload}`,
+    snapshotId: `snap-${params.overviewId}-${params.page}-${params.top}-${params.workload}`,
     generatedUtc: '2026-05-20T00:00:00Z',
     expiresUtc: '2026-05-20T00:02:00Z',
     overviewId: params.overviewId,
@@ -110,14 +111,19 @@ function coverageEntry(over: Partial<LicenceActivityCoverage> = {}): LicenceActi
   };
 }
 
-function renderDrill(coverage: LicenceActivityCoverage[] = []) {
+function renderDrill(
+  coverage: LicenceActivityCoverage[] = [],
+  props: Partial<ComponentProps<typeof UsersDrillDown>> = {},
+) {
   return renderWithProvider(
     <UsersDrillDown
       overviewId="ov1"
+      overviewScope="scope-a"
       licence={licence}
       coverage={coverage}
       onUsersSnapshot={vi.fn()}
       onRefreshOverview={vi.fn()}
+      {...props}
     />,
   );
 }
@@ -289,5 +295,96 @@ describe('UsersDrillDown', () => {
     }));
     renderDrill();
     expect(await screen.findByText(/limited by partial coverage/)).toBeInTheDocument();
+  });
+
+  // Regression for the expiry-recovery page-reset bug. `overviewId` is a per-snapshot generation id:
+  // an expired snapshot is re-fetched under a NEW id for the SAME logical query. Keying the page
+  // reset off `overviewId` bounced an admin browsing page 2 straight back to page 1 every time the
+  // snapshot re-minted. The reset must key off `overviewScope` (the logical window/demographic
+  // identity), which is unchanged by a re-mint.
+  it('keeps the browse page - and the workload/search/sort - when the overview re-mints under a NEW id for the SAME scope', async () => {
+    const onUsersSnapshot = vi.fn();
+    const { rerender } = renderDrill([], { overviewId: 'ov1', overviewScope: 'scope-a', onUsersSnapshot });
+    await waitFor(() => expect(mockUsers).toHaveBeenCalled());
+
+    // Move well away from the defaults: a non-default workload, sort and search, then page 2.
+    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    await waitFor(() => expect(lastParams()).toMatchObject({ workload: 'outlook', page: 1 }));
+    fireEvent.change(screen.getByLabelText('Sort users'), { target: { value: 'upn:asc' } });
+    await waitFor(() => expect(lastParams()).toMatchObject({ sort: 'upn', direction: 'asc' }));
+    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'ada' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ search: 'ada', page: 1 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() =>
+      expect(lastParams()).toMatchObject({
+        overviewId: 'ov1',
+        page: 2,
+        workload: 'outlook',
+        sort: 'upn',
+        direction: 'asc',
+        search: 'ada',
+      }),
+    );
+
+    const callsBefore = mockUsers.mock.calls.length;
+    onUsersSnapshot.mockClear();
+
+    // The overview snapshot expired and was re-minted under a new id - but the reporting window,
+    // demographics and licence (its logical scope) are unchanged.
+    rerender(
+      <UsersDrillDown
+        overviewId="ov2"
+        overviewScope="scope-a"
+        licence={licence}
+        coverage={[]}
+        onUsersSnapshot={onUsersSnapshot}
+        onRefreshOverview={vi.fn()}
+      />,
+    );
+
+    // The new id forces a fresh users fetch, but the admin stays on page 2 with the same view...
+    await waitFor(() => expect(mockUsers.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(lastParams()).toMatchObject({
+      overviewId: 'ov2',
+      page: 2,
+      workload: 'outlook',
+      sort: 'upn',
+      direction: 'asc',
+      search: 'ada',
+    });
+
+    // ...and the export snapshot follows the freshly minted list (a NEW snapshot bound to ov2). The
+    // final reported snapshot is the ov2 one, so the export can only reference the fresh list.
+    const freshSnapshot = `snap-ov2-2-10-outlook`;
+    await waitFor(() => {
+      const calls = onUsersSnapshot.mock.calls;
+      expect(calls[calls.length - 1][0]).toBe(freshSnapshot);
+    });
+  });
+
+  // The opposite direction: a genuine logical-scope change (a new reporting window or demographic
+  // filter, surfaced here as a changed `overviewScope`) MUST reset to page 1, and the fresh fetch
+  // must go against the new snapshot - no old page, no old rows carried over.
+  it('resets to page 1 when the logical scope actually changes', async () => {
+    const { rerender } = renderDrill([], { overviewId: 'ov1', overviewScope: 'scope-a' });
+    await waitFor(() => expect(mockUsers).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ overviewId: 'ov1', page: 2 }));
+
+    const callsBefore = mockUsers.mock.calls.length;
+    // A new reporting window / demographic filter: BOTH the snapshot id and the logical scope change.
+    rerender(
+      <UsersDrillDown
+        overviewId="ov2"
+        overviewScope="scope-b"
+        licence={licence}
+        coverage={[]}
+        onUsersSnapshot={vi.fn()}
+        onRefreshOverview={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(mockUsers.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(lastParams()).toMatchObject({ overviewId: 'ov2', page: 1 });
   });
 });

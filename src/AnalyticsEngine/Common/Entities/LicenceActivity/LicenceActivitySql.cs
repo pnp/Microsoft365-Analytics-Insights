@@ -1118,7 +1118,8 @@ BEGIN
                        THEN 1 ELSE 0
                    END),
                1,
-               CAST(CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END AS bit)
+               -- One pinned sample day: GROUP BY user already collapses duplicate report rows.
+               CAST(1 AS bit)
         FROM #Samples AS chosen
         JOIN #Weeks AS weeks
           ON chosen.sample_date >= weeks.m365_from
@@ -1394,6 +1395,20 @@ FROM PerUser
 OPTION (RECOMPILE);
 ";
 
+        private static string CopilotD7ActivityExpression(string from, string endExclusive)
+        {
+            // Counters describe this period; the user-level date is only a v1-shaped fallback.
+            return @"CASE
+                WHEN report.active_usage_days BETWEEN 1 AND 7
+                  OR report.prompts_all_apps > 0 THEN 1
+                WHEN report.active_usage_days IS NULL
+                 AND report.prompts_all_apps IS NULL
+                 AND report.last_activity_date >= " + from + @"
+                 AND report.last_activity_date < " + endExclusive + @" THEN 1
+                ELSE 0
+            END";
+        }
+
         private static readonly string CopilotOfficialOverview = @"
 DECLARE @copilotLogImported datetime = NULL;
 DECLARE @copilotLogObfuscated bit = 0;
@@ -1527,13 +1542,8 @@ BEGIN
                     (workload, user_id, active_samples, observed_samples, frequency_known)
                 SELECT 5,
                        report.user_id,
-                       CASE
-                           WHEN report.active_usage_days BETWEEN 1 AND 7
-                             OR report.prompts_all_apps > 0
-                             OR (report.last_activity_date >= DATEADD(DAY, -6, report.[date])
-                                 AND report.last_activity_date < DATEADD(DAY, 1, report.[date]))
-                           THEN 1 ELSE 0
-                       END,
+                       " + CopilotD7ActivityExpression(
+                           "DATEADD(DAY, -6, report.[date])", "DATEADD(DAY, 1, report.[date])") + @",
                        1,
                        CAST(CASE
                            WHEN report.active_usage_days BETWEEN 0 AND 7
@@ -1552,17 +1562,8 @@ BEGIN
                 INSERT #Scores
                     (workload, user_id, active_samples, observed_samples, frequency_known)
                 SELECT 5, report.user_id,
-                       SUM(CASE
-                               WHEN report.active_usage_days BETWEEN 1 AND 7
-                                 OR report.prompts_all_apps > 0
-                               THEN 1
-                               WHEN report.active_usage_days IS NULL
-                                AND report.prompts_all_apps IS NULL
-                                AND report.last_activity_date >= DATEADD(DAY, -6, report.[date])
-                                AND report.last_activity_date < DATEADD(DAY, 1, report.[date])
-                               THEN 1
-                               ELSE 0
-                           END),
+                       SUM(" + CopilotD7ActivityExpression(
+                           "DATEADD(DAY, -6, report.[date])", "DATEADD(DAY, 1, report.[date])") + @"),
                        COUNT(*),
                        CAST(CASE
                                 WHEN COUNT(*) = @copilotD7Expected
@@ -2665,13 +2666,7 @@ DECLARE @copilotSampleEnd date =
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
 SELECT 5, report.user_id,
-       SUM(CASE
-               WHEN report.active_usage_days BETWEEN 1 AND 7
-                 OR report.prompts_all_apps > 0
-                 OR (report.last_activity_date >= chosen.copilot_from
-                     AND report.last_activity_date < chosen.end_exclusive)
-               THEN 1 ELSE 0
-           END),
+       SUM(" + CopilotD7ActivityExpression("chosen.copilot_from", "chosen.end_exclusive") + @"),
        COUNT(*),
        CAST(CASE
                 WHEN COUNT(*) = @expected5
