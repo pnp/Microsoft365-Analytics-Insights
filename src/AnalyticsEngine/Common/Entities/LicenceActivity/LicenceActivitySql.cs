@@ -87,6 +87,16 @@ namespace Common.Entities.LicenceActivity
                         SampleParameterName(workload, index));
                 }
             }
+            sql.Append(@"
+UPDATE #Samples
+SET m365_from = CASE WHEN DATEADD(DAY,
+        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
+        sample_date) < @from THEN @from ELSE DATEADD(DAY,
+        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
+        sample_date) END,
+    end_exclusive = DATEADD(DAY, 1, sample_date),
+    copilot_from = DATEADD(DAY, -6, sample_date);
+");
         }
 
         internal static string BuildUsers(
@@ -296,6 +306,19 @@ WHERE (@departmentId IS NULL
   AND EXISTS
       (SELECT 1 FROM dbo.user_license_type_lookups AS owned WHERE owned.user_id = u.id)
 OPTION (RECOMPILE);
+
+-- This shared, connection-scoped index enables batch aggregation without altering source tables.
+-- Editions that cannot index temporary tables as columnstores retain the rowstore primary key.
+IF (SELECT COUNT(*) FROM " + tableName + @") >= 32768
+BEGIN
+    BEGIN TRY
+        EXEC sp_executesql N'CREATE NONCLUSTERED COLUMNSTORE INDEX IX_LicenceActivity_EligibleBatch
+            ON " + tableName + @" (user_id, department_id, country_id);';
+    END TRY
+    BEGIN CATCH
+        PRINT N'Licence activity is using rowstore temporary eligibility.';
+    END CATCH;
+END;
 ");
             if (bandTables != null)
             {
@@ -1095,7 +1118,8 @@ BEGIN
                        THEN 1 ELSE 0
                    END),
                1,
-               CAST(CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END AS bit)
+               -- One pinned sample day: GROUP BY user already collapses duplicate report rows.
+               CAST(1 AS bit)
         FROM #Samples AS chosen
         JOIN #Weeks AS weeks
           ON chosen.sample_date >= weeks.m365_from
@@ -1113,48 +1137,38 @@ BEGIN
         ;WITH PerSample AS
         (
             SELECT activity.user_id,
-                       activity.[date] AS sample_date,
-                       MAX(CASE
-                               WHEN activity.last_activity_date >=
-                                    CASE WHEN report_week.week_start < @from
-                                         THEN @from ELSE report_week.week_start END
-                                AND activity.last_activity_date < DATEADD(DAY, 1, activity.[date])
-                               THEN 1 ELSE 0
-                           END) AS was_active
-            FROM {1} AS activity
-            JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-            CROSS APPLY
-            (
-                    SELECT DATEADD(
-                        DAY, 1 - DATEPART(WEEKDAY, activity.[date]), activity.[date]) AS week_start
-            ) AS report_week
-            WHERE activity.[date] >= @from
+                   chosen.sample_date,
+                   MAX(CASE WHEN activity.last_activity_date >= weeks.m365_from
+                             AND activity.last_activity_date < DATEADD(DAY, 1, chosen.sample_date)
+                            THEN 1 ELSE 0 END) AS was_active
+            FROM #Samples AS chosen
+            JOIN #Weeks AS weeks
+              ON chosen.sample_date = weeks.m365_to
+            JOIN {1} AS activity
+              ON CAST(activity.[date] AS date) = chosen.sample_date
+            WHERE chosen.workload = {0}
+              AND activity.[date] >= @from
               AND activity.[date] < @endExclusive
-              AND activity.[date] < DATEADD(DAY, 1, @settled)
-              AND
-              (
-                      activity.[date] = @to
-                      OR DATEPART(WEEKDAY, activity.[date]) = 7
-              )
-            GROUP BY activity.user_id, activity.[date]
+            GROUP BY activity.user_id, chosen.sample_date
         ),
         PerUser AS
         (
             SELECT user_id,
-                       SUM(was_active) AS active_samples,
-                       COUNT(*) AS observed_samples
+                   SUM(was_active) AS active_samples,
+                   COUNT(*) AS observed_samples
             FROM PerSample
             GROUP BY user_id
         )
         INSERT #Scores
             (workload, user_id, active_samples, observed_samples, frequency_known)
         SELECT {0},
-                   user_id,
+                   per_user.user_id,
                    active_samples,
                    observed_samples,
                    CAST(CASE WHEN observed_samples = @expected{0}
                              THEN 1 ELSE 0 END AS bit)
-        FROM PerUser
+        FROM PerUser AS per_user
+        JOIN #EligibleUsers AS eligible ON eligible.user_id = per_user.user_id
         OPTION (RECOMPILE, MAXDOP 1);
     END;
 END;
@@ -1381,6 +1395,20 @@ FROM PerUser
 OPTION (RECOMPILE);
 ";
 
+        private static string CopilotD7ActivityExpression(string from, string endExclusive)
+        {
+            // Counters describe this period; the user-level date is only a v1-shaped fallback.
+            return @"CASE
+                WHEN report.active_usage_days BETWEEN 1 AND 7
+                  OR report.prompts_all_apps > 0 THEN 1
+                WHEN report.active_usage_days IS NULL
+                 AND report.prompts_all_apps IS NULL
+                 AND report.last_activity_date >= " + from + @"
+                 AND report.last_activity_date < " + endExclusive + @" THEN 1
+                ELSE 0
+            END";
+        }
+
         private static readonly string CopilotOfficialOverview = @"
 DECLARE @copilotLogImported datetime = NULL;
 DECLARE @copilotLogObfuscated bit = 0;
@@ -1508,17 +1536,14 @@ BEGIN
         BEGIN
             IF @copilotD7Expected = 1
             BEGIN
+                DECLARE @copilotSingleSample date =
+                    (SELECT sample_date FROM #Samples WHERE workload = 5);
                 INSERT #Scores
                     (workload, user_id, active_samples, observed_samples, frequency_known)
                 SELECT 5,
                        report.user_id,
-                       CASE
-                           WHEN report.active_usage_days BETWEEN 1 AND 7
-                             OR report.prompts_all_apps > 0
-                             OR (report.last_activity_date >= DATEADD(DAY, -6, report.[date])
-                                 AND report.last_activity_date < DATEADD(DAY, 1, report.[date]))
-                           THEN 1 ELSE 0
-                       END,
+                       " + CopilotD7ActivityExpression(
+                           "DATEADD(DAY, -6, report.[date])", "DATEADD(DAY, 1, report.[date])") + @",
                        1,
                        CAST(CASE
                            WHEN report.active_usage_days BETWEEN 0 AND 7
@@ -1526,12 +1551,10 @@ BEGIN
                            THEN 1 ELSE 0
                        END AS bit)
                 FROM dbo.copilot_usage_user_activity_log AS report
-                JOIN #Samples AS chosen
-                  ON chosen.workload = 5
-                 AND report.[date] >= chosen.sample_date
-                 AND report.[date] < DATEADD(DAY, 1, chosen.sample_date)
                 JOIN #EligibleUsers AS eligible ON eligible.user_id = report.user_id
                 WHERE report.report_period_days = 7
+                  AND report.[date] >= @copilotSingleSample
+                  AND report.[date] < DATEADD(DAY, 1, @copilotSingleSample)
                 OPTION (RECOMPILE, MAXDOP 1);
             END
             ELSE
@@ -1539,38 +1562,26 @@ BEGIN
                 INSERT #Scores
                     (workload, user_id, active_samples, observed_samples, frequency_known)
                 SELECT 5, report.user_id,
-                       SUM(CASE
-                               WHEN report.active_usage_days BETWEEN 1 AND 7
-                                 OR report.prompts_all_apps > 0
-                               THEN 1
-                               WHEN report.active_usage_days IS NULL
-                                AND report.prompts_all_apps IS NULL
-                                AND report.last_activity_date >= DATEADD(DAY, -6, report.[date])
-                                AND report.last_activity_date < DATEADD(DAY, 1, report.[date])
-                               THEN 1
-                               ELSE 0
-                           END),
+                       SUM(" + CopilotD7ActivityExpression(
+                           "DATEADD(DAY, -6, report.[date])", "DATEADD(DAY, 1, report.[date])") + @"),
                        COUNT(*),
                        CAST(CASE
                                 WHEN COUNT(*) = @copilotD7Expected
-                                 AND COUNT(report.active_usage_days) = COUNT(*)
-                                 AND MIN(report.active_usage_days) >= 0
-                                 AND MAX(report.active_usage_days) <= 7
-                                 AND (COUNT(report.prompts_all_apps) = 0
-                                      OR MIN(report.prompts_all_apps) >= 0)
+                                 AND MIN(CASE WHEN report.active_usage_days BETWEEN 0 AND 7
+                                               AND (report.prompts_all_apps IS NULL
+                                                    OR report.prompts_all_apps >= 0)
+                                              THEN 1 ELSE 0 END) = 1
                                 THEN 1 ELSE 0
                             END AS bit)
                 FROM dbo.copilot_usage_user_activity_log AS report WITH (INDEX(0))
+                JOIN #Samples AS chosen
+                  ON chosen.workload = 5
+                 AND CAST(report.[date] AS date) = chosen.sample_date
                 JOIN #EligibleUsers AS eligible ON eligible.user_id = report.user_id
                 WHERE report.report_period_days = 7
                   AND report.[date] >= DATEADD(DAY, 6, @from)
                   AND report.[date] < @endExclusive
                   AND report.[date] < DATEADD(DAY, 1, @settled)
-                  AND
-                  (
-                      report.[date] = @to
-                      OR DATEPART(WEEKDAY, report.[date]) = 7
-                  )
                 GROUP BY report.user_id
                 OPTION (RECOMPILE, MAXDOP 4);
             END
@@ -2488,6 +2499,17 @@ WHERE owned.license_type_id = @licenceTypeId
        OR u.mail LIKE @searchPattern ESCAPE N'\')
 OPTION (RECOMPILE);
 
+IF (SELECT COUNT(*) FROM #EligibleUsers) >= 32768
+BEGIN
+    BEGIN TRY
+        EXEC sp_executesql N'CREATE NONCLUSTERED COLUMNSTORE INDEX IX_LicenceActivity_EligibleBatch
+            ON #EligibleUsers (user_id);';
+    END TRY
+    BEGIN CATCH
+        PRINT N'Licence activity is using rowstore temporary eligibility.';
+    END CATCH;
+END;
+
 CREATE TABLE #Coverage
 (
     workload tinyint NOT NULL PRIMARY KEY,
@@ -2514,6 +2536,9 @@ CREATE TABLE #Samples
 (
     workload tinyint NOT NULL,
     sample_date date NOT NULL,
+    m365_from date NULL,
+    end_exclusive date NULL,
+    copilot_from date NULL,
     PRIMARY KEY (workload, sample_date)
 );
 
@@ -2546,41 +2571,25 @@ CREATE TABLE #Scores
 ;WITH PerSample AS
 (
     SELECT activity.user_id,
-           CAST(activity.[date] AS date) AS sample_date,
+           chosen.sample_date,
            MAX({2}) AS actions,
            MAX(CASE
-                   WHEN activity.last_activity_date >= @from
-                    AND activity.last_activity_date < @endExclusive
-                    AND activity.last_activity_date < DATEADD(DAY, 1, CAST(activity.[date] AS date))
-                    AND activity.last_activity_date >= DATEADD(DAY,
-                        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                        CAST(activity.[date] AS date))
-                    AND activity.last_activity_date < DATEADD(DAY, 7,
-                        DATEADD(DAY,
-                            -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                            CAST(activity.[date] AS date)))
+                   WHEN activity.last_activity_date >= chosen.m365_from
+                    AND activity.last_activity_date < chosen.end_exclusive
                    THEN activity.last_activity_date
                END) AS last_activity_utc,
            MAX(CASE
-                   WHEN activity.last_activity_date >= @from
-                    AND activity.last_activity_date < @endExclusive
-                    AND activity.last_activity_date < DATEADD(DAY, 1, CAST(activity.[date] AS date))
-                    AND activity.last_activity_date >= DATEADD(DAY,
-                        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                        CAST(activity.[date] AS date))
-                    AND activity.last_activity_date < DATEADD(DAY, 7,
-                        DATEADD(DAY,
-                            -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                            CAST(activity.[date] AS date)))
+                   WHEN activity.last_activity_date >= chosen.m365_from
+                    AND activity.last_activity_date < chosen.end_exclusive
                    THEN 1 ELSE 0
                END) AS was_active
     FROM {1} AS activity
     JOIN #Samples AS chosen
       ON chosen.workload = {0}
-     AND activity.[date] >= chosen.sample_date
-     AND activity.[date] < DATEADD(DAY, 1, chosen.sample_date)
+     AND CAST(activity.[date] AS date) = chosen.sample_date
     JOIN {3} AS eligible ON eligible.user_id = activity.user_id
-    GROUP BY activity.user_id, CAST(activity.[date] AS date)
+    WHERE activity.[date] >= @from AND activity.[date] < @endExclusive
+    GROUP BY activity.user_id, chosen.sample_date
 )
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
@@ -2608,7 +2617,32 @@ OPTION (RECOMPILE);
                 && coverage.ReportPeriodDays.HasValue)
             {
                 if (coverage.ReportPeriodDays.Value == 7)
-                    sql.Append(CopilotD7Users.Replace("#ActivityScope", scopeTable));
+                {
+                    if (scopeTable == "#ReturnedUsers")
+                    {
+                        sql.Append(@"
+CREATE TABLE #CopilotReportIds (id int NOT NULL PRIMARY KEY);
+INSERT #CopilotReportIds (id)
+SELECT report.id
+FROM dbo.copilot_usage_user_activity_log AS report WITH (INDEX(IX_date_user_id_report_period_days))
+JOIN #Samples AS chosen
+  ON chosen.workload = 5
+ AND report.[date] >= chosen.sample_date
+ AND report.[date] < DATEADD(DAY, 1, chosen.sample_date)
+JOIN #ReturnedUsers AS eligible ON eligible.user_id = report.user_id
+WHERE report.report_period_days = 7
+OPTION (RECOMPILE);
+");
+                        sql.Append(CopilotD7Users.Replace(
+                            "AS report WITH (INDEX(0))",
+                            "AS report JOIN #CopilotReportIds AS ids ON ids.id = report.id")
+                            .Replace("#ActivityScope", scopeTable));
+                    }
+                    else
+                    {
+                        sql.Append(CopilotD7Users.Replace("#ActivityScope", scopeTable));
+                    }
+                }
                 else
                     sql.Append(CopilotLongUsers.Replace("#ActivityScope", scopeTable));
                 return;
@@ -2625,16 +2659,14 @@ OPTION (RECOMPILE);
         }
 
         private static readonly string CopilotD7Users = @"
+DECLARE @copilotSampleFrom date =
+    (SELECT MIN(sample_date) FROM #Samples WHERE workload = 5);
+DECLARE @copilotSampleEnd date =
+    (SELECT MAX(end_exclusive) FROM #Samples WHERE workload = 5);
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
 SELECT 5, report.user_id,
-       SUM(CASE
-               WHEN report.active_usage_days BETWEEN 1 AND 7
-                 OR report.prompts_all_apps > 0
-                 OR (report.last_activity_date >= DATEADD(DAY, -6, CAST(report.[date] AS date))
-                     AND report.last_activity_date < DATEADD(DAY, 1, CAST(report.[date] AS date)))
-               THEN 1 ELSE 0
-           END),
+       SUM(" + CopilotD7ActivityExpression("chosen.copilot_from", "chosen.end_exclusive") + @"),
        COUNT(*),
        CAST(CASE
                 WHEN COUNT(*) = @expected5
@@ -2651,17 +2683,18 @@ SELECT 5, report.user_id,
                THEN AVG(CAST(report.prompts_all_apps AS float))
        END,
        MAX(CASE
-               WHEN report.last_activity_date >= DATEADD(DAY, -6, CAST(report.[date] AS date))
-                AND report.last_activity_date < DATEADD(DAY, 1, CAST(report.[date] AS date))
+               WHEN report.last_activity_date >= chosen.copilot_from
+                AND report.last_activity_date < chosen.end_exclusive
                THEN report.last_activity_date
            END)
 FROM dbo.copilot_usage_user_activity_log AS report WITH (INDEX(0))
 JOIN #Samples AS chosen
   ON chosen.workload = 5
- AND report.[date] >= chosen.sample_date
- AND report.[date] < DATEADD(DAY, 1, chosen.sample_date)
+ AND CAST(report.[date] AS date) = chosen.sample_date
 JOIN #ActivityScope AS eligible ON eligible.user_id = report.user_id
 WHERE report.report_period_days = 7
+  AND report.[date] >= @copilotSampleFrom
+  AND report.[date] < @copilotSampleEnd
 GROUP BY report.user_id
 OPTION (RECOMPILE);
 ";

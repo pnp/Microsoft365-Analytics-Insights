@@ -891,6 +891,10 @@ DROP TABLE #SyntheticSamples;";
         private const int MaximumRetainedMessages = 128;
         private long _totalLogicalReads;
         private int _retainedMessages;
+        private int _activeConnections;
+        private int _peakConnections;
+        private int _activeCommands;
+        private int _peakCommands;
         private readonly ConcurrentDictionary<string, long> _logicalReadsByOperation =
             new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
 
@@ -899,6 +903,10 @@ DROP TABLE #SyntheticSamples;";
         internal readonly ConcurrentQueue<string> Operations = new ConcurrentQueue<string>();
 
         internal long TotalLogicalReads => Interlocked.Read(ref _totalLogicalReads);
+        internal int ActiveConnections => Volatile.Read(ref _activeConnections);
+        internal int PeakConnections => Volatile.Read(ref _peakConnections);
+        internal int ActiveCommands => Volatile.Read(ref _activeCommands);
+        internal int PeakCommands => Volatile.Read(ref _peakCommands);
         internal IEnumerable<string> LogicalReadsByOperation =>
             _logicalReadsByOperation
                 .OrderBy(pair => pair.Key, StringComparer.Ordinal)
@@ -936,6 +944,12 @@ DROP TABLE #SyntheticSamples;";
         {
             Action<SqlConnection, string> configure = (connection, operation) =>
             {
+                RecordPeak(ref _peakConnections, Interlocked.Increment(ref _activeConnections));
+                connection.StateChange += (sender, args) =>
+                {
+                    if (args.CurrentState == System.Data.ConnectionState.Closed)
+                        Interlocked.Decrement(ref _activeConnections);
+                };
                 connection.InfoMessage += (sender, args) => RecordMessage(args.Message, operation);
                 using (var command = new SqlCommand(
                     includeShowplan
@@ -950,12 +964,37 @@ DROP TABLE #SyntheticSamples;";
             return new SqlLicenceActivityStoreInstrumentation
             {
                 CommandTimeoutSeconds = commandTimeoutSeconds,
+                CommandActiveChanged = active =>
+                {
+                    if (active) RecordPeak(ref _peakCommands, Interlocked.Increment(ref _activeCommands));
+                    else Interlocked.Decrement(ref _activeCommands);
+                },
                 ConnectionOpened = connection => configure(connection, null),
                 ConnectionOpenedForOperation = configure,
                 OperationCompleted = (operation, elapsedMs) =>
                     Operations.Enqueue(operation + "=" + elapsedMs.ToString(CultureInfo.InvariantCulture) + "ms"),
-                ShowplanReceived = plan => Showplans.Enqueue(plan)
+                ShowplanReceived = plan =>
+                {
+                    Showplans.Enqueue(plan);
+                    var directory = Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_PLAN_DIRECTORY");
+                    if (!string.IsNullOrWhiteSpace(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                        File.WriteAllText(Path.Combine(directory, Guid.NewGuid().ToString("N") + ".sqlplan"), plan);
+                    }
+                }
             };
+        }
+
+        private static void RecordPeak(ref int peak, int value)
+        {
+            int previous;
+            do
+            {
+                previous = Volatile.Read(ref peak);
+                if (previous >= value) return;
+            }
+            while (Interlocked.CompareExchange(ref peak, value, previous) != previous);
         }
     }
 }
