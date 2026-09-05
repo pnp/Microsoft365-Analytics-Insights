@@ -175,6 +175,10 @@ jobs:
           -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
         env:
           Configuration: ${{ matrix.configuration }}
+      - name: Execute portal tests
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
+        working-directory: src\AnalyticsEngine\Web\Scripts\portal
+        run: npm run test
       - name: Execute unit tests
         if: needs.setup_tests.outputs.run_dotnet == 'true'
         uses: jesusfer/vstest-action@f5ec12ddb71f6e151b738fa4740f8fea61e9214b
