@@ -91,4 +91,20 @@ describe('UsersTable', () => {
     }
     expect(screen.getByText('Not imported')).toBeInTheDocument();
   });
+
+  it('keeps the expected sample count visible when no per-user observations exist', () => {
+    renderWithProvider(
+      <UsersTable
+        rows={[usr({ workloads: [evidence({
+          status: 'missingCoverage', band: 'unknown', activeSamples: 0,
+          observedSamples: 0, expectedSamples: 8, averageActions: null, lastActivityUtc: null,
+        })] })]}
+        workload="teams"
+        workloadLabel="Teams"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Show all workloads/ }));
+    expect(screen.getAllByText(/0 observed of 8 expected/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
+  });
 });

@@ -112,4 +112,20 @@ describe('SkuAssignments', () => {
     fireEvent.click(screen.getByText('Άδεια σπάνια'));
     expect(onSelect).toHaveBeenCalledWith(99);
   });
+
+  it('filters and selects unnamed SKUs using a real identifier fallback', () => {
+    const many: LicenceActivitySku[] = Array.from({ length: 9 }, (_, i) => ({
+      licenceTypeId: i + 1, name: i < 2 ? null : `SKU ${i}`,
+      skuId: i === 0 ? 'CONTOSO_UNKNOWN' : null,
+      assignedUsers: i + 1, workloads: [],
+    }));
+    const onSelect = vi.fn();
+    renderWithProvider(<SkuAssignments licences={many} selectedLicenceTypeId={null} onSelect={onSelect} />);
+    fireEvent.change(screen.getByLabelText('Filter licences'), { target: { value: 'CONTOSO_UNKNOWN' } });
+    const identifier = screen.getByRole('button', { name: /CONTOSO_UNKNOWN/ });
+    fireEvent.click(identifier);
+    expect(onSelect).toHaveBeenCalledWith(1);
+    fireEvent.change(screen.getByLabelText('Filter licences'), { target: { value: 'Licence 2' } });
+    expect(screen.getByRole('button', { name: 'Licence 2' })).toBeInTheDocument();
+  });
 });

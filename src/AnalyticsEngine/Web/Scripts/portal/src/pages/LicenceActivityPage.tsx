@@ -28,7 +28,7 @@ import DemographicBreakdown from '../components/licenceActivity/DemographicBreak
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
 import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErrorBar';
 import { presetRange } from '../components/licenceActivity/dateRange';
-import { formatCount } from '../components/licenceActivity/format';
+import { formatCount, licenceName } from '../components/licenceActivity/format';
 import {
   mergeDemographicOptions,
   EMPTY_CATALOGUE,
@@ -509,7 +509,7 @@ export default function LicenceActivityPage() {
                       Workload activity
                     </Text>
                     <Text size={200} className={styles.muted}>
-                      {selectedLicence.name} &middot; five workloads, measured separately
+                      {licenceName(selectedLicence)} &middot; five workloads, measured separately
                     </Text>
                   </div>
                   <div style={{ marginTop: '12px' }}>
