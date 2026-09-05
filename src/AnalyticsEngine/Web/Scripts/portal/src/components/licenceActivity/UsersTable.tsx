@@ -88,7 +88,7 @@ function formatAverage(value: number | null | undefined): string {
 /** Active/observed samples with expected context, distinguishing "nothing observed" from a real 0. */
 function formatSamples(ev: LicenceActivityEvidence | null): string {
   if (!ev) return UNKNOWN_TEXT;
-  if (ev.observedSamples <= 0) return DASH; // nothing observed - not a measured zero
+  if (ev.observedSamples <= 0) return `${DASH}; ${ev.observedSamples} observed of ${ev.expectedSamples} expected`;
   const base = `${ev.activeSamples} / ${ev.observedSamples}`;
   return ev.observedSamples !== ev.expectedSamples ? `${base} of ${ev.expectedSamples}` : base;
 }
@@ -135,7 +135,7 @@ function AllWorkloadsDetail({ user }: { user: LicenceActivityUser }) {
             <th className={styles.detailHead}>Coverage</th>
             <th className={styles.detailHead}>Band</th>
             <th className={styles.detailHead}>Source &middot; Measure</th>
-            <th className={styles.detailHead}>Active / observed</th>
+            <th className={styles.detailHead}>Active / observed (expected)</th>
             <th className={styles.detailHead}>Avg</th>
             <th className={styles.detailHead}>Last activity</th>
           </tr>

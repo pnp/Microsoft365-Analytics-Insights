@@ -25,7 +25,7 @@ import UsersTable from './UsersTable';
 import ApiErrorBar, { describeError } from './ApiErrorBar';
 import { useUsersQuery } from './useUsersQuery';
 import { statusMeta } from './statuses';
-import { formatCount } from './format';
+import { formatCount, licenceName } from './format';
 
 const PAGE_SIZE = 50;
 const MIN_TOP = 1;
@@ -274,7 +274,7 @@ export default function UsersDrillDown({
       <div className={styles.head}>
         <div className={styles.headText}>
           <Text weight="semibold" size={400}>
-            {licence.name}
+            {licenceName(licence)}
           </Text>
           <Text size={200} className={styles.muted}>
             {formatCount(licence.assignedUsers)} users hold this licence. Choose a workload to rank them by its
