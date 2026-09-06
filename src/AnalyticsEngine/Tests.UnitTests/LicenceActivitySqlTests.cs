@@ -193,6 +193,67 @@ INSERT dbo.user_license_type_lookups (user_id, license_type_id) VALUES (1, 1);")
             }
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task CustomSampleWindows_DeduplicateReportDaysAndPreserveMissingVersusZero(bool columnstore)
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create(
+                "LicenceSampleWindows", columnstore
+                    ? LicenceActivityUsageIndexMode.Columnstore
+                    : LicenceActivityUsageIndexMode.BTreeFallback))
+            {
+                SeedDirectory(fixture);
+                SeedOneUsageTable(fixture, "onedrive_user_activity_log",
+                    new[] { "2000-06-18", "2000-06-23" });
+                fixture.Execute(@"
+INSERT dbo.onedrive_user_activity_log
+    (viewed_or_edited, synced, shared_internally, shared_externally, user_id, [date], last_activity_date)
+VALUES
+    (20, 0, 0, 0, 1, '2000-06-18T12:00:00', '2000-06-18T23:59:59'),
+    (3000, 0, 0, 0, 2, '2000-06-16', '2000-06-16'),
+    (3000, 0, 0, 0, 2, '2000-06-24', '2000-06-24');
+UPDATE dbo.onedrive_user_activity_log
+SET last_activity_date = CASE WHEN [date] = '2000-06-18'
+                             THEN '2000-06-13' ELSE '2000-06-24' END
+WHERE user_id = 2 AND [date] IN ('2000-06-18', '2000-06-23');
+UPDATE dbo.onedrive_user_activity_log SET last_activity_date = '2000-06-19'
+WHERE user_id = 4;
+DELETE dbo.onedrive_user_activity_log WHERE user_id = 3 AND [date] = '2000-06-23';");
+
+                var query = LicenceActivityQuery.Create(
+                    "2000-06-14", "2000-06-23", LicenceActivitySqlFixture.NowUtc);
+                var sources = Sources(usageReports: true);
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    query, sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
+                    .Workloads.Single(w => w.Workload == "onedrive");
+                Assert.AreEqual(1, distribution.High);
+                Assert.AreEqual(1, distribution.Moderate);
+                Assert.AreEqual(2, distribution.Zero);
+                Assert.AreEqual(1, distribution.Unknown);
+                CollectionAssert.AreEqual(new[] { "2000-06-18", "2000-06-23" },
+                    overview.Coverage.Single(c => c.Workload == "onedrive")
+                        .SnapshotDates.Select(d => d.ToString("yyyy-MM-dd")).ToArray());
+
+                var users = await fixture.Store().LoadUsersAsync(overview,
+                    query.ForUsers(1, "onedrive", null, "upn", "asc", 5, 1, 20,
+                        LicenceActivitySqlFixture.NowUtc),
+                    sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var active = users.Users.Single(u => u.UserId == 1)
+                    .Workloads.Single(w => w.Workload == "onedrive");
+                Assert.AreEqual(2, active.ActiveSamples);
+                Assert.AreEqual(12d, active.AverageActions.Value,
+                    "Average the per-day maxima (20 and 4), never sum or double-count duplicate snapshots.");
+                Assert.AreEqual(0, users.Users.Single(u => u.UserId == 2)
+                    .Workloads.Single(w => w.Workload == "onedrive").ActiveSamples);
+                Assert.IsTrue(users.MostActive.Any(u => u.UserId == 3),
+                    "A missing sample must not erase positive partial evidence.");
+                Assert.IsFalse(users.LeastActive.Any(u => u.UserId == 3));
+                Assert.AreEqual(4, users.LeastActive.Count);
+            }
+        }
+
         [TestMethod]
         public async Task ConcurrentConnections_DoNotCollideOnTempTableConstraintNames()
         {
@@ -218,6 +279,178 @@ CREATE TABLE #probe
                         NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
                     Assert.AreEqual(3, overview.Licences.Count);
                 }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(7, false)]
+        [DataRow(28, false)]
+        [DataRow(90, false)]
+        [DataRow(180, false)]
+        [DataRow(7, true)]
+        [DataRow(28, true)]
+        [DataRow(90, true)]
+        [DataRow(180, true)]
+        public async Task BoundedSamplePivot_PreservesEveryEdgeWeekAndDuplicateCounterMaximum(
+            int days, bool columnstore)
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create(
+                "LicencePivotEdges", columnstore
+                    ? LicenceActivityUsageIndexMode.Columnstore
+                    : LicenceActivityUsageIndexMode.BTreeFallback))
+            {
+                SeedDirectory(fixture);
+                var from = new DateTime(2000, 1, 2); // A Sunday start exercises both partial edge weeks.
+                var to = from.AddDays(days - 1);
+                var dates = Enumerable.Range(0, days).Select(day => from.AddDays(day))
+                    .Where(date => date.DayOfWeek == DayOfWeek.Sunday || date == to)
+                    .Select(date => date.ToString("yyyy-MM-dd")).ToArray();
+                if (days == 180) Assert.AreEqual(27, dates.Length);
+                var workloads = new[] { "teams", "outlook", "onedrive", "sharepoint" };
+                foreach (var workload in workloads)
+                {
+                    var table = workload + "_user_activity_log";
+                    SeedOneUsageTable(fixture, table, dates);
+                    SeedOneUsageTable(fixture, table, dates);
+                    var metric = workload == "teams" ? "private_chat_count"
+                        : workload == "outlook" ? "email_send_count" : "viewed_or_edited";
+                    fixture.Execute($@"
+UPDATE dbo.{table} SET [date] = DATEADD(HOUR, 12, [date])
+WHERE id IN (SELECT MAX(id) FROM dbo.{table} GROUP BY user_id, [date]);
+UPDATE dbo.{table} SET {metric} = {metric} + 16
+WHERE user_id = 1 AND [date] = '{dates.Last()}T12:00:00';
+DELETE dbo.{table} WHERE user_id = 5
+    OR (user_id = 3 AND CAST([date] AS date) = '{dates.Last()}');");
+                }
+                var query = LicenceActivityQuery.Create(
+                    from.ToString("yyyy-MM-dd"), to.ToString("yyyy-MM-dd"), LicenceActivitySqlFixture.NowUtc);
+                var sources = Sources(usageReports: true);
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    query, sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                foreach (var workload in workloads)
+                {
+                    var coverage = overview.Coverage.Single(c => c.Workload == workload);
+                    Assert.AreEqual("available", coverage.Status);
+                    Assert.AreEqual(dates.Length, coverage.ExpectedSamples);
+                    var users = await fixture.Store().LoadUsersAsync(
+                        overview, query.ForUsers(1, workload, null, "activity", "desc", 5, 1, 20,
+                            LicenceActivitySqlFixture.NowUtc),
+                        sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                    var active = users.Users.Single(u => u.UserId == 1).Workloads.Single(w => w.Workload == workload);
+                    Assert.AreEqual(dates.Length, active.ActiveSamples);
+                    Assert.AreEqual(dates.Length, active.ObservedSamples);
+                    Assert.AreEqual((workload == "teams" || workload == "outlook" ? 5d : 4d)
+                        + 16d / dates.Length, active.AverageActions.Value, 0.000001);
+                    Assert.AreEqual("zero", users.Users.Single(u => u.UserId == 4)
+                        .Workloads.Single(w => w.Workload == workload).Band);
+                    Assert.AreEqual(dates.Length - 1, users.Users.Single(u => u.UserId == 3)
+                        .Workloads.Single(w => w.Workload == workload).ObservedSamples);
+                    Assert.IsFalse(users.LeastActive.Any(u => u.UserId == 3 || u.UserId == 5));
+                    Assert.IsTrue(users.MostActive.Any(u => u.UserId == 3));
+                    Assert.IsNull(users.Users.Single(u => u.UserId == 5)
+                        .Workloads.Single(w => w.Workload == workload).AverageActions);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("teams", false)]
+        [DataRow("outlook", false)]
+        [DataRow("onedrive", false)]
+        [DataRow("sharepoint", false)]
+        [DataRow("teams", true)]
+        [DataRow("outlook", true)]
+        [DataRow("onedrive", true)]
+        [DataRow("sharepoint", true)]
+        public async Task SingleWeek_DuplicateReportDaysAgreeWithDrilldown(
+            string workload, bool columnstore)
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create(
+                "LicenceSingleDayDuplicates", columnstore
+                    ? LicenceActivityUsageIndexMode.Columnstore
+                    : LicenceActivityUsageIndexMode.BTreeFallback))
+            {
+                SeedDirectory(fixture);
+                var table = workload + "_user_activity_log";
+                SeedOneUsageTable(fixture, table, new[] { "2000-06-25", "2000-06-25" });
+                fixture.Execute($@"
+UPDATE dbo.{table}
+SET [date] = DATEADD(HOUR, 12, [date])
+WHERE id IN (SELECT MAX(id) FROM dbo.{table} GROUP BY user_id);
+UPDATE dbo.{table} SET last_activity_date = '2000-06-18' WHERE user_id = 2;
+DELETE dbo.{table} WHERE user_id = 3;
+DELETE dbo.{table} WHERE user_id = 5 AND [date] = '2000-06-25T12:00:00';");
+
+                var query = LicenceActivityQuery.Create(
+                    "2000-06-19", "2000-06-25", LicenceActivitySqlFixture.NowUtc);
+                var sources = Sources(usageReports: true);
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    query, sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var users = await fixture.Store().LoadUsersAsync(
+                    overview, query.ForUsers(1, workload, null, "upn", "asc", 5, 1, 20,
+                        LicenceActivitySqlFixture.NowUtc),
+                    sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
+                    .Workloads.Single(w => w.Workload == workload);
+                var coverage = overview.Coverage.Single(c => c.Workload == workload);
+                Assert.AreEqual("available", coverage.Status);
+                Assert.AreEqual(1, coverage.ExpectedSamples);
+                Assert.AreEqual(1, coverage.ObservedSamples);
+                Assert.AreEqual(1, distribution.High,
+                    "Duplicate rows on the one pinned day are still one observed active sample.");
+                Assert.AreEqual(3, distribution.Zero);
+                Assert.AreEqual(1, distribution.Unknown);
+                Assert.AreEqual(0, distribution.Moderate + distribution.Low);
+                Assert.AreEqual(5, users.TotalUsers);
+                foreach (var user in users.Users)
+                {
+                    var evidence = user.Workloads.Single(w => w.Workload == workload);
+                    var expectedBand = user.UserId == 1 ? "high"
+                        : user.UserId == 3 ? "unknown" : "zero";
+                    Assert.AreEqual(expectedBand, evidence.Band);
+                    Assert.AreEqual(user.UserId == 3 ? 0 : 1, evidence.ObservedSamples);
+                    Assert.AreEqual(user.UserId == 1 ? 1 : 0, evidence.ActiveSamples);
+                }
+                var active = users.Users.Single(u => u.UserId == 1)
+                    .Workloads.Single(w => w.Workload == workload);
+                Assert.AreEqual(workload == "teams" || workload == "outlook" ? 5d : 4d,
+                    active.AverageActions.Value,
+                    "Duplicate rolling counters are snapshot evidence, not additional actions.");
+                CollectionAssert.AreEquivalent(new[] { 1 },
+                    users.MostActive.Where(u => u.Workloads.Single(w => w.Workload == workload)
+                        .ActiveSamples > 0).Select(u => u.UserId).ToArray());
+                Assert.IsFalse(users.MostActive.Any(u => u.UserId == 3));
+                CollectionAssert.AreEquivalent(new[] { 1, 2, 4, 5 },
+                    users.LeastActive.Select(u => u.UserId).ToArray());
+                Assert.IsNull(users.Users.Single(u => u.UserId == 3)
+                    .Workloads.Single(w => w.Workload == workload).AverageActions);
+            }
+        }
+
+        [TestMethod]
+        public async Task SqlCommandMeasurements_DrainOnSuccessAndSiblingFailure()
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create("LicenceSqlLifetime"))
+            {
+                SeedDirectory(fixture);
+                var measurement = new LicenceActivitySqlMeasurement();
+                var store = fixture.Store(measurement.Instrumentation(includeShowplan: false));
+                await store.LoadOverviewAsync(
+                    OverviewQuery(), Sources(usageReports: true),
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                Assert.AreEqual(0, measurement.ActiveCommands);
+                Assert.AreEqual(0, measurement.ActiveConnections);
+                Assert.IsTrue(measurement.PeakCommands >= 1);
+                Assert.IsTrue(measurement.PeakConnections >= 2);
+
+                fixture.Execute("DROP TABLE dbo.onedrive_user_activity_log;");
+                await Assert.ThrowsExceptionAsync<SqlException>(() => store.LoadOverviewAsync(
+                    OverviewQuery(), Sources(usageReports: true),
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None));
+                Assert.AreEqual(0, measurement.ActiveCommands,
+                    "All sibling commands must drain before the store reports failure.");
+                Assert.AreEqual(0, measurement.ActiveConnections,
+                    "The shared eligibility connection must also be disposed after failure.");
             }
         }
 
@@ -480,6 +713,96 @@ VALUES (7, 0, 0, 0, 1, '{date}', NULL);");
                 Assert.AreEqual(0, users.LeastActive.Count);
                 Assert.AreEqual("unknown", users.Users.Single(u => u.UserId == 1)
                     .Workloads.Single(w => w.Workload == "copilot").Band);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(1)]
+        [DataRow(8)]
+        public async Task Copilot_D7CountersTakePrecedenceOverUserLastActivityAcrossQueryPaths(int weeks)
+        {
+            using (var fixture = LicenceActivitySqlFixture.Create("LicenceCopilotCounterAuthority"))
+            {
+                SeedDirectory(fixture);
+                fixture.Execute(@"
+INSERT dbo.copilot_usage_report_import_log
+    (report_name, report_refresh_date, report_version, report_period, imported_utc,
+     rows_read, rows_saved, is_upn_obfuscated, error)
+VALUES
+    (N'getMicrosoft365CopilotUsageUserDetail', '2000-06-25', N'v2', N'D7',
+     '2000-07-01T01:00:00', 4, 4, 0, NULL);");
+                foreach (var date in CopilotD7Dates.Skip(CopilotD7Dates.Length - weeks))
+                {
+                    // Counters belong to the period; lastActivityDate comes from the user envelope.
+                    // A v1-shaped row has neither counter and supplies positive evidence, not frequency.
+                    fixture.Execute($@"
+INSERT dbo.copilot_usage_user_activity_log
+    (report_period_days, prompts_all_apps, active_usage_days, is_upn_obfuscated,
+     user_id, [date], last_activity_date)
+VALUES
+    (7, 0, 0, 0, 1, '{date}', '{date}'),
+    (7, 12, 0, 0, 2, '{date}', NULL),
+    (7, NULL, NULL, 0, 3, '{date}', '{date}'),
+    (7, 0, 0, 0, 4, '{date}', NULL);");
+                }
+
+                var query = weeks == 8 ? OverviewQuery() : LicenceActivityQuery.Create(
+                    "2000-06-19", "2000-06-25", LicenceActivitySqlFixture.NowUtc);
+                var sources = Sources(usageReports: false, copilotReports: true);
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    query, sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var users = await fixture.Store().LoadUsersAsync(
+                    overview, query.ForUsers(1, "copilot", null, "upn", "asc", 5, 1, 20,
+                        LicenceActivitySqlFixture.NowUtc),
+                    sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
+                    .Workloads.Single(w => w.Workload == "copilot");
+                Assert.AreEqual("available", overview.Coverage.Single(c => c.Workload == "copilot").Status);
+                Assert.AreEqual(1, distribution.High,
+                    "An explicit D7 zero must not become active because the user-level date is in range.");
+                Assert.AreEqual(2, distribution.Zero);
+                Assert.AreEqual(2, distribution.Unknown);
+                Assert.AreEqual(0, distribution.Moderate + distribution.Low);
+                foreach (var user in users.Users)
+                {
+                    var evidence = user.Workloads.Single(w => w.Workload == "copilot");
+                    var expectedBand = user.UserId == 2 ? "high"
+                        : user.UserId == 1 || user.UserId == 4 ? "zero" : "unknown";
+                    Assert.AreEqual(expectedBand, evidence.Band,
+                        "Overview and drilldown must use the same D7 activity rule for user " + user.UserId);
+                    Assert.AreEqual(user.UserId == 2 || user.UserId == 3 ? weeks : 0,
+                        evidence.ActiveSamples);
+                    Assert.AreEqual(user.UserId == 5 ? 0 : weeks, evidence.ObservedSamples);
+                }
+                Assert.AreEqual("partial", users.Users.Single(u => u.UserId == 3)
+                    .Workloads.Single(w => w.Workload == "copilot").Status);
+                Assert.IsNull(users.Users.Single(u => u.UserId == 3)
+                    .Workloads.Single(w => w.Workload == "copilot").AverageActions);
+                Assert.AreEqual(12d, users.Users.Single(u => u.UserId == 2)
+                    .Workloads.Single(w => w.Workload == "copilot").AverageActions.Value);
+                CollectionAssert.AreEquivalent(new[] { 2, 3 },
+                    users.MostActive.Where(u => u.Workloads.Single(w => w.Workload == "copilot")
+                        .ActiveSamples > 0).Select(u => u.UserId).ToArray());
+                Assert.IsFalse(users.MostActive.Any(u => u.UserId == 5));
+                CollectionAssert.AreEquivalent(new[] { 1, 2, 4 },
+                    users.LeastActive.Select(u => u.UserId).ToArray());
+
+                // Selecting another workload takes the bounded #ReturnedUsers/#CopilotReportIds
+                // supporting-evidence path rather than Copilot's #EligibleUsers ranking path.
+                var nonCopilot = await fixture.Store().LoadUsersAsync(
+                    overview, query.ForUsers(1, "teams", null, "upn", "asc", 5, 1, 20,
+                        LicenceActivitySqlFixture.NowUtc),
+                    sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                foreach (var expectedUser in users.Users)
+                {
+                    var expected = expectedUser.Workloads.Single(w => w.Workload == "copilot");
+                    var supporting = nonCopilot.Users.Single(u => u.UserId == expectedUser.UserId)
+                        .Workloads.Single(w => w.Workload == "copilot");
+                    Assert.AreEqual(expected.Band, supporting.Band);
+                    Assert.AreEqual(expected.ActiveSamples, supporting.ActiveSamples);
+                    Assert.AreEqual(expected.ObservedSamples, supporting.ObservedSamples);
+                    Assert.AreEqual(expected.AverageActions, supporting.AverageActions);
+                }
             }
         }
 

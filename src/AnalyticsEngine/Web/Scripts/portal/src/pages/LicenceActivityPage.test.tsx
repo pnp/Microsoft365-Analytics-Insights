@@ -318,6 +318,142 @@ describe('LicenceActivityPage - export refresh after expiry', () => {
   });
 });
 
+describe('LicenceActivityPage - browse page survives an expiry refresh', () => {
+  const usersParams = () => mockUsers.mock.calls[mockUsers.mock.calls.length - 1][0];
+
+  it('keeps the admin on page 2 (and workload/sort/search) when Refresh re-mints the overview under a NEW id', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
+
+    // The overview re-mints on reload: ov1 first, ov2 after Refresh. A brand-new id per reload is
+    // exactly the case that used to reset the browse page (the drill-down treated the id as scope).
+    let ovCount = 0;
+    mockOverview.mockImplementation(async () => {
+      ovCount += 1;
+      return overview({ snapshotId: ovCount === 1 ? 'ov1' : 'ov2' });
+    });
+
+    // A multi-page list whose snapshot id is bound to the overview id + page, so a re-mint is visible.
+    mockUsers.mockImplementation(async (params) => ({
+      ...usersResponse(),
+      overviewId: params.overviewId,
+      snapshotId: `us-${params.overviewId}-p${params.page}`,
+      totalUsers: 120,
+      query: {
+        ...echo,
+        licenceTypeId: params.licenceTypeId,
+        workload: params.workload,
+        search: params.search ?? '',
+        sort: params.sort,
+        direction: params.direction,
+        top: params.top,
+        page: params.page,
+        pageSize: params.pageSize,
+      },
+    }));
+
+    // The first export fails as expired (users snapshots expire before the overview); later ones pass.
+    mockDownload
+      .mockRejectedValueOnce(
+        new LicenceActivityApiError('expired', 410, 'This snapshot has expired or was refreshed.'),
+      )
+      .mockResolvedValue(undefined);
+
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+    await act(async () => {});
+
+    // Move off the defaults: a non-default workload and sort and search, then browse to page 2.
+    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    await waitFor(() => expect(usersParams()).toMatchObject({ workload: 'outlook', page: 1 }));
+    fireEvent.change(screen.getByLabelText('Sort users'), { target: { value: 'upn:asc' } });
+    await waitFor(() => expect(usersParams()).toMatchObject({ sort: 'upn', direction: 'asc' }));
+    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'ada' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(usersParams()).toMatchObject({ search: 'ada', page: 1 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov1', page: 2 }));
+
+    // Export -> 410 -> a Refresh prompt appears.
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    expect(await screen.findByText(/expired/i)).toBeInTheDocument();
+
+    const usersBefore = mockUsers.mock.calls.length;
+    // Exact 'Refresh' resolves the export bar's button (the drill-down's is 'Refresh users').
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    // The overview re-mints to ov2 and the list is re-fetched - but the admin is STILL on page 2 with
+    // the same workload/sort/search. (With the bug the fresh id reset this to page 1.)
+    await waitFor(() => expect(usersParams().overviewId).toBe('ov2'));
+    expect(mockUsers.mock.calls.length).toBeGreaterThan(usersBefore);
+    expect(usersParams()).toMatchObject({
+      overviewId: 'ov2',
+      page: 2,
+      workload: 'outlook',
+      sort: 'upn',
+      direction: 'asc',
+      search: 'ada',
+    });
+
+    await waitFor(() => expect(screen.queryByText(/expired/i)).not.toBeInTheDocument());
+    await act(async () => {});
+    // Refresh alone must not silently re-export.
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+
+    // A subsequent explicit export references the fresh overview id AND the fresh users snapshot.
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    await waitFor(() => {
+      const last = mockDownload.mock.calls[mockDownload.mock.calls.length - 1][0];
+      expect(last.overviewId).toBe('ov2');
+      expect(last.usersId).toBe('us-ov2-p2');
+    });
+  });
+});
+
+describe('LicenceActivityPage - a real scope change resets the browse page', () => {
+  const usersParams = () => mockUsers.mock.calls[mockUsers.mock.calls.length - 1][0];
+
+  it('returns to page 1 and drops the stale export id when the demographic filter changes', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
+    // A distinct overview id per demographic scope; department 1 stays in the catalogue so it remains
+    // selectable after the scoped reply.
+    mockOverview.mockImplementation(async (q) => overview({ snapshotId: `ov-dept-${q.departmentId ?? 'all'}` }));
+    mockUsers.mockImplementation(async (params) => ({
+      ...usersResponse(),
+      overviewId: params.overviewId,
+      snapshotId: `us-${params.overviewId}-p${params.page}`,
+      totalUsers: 120,
+      query: { ...echo, page: params.page },
+    }));
+
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+    await act(async () => {});
+
+    // Browse to page 2 of the current (all-departments) scope.
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov-dept-all', page: 2 }));
+
+    // Change the department filter: a genuine scope change, NOT a re-mint of the same query.
+    fireEvent.change(screen.getByLabelText('Filter by department'), { target: { value: '1' } });
+    await waitFor(() => expect(mockOverview.mock.calls.some((c) => c[0].departmentId === 1)).toBe(true));
+
+    // The re-scoped list is fetched fresh at PAGE 1 against the NEW overview - never the old page/id.
+    await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov-dept-1', page: 1 }));
+
+    // Let the fresh page-1 list settle (its snapshot id is captured for the export).
+    await screen.findAllByText('ada@contoso.com');
+    await act(async () => {});
+
+    // And an export now references the new scope's ids, never the pre-change ones.
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    await waitFor(() => {
+      const last = mockDownload.mock.calls[mockDownload.mock.calls.length - 1][0];
+      expect(last.overviewId).toBe('ov-dept-1');
+      expect(last.usersId).toBe('us-ov-dept-1-p1');
+    });
+  });
+});
+
 describe('LicenceActivityPage - demographic filter options', () => {
   it('keeps every department selectable after a scoped reply, so you can switch straight from one to another', async () => {
     mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
