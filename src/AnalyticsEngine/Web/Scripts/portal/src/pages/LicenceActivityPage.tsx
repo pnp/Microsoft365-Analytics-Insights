@@ -560,6 +560,7 @@ export default function LicenceActivityPage() {
                       <UsersDrillDown
                         key={selectedLicence.licenceTypeId}
                         overviewId={overview.snapshotId}
+                        overviewScope={overviewKey ?? ''}
                         licence={selectedLicence}
                         coverage={overview.coverage}
                         onUsersSnapshot={handleUsersSnapshot}
