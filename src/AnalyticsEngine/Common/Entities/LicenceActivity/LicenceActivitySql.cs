@@ -1104,16 +1104,6 @@ CROSS APPLY
         {
             if (maximumSamples < 1 || maximumSamples > 27)
                 throw new ArgumentOutOfRangeException(nameof(maximumSamples));
-            var samples = Enumerable.Range(1, maximumSamples).ToArray();
-            var aggregates = string.Join(",\r\n", samples.Select(sample =>
-                "MAX(CASE WHEN chosen.sample_number = " + sample.ToString(CultureInfo.InvariantCulture)
-                + @" THEN CASE WHEN activity.last_activity_date >= chosen.m365_from
-                                AND activity.last_activity_date < chosen.end_exclusive
-                               THEN 2 ELSE 1 END ELSE 0 END) AS sample" + sample));
-            var observed = string.Join(" + ", samples.Select(sample =>
-                "CASE WHEN sample" + sample + " > 0 THEN 1 ELSE 0 END"));
-            var active = string.Join(" + ", samples.Select(sample =>
-                "CASE WHEN sample" + sample + " = 2 THEN 1 ELSE 0 END"));
             sql.AppendFormat(
                 CultureInfo.InvariantCulture,
                 @"
@@ -1148,8 +1138,12 @@ BEGIN
     END
     ELSE
     BEGIN
-        -- A bounded pivot has one group per user, not one per user/report day.
-        -- MAX retains duplicate-day evidence: 0 absent, 1 observed zero, 2 positive.
+        -- One group per user, not one per user/report day. Counting DISTINCT pinned sample
+        -- numbers retains duplicate-day evidence exactly as the previous per-sample MAX pivot
+        -- did: a sample observed by any duplicate row counts once, and a sample positive in any
+        -- duplicate row counts as active once. COUNT(DISTINCT ...) ignores the NULLs produced by
+        -- the anchor's LEFT JOIN, so an eligible user with no matching row still scores zero
+        -- observed samples and is removed below, keeping absent distinct from observed-zero.
         -- Preserve the eligible population through aggregation so sample-join selectivity
         -- cannot shrink its group estimate and memory grant. Remove absent groups afterward.
         ;WITH Chosen AS
@@ -1164,7 +1158,11 @@ BEGIN
         ),
         PerUser AS
         (
-            SELECT eligible.user_id, {2}
+            SELECT eligible.user_id,
+                   COUNT(DISTINCT CASE WHEN activity.last_activity_date >= chosen.m365_from
+                                        AND activity.last_activity_date < chosen.end_exclusive
+                                       THEN chosen.sample_number END) AS active_samples,
+                   COUNT(DISTINCT chosen.sample_number) AS observed_samples
             FROM #EligibleUsers AS eligible
             LEFT JOIN
             (
@@ -1175,11 +1173,6 @@ BEGIN
                  AND activity.[date] < @endExclusive
             ) ON activity.user_id = eligible.user_id
             GROUP BY eligible.user_id
-        ),
-        Totals AS
-        (
-            SELECT user_id, {3} AS active_samples, {4} AS observed_samples
-            FROM PerUser
         )
         INSERT #Scores
             (workload, user_id, active_samples, observed_samples, frequency_known)
@@ -1189,13 +1182,13 @@ BEGIN
                    observed_samples,
                    CAST(CASE WHEN observed_samples = @expected{0}
                              THEN 1 ELSE 0 END AS bit)
-        FROM Totals AS per_user
+        FROM PerUser AS per_user
         WHERE observed_samples > 0
         OPTION (RECOMPILE, MAXDOP 1);
     END;
 END;
 ",
-                workload, table, aggregates, active, observed);
+                workload, table);
         }
 
         private static void AppendCopilotOverview(StringBuilder sql, LicenceActivitySources sources)
