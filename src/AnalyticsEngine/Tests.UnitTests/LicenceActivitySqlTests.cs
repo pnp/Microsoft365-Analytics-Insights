@@ -291,11 +291,11 @@ CREATE TABLE #probe
         [DataRow(28, true)]
         [DataRow(90, true)]
         [DataRow(180, true)]
-        public async Task BoundedSamplePivot_PreservesEveryEdgeWeekAndDuplicateCounterMaximum(
+        public async Task DistinctPinnedSampleCounts_PreserveMissingZeroDuplicatesAndExpectedBoundary(
             int days, bool columnstore)
         {
             using (var fixture = LicenceActivitySqlFixture.Create(
-                "LicencePivotEdges", columnstore
+                "LicenceDistinctSampleCounts", columnstore
                     ? LicenceActivityUsageIndexMode.Columnstore
                     : LicenceActivityUsageIndexMode.BTreeFallback))
             {
@@ -305,6 +305,8 @@ CREATE TABLE #probe
                 var dates = Enumerable.Range(0, days).Select(day => from.AddDays(day))
                     .Where(date => date.DayOfWeek == DayOfWeek.Sunday || date == to)
                     .Select(date => date.ToString("yyyy-MM-dd")).ToArray();
+                Assert.IsTrue(dates.Length > 1,
+                    "This regression must execute the multi-sample distinct-count branch.");
                 if (days == 180) Assert.AreEqual(27, dates.Length);
                 var workloads = new[] { "teams", "outlook", "onedrive", "sharepoint" };
                 foreach (var workload in workloads)
@@ -312,13 +314,33 @@ CREATE TABLE #probe
                     var table = workload + "_user_activity_log";
                     SeedOneUsageTable(fixture, table, dates);
                     SeedOneUsageTable(fixture, table, dates);
+                    SeedOneUsageTable(fixture, table, dates);
                     var metric = workload == "teams" ? "private_chat_count"
                         : workload == "outlook" ? "email_send_count" : "viewed_or_edited";
                     fixture.Execute($@"
-UPDATE dbo.{table} SET [date] = DATEADD(HOUR, 12, [date])
-WHERE id IN (SELECT MAX(id) FROM dbo.{table} GROUP BY user_id, [date]);
-UPDATE dbo.{table} SET {metric} = {metric} + 16
-WHERE user_id = 1 AND [date] = '{dates.Last()}T12:00:00';
+;WITH DuplicateRows AS
+(
+    SELECT id,
+           ROW_NUMBER() OVER
+               (PARTITION BY user_id, CAST([date] AS date) ORDER BY id) AS duplicate_number
+    FROM dbo.{table}
+)
+UPDATE activity
+SET [date] = DATEADD(HOUR, (duplicates.duplicate_number - 1) * 6, activity.[date])
+FROM dbo.{table} AS activity
+JOIN DuplicateRows AS duplicates ON duplicates.id = activity.id;
+
+UPDATE dbo.{table}
+SET {metric} = CASE WHEN [date] = '{dates.Last()}T00:00:00' THEN {metric} + 16 ELSE 0 END,
+    last_activity_date =
+        CASE
+            WHEN [date] = '{dates.Last()}T00:00:00' THEN '{dates.Last()}'
+            WHEN [date] = '{dates.Last()}T06:00:00' THEN DATEADD(DAY, -7, CAST([date] AS date))
+            ELSE NULL
+        END
+WHERE user_id = 1
+  AND CAST([date] AS date) = '{dates.Last()}';
+
 DELETE dbo.{table} WHERE user_id = 5
     OR (user_id = 3 AND CAST([date] AS date) = '{dates.Last()}');");
                 }
@@ -332,6 +354,15 @@ DELETE dbo.{table} WHERE user_id = 5
                     var coverage = overview.Coverage.Single(c => c.Workload == workload);
                     Assert.AreEqual("available", coverage.Status);
                     Assert.AreEqual(dates.Length, coverage.ExpectedSamples);
+                    var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
+                        .Workloads.Single(w => w.Workload == workload);
+                    Assert.AreEqual(1, distribution.Zero);
+                    Assert.AreEqual(2, distribution.Unknown);
+                    Assert.AreEqual(2, distribution.High + distribution.Moderate + distribution.Low,
+                        "Two complete users have positive evidence.");
+                    Assert.AreEqual(3,
+                        distribution.High + distribution.Moderate + distribution.Low + distribution.Zero,
+                        "Exactly three users have complete evidence at the expected-sample boundary.");
                     var users = await fixture.Store().LoadUsersAsync(
                         overview, query.ForUsers(1, workload, null, "activity", "desc", 5, 1, 20,
                             LicenceActivitySqlFixture.NowUtc),
@@ -341,14 +372,23 @@ DELETE dbo.{table} WHERE user_id = 5
                     Assert.AreEqual(dates.Length, active.ObservedSamples);
                     Assert.AreEqual((workload == "teams" || workload == "outlook" ? 5d : 4d)
                         + 16d / dates.Length, active.AverageActions.Value, 0.000001);
-                    Assert.AreEqual("zero", users.Users.Single(u => u.UserId == 4)
-                        .Workloads.Single(w => w.Workload == workload).Band);
-                    Assert.AreEqual(dates.Length - 1, users.Users.Single(u => u.UserId == 3)
-                        .Workloads.Single(w => w.Workload == workload).ObservedSamples);
+                    var explicitZero = users.Users.Single(u => u.UserId == 4)
+                        .Workloads.Single(w => w.Workload == workload);
+                    Assert.AreEqual("zero", explicitZero.Band);
+                    Assert.AreEqual(dates.Length, explicitZero.ObservedSamples);
+                    Assert.AreEqual(0, explicitZero.ActiveSamples);
+                    var partial = users.Users.Single(u => u.UserId == 3)
+                        .Workloads.Single(w => w.Workload == workload);
+                    Assert.AreEqual("partial", partial.Status);
+                    Assert.AreEqual(dates.Length - 1, partial.ObservedSamples);
                     Assert.IsFalse(users.LeastActive.Any(u => u.UserId == 3 || u.UserId == 5));
                     Assert.IsTrue(users.MostActive.Any(u => u.UserId == 3));
-                    Assert.IsNull(users.Users.Single(u => u.UserId == 5)
-                        .Workloads.Single(w => w.Workload == workload).AverageActions);
+                    var absent = users.Users.Single(u => u.UserId == 5)
+                        .Workloads.Single(w => w.Workload == workload);
+                    Assert.AreEqual("missingCoverage", absent.Status);
+                    Assert.AreEqual(0, absent.ObservedSamples);
+                    Assert.AreEqual(0, absent.ActiveSamples);
+                    Assert.IsNull(absent.AverageActions);
                 }
             }
         }
