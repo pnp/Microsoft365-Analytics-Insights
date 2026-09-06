@@ -24,6 +24,24 @@ namespace Tests.UnitTests
     {
         internal static readonly DateTime Now = new DateTime(2000, 7, 1, 0, 0, 0, DateTimeKind.Utc);
 
+        [DataTestMethod]
+        [DataRow("x")]
+        [DataRow("Καλημέρα κόσμε")]
+        [DataRow("𐐀😀")]
+        [DataRow("\"\\\r\n")]
+        public void JsonSizeBudget_MatchesSerializedUtf8IncludingEscapesAndSurrogatePairs(string text)
+        {
+            var budget = LicenceActivitySnapshotCache<LicenceActivityOverview>.MaximumJsonBytes;
+            var repetitions = 4097;
+            var prefix = string.Concat(Enumerable.Repeat(text, repetitions));
+            var prefixBytes = Encoding.UTF8.GetByteCount(JsonConvert.SerializeObject(prefix));
+            var exact = prefix + new string('x', budget - prefixBytes);
+            Assert.AreEqual(budget, Encoding.UTF8.GetByteCount(JsonConvert.SerializeObject(exact)));
+            LicenceActivitySnapshotCache<LicenceActivityOverview>.EnsureJsonWithinBudget(exact);
+            Assert.ThrowsException<InvalidOperationException>(() =>
+                LicenceActivitySnapshotCache<LicenceActivityOverview>.EnsureJsonWithinBudget(exact + "x"));
+        }
+
         [TestMethod]
         public void CustomDates_AreExactUtcAndNeverRounded()
         {

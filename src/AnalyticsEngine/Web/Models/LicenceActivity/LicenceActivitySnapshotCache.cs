@@ -2,6 +2,7 @@ using Common.Entities.LicenceActivity;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -133,8 +134,7 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
                 value.ExpiresUtc = value.GeneratedUtc.Add(_ttl);
                 if (notAfterUtc.HasValue && value.ExpiresUtc > notAfterUtc.Value) value.ExpiresUtc = notAfterUtc.Value;
                 if (value.ExpiresUtc <= value.GeneratedUtc) throw new LicenceActivityExpiredException();
-                if (Encoding.UTF8.GetByteCount(JsonConvert.SerializeObject(value)) > MaximumJsonBytes)
-                    throw new InvalidOperationException("The bounded report response exceeds its size budget.");
+                EnsureJsonWithinBudget(value);
                 entry.Lifetime.Token.ThrowIfCancellationRequested();
             }
             catch (Exception ex)
@@ -174,6 +174,37 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
                 entry.Deadline.Dispose();
                 entry.Lifetime.Dispose();
                 diagnostics?.Dispose();
+            }
+        }
+
+        internal static void EnsureJsonWithinBudget(object value)
+        {
+            // Count the same UTF-8 JSON without allocating a response-sized UTF-16 string on the LOH.
+            using (var stream = new JsonSizeStream())
+            using (var text = new StreamWriter(stream, new UTF8Encoding(false), 4096))
+            using (var json = new JsonTextWriter(text))
+            {
+                JsonSerializer.CreateDefault().Serialize(json, value);
+            }
+        }
+
+        private sealed class JsonSizeStream : Stream
+        {
+            private long _length;
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => _length;
+            public override long Position { get => _length; set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                _length += count;
+                if (_length > MaximumJsonBytes)
+                    throw new InvalidOperationException("The bounded report response exceeds its size budget.");
             }
         }
 
