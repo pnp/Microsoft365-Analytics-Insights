@@ -5,6 +5,15 @@
 // "nobody did this" when the truth is "we didn't measure it". These helpers force the caller to be
 // explicit about the null case rather than letting `null` coerce to 0 somewhere in a template.
 
+import type { LicenceActivitySku } from '../../types/licenceActivity';
+
+/** A licence name can be absent in storage; use an actual identifier rather than invent a product. */
+export function licenceName(sku: LicenceActivitySku): string {
+  if (sku.name?.trim()) return sku.name;
+  if (sku.skuId?.trim()) return sku.skuId;
+  return `Licence ${sku.licenceTypeId}`;
+}
+
 /** Rendered for a value that is genuinely unknown, as opposed to a measured zero. */
 export const UNKNOWN_TEXT = 'Unknown';
 

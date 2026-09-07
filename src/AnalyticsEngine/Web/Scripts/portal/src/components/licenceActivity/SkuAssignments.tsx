@@ -2,7 +2,7 @@ import { memo, useMemo, useState, type CSSProperties } from 'react';
 import { makeStyles, tokens, Card, Text, Input } from '@fluentui/react-components';
 import type { LicenceActivityDistribution, LicenceActivitySku } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
-import { formatCount } from './format';
+import { formatCount, licenceName } from './format';
 import { useLaTableStyles } from './tableStyles';
 import { MiniDistribution, BandLegend } from './MiniDistribution';
 
@@ -94,7 +94,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
   const [filter, setFilter] = useState('');
 
   const sorted = useMemo(
-    () => [...licences].sort((a, b) => b.assignedUsers - a.assignedUsers || a.name.localeCompare(b.name)),
+    () => [...licences].sort((a, b) => b.assignedUsers - a.assignedUsers || licenceName(a).localeCompare(licenceName(b))),
     [licences],
   );
 
@@ -102,7 +102,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
     const q = filter.trim().toLocaleLowerCase();
     if (!q) return sorted;
     return sorted.filter(
-      (s) => s.name.toLocaleLowerCase().includes(q) || (s.skuId ?? '').toLocaleLowerCase().includes(q),
+      (s) => licenceName(s).toLocaleLowerCase().includes(q) || (s.skuId ?? '').toLocaleLowerCase().includes(q),
     );
   }, [sorted, filter]);
 
@@ -187,9 +187,9 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
                     >
                       <span className={styles.sku}>
                         <Text size={300} weight="semibold">
-                          {sku.name}
+                          {licenceName(sku)}
                         </Text>
-                        {sku.skuId && (
+                        {sku.skuId && sku.skuId !== licenceName(sku) && (
                           <Text size={100} className={styles.muted}>
                             {sku.skuId}
                           </Text>
