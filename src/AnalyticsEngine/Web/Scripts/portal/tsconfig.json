@@ -19,5 +19,7 @@
     "esModuleInterop": true,
     "isolatedModules": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts"],
+  "//": "Test files and the test harness are checked and run by Vitest (vitest.config.ts), not by the production `tsc --noEmit` build, so exclude them here to keep `npm run build` independent of the test-only toolchain types.",
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test"]
 }
