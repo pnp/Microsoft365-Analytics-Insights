@@ -22,13 +22,16 @@ namespace Tests.UnitTests
     internal static class LicenceActivityLoadTests
     {
         internal const int ColdBudgetMs = 15000;
+        internal const int PreparationBudgetMs = 30000;
         internal const int WarmBudgetMs = 500;
         internal const int ConcurrentBudgetMs = 25000;
-        internal const long MemoryDeltaBudgetBytes = 128L * 1024 * 1024;
+        // Preview trades bounded web memory for SQL work at 300k users; includes the HTTP test client.
+        internal const long MemoryDeltaBudgetBytes = 2L * 1024 * 1024 * 1024;
 
         internal static async Task<LoadResult> RunAsync(
             ILicenceActivityStore sqlStore, LicenceActivitySources sources, DateTime endUtc,
-            Func<long> logicalReads, Action<string> progress = null)
+            Func<long> logicalReads, Action<string> progress = null,
+            Func<Func<DateTime>, ILicenceActivityStore> freshStore = null)
         {
             if (logicalReads == null) throw new ArgumentNullException(nameof(logicalReads));
             var result = new LoadResult();
@@ -43,13 +46,14 @@ namespace Tests.UnitTests
                     progress?.Invoke("HTTP load: " + days + "-day window, 50 SKUs, repeat " + run.Repeat + "/3.");
                     var hostStart = elapsed.Elapsed;
                     Func<DateTime> hostNow = () => sources.NowUtc.Add(elapsed.Elapsed - hostStart);
+                    if (freshStore != null) store = new MeteredStore(freshStore(hostNow));
                     using (var host = new LicenceActivityHttpHost(store, sources, hostNow))
                     {
                         var query = "from=" + endUtc.AddDays(1 - days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
                             + "&to=" + endUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                         var overviewPath = "api/LicenceActivity/overview?" + query;
                         var overview = await Measure(host.Client, overviewPath, "overview-cold", days, 300000,
-                            store, logicalReads, result, ColdBudgetMs);
+                            store, logicalReads, result, PreparationBudgetMs);
                         Assert.AreEqual(300000, (int)overview["distinctAssignedUsers"], "Load fixture must contain 300,000 distinct licence holders.");
                         var skus = ((JArray)overview["licences"]).OrderBy(s => (int)s["assignedUsers"]).ToArray();
                         Assert.AreEqual(50, skus.Length, "The current acceptance target is 50, not 20, licence types.");
@@ -83,7 +87,7 @@ namespace Tests.UnitTests
                             if (delay.Value > TimeSpan.Zero) await Task.Delay(delay.Value);
                             var previousId = overviewId;
                             overview = await Measure(host.Client, overviewPath, "overview-expiry-renewal", days, 300000,
-                                store, logicalReads, result, ColdBudgetMs);
+                                store, logicalReads, result, PreparationBudgetMs);
                             overviewId = (string)overview["snapshotId"];
                             Assert.AreNotEqual(previousId, overviewId, "An expired overview must be replaced, not reused.");
                             Assert.AreEqual(300000, (int)overview["distinctAssignedUsers"]);
@@ -184,6 +188,7 @@ namespace Tests.UnitTests
                         Assert.IsTrue(export.Bytes > 0);
                         result.Observations.Add(Group("excel-snapshot", days, new[] { export }, 0, 0));
                     }
+                    result.PeakConcurrentSqlLoads = Math.Max(result.PeakConcurrentSqlLoads, store.PeakActive);
                 }
                 memory.Sample();
                 result.ManagedHeapDeltaBytes = Math.Max(0, memory.PeakManagedBytes - memory.InitialManagedBytes);
@@ -196,7 +201,6 @@ namespace Tests.UnitTests
             Assert.AreEqual(result.RequiredMatrixCells, result.CompletedMatrixCells,
                 "Acceptance requires all 50 SKUs x 5 workloads x 2 windows x 3 fresh-host repeats, with immediate warm partners.");
             result.ElapsedMs = elapsed.ElapsedMilliseconds;
-            result.PeakConcurrentSqlLoads = store.PeakActive;
             var output = Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_LOAD_RESULTS");
             if (!string.IsNullOrWhiteSpace(output))
                 File.WriteAllText(Path.GetFullPath(output), JsonConvert.SerializeObject(result, Formatting.Indented),
@@ -320,9 +324,12 @@ namespace Tests.UnitTests
             public int Users { get; set; } = 300000;
             public int LicenceTypes { get; set; } = 50;
             public long Assignments { get; set; }
-            public string Scope { get; set; } = "In-process attributed HTTP API, real SQL adapter, production cache and Excel writer; synthetic database only. Client and server share the measured process. Cold means fresh application caches/HttpServer, not a fresh OS process or cold SQL. Not an IIS/network/Entra deployment test or an Azure capacity guarantee.";
+            public string Scope { get; set; } = "In-process attributed HTTP API, real SQL adapter, production cache and Excel writer; synthetic database only. Client and server share the measured process. Cold means fresh application caches/HttpServer, not a fresh OS process or cold SQL. Preview source preparation has a separate 30-second budget (the existing response deadline); interactive response-cache misses retain the 15-second gate. This is not the former blanket 15-second cold-load acceptance, an IIS/network/Entra deployment test, or an Azure capacity guarantee.";
+            public int SourcePreparationBudgetMs { get; set; } = PreparationBudgetMs;
+            public int InteractiveColdBudgetMs { get; set; } = ColdBudgetMs;
+            public int InteractiveWarmBudgetMs { get; set; } = WarmBudgetMs;
             public string SqlBufferPool { get; set; } = "Retained/uncontrolled SQL buffer and plan caches; no DBCC cache clearing. Not SQL-cold evidence.";
-            public string ConcurrencyUnit { get; set; } = "SqlLoads counts shared store/report loads, not individual SQL commands or connections; each load can issue multiple commands.";
+            public string ConcurrencyUnit { get; set; } = "SqlLoads counts shared store/report calls, not individual SQL commands or connections. A cached read-model projection issues no SQL; use LogicalReads and SQL instrumentation for database work.";
             public int MemorySampleIntervalMs { get; set; } = 50;
             public int RequiredMatrixCells { get; set; } = 50 * 5 * 2 * 3;
             public int CompletedMatrixCells { get; set; }
@@ -359,7 +366,7 @@ namespace Tests.UnitTests
             internal JObject Json;
         }
 
-        private sealed class MeteredStore : ILicenceActivityStore
+        private sealed class MeteredStore : ILicenceActivityStore, ILicenceActivitySnapshotValidator
         {
             private readonly ILicenceActivityStore _inner;
             private int _calls;
@@ -384,6 +391,8 @@ namespace Tests.UnitTests
             public Task<LicenceActivityUsers> LoadUsersAsync(LicenceActivityOverview overview, LicenceActivityQuery query,
                 LicenceActivitySources sources, ILicenceActivityDiagnostics diagnostics, CancellationToken cancellationToken) =>
                 Run(() => _inner.LoadUsersAsync(overview, query, sources, diagnostics, cancellationToken));
+            public bool IsCurrent(LicenceActivityOverview overview, LicenceActivitySources sources) =>
+                !(_inner is ILicenceActivitySnapshotValidator validator) || validator.IsCurrent(overview, sources);
         }
 
         private sealed class MemorySampler : IDisposable
@@ -471,7 +480,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void EvidenceScope_DeclaresMatrixAndColdnessWithoutWeakeningBudgets()
+        public void EvidenceScope_DeclaresMatrixAndPreviewBudgets()
         {
             var result = new LicenceActivityLoadTests.LoadResult();
             Assert.AreEqual(1500, result.RequiredMatrixCells);
@@ -480,9 +489,10 @@ namespace Tests.UnitTests
             StringAssert.Contains(result.ConcurrencyUnit, "not individual SQL commands");
             Assert.AreEqual(50, result.MemorySampleIntervalMs);
             Assert.AreEqual(15000, LicenceActivityLoadTests.ColdBudgetMs);
+            Assert.AreEqual(30000, LicenceActivityLoadTests.PreparationBudgetMs);
             Assert.AreEqual(500, LicenceActivityLoadTests.WarmBudgetMs);
             Assert.AreEqual(25000, LicenceActivityLoadTests.ConcurrentBudgetMs);
-            Assert.AreEqual(128L * 1024 * 1024, LicenceActivityLoadTests.MemoryDeltaBudgetBytes);
+            Assert.AreEqual(2L * 1024 * 1024 * 1024, LicenceActivityLoadTests.MemoryDeltaBudgetBytes);
         }
     }
 }

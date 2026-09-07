@@ -57,7 +57,7 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
 
         internal Task<T> GetAsync(
             string scope, string key, Func<ILicenceActivityDiagnostics, CancellationToken, Task<T>> load,
-            DateTime? notAfterUtc = null)
+            DateTime? notAfterUtc = null, Func<T, bool> isCurrent = null)
         {
             if (load == null) throw new ArgumentNullException(nameof(load));
             Entry entry;
@@ -67,7 +67,12 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
                 Prune();
                 if (notAfterUtc.HasValue && notAfterUtc <= _utcNow())
                     throw new LicenceActivityExpiredException();
-                if (_entries.TryGetValue(compoundKey, out var existing)) return existing.Completion.Task;
+                if (_entries.TryGetValue(compoundKey, out var existing))
+                {
+                    if (existing.Value == null || isCurrent == null || isCurrent(existing.Value))
+                        return existing.Completion.Task;
+                    _entries.Remove(compoundKey);
+                }
                 Entry oldest = null;
                 if (_entries.Count >= _capacity)
                 {
@@ -132,6 +137,8 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
                 value.SnapshotId = Guid.NewGuid().ToString("N");
                 value.GeneratedUtc = _utcNow();
                 value.ExpiresUtc = value.GeneratedUtc.Add(_ttl);
+                if (value.SourceExpiresUtc.HasValue && value.ExpiresUtc > value.SourceExpiresUtc.Value)
+                    value.ExpiresUtc = value.SourceExpiresUtc.Value;
                 if (notAfterUtc.HasValue && value.ExpiresUtc > notAfterUtc.Value) value.ExpiresUtc = notAfterUtc.Value;
                 if (value.ExpiresUtc <= value.GeneratedUtc) throw new LicenceActivityExpiredException();
                 EnsureJsonWithinBudget(value);
@@ -233,6 +240,7 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
                 if (_entries.TryGetValue(entry.Key, out var current) && ReferenceEquals(current, entry))
                     _entries.Remove(entry.Key);
                 entry.Completion.TrySetException(failure is LicenceActivityExpiredException
+                    || failure is LicenceActivityReadModelExpiredException || failure is LicenceActivityReadModelBusyException
                     ? failure : new LicenceActivityFailedException(entry.RunId));
                 _ = entry.Completion.Task.Exception;
             }

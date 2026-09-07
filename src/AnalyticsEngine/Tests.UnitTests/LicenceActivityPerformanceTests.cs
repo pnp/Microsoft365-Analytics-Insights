@@ -27,6 +27,83 @@ namespace Tests.UnitTests
     {
         [TestMethod]
         [TestCategory("Performance")]
+        public async Task CachedReadModel_AtReleaseScale_PassesTheCompleteHttpMatrix()
+        {
+            if (!string.Equals(Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF"), "1", StringComparison.Ordinal))
+                Assert.Inconclusive("Set LICENCE_ACTIVITY_PERF=1 to run the synthetic 300k-user preview matrix.");
+            using (var fixture = LicenceActivitySqlFixture.CreateScale("LicenceCachedScale", ReadIndexMode()))
+            {
+                Assert.AreEqual(300000, Convert.ToInt32(fixture.Scalar("SELECT COUNT(*) FROM dbo.users;")));
+                Assert.AreEqual(50, Convert.ToInt32(fixture.Scalar("SELECT COUNT(*) FROM dbo.license_types;")));
+                Assert.IsTrue(Convert.ToInt64(fixture.Scalar(
+                    "SELECT COUNT_BIG(*) FROM dbo.user_license_type_lookups;")) >= 2000000);
+                Assert.AreEqual(0, Convert.ToInt32(fixture.Scalar(
+                    "SELECT COUNT(*) FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_usage_user_activity_log') AND type=6;")),
+                    "The shipped Copilot usage table has no columnstore index; an experimental fixture index cannot prove release performance.");
+                var sources = new LicenceActivitySources
+                {
+                    UserMetadata = true, UsageReports = true, CopilotUsageReports = true,
+                    NowUtc = LicenceActivitySqlFixture.NowUtc
+                };
+                var measurements = new LicenceActivitySqlMeasurement();
+                try
+                {
+                    if (string.Equals(Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_READ_MODEL_DIAGNOSTIC"),
+                        "1", StringComparison.Ordinal))
+                    {
+                        var diagnosticTimeout = int.TryParse(Environment.GetEnvironmentVariable(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_TIMEOUT"), out var seconds)
+                            ? seconds : LicenceActivitySql.CommandTimeoutSeconds;
+                        var showplan = Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_SHOWPLAN") == "1";
+                        foreach (var days in new[] { 7, 180 })
+                        {
+                            var query = LicenceActivityQuery.Create(
+                                LicenceActivitySqlFixture.WideToUtc.AddDays(1 - days).ToString("yyyy-MM-dd"),
+                                LicenceActivitySqlFixture.WideToUtc.ToString("yyyy-MM-dd"), sources.NowUtc);
+                            var watch = Stopwatch.StartNew();
+                            var model = await fixture.Store(measurements.Instrumentation(
+                                    includeShowplan: showplan, commandTimeoutSeconds: diagnosticTimeout))
+                                .LoadReadModelAsync(query, sources, null, CancellationToken.None);
+                            Console.WriteLine("READ_MODEL_DIAGNOSTIC days={0} loadMs={1}", days, watch.ElapsedMilliseconds);
+                            watch.Restart();
+                            var overview = model.BuildOverview(query, CancellationToken.None);
+                            Console.WriteLine("READ_MODEL_DIAGNOSTIC days={0} overviewMs={1} users={2}",
+                                days, watch.ElapsedMilliseconds, overview.DistinctAssignedUsers);
+                        }
+                        Assert.Inconclusive("Read-model diagnostics only; the HTTP acceptance matrix has not run.");
+                    }
+                    var result = await LicenceActivityLoadTests.RunAsync(
+                        fixture.Store(), sources, LicenceActivitySqlFixture.WideToUtc,
+                        () => measurements.TotalLogicalReads, Console.WriteLine,
+                        clock => new CachedLicenceActivityStore(
+                            fixture.Store(measurements.Instrumentation(includeShowplan: false)),
+                            new LicenceActivityReadModelCache(utcNow: clock), "synthetic-scale"));
+                    Assert.AreEqual(1500, result.CompletedMatrixCells);
+                    Assert.IsTrue(result.Observations.Where(observation =>
+                            observation.Scenario == "users-cold" || observation.Scenario == "department"
+                            || observation.Scenario == "country" || observation.Scenario == "workload-ranking")
+                        .All(observation => observation.LogicalReads == 0),
+                        "SKU, workload, filter, search and ranking changes must reuse the read model instead of querying SQL.");
+                    Assert.AreEqual(0, measurements.ActiveCommands);
+                    Assert.AreEqual(0, measurements.ActiveConnections);
+                    Console.WriteLine("LICENCE_ACTIVITY_CACHED_PERF environment=LocalDB azureLatency=unmeasured "
+                        + "cells={0} elapsedMs={1} managedGrowthBytes={2} privateGrowthBytes={3} logicalReads={4}",
+                        result.CompletedMatrixCells, result.ElapsedMs, result.ManagedHeapDeltaBytes,
+                        result.PrivateMemoryDeltaBytes, measurements.TotalLogicalReads);
+                }
+                finally
+                {
+                    Console.WriteLine("LICENCE_ACTIVITY_CACHED_PERF operations={0} readsByOperation={1}",
+                        string.Join(",", measurements.Operations), string.Join(",", measurements.LogicalReadsByOperation));
+                    if (measurements.Showplans.Count > 0)
+                        Console.WriteLine("READ_MODEL_DIAGNOSTIC operators={0}",
+                            string.Join(",", PlanOperators(measurements.Showplans)));
+                }
+            }
+        }
+
+        [TestMethod]
+        [TestCategory("Performance")]
         public async Task SqlStore_AtReleaseScale_RecordsElapsedReadsAndPlansAcrossWindowsAndSkuSizes()
         {
             if (!string.Equals(

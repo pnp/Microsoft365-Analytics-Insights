@@ -190,6 +190,43 @@ describe('LicenceActivityPage - user-detail gating', () => {
     expect((await screen.findAllByText('ada@contoso.com')).length).toBeGreaterThan(0);
     expect(mockUsers).toHaveBeenCalled();
   });
+
+  it('drops revoked user detail on a users 403 while retaining aggregates and rechecking availability', async () => {
+    let finishAvailability!: (value: LicenceActivityAvailability) => void;
+    const recheck = new Promise<LicenceActivityAvailability>((resolve) => { finishAvailability = resolve; });
+    mockAvailability.mockResolvedValueOnce(availability({ canViewUsers: true })).mockReturnValueOnce(recheck);
+    mockUsers.mockResolvedValueOnce(usersResponse()).mockRejectedValueOnce(
+      new LicenceActivityApiError('forbidden', 403, 'Individual user detail is forbidden.'),
+    );
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+
+    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    await waitFor(() => expect(mockAvailability).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('User drill-down')).not.toBeInTheDocument();
+    expect(screen.queryByText('ada@contoso.com')).not.toBeInTheDocument();
+    expect(screen.getByText('Licence assignments')).toBeInTheDocument();
+    expect(screen.getByText(/aggregate view/i)).toBeInTheDocument();
+
+    await act(async () => { finishAvailability(availability({ canViewUsers: false })); });
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    await waitFor(() => expect(mockDownload).toHaveBeenCalledWith({ overviewId: 'ov1', usersId: undefined }));
+    expect(mockUsers).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not discard user-detail permission for a transient users failure', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
+    mockUsers.mockResolvedValueOnce(usersResponse()).mockRejectedValueOnce(
+      new LicenceActivityApiError('busy', 503, 'Reporting is busy.'),
+    );
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+
+    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    expect(await screen.findByText('Reporting is busy.')).toBeInTheDocument();
+    expect(screen.getByText('User drill-down')).toBeInTheDocument();
+    expect(mockAvailability).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('LicenceActivityPage - scale (50 SKUs)', () => {
@@ -284,6 +321,33 @@ describe('LicenceActivityPage - export', () => {
 });
 
 describe('LicenceActivityPage - export refresh after expiry', () => {
+  it('disables aggregate export until a pending expiry refresh supplies a fresh overview', async () => {
+    let finishOverview!: (value: LicenceActivityOverview) => void;
+    const renewal = new Promise<LicenceActivityOverview>((resolve) => { finishOverview = resolve; });
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
+    mockOverview.mockResolvedValueOnce(overview()).mockReturnValueOnce(renewal);
+    mockDownload.mockRejectedValueOnce(
+      new LicenceActivityApiError('expired', 410, 'The overview expired.'),
+    ).mockResolvedValue(undefined);
+    renderWithProvider(<LicenceActivityPage />);
+    const exportButton = await screen.findByRole('button', { name: /Export to Excel/i });
+    await waitFor(() => expect(exportButton).toBeEnabled());
+    fireEvent.click(exportButton);
+    await screen.findByText('The overview expired.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(exportButton).toBeDisabled();
+    fireEvent.click(exportButton);
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Licence assignments')).toBeInTheDocument();
+    await waitFor(() => expect(mockOverview).toHaveBeenCalledTimes(2));
+
+    await act(async () => { finishOverview(overview({ snapshotId: 'ov2' })); });
+    await waitFor(() => expect(exportButton).toBeEnabled());
+    fireEvent.click(exportButton);
+    await waitFor(() => expect(mockDownload).toHaveBeenLastCalledWith({ overviewId: 'ov2', usersId: undefined }));
+  });
+
   it('re-mints the users snapshot on Refresh (same cached overviewId) without silently re-exporting', async () => {
     mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
     // The overview stays cached: it returns the SAME snapshotId on reload, which is exactly the case
@@ -384,15 +448,16 @@ describe('LicenceActivityPage - browse page survives an expiry refresh', () => {
     // Move off the defaults: a non-default workload and sort and search, then browse to page 2.
     fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
     await waitFor(() => expect(usersParams()).toMatchObject({ workload: 'outlook', page: 1 }));
-    fireEvent.change(screen.getByLabelText('Sort users'), { target: { value: 'upn:asc' } });
+    fireEvent.change(await screen.findByLabelText('Sort users'), { target: { value: 'upn:asc' } });
     await waitFor(() => expect(usersParams()).toMatchObject({ sort: 'upn', direction: 'asc' }));
-    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'ada' } });
+    fireEvent.change(await screen.findByLabelText('Search users'), { target: { value: 'ada' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await waitFor(() => expect(usersParams()).toMatchObject({ search: 'ada', page: 1 }));
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
     await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov1', page: 2 }));
 
     // Export -> 410 -> a Refresh prompt appears.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Export to Excel/i })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
     expect(await screen.findByText(/expired/i)).toBeInTheDocument();
 
@@ -501,5 +566,23 @@ describe('LicenceActivityPage - demographic filter options', () => {
     await waitFor(() => expect(screen.getByRole('option', { name: 'Support' })).toBeInTheDocument());
     fireEvent.change(deptSelect, { target: { value: '2' } });
     await waitFor(() => expect(mockOverview.mock.calls.some((c) => c[0].departmentId === 2)).toBe(true));
+  });
+});
+
+describe('LicenceActivityPage - preview label', () => {
+  it('shows a Preview badge next to the Licence activity heading', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
+    await act(async () => { renderWithProvider(<LicenceActivityPage />); });
+    expect(screen.getByText('Preview')).toBeInTheDocument();
+    expect(screen.getByText('Licence activity')).toBeInTheDocument();
+  });
+
+  it('explains cache lag, cold-load behaviour, and the no-judgement note', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
+    await act(async () => { renderWithProvider(<LicenceActivityPage />); });
+    const note = screen.getByRole('note');
+    expect(note.textContent).toMatch(/5 minutes/i);
+    expect(note.textContent).toMatch(/first load/i);
+    expect(note.textContent).toMatch(/activity evidence/i);
   });
 });

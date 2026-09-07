@@ -370,7 +370,8 @@ WHERE object_id IN
     OBJECT_ID(N'dbo.teams_user_activity_log'),
     OBJECT_ID(N'dbo.outlook_user_activity_log'),
     OBJECT_ID(N'dbo.onedrive_user_activity_log'),
-    OBJECT_ID(N'dbo.sharepoint_user_activity_log')
+    OBJECT_ID(N'dbo.sharepoint_user_activity_log'),
+    OBJECT_ID(N'dbo.copilot_usage_user_activity_log')
 );"), CultureInfo.InvariantCulture);
             switch (mode)
             {

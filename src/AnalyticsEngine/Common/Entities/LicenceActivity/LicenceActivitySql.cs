@@ -131,6 +131,74 @@ CREATE UNIQUE CLUSTERED INDEX IX_LicenceActivity_UserScores
             return sql.ToString();
         }
 
+        internal static string BuildReadModelDirectory(string eligibleTable)
+        {
+            ValidateSharedEligibleTableName(eligibleTable);
+            return @"
+SET NOCOUNT ON;
+SELECT licence.id, licence.name, licence.sku_id
+FROM dbo.license_types AS licence
+ORDER BY licence.id;
+
+SELECT eligible.user_id, users.user_name, users.mail,
+       eligible.department_id, department.name,
+       eligible.country_id, country.name, users.account_enabled
+FROM " + eligibleTable + @" AS eligible
+JOIN dbo.users AS users ON users.id = eligible.user_id
+LEFT JOIN dbo.user_departments AS department ON department.id = eligible.department_id
+LEFT JOIN dbo.user_country_or_region AS country ON country.id = eligible.country_id;
+
+SELECT DISTINCT owned.user_id, owned.license_type_id
+FROM dbo.user_license_type_lookups AS owned
+JOIN " + eligibleTable + @" AS eligible ON eligible.user_id = owned.user_id
+OPTION (RECOMPILE);";
+        }
+
+        internal static string BuildReadModelCoverage(LicenceActivitySources sources, string eligibleTable)
+        {
+            var sql = new StringBuilder(18000);
+            AppendOverviewPartPreamble(sql, eligibleTable);
+            AppendM365Overview(sql, Teams, "teams", "dbo.teams_user_activity_log",
+                "average published message and meeting counters across supporting snapshots", sources.UsageReports);
+            AppendM365Overview(sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
+                "average published sent and read counters across supporting snapshots", sources.UsageReports);
+            AppendM365Overview(sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
+                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+            AppendM365Overview(sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
+                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+            AppendCopilotOverview(sql, sources, includeScores: false);
+            sql.Append(@"
+SELECT workload_name AS Workload, status AS Status, source AS Source,
+       measure AS Measure, granularity AS Granularity, message AS Message,
+       effective_from_utc AS EffectiveFromUtc, effective_to_utc AS EffectiveToUtc,
+       latest_import_utc AS LatestImportUtc, lag_days AS LagDays,
+       report_period_days AS ReportPeriodDays, expected_samples AS ExpectedSamples,
+       observed_samples AS ObservedSamples, unmatched_users AS UnmatchedUsers
+FROM #Coverage ORDER BY workload;
+SELECT coverage.workload_name AS WorkloadName, samples.sample_date AS SnapshotDate
+FROM #Samples AS samples
+JOIN #Coverage AS coverage ON coverage.workload = samples.workload
+ORDER BY samples.workload, samples.sample_date;");
+            return sql.ToString().Replace("#EligibleUsers", eligibleTable);
+        }
+
+        internal static string BuildReadModelEvidence(
+            LicenceActivityOverview overview, LicenceActivityCoverage coverage, string eligibleTable)
+        {
+            ValidateSharedEligibleTableName(eligibleTable);
+            var start = UsersPreamble.IndexOf("CREATE TABLE #Coverage", StringComparison.Ordinal);
+            if (start < 0) throw new InvalidOperationException("The user evidence SQL preamble is malformed.");
+            var sql = new StringBuilder("SET NOCOUNT ON;\r\nSET XACT_ABORT ON;\r\n");
+            sql.Append(UsersPreamble.Substring(start));
+            AppendSampleInserts(sql, overview);
+            AppendWorkloadUsers(sql, coverage, "#EligibleUsers", readModel: true);
+            sql.Append(@"
+SELECT user_id, active_samples, observed_samples, frequency_known,
+       average_actions, last_activity_utc
+FROM #Scores;");
+            return sql.ToString().Replace("#EligibleUsers", eligibleTable);
+        }
+
         internal static string BuildOverviewBase(string eligibleTable = "#EligibleUsers")
         {
             if (eligibleTable == "#EligibleUsers") return OverviewBaseSql;
@@ -658,7 +726,8 @@ VALUES
         private static void AppendWorkloadUsers(
             StringBuilder sql,
             LicenceActivityCoverage coverage,
-            string scopeTable)
+            string scopeTable,
+            bool readModel = false)
         {
             var workload = WorkloadId(coverage.Workload);
             if (workload == Teams)
@@ -670,30 +739,30 @@ VALUES
                     + " + CAST(ISNULL(activity.reply_messages, 0) AS float)"
                     + " + CAST(ISNULL(activity.meetings_attended_count, 0) AS float)"
                     + " + CAST(ISNULL(activity.meetings_organized_count, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == Outlook)
             {
                 AppendM365Users(sql, coverage, Outlook, "dbo.outlook_user_activity_log",
                     "CAST(ISNULL(activity.email_send_count, 0) AS float)"
                     + " + CAST(ISNULL(activity.email_read_count, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == OneDrive)
             {
                 AppendM365Users(sql, coverage, OneDrive, "dbo.onedrive_user_activity_log",
                     "CAST(ISNULL(activity.viewed_or_edited, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == SharePoint)
             {
                 AppendM365Users(sql, coverage, SharePoint, "dbo.sharepoint_user_activity_log",
                     "CAST(ISNULL(activity.viewed_or_edited, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == Copilot)
             {
-                AppendCopilotUsers(sql, coverage, scopeTable);
+                AppendCopilotUsers(sql, coverage, scopeTable, readModel);
             }
         }
 
@@ -1191,8 +1260,10 @@ END;
                 workload, table);
         }
 
-        private static void AppendCopilotOverview(StringBuilder sql, LicenceActivitySources sources)
+        private static void AppendCopilotOverview(
+            StringBuilder sql, LicenceActivitySources sources, bool includeScores = true)
         {
+            sql.Append("DECLARE @copilotIncludeScores bit = " + (includeScores ? "1" : "0") + ";\r\n");
             if (sources.CopilotUsageReports)
             {
                 sql.Append(CopilotOfficialOverview);
@@ -1547,7 +1618,7 @@ BEGIN
                7, @copilotD7Expected, @copilotD7Observed, 0
         FROM (SELECT sample_date FROM #Samples WHERE workload = 5) AS samples;
 
-        IF @copilotPreferredStatus = 'available'
+        IF @copilotPreferredStatus = 'available' AND @copilotIncludeScores = 1
         BEGIN
             IF @copilotD7Expected = 1
             BEGIN
@@ -1660,6 +1731,7 @@ BEGIN
                 @copilotLongPeriod, @copilotLongPeriod, @copilotLongPeriod, 0
             );
 
+            IF @copilotIncludeScores = 1
             INSERT #Scores
                 (workload, user_id, active_samples, observed_samples, frequency_known)
             SELECT 5,
@@ -1714,6 +1786,8 @@ BEGIN
              ELSE N'Copilot audit events provide positive evidence only; no database signal proves complete event coverage, so absent users remain unknown.'
         END;
 
+    IF @copilotIncludeScores = 1
+    BEGIN
     ;WITH EventWeeks AS
     (
         SELECT chats.user_id,
@@ -1737,6 +1811,7 @@ BEGIN
     FROM EventWeeks
     GROUP BY user_id
     OPTION (RECOMPILE);
+    END;
 
     INSERT #Coverage
     (
@@ -1775,6 +1850,8 @@ BEGIN
              ELSE N'Copilot interaction history provides positive evidence only; no database signal proves complete history for every user, so absent users remain unknown.'
         END;
 
+    IF @copilotIncludeScores = 1
+    BEGIN
     ;WITH EventWeeks AS
     (
         SELECT interactions.user_id,
@@ -1798,6 +1875,7 @@ BEGIN
     FROM EventWeeks
     GROUP BY user_id
     OPTION (RECOMPILE);
+    END;
 
     INSERT #Coverage
     (
@@ -2575,10 +2653,17 @@ CREATE TABLE #Scores
             int workload,
             string table,
             string actionExpression,
-            string scopeTable)
+            string scopeTable,
+            bool readModel = false)
         {
             if (coverage.SnapshotDates == null || coverage.SnapshotDates.Count == 0)
                 return;
+
+            if (readModel)
+            {
+                AppendM365ReadModel(sql, coverage, workload, table, actionExpression, scopeTable);
+                return;
+            }
 
             var samples = Enumerable.Range(0, coverage.SnapshotDates.Count).ToArray();
             var aggregates = string.Join("\r\nUNION ALL\r\n", samples.Select(sample =>
@@ -2638,10 +2723,58 @@ OPTION (RECOMPILE);
                 workload, aggregates);
         }
 
+        private static void AppendM365ReadModel(
+            StringBuilder sql, LicenceActivityCoverage coverage, int workload,
+            string table, string actionExpression, string scopeTable)
+        {
+            // Two ordered aggregations over a single pass of the activity table. The inner group
+            // collapses every row for one (user, pinned snapshot) to a single sample - MAX actions,
+            // MAX activity flag and MAX clipped last-activity retain duplicate-day evidence exactly
+            // as the legacy per-date UNION ALL did. The outer group then counts the distinct samples
+            // and averages them per user. Unlike the previous per-sample pivot this emits only two
+            // predicates per row rather than one CASE pair per snapshot, so a columnstore metrics
+            // index (the Azure default) can service it in batch mode instead of scanning a wide
+            // per-snapshot projection. It is also faithful to the row-by-row scoring semantics:
+            // sample counts once, any positive duplicate is active, and frequency_known compares the
+            // distinct observed samples against the expected count for the workload.
+            sql.Append(@"
+;WITH PerUserDay AS
+(
+    SELECT activity.user_id, chosen.sample_date,
+           MAX(" + actionExpression + @") AS actions,
+           MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                     AND activity.last_activity_date < chosen.end_exclusive
+                    THEN 1 ELSE 0 END) AS was_active,
+           MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                     AND activity.last_activity_date < chosen.end_exclusive
+                    THEN activity.last_activity_date END) AS last_activity_utc
+    FROM " + table + @" AS activity
+    JOIN #Samples AS chosen
+      ON chosen.workload = " + workload + @"
+     AND CAST(activity.[date] AS date) = chosen.sample_date
+    JOIN " + scopeTable + @" AS eligible ON eligible.user_id = activity.user_id
+    WHERE activity.[date] >= @from AND activity.[date] < @endExclusive
+    GROUP BY activity.user_id, chosen.sample_date
+)
+INSERT #Scores
+    (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
+SELECT " + workload + @", user_id,
+       SUM(was_active),
+       COUNT(*),
+       CAST(CASE WHEN COUNT(*) = @expected" + workload + @" THEN 1 ELSE 0 END AS bit),
+       AVG(actions),
+       MAX(last_activity_utc)
+FROM PerUserDay
+GROUP BY user_id
+OPTION (RECOMPILE);
+");
+        }
+
         private static void AppendCopilotUsers(
             StringBuilder sql,
             LicenceActivityCoverage coverage,
-            string scopeTable)
+            string scopeTable,
+            bool readModel = false)
         {
             if (coverage.Source == CopilotReportSource
                 && coverage.SnapshotDates != null
@@ -2672,7 +2805,18 @@ OPTION (RECOMPILE);
                     }
                     else
                     {
-                        sql.Append(CopilotD7Users.Replace("#ActivityScope", scopeTable));
+                        var query = CopilotD7Users.Replace("#ActivityScope", scopeTable);
+                        if (readModel)
+                            // Let the optimiser choose the access path for every read-model D7 shape.
+                            // The forced clustered scan (INDEX(0)) blocked batch mode; the single-snapshot
+                            // IX seek looked cheaper but does ~930k key lookups (~6.7s). Measured at 300k
+                            // users a columnstore metrics index (the Azure default) instead gives batch mode
+                            // with rowgroup elimination on the date predicate: one snapshot reads a single
+                            // segment and skips the rest (~0.5s), and the full 180-day window aggregates in
+                            // batch (~2s vs ~15s). In pure rowstore the optimiser still lands on a scan, so
+                            // this only removes rowstore-era hints that a columnstore deployment must not pay.
+                            query = query.Replace(" WITH (INDEX(0))", string.Empty);
+                        sql.Append(query);
                     }
                 }
                 else
