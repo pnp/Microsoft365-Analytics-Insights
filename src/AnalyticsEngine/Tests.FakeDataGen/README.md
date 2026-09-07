@@ -8,6 +8,25 @@ stress runs land in the same shape and can be re-run side-by-side.
 
 ## Usage
 
+For a rounded demo rather than an importer stress test:
+
+```
+Tests.FakeDataGen.exe demo --database ContosoDemo_Example
+Tests.FakeDataGen.exe demo --help
+```
+
+This non-interactive command creates a **new LocalDB-only** target, applies the
+existing schema, and generates current overlapping licence assignments, daily
+workload coverage (including explicit zero rows), Copilot adoption and official
+D28 snapshots, metadata-only prompt/response pairs, SharePoint/web facts, and
+complete-week Power BI profiles. It never reads a configured production connection.
+Exact completed reruns are read-only no-ops; other existing targets are refused.
+`--preview` runs the same generator without SQL. Fix `--as-of` and `--seed` for
+reproducibility. `--help` lists all flags and the deliberately unsupported datasets.
+The operator guide lives in the wiki: [Synthetic demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data).
+
+The older, independent interactive generator/stress-test menu is still available:
+
 ```
 Tests.FakeDataGen.exe "<SQL Connection String>"
 ```
@@ -50,7 +69,8 @@ Tests.FakeDataGen/
 ├── Program.cs                # menu + dispatcher
 ├── App.config                # EF + Azure binding redirects
 ├── Copilot/                  # realistic Copilot data generators
-│   └── SQL/                  # hand-run scripts (see "Shaping an existing demo database")
+│   └── SQL/                  # refusal-only compatibility stub for the retired shaper
+├── Demo/                     # safe single-command generator, calendar, plan and bounded SQL sink
 ├── Generation/               # shared synthetic activity helpers
 ├── Office365/                # O365 audit activity generator
 ├── Seeding/                  # shared user / license / lookup seed data
@@ -67,9 +87,9 @@ Tests.FakeDataGen/
     └── FakeLoaders/          # fakes only used by stress tests
 ```
 
-`Seeding` is intentionally shared: every data generator and stress test that
-needs prerequisite metadata calls `UserMetadataSeeder` so the same lookup tables,
-departments, license catalogue, etc. are populated everywhere. Users are made as
+`Seeding` is intentionally shared: legacy generators and stress tests call
+`UserMetadataSeeder`; the new `demo` command uses the same `SeedDataCatalogue`
+through its new-target-only bounded sink. Users are made as
 realistic as a live tenant: `SeedDataCatalogue` assigns each user a coherent geo
 locale (country / state / city / office / usage location / postal code all agree,
 across 21 countries incl. non-Latin values), a job title that fits its department,
@@ -157,44 +177,13 @@ while adding SharePoint, OneDrive, Outlook, and Teams profiling sources.
 
 ### Shaping an existing demo database
 
-`Copilot/SQL/ShapeCopilotAdoptionDemo.sql` does for a database that **already has
-data** what `CopilotAdoptionScenarioGenerator` does while one is being generated:
-it reshapes Copilot activity so every figure on the Copilot Adoption page tells one
-coherent story, with headline numbers you can dial. Use it to prepare a demo or a
-screenshot without regenerating the database.
-
-```
-sqlcmd -S <server> -d <demo database> -E -i ShapeCopilotAdoptionDemo.sql -b
-```
-
-It refuses to run until `@ConfirmDemoDatabase` is set to `1` — it rewrites licence
-assignments and audit-event timestamps, so it must never touch a customer database.
-Seat count, reporting window, band mix and the size of the unlicensed "proven
-demand" cohort are all parameters at the top of the file; everything else
-(departments, population, agents) is read from the target database, so the script
-is portable across demo tenants.
-
-Nothing is deleted. Existing interactions are re-dated into each user's own
-history — or pushed past the 365-day history horizon for the cohorts that must look
-untouched — so no child rows are orphaned, and planted rows are tagged with a
-distinctive `copilot_log_version` so a re-run replaces them rather than stacking a
-second cohort on top. At the defaults it produces 150 licences, 86% adoption, 61%
-habitual, 21 reclaimable licences, 18 unlicensed Copilot Chat users, an agent
-inventory containing all four health verdicts, and six-month trend series that rise
-towards the present.
-
-Targets are expressed in the three signals `CopilotAdoptionScoring` measures —
-distinct active dates, interactions per active date, and distinct `app_host` values
-— so the bands come out of the real scoring code. Keep the persona table in the
-script in step with `CopilotAdoptionOptions` if those weights or thresholds change.
-
-Two things to know when checking the result:
-
-- The KPI cards and the adoption funnel are built from the same
-  `CopilotAdoptionSummary`, so they cannot disagree. Two screenshots that look
-  inconsistent were taken with different values of the **period** drop-down.
-- `CopilotAdoptionAPIController` caches each analysis for 10 minutes, so recycle the
-  site or wait before taking screenshots.
+`Copilot/SQL/ShapeCopilotAdoptionDemo.sql` is now a **refusal-only compatibility
+stub**. Run the `demo` command against a new name instead. The new command reuses
+`CopilotAdoptionPersonas` and the real adoption scorer instead of maintaining a
+second scoring implementation in SQL. It adds the script's useful shaping to the
+wider demo dataset without carrying forward its destructive rewrite path.
+The legacy menu's random-volume generators remain available for their original
+stress-testing purposes; they do not have the new command's target safeguards.
 
 ## Stress tests
 

@@ -195,3 +195,11 @@ jobs:
           # spent and the API answers 403 - failing the required check for reasons unrelated to the change.
           # The built-in token raises it to 5,000/hour. Read-only public metadata; no extra permission needed.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and smoke-test the demo command
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
+        shell: pwsh
+        run: |
+          msbuild src\AnalyticsEngine\Tests.FakeDataGen\Tests.FakeDataGen.csproj /restore `
+            -p:Configuration=${{ matrix.configuration }} -p:BuildProjectReferences=false
+          if ($LASTEXITCODE -ne 0) { throw "Demo generator build failed." }
+          & .\src\AnalyticsEngine\Tests.FakeDataGen\Verify-DemoCommand.ps1 -Configuration '${{ matrix.configuration }}'
