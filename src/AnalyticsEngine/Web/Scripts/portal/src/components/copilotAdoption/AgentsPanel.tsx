@@ -1,5 +1,17 @@
 import { useMemo, useState } from 'react';
-import { makeStyles, tokens, Text, Card, Badge, Select, Checkbox, Tooltip } from '@fluentui/react-components';
+import {
+  makeStyles,
+  tokens,
+  Text,
+  Card,
+  Badge,
+  Button,
+  Input,
+  Select,
+  Checkbox,
+  Tooltip,
+} from '@fluentui/react-components';
+import { Dismiss16Regular, Search16Regular } from '@fluentui/react-icons';
 import type { AgentEstateSummary, AgentUsageRow, CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { AgentHealth } from '../../types/copilotAdoption';
 import CategoryBarChart from '../charts/CategoryBarChart';
@@ -73,6 +85,21 @@ const useStyles = makeStyles({
   agentName: {
     display: 'flex',
     flexDirection: 'column',
+    // Agent identifiers are machine-generated and can run to several hundred characters with no
+    // break opportunity in them. Left unbounded, one such row stretches this column until every
+    // other column is pushed off the right-hand side of the screen.
+    maxWidth: '360px',
+  },
+  agentKey: {
+    display: 'block',
+    maxWidth: '360px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: tokens.colorNeutralForeground3,
+  },
+  search: {
+    minWidth: '240px',
   },
   reason: {
     maxWidth: '320px',
@@ -133,12 +160,22 @@ export default function AgentsPanel({
 
   const [health, setHealth] = useState<'' | string>('');
   const [customOnly, setCustomOnly] = useState(false);
+  const [search, setSearch] = useState('');
+
+  // Filtered in the browser rather than on the server: the whole inventory is already in memory,
+  // so a name filter is instant and a round trip would only make it feel slower.
+  const needle = search.trim().toLowerCase();
 
   const visible = useMemo(() => {
     return agents.filter(
-      (a) => (health === '' || a.health === Number(health)) && (!customOnly || a.isCustomAgent),
+      (a) =>
+        (health === '' || a.health === Number(health)) &&
+        (!customOnly || a.isCustomAgent) &&
+        (needle === '' ||
+          a.name.toLowerCase().includes(needle) ||
+          (a.agentKey ?? '').toLowerCase().includes(needle)),
     );
-  }, [agents, health, customOnly]);
+  }, [agents, health, customOnly, needle]);
 
   const legendStates = useMemo(() => {
     const present = new Set(visible.map((a) => a.health));
@@ -284,6 +321,25 @@ export default function AgentsPanel({
 
         <div className={styles.cardBody}>
           <div className={styles.filters}>
+            <Input
+              className={styles.search}
+              value={search}
+              placeholder="Search agent name or ID"
+              aria-label="Search agents by name or ID"
+              contentBefore={<Search16Regular />}
+              contentAfter={
+                search ? (
+                  <Button
+                    appearance="transparent"
+                    size="small"
+                    icon={<Dismiss16Regular />}
+                    aria-label="Clear agent search"
+                    onClick={() => setSearch('')}
+                  />
+                ) : undefined
+              }
+              onChange={(_e, d) => setSearch(d.value)}
+            />
             <Select
               value={health}
               aria-label="Filter agents by health"
@@ -339,7 +395,7 @@ export default function AgentsPanel({
                               {agent.name}
                             </Text>
                             {agent.agentKey && (
-                              <Text size={100} className={styles.muted}>
+                              <Text size={100} className={styles.agentKey} title={agent.agentKey}>
                                 {agent.agentKey}
                               </Text>
                             )}
@@ -348,7 +404,7 @@ export default function AgentsPanel({
                         <td className={table.td}>{agent.isCustomAgent ? 'Custom' : 'Microsoft'}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>
                           {formatCount(agent.users)}
-                          <Text size={100} block className={styles.muted}>
+                          <Text size={100} block className={table.tdSub}>
                             {formatCount(agent.licensedUsers)} licensed
                           </Text>
                         </td>
@@ -358,7 +414,7 @@ export default function AgentsPanel({
                         <td className={table.td}>
                           {formatDate(agent.lastUsedUtc)}
                           {agent.daysSinceLastUse !== null && agent.daysSinceLastUse > 0 && (
-                            <Text size={100} block className={styles.muted}>
+                            <Text size={100} block className={table.tdSub}>
                               {agent.daysSinceLastUse} days ago
                             </Text>
                           )}
