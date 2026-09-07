@@ -27,6 +27,83 @@ namespace Tests.UnitTests
     {
         [TestMethod]
         [TestCategory("Performance")]
+        public async Task CachedReadModel_AtReleaseScale_PassesTheCompleteHttpMatrix()
+        {
+            if (!string.Equals(Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF"), "1", StringComparison.Ordinal))
+                Assert.Inconclusive("Set LICENCE_ACTIVITY_PERF=1 to run the synthetic 300k-user preview matrix.");
+            using (var fixture = LicenceActivitySqlFixture.CreateScale("LicenceCachedScale", ReadIndexMode()))
+            {
+                Assert.AreEqual(300000, Convert.ToInt32(fixture.Scalar("SELECT COUNT(*) FROM dbo.users;")));
+                Assert.AreEqual(50, Convert.ToInt32(fixture.Scalar("SELECT COUNT(*) FROM dbo.license_types;")));
+                Assert.IsTrue(Convert.ToInt64(fixture.Scalar(
+                    "SELECT COUNT_BIG(*) FROM dbo.user_license_type_lookups;")) >= 2000000);
+                Assert.AreEqual(0, Convert.ToInt32(fixture.Scalar(
+                    "SELECT COUNT(*) FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_usage_user_activity_log') AND type=6;")),
+                    "The shipped Copilot usage table has no columnstore index; an experimental fixture index cannot prove release performance.");
+                var sources = new LicenceActivitySources
+                {
+                    UserMetadata = true, UsageReports = true, CopilotUsageReports = true,
+                    NowUtc = LicenceActivitySqlFixture.NowUtc
+                };
+                var measurements = new LicenceActivitySqlMeasurement();
+                try
+                {
+                    if (string.Equals(Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_READ_MODEL_DIAGNOSTIC"),
+                        "1", StringComparison.Ordinal))
+                    {
+                        var diagnosticTimeout = int.TryParse(Environment.GetEnvironmentVariable(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_TIMEOUT"), out var seconds)
+                            ? seconds : LicenceActivitySql.CommandTimeoutSeconds;
+                        var showplan = Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_SHOWPLAN") == "1";
+                        foreach (var days in new[] { 7, 180 })
+                        {
+                            var query = LicenceActivityQuery.Create(
+                                LicenceActivitySqlFixture.WideToUtc.AddDays(1 - days).ToString("yyyy-MM-dd"),
+                                LicenceActivitySqlFixture.WideToUtc.ToString("yyyy-MM-dd"), sources.NowUtc);
+                            var watch = Stopwatch.StartNew();
+                            var model = await fixture.Store(measurements.Instrumentation(
+                                    includeShowplan: showplan, commandTimeoutSeconds: diagnosticTimeout))
+                                .LoadReadModelAsync(query, sources, null, CancellationToken.None);
+                            Console.WriteLine("READ_MODEL_DIAGNOSTIC days={0} loadMs={1}", days, watch.ElapsedMilliseconds);
+                            watch.Restart();
+                            var overview = model.BuildOverview(query, CancellationToken.None);
+                            Console.WriteLine("READ_MODEL_DIAGNOSTIC days={0} overviewMs={1} users={2}",
+                                days, watch.ElapsedMilliseconds, overview.DistinctAssignedUsers);
+                        }
+                        Assert.Inconclusive("Read-model diagnostics only; the HTTP acceptance matrix has not run.");
+                    }
+                    var result = await LicenceActivityLoadTests.RunAsync(
+                        fixture.Store(), sources, LicenceActivitySqlFixture.WideToUtc,
+                        () => measurements.TotalLogicalReads, Console.WriteLine,
+                        clock => new CachedLicenceActivityStore(
+                            fixture.Store(measurements.Instrumentation(includeShowplan: false)),
+                            new LicenceActivityReadModelCache(utcNow: clock), "synthetic-scale"));
+                    Assert.AreEqual(1500, result.CompletedMatrixCells);
+                    Assert.IsTrue(result.Observations.Where(observation =>
+                            observation.Scenario == "users-cold" || observation.Scenario == "department"
+                            || observation.Scenario == "country" || observation.Scenario == "workload-ranking")
+                        .All(observation => observation.LogicalReads == 0),
+                        "SKU, workload, filter, search and ranking changes must reuse the read model instead of querying SQL.");
+                    Assert.AreEqual(0, measurements.ActiveCommands);
+                    Assert.AreEqual(0, measurements.ActiveConnections);
+                    Console.WriteLine("LICENCE_ACTIVITY_CACHED_PERF environment=LocalDB azureLatency=unmeasured "
+                        + "cells={0} elapsedMs={1} managedGrowthBytes={2} privateGrowthBytes={3} logicalReads={4}",
+                        result.CompletedMatrixCells, result.ElapsedMs, result.ManagedHeapDeltaBytes,
+                        result.PrivateMemoryDeltaBytes, measurements.TotalLogicalReads);
+                }
+                finally
+                {
+                    Console.WriteLine("LICENCE_ACTIVITY_CACHED_PERF operations={0} readsByOperation={1}",
+                        string.Join(",", measurements.Operations), string.Join(",", measurements.LogicalReadsByOperation));
+                    if (measurements.Showplans.Count > 0)
+                        Console.WriteLine("READ_MODEL_DIAGNOSTIC operators={0}",
+                            string.Join(",", PlanOperators(measurements.Showplans)));
+                }
+            }
+        }
+
+        [TestMethod]
+        [TestCategory("Performance")]
         public async Task SqlStore_AtReleaseScale_RecordsElapsedReadsAndPlansAcrossWindowsAndSkuSizes()
         {
             if (!string.Equals(
@@ -89,39 +166,102 @@ namespace Tests.UnitTests
                         LicenceActivitySqlFixture.WideToUtc.ToString("yyyy-MM-dd"),
                         LicenceActivitySqlFixture.NowUtc);
 
+                    var diagnosticTimeout = LicenceActivitySql.CommandTimeoutSeconds;
                     if (int.TryParse(
                         Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_TIMEOUT"),
-                        out var diagnosticTimeout)
-                        && diagnosticTimeout > LicenceActivitySql.CommandTimeoutSeconds)
+                        out var configuredDiagnosticTimeout)
+                        && configuredDiagnosticTimeout > diagnosticTimeout)
+                        diagnosticTimeout = configuredDiagnosticTimeout;
+                    if (string.Equals(Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC"),
+                            "1", StringComparison.Ordinal)
+                        || diagnosticTimeout > LicenceActivitySql.CommandTimeoutSeconds)
                     {
                         var diagnosticWide = string.Equals(
                             Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_WINDOW"),
                             "wide",
                             StringComparison.OrdinalIgnoreCase);
                         var diagnosticQuery = diagnosticWide ? wideQuery : narrowQuery;
+                        if (int.TryParse(Environment.GetEnvironmentVariable(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_DEPARTMENT"), out var diagnosticDepartment))
+                        {
+                            diagnosticQuery = LicenceActivityQuery.Create(
+                                diagnosticQuery.From, diagnosticQuery.To, LicenceActivitySqlFixture.NowUtc,
+                                departmentId: diagnosticDepartment);
+                        }
                         var diagnosticScenario = diagnosticWide
                             ? "overview-wide-180d"
                             : "overview-narrow-7d";
+                        if (string.Equals(Environment.GetEnvironmentVariable(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_HTTP"), "1", StringComparison.Ordinal))
+                        {
+                            await DiagnoseHttpOverview(fixture, diagnosticQuery, sources);
+                            Assert.Inconclusive(
+                                "HTTP overview preflight only, with production SQL/response limits; "
+                                + "the complete acceptance matrix has NOT run.");
+                        }
                         var diagnostic = new LicenceActivitySqlMeasurement();
+                        var diagnosticUsers = string.Equals(
+                            Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_USERS"),
+                            "1", StringComparison.Ordinal);
+                        LicenceActivityOverview diagnosticOverview = null;
+                        if (diagnosticUsers)
+                        {
+                            diagnosticOverview = await fixture.Store(new SqlLicenceActivityStoreInstrumentation
+                                { CommandTimeoutSeconds = diagnosticTimeout })
+                                .LoadOverviewAsync(diagnosticQuery, sources,
+                                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                            diagnosticScenario = "users-" + diagnosticScenario;
+                        }
                         var includeShowplan = string.Equals(
                             Environment.GetEnvironmentVariable("LICENCE_ACTIVITY_PERF_DIAGNOSTIC_SHOWPLAN"),
                             "1",
                             StringComparison.Ordinal);
                         var diagnosticWatch = Stopwatch.StartNew();
-                        await fixture.Store(diagnostic.Instrumentation(
-                                includeShowplan: includeShowplan,
-                                commandTimeoutSeconds: diagnosticTimeout))
-                            .LoadOverviewAsync(
+                        var uninstrumented = string.Equals(Environment.GetEnvironmentVariable(
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_UNINSTRUMENTED"), "1", StringComparison.Ordinal);
+                        if (uninstrumented) diagnosticTimeout = LicenceActivitySql.CommandTimeoutSeconds;
+                        var diagnosticStore = uninstrumented ? fixture.Store()
+                            : fixture.Store(diagnostic.Instrumentation(
+                                includeShowplan: includeShowplan, commandTimeoutSeconds: diagnosticTimeout));
+                        try
+                        {
+                        if (diagnosticUsers)
+                        {
+                            var sku = int.TryParse(Environment.GetEnvironmentVariable(
+                                "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_SKU"), out var configuredSku) ? configuredSku : 2;
+                            var workload = Environment.GetEnvironmentVariable(
+                                "LICENCE_ACTIVITY_PERF_DIAGNOSTIC_WORKLOAD") ?? "teams";
+                            var users = await diagnosticStore.LoadUsersAsync(diagnosticOverview,
+                                diagnosticQuery.ForUsers(sku, workload, null, "activity", "desc",
+                                    100, 1, 100, LicenceActivitySqlFixture.NowUtc),
+                                sources, NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                            var licence = diagnosticOverview.Licences.Single(l => l.LicenceTypeId == sku);
+                            var distribution = licence.Workloads.Single(w => w.Workload == workload);
+                            var positive = distribution.High + distribution.Moderate + distribution.Low;
+                            Assert.AreEqual(licence.AssignedUsers, users.TotalUsers);
+                            Assert.AreEqual(Math.Min(100, positive + distribution.Zero), users.LeastActive.Count);
+                            Assert.IsTrue(users.MostActive.Count >= Math.Min(100, positive));
+                            diagnosticScenario += "-sku" + sku + "-" + workload;
+                        }
+                        else
+                        {
+                            await diagnosticStore.LoadOverviewAsync(
                                 diagnosticQuery, sources,
                                 NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                        }
+                        }
+                        finally
+                        {
                         diagnosticWatch.Stop();
                         Console.WriteLine(
-                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC scenario={0} elapsedMs={1} logicalReads={2} readsByOperation={3} operations={4}",
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC scenario={0} elapsedMs={1} logicalReads={2} readsByOperation={3} operations={4} instrumented={5}",
                             diagnosticScenario,
                             diagnosticWatch.ElapsedMilliseconds,
-                            diagnostic.TotalLogicalReads,
+                            uninstrumented ? "unmeasured"
+                                : diagnostic.TotalLogicalReads.ToString(CultureInfo.InvariantCulture),
                             string.Join(",", diagnostic.LogicalReadsByOperation),
-                            string.Join(",", diagnostic.Operations));
+                            string.Join(",", diagnostic.Operations),
+                            !uninstrumented);
                         Console.WriteLine(
                             "LICENCE_ACTIVITY_PERF_DIAGNOSTIC statementTimings={0}",
                             string.Join(
@@ -134,20 +274,40 @@ namespace Tests.UnitTests
                                         message.Split(
                                             (char[])null,
                                             StringSplitOptions.RemoveEmptyEntries)))));
-                        if (includeShowplan)
+                        if (!uninstrumented)
+                            Console.WriteLine(
+                                "LICENCE_ACTIVITY_PERF_DIAGNOSTIC innerSqlPeakCommands={0} innerSqlPeakConnections={1} activeCommands={2} activeConnections={3}",
+                                diagnostic.PeakCommands, diagnostic.PeakConnections,
+                                diagnostic.ActiveCommands, diagnostic.ActiveConnections);
+                        if (includeShowplan && !uninstrumented)
                         {
                             Console.WriteLine(
                                 "LICENCE_ACTIVITY_PERF_DIAGNOSTIC operators={0}",
                                 string.Join(",", PlanOperators(diagnostic.Showplans)));
+                            var plans = diagnostic.Showplans.Select(XDocument.Parse).ToArray();
+                            var aggregateRows = plans.SelectMany(plan => plan.Descendants()
+                                .Where(node => node.Name.LocalName == "RelOp"
+                                    && (string)node.Attribute("LogicalOp") == "Aggregate"))
+                                .Select(node => node.Elements()
+                                    .Where(child => child.Name.LocalName == "RunTimeInformation")
+                                    .SelectMany(child => child.Elements())
+                                    .Sum(counter => (double?)counter.Attribute("ActualRows") ?? 0))
+                                .DefaultIfEmpty(0).Max();
+                            Console.WriteLine(
+                                "LICENCE_ACTIVITY_PERF_DIAGNOSTIC maximumAggregateRows={0} spillWarnings={1} maximumGrantedMemoryKb={2}",
+                                aggregateRows,
+                                plans.Sum(plan => plan.Descendants()
+                                    .Count(node => node.Name.LocalName == "SpillToTempDb")),
+                                plans.SelectMany(plan => plan.Descendants()
+                                    .Where(node => node.Name.LocalName == "MemoryGrantInfo"))
+                                    .Select(node => (long?)node.Attribute("GrantedMemory") ?? 0)
+                                    .DefaultIfEmpty(0).Max());
                         }
-                        // A long diagnostic timeout deliberately exceeds the production command
-                        // timeout so a slow plan can be root-caused instead of being cut off. That is
-                        // legitimate, but it means the acceptance assertions below were NEVER reached
-                        // and the production budgets were NOT honoured. Reporting Passed here would
-                        // turn a root-cause probe into fake acceptance evidence, so end the run as
-                        // Inconclusive with the diagnostics already written to the console above.
+                        }
+                        // Diagnostics can retain the production timeout. They still do not execute
+                        // the full acceptance matrix and must never be reported as a passing test.
                         Assert.Inconclusive(
-                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC run only (scenario={0}, commandTimeoutSeconds={1} > production {2}). "
+                            "LICENCE_ACTIVITY_PERF_DIAGNOSTIC run only (scenario={0}, commandTimeoutSeconds={1}, production={2}). "
                             + "Diagnostics were captured but NO acceptance assertion or HTTP load was executed, "
                             + "so this run is NOT Azure SQL 200-400 DTU acceptance evidence.",
                             diagnosticScenario,
@@ -247,13 +407,16 @@ namespace Tests.UnitTests
                     () => loadMeasurement.TotalLogicalReads,
                     message => Console.WriteLine("LICENCE_ACTIVITY_PERF " + message));
                     Console.WriteLine(
-                        "LICENCE_ACTIVITY_PERF httpLoadMs={0} assignments={1} peakConcurrentSql={2} "
-                        + "managedHeapDelta={3} privateMemoryDelta={4}",
+                        "LICENCE_ACTIVITY_PERF httpLoadMs={0} assignments={1} peakSharedReportLoads={2} "
+                        + "managedHeapDelta={3} privateMemoryDelta={4} innerSqlPeakCommands={5} innerSqlPeakConnections={6}",
                         load.ElapsedMs,
                         load.Assignments,
                         load.PeakConcurrentSqlLoads,
                         load.ManagedHeapDeltaBytes,
-                        load.PrivateMemoryDeltaBytes);
+                        load.PrivateMemoryDeltaBytes,
+                        loadMeasurement.PeakCommands, loadMeasurement.PeakConnections);
+                    Assert.AreEqual(0, loadMeasurement.ActiveCommands);
+                    Assert.AreEqual(0, loadMeasurement.ActiveConnections);
                 }
             }
             finally
@@ -330,6 +493,45 @@ namespace Tests.UnitTests
                 measurement.PlanCount,
                 measurement.Operators);
             return measurement;
+        }
+
+        private static async Task DiagnoseHttpOverview(
+            LicenceActivitySqlFixture fixture, LicenceActivityQuery query, LicenceActivitySources sources)
+        {
+            var measurement = new LicenceActivitySqlMeasurement();
+            var clock = Stopwatch.StartNew();
+            using (var host = new LicenceActivityHttpHost(
+                fixture.Store(measurement.Instrumentation(includeShowplan: false)), sources,
+                () => sources.NowUtc.Add(clock.Elapsed)))
+            {
+                var path = "api/LicenceActivity/overview?from=" + query.From + "&to=" + query.To;
+                if (query.DepartmentId.HasValue) path += "&departmentId=" + query.DepartmentId.Value;
+                if (query.CountryId.HasValue) path += "&countryId=" + query.CountryId.Value;
+                foreach (var temperature in new[] { "cold", "warm" })
+                {
+                    var reads = measurement.TotalLogicalReads;
+                    var watch = Stopwatch.StartNew();
+                    using (var response = await host.Client.GetAsync(path))
+                    {
+                        var content = await response.Content.ReadAsByteArrayAsync();
+                        watch.Stop();
+                        Console.WriteLine(
+                            "LICENCE_ACTIVITY_PERF_HTTP_PREFLIGHT state={0} status={1} elapsedMs={2} bytes={3} logicalReads={4} innerSqlPeakCommands={5} innerSqlPeakConnections={6}",
+                            temperature, (int)response.StatusCode, watch.ElapsedMilliseconds, content.Length,
+                            measurement.TotalLogicalReads - reads, measurement.PeakCommands, measurement.PeakConnections);
+                        if (!response.IsSuccessStatusCode) break;
+                        if (temperature == "warm")
+                            Assert.AreEqual(0L, measurement.TotalLogicalReads - reads,
+                                "A warm preflight must not re-read SQL.");
+                    }
+                }
+                var drain = Stopwatch.StartNew();
+                while ((measurement.ActiveCommands != 0 || measurement.ActiveConnections != 0)
+                    && drain.Elapsed < TimeSpan.FromMinutes(1))
+                    await Task.Delay(50);
+                Assert.AreEqual(0, measurement.ActiveCommands);
+                Assert.AreEqual(0, measurement.ActiveConnections);
+            }
         }
 
         private static void AssertMeasured(Measurement measurement)

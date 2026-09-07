@@ -87,6 +87,16 @@ namespace Common.Entities.LicenceActivity
                         SampleParameterName(workload, index));
                 }
             }
+            sql.Append(@"
+UPDATE #Samples
+SET m365_from = CASE WHEN DATEADD(DAY,
+        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
+        sample_date) < @from THEN @from ELSE DATEADD(DAY,
+        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
+        sample_date) END,
+    end_exclusive = DATEADD(DAY, 1, sample_date),
+    copilot_from = DATEADD(DAY, -6, sample_date);
+");
         }
 
         internal static string BuildUsers(
@@ -119,6 +129,74 @@ CREATE UNIQUE CLUSTERED INDEX IX_LicenceActivity_UserScores
 
             sql.Append(UsersFinalProjection);
             return sql.ToString();
+        }
+
+        internal static string BuildReadModelDirectory(string eligibleTable)
+        {
+            ValidateSharedEligibleTableName(eligibleTable);
+            return @"
+SET NOCOUNT ON;
+SELECT licence.id, licence.name, licence.sku_id
+FROM dbo.license_types AS licence
+ORDER BY licence.id;
+
+SELECT eligible.user_id, users.user_name, users.mail,
+       eligible.department_id, department.name,
+       eligible.country_id, country.name, users.account_enabled
+FROM " + eligibleTable + @" AS eligible
+JOIN dbo.users AS users ON users.id = eligible.user_id
+LEFT JOIN dbo.user_departments AS department ON department.id = eligible.department_id
+LEFT JOIN dbo.user_country_or_region AS country ON country.id = eligible.country_id;
+
+SELECT DISTINCT owned.user_id, owned.license_type_id
+FROM dbo.user_license_type_lookups AS owned
+JOIN " + eligibleTable + @" AS eligible ON eligible.user_id = owned.user_id
+OPTION (RECOMPILE);";
+        }
+
+        internal static string BuildReadModelCoverage(LicenceActivitySources sources, string eligibleTable)
+        {
+            var sql = new StringBuilder(18000);
+            AppendOverviewPartPreamble(sql, eligibleTable);
+            AppendM365Overview(sql, Teams, "teams", "dbo.teams_user_activity_log",
+                "average published message and meeting counters across supporting snapshots", sources.UsageReports);
+            AppendM365Overview(sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
+                "average published sent and read counters across supporting snapshots", sources.UsageReports);
+            AppendM365Overview(sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
+                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+            AppendM365Overview(sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
+                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+            AppendCopilotOverview(sql, sources, includeScores: false);
+            sql.Append(@"
+SELECT workload_name AS Workload, status AS Status, source AS Source,
+       measure AS Measure, granularity AS Granularity, message AS Message,
+       effective_from_utc AS EffectiveFromUtc, effective_to_utc AS EffectiveToUtc,
+       latest_import_utc AS LatestImportUtc, lag_days AS LagDays,
+       report_period_days AS ReportPeriodDays, expected_samples AS ExpectedSamples,
+       observed_samples AS ObservedSamples, unmatched_users AS UnmatchedUsers
+FROM #Coverage ORDER BY workload;
+SELECT coverage.workload_name AS WorkloadName, samples.sample_date AS SnapshotDate
+FROM #Samples AS samples
+JOIN #Coverage AS coverage ON coverage.workload = samples.workload
+ORDER BY samples.workload, samples.sample_date;");
+            return sql.ToString().Replace("#EligibleUsers", eligibleTable);
+        }
+
+        internal static string BuildReadModelEvidence(
+            LicenceActivityOverview overview, LicenceActivityCoverage coverage, string eligibleTable)
+        {
+            ValidateSharedEligibleTableName(eligibleTable);
+            var start = UsersPreamble.IndexOf("CREATE TABLE #Coverage", StringComparison.Ordinal);
+            if (start < 0) throw new InvalidOperationException("The user evidence SQL preamble is malformed.");
+            var sql = new StringBuilder("SET NOCOUNT ON;\r\nSET XACT_ABORT ON;\r\n");
+            sql.Append(UsersPreamble.Substring(start));
+            AppendSampleInserts(sql, overview);
+            AppendWorkloadUsers(sql, coverage, "#EligibleUsers", readModel: true);
+            sql.Append(@"
+SELECT user_id, active_samples, observed_samples, frequency_known,
+       average_actions, last_activity_utc
+FROM #Scores;");
+            return sql.ToString().Replace("#EligibleUsers", eligibleTable);
         }
 
         internal static string BuildOverviewBase(string eligibleTable = "#EligibleUsers")
@@ -195,7 +273,8 @@ CREATE UNIQUE CLUSTERED INDEX IX_LicenceActivity_UserScores
         internal static string BuildM365OverviewPart(
             int workload,
             string eligibleTable = "#EligibleUsers",
-            string bandTable = null)
+            string bandTable = null,
+            int maximumSamples = 27)
         {
             var sql = new StringBuilder(14000);
             AppendOverviewPartPreamble(sql, eligibleTable);
@@ -208,7 +287,7 @@ CREATE UNIQUE CLUSTERED INDEX IX_LicenceActivity_UserScores
                         "average published message and meeting counters across supporting snapshots",
                         true);
                     AppendM365OverviewScore(
-                        sql, Teams, "dbo.teams_user_activity_log");
+                        sql, Teams, "dbo.teams_user_activity_log", maximumSamples);
                     break;
                 case Outlook:
                     AppendM365Overview(
@@ -216,7 +295,7 @@ CREATE UNIQUE CLUSTERED INDEX IX_LicenceActivity_UserScores
                         "average published sent and read counters across supporting snapshots",
                         true);
                     AppendM365OverviewScore(
-                        sql, Outlook, "dbo.outlook_user_activity_log");
+                        sql, Outlook, "dbo.outlook_user_activity_log", maximumSamples);
                     break;
                 case OneDrive:
                     AppendM365Overview(
@@ -224,7 +303,7 @@ CREATE UNIQUE CLUSTERED INDEX IX_LicenceActivity_UserScores
                         "average published viewed-or-edited counter across supporting snapshots",
                         true);
                     AppendM365OverviewScore(
-                        sql, OneDrive, "dbo.onedrive_user_activity_log");
+                        sql, OneDrive, "dbo.onedrive_user_activity_log", maximumSamples);
                     break;
                 case SharePoint:
                     AppendM365Overview(
@@ -232,7 +311,7 @@ CREATE UNIQUE CLUSTERED INDEX IX_LicenceActivity_UserScores
                         "average published viewed-or-edited counter across supporting snapshots",
                         true);
                     AppendM365OverviewScore(
-                        sql, SharePoint, "dbo.sharepoint_user_activity_log");
+                        sql, SharePoint, "dbo.sharepoint_user_activity_log", maximumSamples);
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(workload));
@@ -296,6 +375,19 @@ WHERE (@departmentId IS NULL
   AND EXISTS
       (SELECT 1 FROM dbo.user_license_type_lookups AS owned WHERE owned.user_id = u.id)
 OPTION (RECOMPILE);
+
+-- This shared, connection-scoped index enables batch aggregation without altering source tables.
+-- Editions that cannot index temporary tables as columnstores retain the rowstore primary key.
+IF (SELECT COUNT(*) FROM " + tableName + @") >= 32768
+BEGIN
+    BEGIN TRY
+        EXEC sp_executesql N'CREATE NONCLUSTERED COLUMNSTORE INDEX IX_LicenceActivity_EligibleBatch
+            ON " + tableName + @" (user_id, department_id, country_id);';
+    END TRY
+    BEGIN CATCH
+        PRINT N'Licence activity is using rowstore temporary eligibility.';
+    END CATCH;
+END;
 ");
             if (bandTables != null)
             {
@@ -634,7 +726,8 @@ VALUES
         private static void AppendWorkloadUsers(
             StringBuilder sql,
             LicenceActivityCoverage coverage,
-            string scopeTable)
+            string scopeTable,
+            bool readModel = false)
         {
             var workload = WorkloadId(coverage.Workload);
             if (workload == Teams)
@@ -646,30 +739,30 @@ VALUES
                     + " + CAST(ISNULL(activity.reply_messages, 0) AS float)"
                     + " + CAST(ISNULL(activity.meetings_attended_count, 0) AS float)"
                     + " + CAST(ISNULL(activity.meetings_organized_count, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == Outlook)
             {
                 AppendM365Users(sql, coverage, Outlook, "dbo.outlook_user_activity_log",
                     "CAST(ISNULL(activity.email_send_count, 0) AS float)"
                     + " + CAST(ISNULL(activity.email_read_count, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == OneDrive)
             {
                 AppendM365Users(sql, coverage, OneDrive, "dbo.onedrive_user_activity_log",
                     "CAST(ISNULL(activity.viewed_or_edited, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == SharePoint)
             {
                 AppendM365Users(sql, coverage, SharePoint, "dbo.sharepoint_user_activity_log",
                     "CAST(ISNULL(activity.viewed_or_edited, 0) AS float)",
-                    scopeTable);
+                    scopeTable, readModel);
             }
             else if (workload == Copilot)
             {
-                AppendCopilotUsers(sql, coverage, scopeTable);
+                AppendCopilotUsers(sql, coverage, scopeTable, readModel);
             }
         }
 
@@ -1075,8 +1168,11 @@ CROSS APPLY
         private static void AppendM365OverviewScore(
             StringBuilder sql,
             int workload,
-            string table)
+            string table,
+            int maximumSamples = 27)
         {
+            if (maximumSamples < 1 || maximumSamples > 27)
+                throw new ArgumentOutOfRangeException(nameof(maximumSamples));
             sql.AppendFormat(
                 CultureInfo.InvariantCulture,
                 @"
@@ -1095,7 +1191,8 @@ BEGIN
                        THEN 1 ELSE 0
                    END),
                1,
-               CAST(CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END AS bit)
+               -- One pinned sample day: GROUP BY user already collapses duplicate report rows.
+               CAST(1 AS bit)
         FROM #Samples AS chosen
         JOIN #Weeks AS weeks
           ON chosen.sample_date >= weeks.m365_from
@@ -1110,51 +1207,52 @@ BEGIN
     END
     ELSE
     BEGIN
-        ;WITH PerSample AS
+        -- One group per user, not one per user/report day. Counting DISTINCT pinned sample
+        -- numbers retains duplicate-day evidence exactly as the previous per-sample MAX pivot
+        -- did: a sample observed by any duplicate row counts once, and a sample positive in any
+        -- duplicate row counts as active once. COUNT(DISTINCT ...) ignores the NULLs produced by
+        -- the anchor's LEFT JOIN, so an eligible user with no matching row still scores zero
+        -- observed samples and is removed below, keeping absent distinct from observed-zero.
+        -- Preserve the eligible population through aggregation so sample-join selectivity
+        -- cannot shrink its group estimate and memory grant. Remove absent groups afterward.
+        ;WITH Chosen AS
         (
-            SELECT activity.user_id,
-                       activity.[date] AS sample_date,
-                       MAX(CASE
-                               WHEN activity.last_activity_date >=
-                                    CASE WHEN report_week.week_start < @from
-                                         THEN @from ELSE report_week.week_start END
-                                AND activity.last_activity_date < DATEADD(DAY, 1, activity.[date])
-                               THEN 1 ELSE 0
-                           END) AS was_active
-            FROM {1} AS activity
-            JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-            CROSS APPLY
-            (
-                    SELECT DATEADD(
-                        DAY, 1 - DATEPART(WEEKDAY, activity.[date]), activity.[date]) AS week_start
-            ) AS report_week
-            WHERE activity.[date] >= @from
-              AND activity.[date] < @endExclusive
-              AND activity.[date] < DATEADD(DAY, 1, @settled)
-              AND
-              (
-                      activity.[date] = @to
-                      OR DATEPART(WEEKDAY, activity.[date]) = 7
-              )
-            GROUP BY activity.user_id, activity.[date]
+            SELECT samples.sample_date, weeks.m365_from,
+                   DATEADD(DAY, 1, samples.sample_date) AS end_exclusive,
+                   ROW_NUMBER() OVER (ORDER BY samples.sample_date) AS sample_number
+            FROM #Samples AS samples
+            JOIN #Weeks AS weeks
+              ON samples.sample_date = weeks.m365_to
+            WHERE samples.workload = {0}
         ),
         PerUser AS
         (
-            SELECT user_id,
-                       SUM(was_active) AS active_samples,
-                       COUNT(*) AS observed_samples
-            FROM PerSample
-            GROUP BY user_id
+            SELECT eligible.user_id,
+                   COUNT(DISTINCT CASE WHEN activity.last_activity_date >= chosen.m365_from
+                                        AND activity.last_activity_date < chosen.end_exclusive
+                                       THEN chosen.sample_number END) AS active_samples,
+                   COUNT(DISTINCT chosen.sample_number) AS observed_samples
+            FROM #EligibleUsers AS eligible
+            LEFT JOIN
+            (
+                {1} AS activity
+                JOIN Chosen AS chosen
+                  ON CAST(activity.[date] AS date) = chosen.sample_date
+                 AND activity.[date] >= @from
+                 AND activity.[date] < @endExclusive
+            ) ON activity.user_id = eligible.user_id
+            GROUP BY eligible.user_id
         )
         INSERT #Scores
             (workload, user_id, active_samples, observed_samples, frequency_known)
         SELECT {0},
-                   user_id,
+                   per_user.user_id,
                    active_samples,
                    observed_samples,
                    CAST(CASE WHEN observed_samples = @expected{0}
                              THEN 1 ELSE 0 END AS bit)
-        FROM PerUser
+        FROM PerUser AS per_user
+        WHERE observed_samples > 0
         OPTION (RECOMPILE, MAXDOP 1);
     END;
 END;
@@ -1162,8 +1260,10 @@ END;
                 workload, table);
         }
 
-        private static void AppendCopilotOverview(StringBuilder sql, LicenceActivitySources sources)
+        private static void AppendCopilotOverview(
+            StringBuilder sql, LicenceActivitySources sources, bool includeScores = true)
         {
+            sql.Append("DECLARE @copilotIncludeScores bit = " + (includeScores ? "1" : "0") + ";\r\n");
             if (sources.CopilotUsageReports)
             {
                 sql.Append(CopilotOfficialOverview);
@@ -1381,6 +1481,20 @@ FROM PerUser
 OPTION (RECOMPILE);
 ";
 
+        private static string CopilotD7ActivityExpression(string from, string endExclusive)
+        {
+            // Counters describe this period; the user-level date is only a v1-shaped fallback.
+            return @"CASE
+                WHEN report.active_usage_days BETWEEN 1 AND 7
+                  OR report.prompts_all_apps > 0 THEN 1
+                WHEN report.active_usage_days IS NULL
+                 AND report.prompts_all_apps IS NULL
+                 AND report.last_activity_date >= " + from + @"
+                 AND report.last_activity_date < " + endExclusive + @" THEN 1
+                ELSE 0
+            END";
+        }
+
         private static readonly string CopilotOfficialOverview = @"
 DECLARE @copilotLogImported datetime = NULL;
 DECLARE @copilotLogObfuscated bit = 0;
@@ -1504,21 +1618,18 @@ BEGIN
                7, @copilotD7Expected, @copilotD7Observed, 0
         FROM (SELECT sample_date FROM #Samples WHERE workload = 5) AS samples;
 
-        IF @copilotPreferredStatus = 'available'
+        IF @copilotPreferredStatus = 'available' AND @copilotIncludeScores = 1
         BEGIN
             IF @copilotD7Expected = 1
             BEGIN
+                DECLARE @copilotSingleSample date =
+                    (SELECT sample_date FROM #Samples WHERE workload = 5);
                 INSERT #Scores
                     (workload, user_id, active_samples, observed_samples, frequency_known)
                 SELECT 5,
                        report.user_id,
-                       CASE
-                           WHEN report.active_usage_days BETWEEN 1 AND 7
-                             OR report.prompts_all_apps > 0
-                             OR (report.last_activity_date >= DATEADD(DAY, -6, report.[date])
-                                 AND report.last_activity_date < DATEADD(DAY, 1, report.[date]))
-                           THEN 1 ELSE 0
-                       END,
+                       " + CopilotD7ActivityExpression(
+                           "DATEADD(DAY, -6, report.[date])", "DATEADD(DAY, 1, report.[date])") + @",
                        1,
                        CAST(CASE
                            WHEN report.active_usage_days BETWEEN 0 AND 7
@@ -1526,12 +1637,10 @@ BEGIN
                            THEN 1 ELSE 0
                        END AS bit)
                 FROM dbo.copilot_usage_user_activity_log AS report
-                JOIN #Samples AS chosen
-                  ON chosen.workload = 5
-                 AND report.[date] >= chosen.sample_date
-                 AND report.[date] < DATEADD(DAY, 1, chosen.sample_date)
                 JOIN #EligibleUsers AS eligible ON eligible.user_id = report.user_id
                 WHERE report.report_period_days = 7
+                  AND report.[date] >= @copilotSingleSample
+                  AND report.[date] < DATEADD(DAY, 1, @copilotSingleSample)
                 OPTION (RECOMPILE, MAXDOP 1);
             END
             ELSE
@@ -1539,38 +1648,26 @@ BEGIN
                 INSERT #Scores
                     (workload, user_id, active_samples, observed_samples, frequency_known)
                 SELECT 5, report.user_id,
-                       SUM(CASE
-                               WHEN report.active_usage_days BETWEEN 1 AND 7
-                                 OR report.prompts_all_apps > 0
-                               THEN 1
-                               WHEN report.active_usage_days IS NULL
-                                AND report.prompts_all_apps IS NULL
-                                AND report.last_activity_date >= DATEADD(DAY, -6, report.[date])
-                                AND report.last_activity_date < DATEADD(DAY, 1, report.[date])
-                               THEN 1
-                               ELSE 0
-                           END),
+                       SUM(" + CopilotD7ActivityExpression(
+                           "DATEADD(DAY, -6, report.[date])", "DATEADD(DAY, 1, report.[date])") + @"),
                        COUNT(*),
                        CAST(CASE
                                 WHEN COUNT(*) = @copilotD7Expected
-                                 AND COUNT(report.active_usage_days) = COUNT(*)
-                                 AND MIN(report.active_usage_days) >= 0
-                                 AND MAX(report.active_usage_days) <= 7
-                                 AND (COUNT(report.prompts_all_apps) = 0
-                                      OR MIN(report.prompts_all_apps) >= 0)
+                                 AND MIN(CASE WHEN report.active_usage_days BETWEEN 0 AND 7
+                                               AND (report.prompts_all_apps IS NULL
+                                                    OR report.prompts_all_apps >= 0)
+                                              THEN 1 ELSE 0 END) = 1
                                 THEN 1 ELSE 0
                             END AS bit)
                 FROM dbo.copilot_usage_user_activity_log AS report WITH (INDEX(0))
+                JOIN #Samples AS chosen
+                  ON chosen.workload = 5
+                 AND CAST(report.[date] AS date) = chosen.sample_date
                 JOIN #EligibleUsers AS eligible ON eligible.user_id = report.user_id
                 WHERE report.report_period_days = 7
                   AND report.[date] >= DATEADD(DAY, 6, @from)
                   AND report.[date] < @endExclusive
                   AND report.[date] < DATEADD(DAY, 1, @settled)
-                  AND
-                  (
-                      report.[date] = @to
-                      OR DATEPART(WEEKDAY, report.[date]) = 7
-                  )
                 GROUP BY report.user_id
                 OPTION (RECOMPILE, MAXDOP 4);
             END
@@ -1634,6 +1731,7 @@ BEGIN
                 @copilotLongPeriod, @copilotLongPeriod, @copilotLongPeriod, 0
             );
 
+            IF @copilotIncludeScores = 1
             INSERT #Scores
                 (workload, user_id, active_samples, observed_samples, frequency_known)
             SELECT 5,
@@ -1688,6 +1786,8 @@ BEGIN
              ELSE N'Copilot audit events provide positive evidence only; no database signal proves complete event coverage, so absent users remain unknown.'
         END;
 
+    IF @copilotIncludeScores = 1
+    BEGIN
     ;WITH EventWeeks AS
     (
         SELECT chats.user_id,
@@ -1711,6 +1811,7 @@ BEGIN
     FROM EventWeeks
     GROUP BY user_id
     OPTION (RECOMPILE);
+    END;
 
     INSERT #Coverage
     (
@@ -1749,6 +1850,8 @@ BEGIN
              ELSE N'Copilot interaction history provides positive evidence only; no database signal proves complete history for every user, so absent users remain unknown.'
         END;
 
+    IF @copilotIncludeScores = 1
+    BEGIN
     ;WITH EventWeeks AS
     (
         SELECT interactions.user_id,
@@ -1772,6 +1875,7 @@ BEGIN
     FROM EventWeeks
     GROUP BY user_id
     OPTION (RECOMPILE);
+    END;
 
     INSERT #Coverage
     (
@@ -2488,6 +2592,17 @@ WHERE owned.license_type_id = @licenceTypeId
        OR u.mail LIKE @searchPattern ESCAPE N'\')
 OPTION (RECOMPILE);
 
+IF (SELECT COUNT(*) FROM #EligibleUsers) >= 32768
+BEGIN
+    BEGIN TRY
+        EXEC sp_executesql N'CREATE NONCLUSTERED COLUMNSTORE INDEX IX_LicenceActivity_EligibleBatch
+            ON #EligibleUsers (user_id);';
+    END TRY
+    BEGIN CATCH
+        PRINT N'Licence activity is using rowstore temporary eligibility.';
+    END CATCH;
+END;
+
 CREATE TABLE #Coverage
 (
     workload tinyint NOT NULL PRIMARY KEY,
@@ -2514,6 +2629,9 @@ CREATE TABLE #Samples
 (
     workload tinyint NOT NULL,
     sample_date date NOT NULL,
+    m365_from date NULL,
+    end_exclusive date NULL,
+    copilot_from date NULL,
     PRIMARY KEY (workload, sample_date)
 );
 
@@ -2535,52 +2653,60 @@ CREATE TABLE #Scores
             int workload,
             string table,
             string actionExpression,
-            string scopeTable)
+            string scopeTable,
+            bool readModel = false)
         {
             if (coverage.SnapshotDates == null || coverage.SnapshotDates.Count == 0)
                 return;
 
+            if (readModel)
+            {
+                AppendM365ReadModel(sql, coverage, workload, table, actionExpression, scopeTable);
+                return;
+            }
+
+            var samples = Enumerable.Range(0, coverage.SnapshotDates.Count).ToArray();
+            var aggregates = string.Join("\r\nUNION ALL\r\n", samples.Select(sample =>
+            {
+                var date = SampleParameterName(workload, sample);
+                return @"SELECT eligible.user_id, MAX(" + actionExpression + @") AS actions,
+                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                              AND activity.last_activity_date < chosen.end_exclusive
+                             THEN activity.last_activity_date END) AS last_activity_utc,
+                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                              AND activity.last_activity_date < chosen.end_exclusive
+                             THEN 1 ELSE 0 END) AS was_active
+                FROM " + table + @" AS activity
+                JOIN " + scopeTable + @" AS eligible ON eligible.user_id = activity.user_id
+                JOIN #Samples AS chosen ON chosen.workload = " + workload + @"
+                    AND chosen.sample_date = " + date + @"
+                WHERE activity.[date] >= " + date + @"
+                  AND activity.[date] < DATEADD(DAY, 1, " + date + @")
+                GROUP BY eligible.user_id";
+            }));
+            if (scopeTable == "#ReturnedUsers")
+            {
+                // At most 300 returned users: this hash is bounded to 300 x 27 samples.
+                aggregates = @"SELECT eligible.user_id, MAX(" + actionExpression + @") AS actions,
+                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                              AND activity.last_activity_date < chosen.end_exclusive
+                             THEN activity.last_activity_date END) AS last_activity_utc,
+                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                              AND activity.last_activity_date < chosen.end_exclusive
+                             THEN 1 ELSE 0 END) AS was_active
+                FROM " + table + @" AS activity
+                JOIN #ReturnedUsers AS eligible ON eligible.user_id = activity.user_id
+                JOIN #Samples AS chosen ON chosen.workload = " + workload + @"
+                    AND CAST(activity.[date] AS date) = chosen.sample_date
+                WHERE activity.[date] >= @from AND activity.[date] < @endExclusive
+                GROUP BY eligible.user_id, chosen.sample_date";
+            }
             sql.AppendFormat(
                 CultureInfo.InvariantCulture,
                 @"
 ;WITH PerSample AS
 (
-    SELECT activity.user_id,
-           CAST(activity.[date] AS date) AS sample_date,
-           MAX({2}) AS actions,
-           MAX(CASE
-                   WHEN activity.last_activity_date >= @from
-                    AND activity.last_activity_date < @endExclusive
-                    AND activity.last_activity_date < DATEADD(DAY, 1, CAST(activity.[date] AS date))
-                    AND activity.last_activity_date >= DATEADD(DAY,
-                        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                        CAST(activity.[date] AS date))
-                    AND activity.last_activity_date < DATEADD(DAY, 7,
-                        DATEADD(DAY,
-                            -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                            CAST(activity.[date] AS date)))
-                   THEN activity.last_activity_date
-               END) AS last_activity_utc,
-           MAX(CASE
-                   WHEN activity.last_activity_date >= @from
-                    AND activity.last_activity_date < @endExclusive
-                    AND activity.last_activity_date < DATEADD(DAY, 1, CAST(activity.[date] AS date))
-                    AND activity.last_activity_date >= DATEADD(DAY,
-                        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                        CAST(activity.[date] AS date))
-                    AND activity.last_activity_date < DATEADD(DAY, 7,
-                        DATEADD(DAY,
-                            -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), CAST(activity.[date] AS date)) % 7) + 7) % 7),
-                            CAST(activity.[date] AS date)))
-                   THEN 1 ELSE 0
-               END) AS was_active
-    FROM {1} AS activity
-    JOIN #Samples AS chosen
-      ON chosen.workload = {0}
-     AND activity.[date] >= chosen.sample_date
-     AND activity.[date] < DATEADD(DAY, 1, chosen.sample_date)
-    JOIN {3} AS eligible ON eligible.user_id = activity.user_id
-    GROUP BY activity.user_id, CAST(activity.[date] AS date)
+    {1}
 )
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
@@ -2594,13 +2720,61 @@ FROM PerSample
 GROUP BY user_id
 OPTION (RECOMPILE);
 ",
-                workload, table, actionExpression, scopeTable);
+                workload, aggregates);
+        }
+
+        private static void AppendM365ReadModel(
+            StringBuilder sql, LicenceActivityCoverage coverage, int workload,
+            string table, string actionExpression, string scopeTable)
+        {
+            // Two ordered aggregations over a single pass of the activity table. The inner group
+            // collapses every row for one (user, pinned snapshot) to a single sample - MAX actions,
+            // MAX activity flag and MAX clipped last-activity retain duplicate-day evidence exactly
+            // as the legacy per-date UNION ALL did. The outer group then counts the distinct samples
+            // and averages them per user. Unlike the previous per-sample pivot this emits only two
+            // predicates per row rather than one CASE pair per snapshot, so a columnstore metrics
+            // index (the Azure default) can service it in batch mode instead of scanning a wide
+            // per-snapshot projection. It is also faithful to the row-by-row scoring semantics:
+            // sample counts once, any positive duplicate is active, and frequency_known compares the
+            // distinct observed samples against the expected count for the workload.
+            sql.Append(@"
+;WITH PerUserDay AS
+(
+    SELECT activity.user_id, chosen.sample_date,
+           MAX(" + actionExpression + @") AS actions,
+           MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                     AND activity.last_activity_date < chosen.end_exclusive
+                    THEN 1 ELSE 0 END) AS was_active,
+           MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
+                     AND activity.last_activity_date < chosen.end_exclusive
+                    THEN activity.last_activity_date END) AS last_activity_utc
+    FROM " + table + @" AS activity
+    JOIN #Samples AS chosen
+      ON chosen.workload = " + workload + @"
+     AND CAST(activity.[date] AS date) = chosen.sample_date
+    JOIN " + scopeTable + @" AS eligible ON eligible.user_id = activity.user_id
+    WHERE activity.[date] >= @from AND activity.[date] < @endExclusive
+    GROUP BY activity.user_id, chosen.sample_date
+)
+INSERT #Scores
+    (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
+SELECT " + workload + @", user_id,
+       SUM(was_active),
+       COUNT(*),
+       CAST(CASE WHEN COUNT(*) = @expected" + workload + @" THEN 1 ELSE 0 END AS bit),
+       AVG(actions),
+       MAX(last_activity_utc)
+FROM PerUserDay
+GROUP BY user_id
+OPTION (RECOMPILE);
+");
         }
 
         private static void AppendCopilotUsers(
             StringBuilder sql,
             LicenceActivityCoverage coverage,
-            string scopeTable)
+            string scopeTable,
+            bool readModel = false)
         {
             if (coverage.Source == CopilotReportSource
                 && coverage.SnapshotDates != null
@@ -2608,7 +2782,43 @@ OPTION (RECOMPILE);
                 && coverage.ReportPeriodDays.HasValue)
             {
                 if (coverage.ReportPeriodDays.Value == 7)
-                    sql.Append(CopilotD7Users.Replace("#ActivityScope", scopeTable));
+                {
+                    if (scopeTable == "#ReturnedUsers")
+                    {
+                        sql.Append(@"
+CREATE TABLE #CopilotReportIds (id int NOT NULL PRIMARY KEY);
+INSERT #CopilotReportIds (id)
+SELECT report.id
+FROM dbo.copilot_usage_user_activity_log AS report WITH (INDEX(IX_date_user_id_report_period_days))
+JOIN #Samples AS chosen
+  ON chosen.workload = 5
+ AND report.[date] >= chosen.sample_date
+ AND report.[date] < DATEADD(DAY, 1, chosen.sample_date)
+JOIN #ReturnedUsers AS eligible ON eligible.user_id = report.user_id
+WHERE report.report_period_days = 7
+OPTION (RECOMPILE);
+");
+                        sql.Append(CopilotD7Users.Replace(
+                            "AS report WITH (INDEX(0))",
+                            "AS report JOIN #CopilotReportIds AS ids ON ids.id = report.id")
+                            .Replace("#ActivityScope", scopeTable));
+                    }
+                    else
+                    {
+                        var query = CopilotD7Users.Replace("#ActivityScope", scopeTable);
+                        if (readModel)
+                            // Let the optimiser choose the access path for every read-model D7 shape.
+                            // The forced clustered scan (INDEX(0)) blocked batch mode; the single-snapshot
+                            // IX seek looked cheaper but does ~930k key lookups (~6.7s). Measured at 300k
+                            // users a columnstore metrics index (the Azure default) instead gives batch mode
+                            // with rowgroup elimination on the date predicate: one snapshot reads a single
+                            // segment and skips the rest (~0.5s), and the full 180-day window aggregates in
+                            // batch (~2s vs ~15s). In pure rowstore the optimiser still lands on a scan, so
+                            // this only removes rowstore-era hints that a columnstore deployment must not pay.
+                            query = query.Replace(" WITH (INDEX(0))", string.Empty);
+                        sql.Append(query);
+                    }
+                }
                 else
                     sql.Append(CopilotLongUsers.Replace("#ActivityScope", scopeTable));
                 return;
@@ -2625,16 +2835,14 @@ OPTION (RECOMPILE);
         }
 
         private static readonly string CopilotD7Users = @"
+DECLARE @copilotSampleFrom date =
+    (SELECT MIN(sample_date) FROM #Samples WHERE workload = 5);
+DECLARE @copilotSampleEnd date =
+    (SELECT MAX(end_exclusive) FROM #Samples WHERE workload = 5);
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
 SELECT 5, report.user_id,
-       SUM(CASE
-               WHEN report.active_usage_days BETWEEN 1 AND 7
-                 OR report.prompts_all_apps > 0
-                 OR (report.last_activity_date >= DATEADD(DAY, -6, CAST(report.[date] AS date))
-                     AND report.last_activity_date < DATEADD(DAY, 1, CAST(report.[date] AS date)))
-               THEN 1 ELSE 0
-           END),
+       SUM(" + CopilotD7ActivityExpression("chosen.copilot_from", "chosen.end_exclusive") + @"),
        COUNT(*),
        CAST(CASE
                 WHEN COUNT(*) = @expected5
@@ -2651,17 +2859,18 @@ SELECT 5, report.user_id,
                THEN AVG(CAST(report.prompts_all_apps AS float))
        END,
        MAX(CASE
-               WHEN report.last_activity_date >= DATEADD(DAY, -6, CAST(report.[date] AS date))
-                AND report.last_activity_date < DATEADD(DAY, 1, CAST(report.[date] AS date))
+               WHEN report.last_activity_date >= chosen.copilot_from
+                AND report.last_activity_date < chosen.end_exclusive
                THEN report.last_activity_date
            END)
 FROM dbo.copilot_usage_user_activity_log AS report WITH (INDEX(0))
 JOIN #Samples AS chosen
   ON chosen.workload = 5
- AND report.[date] >= chosen.sample_date
- AND report.[date] < DATEADD(DAY, 1, chosen.sample_date)
+ AND CAST(report.[date] AS date) = chosen.sample_date
 JOIN #ActivityScope AS eligible ON eligible.user_id = report.user_id
 WHERE report.report_period_days = 7
+  AND report.[date] >= @copilotSampleFrom
+  AND report.[date] < @copilotSampleEnd
 GROUP BY report.user_id
 OPTION (RECOMPILE);
 ";
