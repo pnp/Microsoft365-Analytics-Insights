@@ -100,6 +100,11 @@ const useStyles = makeStyles({
     fontVariantNumeric: 'tabular-nums',
     textAlign: 'right',
     padding: '6px 10px',
+    // Matches the shared table cell (see adoptionShared's `td`). This class deliberately does not
+    // reuse `table.td` because it carries its own shading, so the size has to be kept in step by
+    // hand - without it these two cells render a size larger than the six around them.
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: tokens.colorNeutralStroke3,

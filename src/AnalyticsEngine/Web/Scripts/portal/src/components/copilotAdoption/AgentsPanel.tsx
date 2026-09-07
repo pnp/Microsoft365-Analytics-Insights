@@ -89,6 +89,10 @@ const useStyles = makeStyles({
     // break opportunity in them. Left unbounded, one such row stretches this column until every
     // other column is pushed off the right-hand side of the screen.
     maxWidth: '360px',
+    // The name is tenant-supplied, so it can be a single unbreakable token too. It wraps rather
+    // than truncates - a name is what a reader identifies the agent by, so losing the end of it is
+    // worse than a taller row. (No effect on the key below, which is nowrap.)
+    overflowWrap: 'anywhere',
   },
   agentKey: {
     display: 'block',

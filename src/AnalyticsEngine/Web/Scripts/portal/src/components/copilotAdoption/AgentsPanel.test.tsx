@@ -147,6 +147,9 @@ describe('AgentsPanel inventory', () => {
   it('keeps the full agent ID reachable on hover, since the column truncates it', () => {
     renderPanel();
 
+    // Only the affordance is assertable here: vitest runs with `css: false` and jsdom has no layout
+    // engine, so the truncation itself (max-width + text-overflow) cannot be verified from a test.
+    // That was checked in a headless browser against a 180-character key.
     expect(screen.getByText(LONG_KEY)).toHaveAttribute('title', LONG_KEY);
   });
 });
