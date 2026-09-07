@@ -64,7 +64,7 @@ export interface LicenceActivityDistribution {
 /** One licence SKU with how many hold it and its five workload distributions. */
 export interface LicenceActivitySku {
   licenceTypeId: number;
-  name: string;
+  name: string | null;
   skuId: string | null;
   assignedUsers: number;
   workloads: LicenceActivityDistribution[];
