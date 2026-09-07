@@ -81,6 +81,16 @@
   <ItemGroup>
     <Compile Include="BaseEntity.cs" />
     <Compile Include="BuildConstants.cs" />
+    <Compile Include="LicenceActivity\ILicenceActivityStore.cs" />
+    <Compile Include="LicenceActivity\LicenceActivityModels.cs" />
+    <Compile Include="LicenceActivity\LicenceActivityQuery.cs" />
+    <Compile Include="LicenceActivity\LicenceActivityWorkbook.cs" />
+    <Compile Include="LicenceActivity\LicenceActivitySql.cs" />
+    <Compile Include="LicenceActivity\SqlLicenceActivityStore.cs" />
+    <Compile Include="LicenceActivity\SqlLicenceActivityReadModelLoader.cs" />
+    <Compile Include="LicenceActivity\LicenceActivityReadModel.cs" />
+    <Compile Include="LicenceActivity\LicenceActivityReadModelCache.cs" />
+    <Compile Include="LicenceActivity\CachedLicenceActivityStore.cs" />
     <Compile Include="Config\AppConfig.cs" />
     <Compile Include="Config\AppConnectionStrings.cs" />
     <Compile Include="CopilotAdoption\AdoptionBand.cs" />
