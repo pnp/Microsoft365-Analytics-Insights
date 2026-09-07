@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../test/renderWithProvider';
 import LicenceActivityPage from './LicenceActivityPage';
 import {
@@ -261,6 +262,24 @@ describe('LicenceActivityPage - export', () => {
 
     const exportBtn = await screen.findByRole('button', { name: /Export to Excel/i });
     expect(exportBtn).toBeDisabled();
+  });
+
+  it('does not export the old users snapshot when clicking Export commits a new top count on blur', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
+    mockUsers.mockResolvedValueOnce(usersResponse()).mockReturnValue(new Promise(() => {}));
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+    await act(async () => {});
+
+    const events = userEvent.setup();
+    const top = screen.getByRole('spinbutton', { name: 'Number of users in each list' });
+    await events.clear(top);
+    await events.type(top, '25');
+    await events.click(screen.getByRole('button', { name: /Export to Excel/i }));
+
+    await waitFor(() => expect(mockUsers.mock.calls.at(-1)?.[0].top).toBe(25));
+    await waitFor(() => expect(mockDownload).toHaveBeenCalledTimes(1));
+    expect(mockDownload.mock.calls[0][0].usersId).not.toBe('us1');
   });
 });
 
