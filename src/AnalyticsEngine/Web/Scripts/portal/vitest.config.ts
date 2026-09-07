@@ -10,6 +10,12 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    server: {
+      deps: {
+        // Fluent's ESM dependency graph uses extensionless imports that need Vite's resolver.
+        inline: [/@fluentui[\\/]/],
+      },
+    },
     // The Fluent components pull in a lot of CSS-in-JS; we don't assert on computed styles, so
     // skipping CSS processing keeps the tests fast without changing what they verify.
     css: false,
