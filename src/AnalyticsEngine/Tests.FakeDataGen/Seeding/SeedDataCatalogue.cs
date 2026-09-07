@@ -15,7 +15,7 @@ namespace Tests.FakeDataGen.Seeding
     /// Some values are deliberately non-Latin (Greek "Αττική", Japanese "東京都", accented
     /// "São Paulo" / "Zürich") so Unicode round-trips are exercised by the fake data too.
     /// </summary>
-    public static class SeedDataCatalogue
+    internal static class SeedDataCatalogue
     {
         /// <summary>Fraction of seeded users whose account is disabled (leavers / suspended).</summary>
         public const double DisabledAccountFraction = 0.07;
