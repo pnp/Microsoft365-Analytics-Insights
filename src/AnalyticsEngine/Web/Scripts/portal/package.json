@@ -19,19 +19,22 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.0"
   },
+  "overrides": {
+    "@csstools/css-syntax-patches-for-csstree": "1.1.7"
+  },
   "devDependencies": {
     "@microsoft/microsoft-graph-types": "^2.43.1",
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/jest-dom": "^7.0.1",
-    "@testing-library/react": "^16.3.3",
-    "@testing-library/user-event": "^14.6.7",
-    "@types/node": "^26.0.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "jsdom": "^30.0.1",
-    "typescript": "^6.0.3",
-    "vite": "^8.1.0",
-    "vitest": "^5.0.0"
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.4",
+    "@types/node": "24.12.3",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.1",
+    "jsdom": "29.1.1",
+    "typescript": "~6.0.2",
+    "vite": "8.0.12",
+    "vitest": "3.2.7"
   }
 }
