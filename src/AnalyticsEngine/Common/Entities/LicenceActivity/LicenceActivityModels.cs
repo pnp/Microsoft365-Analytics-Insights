@@ -21,11 +21,17 @@ namespace Common.Entities.LicenceActivity
         public string SnapshotId { get; set; }
         public DateTime GeneratedUtc { get; set; }
         public DateTime ExpiresUtc { get; set; }
+
+        [JsonIgnore]
+        public DateTime? SourceExpiresUtc { get; set; }
     }
 
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class LicenceActivityOverview : LicenceActivitySnapshot
     {
+        [JsonIgnore]
+        public string ReadModelId { get; set; }
+
         public LicenceActivityQuery Query { get; set; }
         public int DistinctAssignedUsers { get; set; }
         public List<LicenceActivitySku> Licences { get; set; } = new List<LicenceActivitySku>();

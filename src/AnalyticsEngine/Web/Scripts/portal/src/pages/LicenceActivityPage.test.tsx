@@ -190,6 +190,43 @@ describe('LicenceActivityPage - user-detail gating', () => {
     expect((await screen.findAllByText('ada@contoso.com')).length).toBeGreaterThan(0);
     expect(mockUsers).toHaveBeenCalled();
   });
+
+  it('drops revoked user detail on a users 403 while retaining aggregates and rechecking availability', async () => {
+    let finishAvailability!: (value: LicenceActivityAvailability) => void;
+    const recheck = new Promise<LicenceActivityAvailability>((resolve) => { finishAvailability = resolve; });
+    mockAvailability.mockResolvedValueOnce(availability({ canViewUsers: true })).mockReturnValueOnce(recheck);
+    mockUsers.mockResolvedValueOnce(usersResponse()).mockRejectedValueOnce(
+      new LicenceActivityApiError('forbidden', 403, 'Individual user detail is forbidden.'),
+    );
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+
+    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    await waitFor(() => expect(mockAvailability).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('User drill-down')).not.toBeInTheDocument();
+    expect(screen.queryByText('ada@contoso.com')).not.toBeInTheDocument();
+    expect(screen.getByText('Licence assignments')).toBeInTheDocument();
+    expect(screen.getByText(/aggregate view/i)).toBeInTheDocument();
+
+    await act(async () => { finishAvailability(availability({ canViewUsers: false })); });
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    await waitFor(() => expect(mockDownload).toHaveBeenCalledWith({ overviewId: 'ov1', usersId: undefined }));
+    expect(mockUsers).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not discard user-detail permission for a transient users failure', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
+    mockUsers.mockResolvedValueOnce(usersResponse()).mockRejectedValueOnce(
+      new LicenceActivityApiError('busy', 503, 'Reporting is busy.'),
+    );
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+
+    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    expect(await screen.findByText('Reporting is busy.')).toBeInTheDocument();
+    expect(screen.getByText('User drill-down')).toBeInTheDocument();
+    expect(mockAvailability).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('LicenceActivityPage - scale (50 SKUs)', () => {
@@ -284,6 +321,33 @@ describe('LicenceActivityPage - export', () => {
 });
 
 describe('LicenceActivityPage - export refresh after expiry', () => {
+  it('disables aggregate export until a pending expiry refresh supplies a fresh overview', async () => {
+    let finishOverview!: (value: LicenceActivityOverview) => void;
+    const renewal = new Promise<LicenceActivityOverview>((resolve) => { finishOverview = resolve; });
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
+    mockOverview.mockResolvedValueOnce(overview()).mockReturnValueOnce(renewal);
+    mockDownload.mockRejectedValueOnce(
+      new LicenceActivityApiError('expired', 410, 'The overview expired.'),
+    ).mockResolvedValue(undefined);
+    renderWithProvider(<LicenceActivityPage />);
+    const exportButton = await screen.findByRole('button', { name: /Export to Excel/i });
+    await waitFor(() => expect(exportButton).toBeEnabled());
+    fireEvent.click(exportButton);
+    await screen.findByText('The overview expired.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(exportButton).toBeDisabled();
+    fireEvent.click(exportButton);
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Licence assignments')).toBeInTheDocument();
+    await waitFor(() => expect(mockOverview).toHaveBeenCalledTimes(2));
+
+    await act(async () => { finishOverview(overview({ snapshotId: 'ov2' })); });
+    await waitFor(() => expect(exportButton).toBeEnabled());
+    fireEvent.click(exportButton);
+    await waitFor(() => expect(mockDownload).toHaveBeenLastCalledWith({ overviewId: 'ov2', usersId: undefined }));
+  });
+
   it('re-mints the users snapshot on Refresh (same cached overviewId) without silently re-exporting', async () => {
     mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
     // The overview stays cached: it returns the SAME snapshotId on reload, which is exactly the case
@@ -337,6 +401,143 @@ describe('LicenceActivityPage - export refresh after expiry', () => {
   });
 });
 
+describe('LicenceActivityPage - browse page survives an expiry refresh', () => {
+  const usersParams = () => mockUsers.mock.calls[mockUsers.mock.calls.length - 1][0];
+
+  it('keeps the admin on page 2 (and workload/sort/search) when Refresh re-mints the overview under a NEW id', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
+
+    // The overview re-mints on reload: ov1 first, ov2 after Refresh. A brand-new id per reload is
+    // exactly the case that used to reset the browse page (the drill-down treated the id as scope).
+    let ovCount = 0;
+    mockOverview.mockImplementation(async () => {
+      ovCount += 1;
+      return overview({ snapshotId: ovCount === 1 ? 'ov1' : 'ov2' });
+    });
+
+    // A multi-page list whose snapshot id is bound to the overview id + page, so a re-mint is visible.
+    mockUsers.mockImplementation(async (params) => ({
+      ...usersResponse(),
+      overviewId: params.overviewId,
+      snapshotId: `us-${params.overviewId}-p${params.page}`,
+      totalUsers: 120,
+      query: {
+        ...echo,
+        licenceTypeId: params.licenceTypeId,
+        workload: params.workload,
+        search: params.search ?? '',
+        sort: params.sort,
+        direction: params.direction,
+        top: params.top,
+        page: params.page,
+        pageSize: params.pageSize,
+      },
+    }));
+
+    // The first export fails as expired (users snapshots expire before the overview); later ones pass.
+    mockDownload
+      .mockRejectedValueOnce(
+        new LicenceActivityApiError('expired', 410, 'This snapshot has expired or was refreshed.'),
+      )
+      .mockResolvedValue(undefined);
+
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+    await act(async () => {});
+
+    // Move off the defaults: a non-default workload and sort and search, then browse to page 2.
+    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    await waitFor(() => expect(usersParams()).toMatchObject({ workload: 'outlook', page: 1 }));
+    fireEvent.change(await screen.findByLabelText('Sort users'), { target: { value: 'upn:asc' } });
+    await waitFor(() => expect(usersParams()).toMatchObject({ sort: 'upn', direction: 'asc' }));
+    fireEvent.change(await screen.findByLabelText('Search users'), { target: { value: 'ada' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(usersParams()).toMatchObject({ search: 'ada', page: 1 }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov1', page: 2 }));
+
+    // Export -> 410 -> a Refresh prompt appears.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Export to Excel/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    expect(await screen.findByText(/expired/i)).toBeInTheDocument();
+
+    const usersBefore = mockUsers.mock.calls.length;
+    // Exact 'Refresh' resolves the export bar's button (the drill-down's is 'Refresh users').
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    // The overview re-mints to ov2 and the list is re-fetched - but the admin is STILL on page 2 with
+    // the same workload/sort/search. (With the bug the fresh id reset this to page 1.)
+    await waitFor(() => expect(usersParams().overviewId).toBe('ov2'));
+    expect(mockUsers.mock.calls.length).toBeGreaterThan(usersBefore);
+    expect(usersParams()).toMatchObject({
+      overviewId: 'ov2',
+      page: 2,
+      workload: 'outlook',
+      sort: 'upn',
+      direction: 'asc',
+      search: 'ada',
+    });
+
+    await waitFor(() => expect(screen.queryByText(/expired/i)).not.toBeInTheDocument());
+    await act(async () => {});
+    // Refresh alone must not silently re-export.
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+
+    // A subsequent explicit export references the fresh overview id AND the fresh users snapshot.
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    await waitFor(() => {
+      const last = mockDownload.mock.calls[mockDownload.mock.calls.length - 1][0];
+      expect(last.overviewId).toBe('ov2');
+      expect(last.usersId).toBe('us-ov2-p2');
+    });
+  });
+});
+
+describe('LicenceActivityPage - a real scope change resets the browse page', () => {
+  const usersParams = () => mockUsers.mock.calls[mockUsers.mock.calls.length - 1][0];
+
+  it('returns to page 1 and drops the stale export id when the demographic filter changes', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: true }));
+    // A distinct overview id per demographic scope; department 1 stays in the catalogue so it remains
+    // selectable after the scoped reply.
+    mockOverview.mockImplementation(async (q) => overview({ snapshotId: `ov-dept-${q.departmentId ?? 'all'}` }));
+    mockUsers.mockImplementation(async (params) => ({
+      ...usersResponse(),
+      overviewId: params.overviewId,
+      snapshotId: `us-${params.overviewId}-p${params.page}`,
+      totalUsers: 120,
+      query: { ...echo, page: params.page },
+    }));
+
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findAllByText('ada@contoso.com');
+    await act(async () => {});
+
+    // Browse to page 2 of the current (all-departments) scope.
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov-dept-all', page: 2 }));
+
+    // Change the department filter: a genuine scope change, NOT a re-mint of the same query.
+    fireEvent.change(screen.getByLabelText('Filter by department'), { target: { value: '1' } });
+    await waitFor(() => expect(mockOverview.mock.calls.some((c) => c[0].departmentId === 1)).toBe(true));
+
+    // The re-scoped list is fetched fresh at PAGE 1 against the NEW overview - never the old page/id.
+    await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov-dept-1', page: 1 }));
+
+    // Let the fresh page-1 list settle (its snapshot id is captured for the export).
+    await screen.findAllByText('ada@contoso.com');
+    await act(async () => {});
+
+    // And an export now references the new scope's ids, never the pre-change ones.
+    fireEvent.click(screen.getByRole('button', { name: /Export to Excel/i }));
+    await waitFor(() => {
+      const last = mockDownload.mock.calls[mockDownload.mock.calls.length - 1][0];
+      expect(last.overviewId).toBe('ov-dept-1');
+      expect(last.usersId).toBe('us-ov-dept-1-p1');
+    });
+  });
+});
+
 describe('LicenceActivityPage - demographic filter options', () => {
   it('keeps every department selectable after a scoped reply, so you can switch straight from one to another', async () => {
     mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
@@ -365,5 +566,23 @@ describe('LicenceActivityPage - demographic filter options', () => {
     await waitFor(() => expect(screen.getByRole('option', { name: 'Support' })).toBeInTheDocument());
     fireEvent.change(deptSelect, { target: { value: '2' } });
     await waitFor(() => expect(mockOverview.mock.calls.some((c) => c[0].departmentId === 2)).toBe(true));
+  });
+});
+
+describe('LicenceActivityPage - preview label', () => {
+  it('shows a Preview badge next to the Licence activity heading', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
+    await act(async () => { renderWithProvider(<LicenceActivityPage />); });
+    expect(screen.getByText('Preview')).toBeInTheDocument();
+    expect(screen.getByText('Licence activity')).toBeInTheDocument();
+  });
+
+  it('explains cache lag, cold-load behaviour, and the no-judgement note', async () => {
+    mockAvailability.mockResolvedValue(availability({ canViewUsers: false }));
+    await act(async () => { renderWithProvider(<LicenceActivityPage />); });
+    const note = screen.getByRole('note');
+    expect(note.textContent).toMatch(/5 minutes/i);
+    expect(note.textContent).toMatch(/first load/i);
+    expect(note.textContent).toMatch(/activity evidence/i);
   });
 });

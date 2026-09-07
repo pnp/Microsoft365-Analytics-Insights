@@ -160,6 +160,15 @@ function TopCountInput({ value, onCommit, disabled }: { value: number; onCommit:
 
 interface UsersDrillDownProps {
   overviewId: string;
+  /** The overview's LOGICAL scope identity - the reporting window and demographic filters that
+   *  define WHICH population this drill-down is browsing. Unlike `overviewId` (a per-snapshot
+   *  generation id that is re-minted every time the snapshot expires and is re-fetched), this is
+   *  stable across a same-query re-mint. It, not `overviewId`, decides when the browse page must
+   *  reset: a genuine scope change (new window / department / country) resets to page 1, but
+   *  re-minting the identical logical query under a fresh `overviewId` - e.g. the export-410
+   *  recovery - must NOT, or an admin browsing page 2 is silently bounced back to page 1 by a
+   *  refresh that changed nothing they can see. */
+  overviewScope: string;
   licence: LicenceActivitySku;
   /** The overview's per-workload coverage, used to explain why a workload can't be ranked. */
   coverage: LicenceActivityCoverage[];
@@ -168,6 +177,8 @@ interface UsersDrillDownProps {
   onUsersSnapshot: (usersId: string | null) => void;
   /** Reloads the overview - the correct fix when a users request fails because the snapshot expired. */
   onRefreshOverview: () => void;
+  /** Rechecks detail permission after a current users request is forbidden. */
+  onForbidden?: () => void;
   /** Bumped by the parent to force a fresh users fetch (re-mint) even when the params are otherwise
    *  unchanged - e.g. after an export 410, when the overview is still cached under the same id so the
    *  params never change on their own. A same-key reload keeps the current rows on screen while the
@@ -182,10 +193,12 @@ interface UsersDrillDownProps {
  */
 export default function UsersDrillDown({
   overviewId,
+  overviewScope,
   licence,
   coverage,
   onUsersSnapshot,
   onRefreshOverview,
+  onForbidden,
   refreshToken,
 }: UsersDrillDownProps) {
   const styles = useStyles();
@@ -226,7 +239,14 @@ export default function UsersDrillDown({
   // Reset the page atomically when the scope (licence / workload / browse filter) changes, DURING
   // render - so `params` never briefly pairs a new scope with the old page, which would fire a wasted
   // SQL load before the page-1 reset. This is the React "adjust state during render" pattern.
-  const scopeKey = `${overviewId}\n${licence.licenceTypeId}\n${workload}\n${search}\n${sort}\n${direction}`;
+  //
+  // The scope is keyed off `overviewScope` (the overview's logical window + demographic identity),
+  // NOT `overviewId`. `overviewId` is a per-snapshot generation id that changes whenever the snapshot
+  // is re-minted (an expiry refresh re-fetches the SAME logical query under a new id); keying the
+  // reset off it would bounce an admin on page 2 back to page 1 on every recovery. `overviewId` still
+  // flows through `params` below, so a re-mint re-fetches the current page against the fresh snapshot
+  // without discarding the admin's place, workload, search or sort.
+  const scopeKey = `${overviewScope}\n${licence.licenceTypeId}\n${workload}\n${search}\n${sort}\n${direction}`;
   const [scope, setScope] = useState(scopeKey);
   if (scope !== scopeKey) {
     setScope(scopeKey);
@@ -250,6 +270,12 @@ export default function UsersDrillDown({
 
   const { data, loading, error, reload } = useUsersQuery(params);
 
+  const totalPages = data ? Math.max(1, Math.ceil(data.totalUsers / PAGE_SIZE)) : 1;
+  // Preserve a renewed page only while it still exists. Adjust during render so an expired
+  // population's empty out-of-range page is never displayed or published as the export snapshot;
+  // the scope-bound hook will fetch the last valid page (page 1 for an empty population).
+  if (data && page > totalPages) setPage(totalPages);
+
   // A parent-driven forced refresh (e.g. after an export 410). Re-mint the current view's snapshot
   // without changing any params, so the licence/workload/page/filters the admin is looking at are all
   // preserved. Skip the initial mount (token 0/undefined) so this never double-fetches on first load.
@@ -266,8 +292,13 @@ export default function UsersDrillDown({
     onUsersSnapshot(data?.snapshotId ?? null);
   }, [data?.snapshotId, onUsersSnapshot]);
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.totalUsers / PAGE_SIZE)) : 1;
-  const retry = describeError(error, '').kind === 'expired' ? onRefreshOverview : reload;
+  const errorKind = describeError(error, '').kind;
+  useEffect(() => {
+    if (errorKind === 'forbidden') onForbidden?.();
+  }, [errorKind, onForbidden]);
+
+  const retry = errorKind === 'expired' ? onRefreshOverview
+    : errorKind === 'forbidden' && onForbidden ? onForbidden : reload;
 
   return (
     <Card className={styles.card}>

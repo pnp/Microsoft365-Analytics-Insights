@@ -25,6 +25,7 @@ namespace Web.AnalyticsWeb.Controllers
             new LicenceActivitySnapshotCache<LicenceActivityOverview>(16, TimeSpan.FromMinutes(5));
         private static readonly LicenceActivitySnapshotCache<LicenceActivityUsers> UsersCache =
             new LicenceActivitySnapshotCache<LicenceActivityUsers>(32, TimeSpan.FromMinutes(2));
+        private static readonly LicenceActivityReadModelCache ReadModelCache = new LicenceActivityReadModelCache();
 
         private readonly Func<LicenceActivityRequestContext> _context;
         private readonly LicenceActivitySnapshotCache<LicenceActivityOverview> _overviews;
@@ -72,7 +73,8 @@ namespace Web.AnalyticsWeb.Controllers
                     result.Messages.Add(LicenceActivityRules.InterpretationCaveat);
                     result.Messages.Add(LicenceActivityRules.Method);
                     return result;
-                });
+                }, isCurrent: snapshot => !(context.Store is ILicenceActivitySnapshotValidator validator)
+                    || validator.IsCurrent(snapshot, context.Sources));
                 return Reply(HttpStatusCode.OK,
                     await LicenceActivitySnapshotCache<LicenceActivityOverview>.WaitForCallerAsync(task, cancellationToken));
             });
@@ -142,6 +144,14 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 return Reply(HttpStatusCode.Gone, new { message = "This snapshot has expired or was evicted. Refresh the current view before continuing or exporting." });
             }
+            catch (LicenceActivityReadModelExpiredException)
+            {
+                return Reply(HttpStatusCode.Gone, new { message = "The source snapshot expired or was evicted. Refresh the current view before continuing." });
+            }
+            catch (LicenceActivityReadModelBusyException)
+            {
+                return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Another licence report snapshot is loading. Retry in a few seconds." }, true);
+            }
             catch (LicenceActivityBusyException)
             {
                 return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Licence reporting is busy. Retry in a few seconds." }, true);
@@ -181,7 +191,8 @@ namespace Web.AnalyticsWeb.Controllers
                 scope = Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(
                     config.TenantGUID + "\n" + config.ConnectionStrings.DatabaseConnectionString + "\n" + sources.CacheKey)));
             return new LicenceActivityRequestContext(scope, sources,
-                new SqlLicenceActivityStore(config.ConnectionStrings.DatabaseConnectionString));
+                new CachedLicenceActivityStore(
+                    new SqlLicenceActivityStore(config.ConnectionStrings.DatabaseConnectionString), ReadModelCache, scope));
         }
     }
 

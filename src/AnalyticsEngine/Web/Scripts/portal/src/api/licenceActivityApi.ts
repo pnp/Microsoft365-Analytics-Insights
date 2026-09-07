@@ -12,9 +12,8 @@ const baseUrl = (): string =>
 
 /**
  * How a Licence-activity request failed, so callers can react to the case rather than a raw status.
- *   - `busy`       503: the query hit its finite timeout on a large tenant. This tool does NOT poll
- *                       (a bounded, killable query is simpler than a long-poll); the UI offers a
- *                       manual "Try again".
+ *   - `busy`       503: reporting capacity is busy or a report load failed. This tool does NOT poll;
+ *                       the UI offers a manual "Try again".
  *   - `expired`    410/409/404: the cached snapshot the request referenced is gone, superseded, or no
  *                       longer contains that licence. The caller must NOT silently re-query - it must
  *                       tell the user to refresh so the exported file always matches the screen.
@@ -66,7 +65,7 @@ function kindForStatus(status: number): LicenceActivityErrorKind {
 function fallbackMessage(kind: LicenceActivityErrorKind, status: number, what: string): string {
   switch (kind) {
     case 'busy':
-      return `The server is busy and ${what} timed out. Try again in a moment, or narrow the date range.`;
+      return `The server is busy or could not prepare ${what}. Try again in a moment.`;
     case 'expired':
       return `This snapshot has expired or was refreshed. Reload to get a current one.`;
     case 'forbidden':

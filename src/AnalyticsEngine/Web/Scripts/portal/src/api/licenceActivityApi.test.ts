@@ -86,6 +86,17 @@ describe('licenceActivityApi error mapping', () => {
       message: expect.stringMatching(/busy/i),
     });
   });
+
+  it('surfaces cold-range admission pressure without inventing a query timeout or polling', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({
+      message: 'Another licence report snapshot is loading. Retry in a few seconds.',
+    }, 503));
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'busy',
+      message: 'Another licence report snapshot is loading. Retry in a few seconds.',
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('downloadExport', () => {

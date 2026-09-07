@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   makeStyles,
   tokens,
+  Badge,
   Title3,
   Body1,
   Text,
@@ -44,9 +45,19 @@ const useStyles = makeStyles({
     gap: '12px',
     flexWrap: 'wrap',
   },
+  titleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
   intro: {
     marginTop: '8px',
     maxWidth: '820px',
+  },
+  previewNote: {
+    marginTop: '6px',
+    maxWidth: '820px',
+    color: tokens.colorNeutralForeground3,
   },
   controlsCard: {
     display: 'flex',
@@ -132,6 +143,7 @@ export default function LicenceActivityPage() {
 
   const [overviewResult, setOverviewResult] = useState<{
     key: string;
+    generation: number;
     data: LicenceActivityOverview | null;
     error: unknown;
   } | null>(null);
@@ -197,12 +209,13 @@ export default function LicenceActivityPage() {
     const controller = new AbortController();
     fetchOverview({ from: range.from, to: range.to, departmentId, countryId }, controller.signal)
       .then((o) => {
-        if (mySeq === overviewSeqRef.current) setOverviewResult({ key: overviewKey, data: o, error: null });
+        if (mySeq === overviewSeqRef.current)
+          setOverviewResult({ key: overviewKey, generation: overviewReloadKey, data: o, error: null });
       })
       .catch((err) => {
         if (mySeq !== overviewSeqRef.current || controller.signal.aborted) return;
         if (err instanceof DOMException && err.name === 'AbortError') return;
-        setOverviewResult({ key: overviewKey, data: null, error: err });
+        setOverviewResult({ key: overviewKey, generation: overviewReloadKey, data: null, error: err });
       });
 
     return () => controller.abort();
@@ -212,9 +225,11 @@ export default function LicenceActivityPage() {
   // Only surface an overview that belongs to the CURRENT scope key. A filter change hides the previous
   // overview (and its export id) on this render, before the new request starts.
   const overviewBelongs = overviewResult !== null && overviewResult.key === overviewKey;
+  const overviewCurrent = overviewBelongs && overviewResult.generation === overviewReloadKey;
   const overview = overviewBelongs ? overviewResult!.data : null;
-  const overviewError = overviewBelongs ? overviewResult!.error : null;
-  const overviewLoading = overviewKey !== null && !overviewBelongs;
+  const overviewError = overviewCurrent ? overviewResult!.error : null;
+  // Keep the same-scope drill-down mounted to preserve its page, but do not export a retiring generation.
+  const overviewLoading = overviewKey !== null && !overviewCurrent;
 
   // Refresh persisted filter options and choose/validate the selected licence against a new overview.
   // `overview` is request-scope bound, so when it is present the page's departmentId/countryId are the
@@ -250,6 +265,11 @@ export default function LicenceActivityPage() {
 
   const reloadOverview = useCallback(() => setOverviewReloadKey((k) => k + 1), []);
   const handleUsersSnapshot = useCallback((id: string | null) => setUsersId(id), []);
+  const handleUsersForbidden = useCallback(() => {
+    setUsersId(null);
+    setAvailability((previous) => previous ? { ...previous, canViewUsers: false } : previous);
+    setAvailabilityKey((k) => k + 1);
+  }, []);
 
   // The correct response to an EXPIRED snapshot (export 410, or a users 410): re-mint the snapshots in
   // place. We drop the stale users id and error, force the drill-down to re-fetch a fresh users
@@ -279,7 +299,7 @@ export default function LicenceActivityPage() {
   const exportUsersId = canViewUsers && selectedLicence ? usersId ?? undefined : undefined;
 
   const onExport = async (): Promise<void> => {
-    if (!overview) return;
+    if (!overview || overviewLoading) return;
     setExporting(true);
     setExportError(null);
     try {
@@ -290,8 +310,7 @@ export default function LicenceActivityPage() {
       // was still attaching a usersId. Retrying unchanged would 403 forever, so drop the individual
       // snapshot and re-read availability: the next export is then a valid aggregate-only workbook.
       if (describeError(err, '').kind === 'forbidden') {
-        setUsersId(null);
-        setAvailabilityKey((k) => k + 1);
+        handleUsersForbidden();
       }
     } finally {
       setExporting(false);
@@ -304,12 +323,21 @@ export default function LicenceActivityPage() {
     <div>
       <div className={styles.header}>
         <div>
-          <Title3>Licence activity</Title3>
+          <div className={styles.titleRow}>
+            <Title3>Licence activity</Title3>
+            <Badge appearance="tint" color="brand" size="medium">Preview</Badge>
+          </div>
           <Body1 block className={styles.intro}>
             Which licences are assigned, and how much are the people who hold them actually using each Microsoft 365
             workload. Activity is shown per workload and never blended into a single score, and anything that was not
             imported is shown as &quot;Unknown&quot; rather than zero.
           </Body1>
+          <Text role="note" block size={200} className={styles.previewNote}>
+            This report is in preview. Results are cached in memory for up to 5 minutes, so recent imports may not
+            yet appear. The first load for a new date range may take longer. Nothing shown implies a productivity
+            assessment or a recommendation to remove a licence —
+            it is activity evidence only.
+          </Text>
         </div>
       </div>
 
@@ -425,7 +453,7 @@ export default function LicenceActivityPage() {
                 <Tooltip
                   relationship="description"
                   content={
-                    overview
+                    overview && !overviewLoading
                       ? exportUsersId
                         ? 'Excel snapshot of the overview plus the exact user rows currently in view. Built from the cached snapshot, so it matches the screen rather than re-querying.'
                         : 'Excel snapshot of the licence and workload overview (aggregate only). Built from the cached snapshot.'
@@ -435,7 +463,7 @@ export default function LicenceActivityPage() {
                   <Button
                     appearance="primary"
                     icon={<ArrowDownload16Regular />}
-                    disabled={!overview || exporting}
+                    disabled={!overview || overviewLoading || exporting}
                     onClick={onExport}
                   >
                     {exporting ? 'Exporting...' : 'Export to Excel'}
@@ -560,10 +588,12 @@ export default function LicenceActivityPage() {
                       <UsersDrillDown
                         key={selectedLicence.licenceTypeId}
                         overviewId={overview.snapshotId}
+                        overviewScope={overviewKey ?? ''}
                         licence={selectedLicence}
                         coverage={overview.coverage}
                         onUsersSnapshot={handleUsersSnapshot}
                         onRefreshOverview={refreshSnapshots}
+                        onForbidden={handleUsersForbidden}
                         refreshToken={usersRefreshToken}
                       />
                     ) : (
