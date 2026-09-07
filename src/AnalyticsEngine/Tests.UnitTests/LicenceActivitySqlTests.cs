@@ -1331,7 +1331,7 @@ SELECT id, 1 FROM dbo.users;");
             }
         }
 
-        private static LicenceActivitySqlFixture CreateMeasuredFixture()
+        internal static LicenceActivitySqlFixture CreateMeasuredFixture()
         {
             var fixture = LicenceActivitySqlFixture.Create("LicenceMeasured");
             SeedDirectory(fixture);
@@ -1353,7 +1353,7 @@ VALUES
             return fixture;
         }
 
-        private static void SeedDirectory(LicenceActivitySqlFixture fixture)
+        internal static void SeedDirectory(LicenceActivitySqlFixture fixture)
         {
             fixture.Execute(@"
 INSERT dbo.user_departments (name)
@@ -1392,7 +1392,7 @@ VALUES
             SeedOneUsageTable(fixture, "sharepoint_user_activity_log", sampleDates);
         }
 
-        private static void SeedOneUsageTable(
+        internal static void SeedOneUsageTable(
             LicenceActivitySqlFixture fixture,
             string table,
             string[] sampleDates)

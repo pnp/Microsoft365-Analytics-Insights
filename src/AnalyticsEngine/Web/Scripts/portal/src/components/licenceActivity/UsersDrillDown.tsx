@@ -177,6 +177,8 @@ interface UsersDrillDownProps {
   onUsersSnapshot: (usersId: string | null) => void;
   /** Reloads the overview - the correct fix when a users request fails because the snapshot expired. */
   onRefreshOverview: () => void;
+  /** Rechecks detail permission after a current users request is forbidden. */
+  onForbidden?: () => void;
   /** Bumped by the parent to force a fresh users fetch (re-mint) even when the params are otherwise
    *  unchanged - e.g. after an export 410, when the overview is still cached under the same id so the
    *  params never change on their own. A same-key reload keeps the current rows on screen while the
@@ -196,6 +198,7 @@ export default function UsersDrillDown({
   coverage,
   onUsersSnapshot,
   onRefreshOverview,
+  onForbidden,
   refreshToken,
 }: UsersDrillDownProps) {
   const styles = useStyles();
@@ -289,7 +292,13 @@ export default function UsersDrillDown({
     onUsersSnapshot(data?.snapshotId ?? null);
   }, [data?.snapshotId, onUsersSnapshot]);
 
-  const retry = describeError(error, '').kind === 'expired' ? onRefreshOverview : reload;
+  const errorKind = describeError(error, '').kind;
+  useEffect(() => {
+    if (errorKind === 'forbidden') onForbidden?.();
+  }, [errorKind, onForbidden]);
+
+  const retry = errorKind === 'expired' ? onRefreshOverview
+    : errorKind === 'forbidden' && onForbidden ? onForbidden : reload;
 
   return (
     <Card className={styles.card}>

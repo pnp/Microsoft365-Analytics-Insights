@@ -15,7 +15,7 @@ namespace Common.Entities.LicenceActivity
     /// calls own a shared-scope connection and independently bounded workload connections.
     /// No EF context or request synchronization context is shared.
     /// </summary>
-    public sealed class SqlLicenceActivityStore : ILicenceActivityStore
+    public sealed partial class SqlLicenceActivityStore : ILicenceActivityStore, ILicenceActivityReadModelLoader
     {
         private static readonly SemaphoreSlim OverviewSqlSlots = new SemaphoreSlim(6, 6);
         private readonly string _connectionString;
@@ -816,6 +816,11 @@ namespace Common.Entities.LicenceActivity
             command.Parameters.Add("@searchPattern", SqlDbType.NVarChar, 202).Value =
                 escapedSearch.Length == 0 ? string.Empty : "%" + escapedSearch + "%";
 
+            AddCoverageParameters(command, overview);
+        }
+
+        private static void AddCoverageParameters(SqlCommand command, LicenceActivityOverview overview)
+        {
             var byWorkload = overview.Coverage.ToDictionary(c => c.Workload, StringComparer.Ordinal);
             for (var workload = LicenceActivitySql.Teams; workload <= LicenceActivitySql.Copilot; workload++)
             {
