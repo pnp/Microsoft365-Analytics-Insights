@@ -13,6 +13,11 @@ This is a **public** repository (part of a multi-fork network). Anything pushed 
 - **Azure deployment plans must be synthetic.** Files such as `.azure/plan.md` must never record real subscription/tenant/resource names or IDs, regions, hostnames/URLs, CIDRs, app IDs, user identities, deployment timestamps, resource counts, capacity/policy failures, or production validation/deployment results. Use placeholders and generic result shapes; keep real deployment context and evidence out-of-band.
 - If real data does reach a public location, treat it as **compromised**: flag it immediately so history can be rewritten and a GitHub Support purge requested (a force-push alone is not enough).
 
+## npm registry troubleshooting
+
+- Use the public npm registry (`https://registry.npmjs.org/`) when it is available. If it is unavailable or a package cannot be fetched, test the Microsoft employee proxy before changing dependency versions or lockfiles: `npm config get registry`, `npm ping --registry=https://packagefeedproxy.microsoft.io/npm/`, and `npm view <package>@<version> version --registry=https://packagefeedproxy.microsoft.io/npm/`.
+- On managed Microsoft devices, the approved proxy is `https://packagefeedproxy.microsoft.io/npm/`. Do not add credentials or machine-specific `.npmrc` settings to the repository. If the proxy test succeeds, use it consistently to regenerate the lockfile and verify the exact failing package/version before selecting a fallback.
+
 ## C# / AnalyticsEngine
 
 For all work inside `src/AnalyticsEngine/` (the C# solution, web-jobs, installer, Common libraries and tests), follow the conventions in:
