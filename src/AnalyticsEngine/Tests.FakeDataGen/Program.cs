@@ -25,6 +25,8 @@ namespace Tests.FakeDataGen
         private static readonly List<MenuItem> MenuItems = new List<MenuItem>
         {
             // Data generation
+            new MenuItem(DemoInteractive.MenuTitle, MenuCategory.DataGeneration,
+                ctx => DemoInteractive.Run()),
             new MenuItem("Generate fake Copilot activity", MenuCategory.DataGeneration,
                 ctx => RunCopilotActivityGenerator(ctx.RequireConnectionString())),
             new MenuItem("Generate fake O365 audit activity", MenuCategory.DataGeneration,
@@ -84,9 +86,10 @@ namespace Tests.FakeDataGen
             else
             {
                 Console.WriteLine("No SQL connection string provided.");
-                Console.WriteLine("Stress tests that don't need SQL will still run; everything else will be disabled.");
+                Console.WriteLine("The synthetic demo option (which creates its own new LocalDB database) and the");
+                Console.WriteLine("stress tests that don't need SQL will still run; everything else will be disabled.");
                 Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|copilotadoption|activityapi|activityapidb|powerplatform|sentemail|useractivity>]");
-                Console.WriteLine("Safe one-command demo: Tests.FakeDataGen.exe demo --help");
+                Console.WriteLine("Safe one-command demo: Tests.FakeDataGen.exe demo --help (or pick it from the menu below)");
             }
             Console.WriteLine();
 
