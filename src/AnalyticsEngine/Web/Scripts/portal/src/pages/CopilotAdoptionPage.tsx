@@ -627,16 +627,16 @@ function OverviewTab({
               title="Adoption funnel"
               content={{
                 what: 'The licensed population narrowed one stage at a time, so the single biggest loss of value is visible rather than averaged away.',
-                how: `Licensed = holders of a Copilot licence SKU. Ever used = any Copilot activity in the last ${o.historyDays} days. Active this period = at least one interaction inside the selected period. Habitual = engagement of ${o.establishedScore} or more. Champions = ${o.championScore} or more. The percentage on the right is the conversion from the stage above, not from the top - a 90% that follows a 40% is still a healthy step. The red "lost here" counts are drop-offs worth acting on; the final step is grey because reaching Champion is not expected of everyone - habitual users are already established and the action plan says they need no action.`,
+                how: `Licensed = holders of a Copilot licence SKU. Ever used = counted as active in the period, or Dormant - not counted as active in the period but with earlier use on record. Active this period = counted as having at least one interaction inside the selected period. Habitual = engagement of ${o.establishedScore} or more. Champions = ${o.championScore} or more. The percentage on the right is the conversion from the stage above, not from the top - a 90% that follows a 40% is still a healthy step. The red "lost here" counts are drop-offs worth acting on; the final step is grey because reaching Champion is not expected of everyone - habitual users are already established and the action plan says they need no action.`,
                 source:
-                  'Licensed counts come from the imported licence assignments; every activity stage comes from the Copilot audit log, falling back to Microsoft\u2019s per-user usage report where the audit import is unavailable.',
+                  'Licensed counts come from the imported licence assignments; every activity stage comes from the Copilot audit log, falling back to Microsoft\u2019s per-user usage report where the audit import has nothing for that user - and that report covers Microsoft\u2019s own window rather than exactly the period selected here.',
               }}
             />
             {sql?.licensedUsers && <SqlPopover sql={sql.licensedUsers} title="SQL behind these figures" />}
           </div>
         </div>
         <div className={styles.cardBody}>
-          <AdoptionFunnel stages={summary.funnel} />
+          <AdoptionFunnel stages={summary.funnel} options={o} />
         </div>
       </Card>
 
@@ -1157,9 +1157,8 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               </Text>
               <Text>
                 Each component is a ratio capped at 1 before it is weighted, so nothing above target buys extra
-                credit and no single component can carry a user on its own. The weighted sum is divided by the
-                total of the three weights, which is what keeps the result on a 0-100 scale whatever the
-                weights are set to:
+                credit. The weighted sum is divided by the total of the three weights, which is what keeps the
+                result on a 0-100 scale whatever the weights are set to:
               </Text>
               <div className={styles.formula}>
                 {`frequency = min(1, activeDays / expectedActiveDays)\n` +
@@ -1476,7 +1475,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       tone: summary.habitRatePct >= 50 ? 'good' : summary.habitRatePct >= 25 ? 'warning' : 'critical',
       info: {
         what: 'Licensed users for whom Copilot is a routine part of the working week, rather than something they have merely touched.',
-        how: `A user is habitual when their engagement score reaches ${o.establishedScore} out of 100 - the Established and Champion bands. Reaching that needs sustained use across most weeks, more than a single interaction per day, and normally more than one Copilot surface; no one component can get there alone.`,
+        how: `A user is habitual when their engagement score reaches ${o.establishedScore} out of 100 - the Established and Champion bands. That score is the weighted blend of frequency, depth per active day and breadth of Copilot surfaces set out on the Method tab.`,
         formula: `${formatCount(summary.habitualUsers)} users scoring >= ${o.establishedScore} / ${formatCount(
           summary.scoredUsers,
         )} ${capped ? "analysed" : "licensed"} = ${formatPct(summary.habitRatePct)}`,
