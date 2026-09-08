@@ -49,6 +49,7 @@ import IntensityScatter from '../components/copilotAdoption/IntensityScatter';
 import ActionPlan from '../components/copilotAdoption/ActionPlan';
 import AgentsPanel from '../components/copilotAdoption/AgentsPanel';
 import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
+import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/copilotAdoption/InfoTip';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
@@ -968,27 +969,28 @@ function OverviewTab({
           <div className={styles.cardHead}>
             <div>
               <Text weight="semibold" size={400}>
-                What Copilot is working on
+                What Copilot referenced
               </Text>
               <Text size={200} block className={styles.muted}>
-                The kinds of tenant content Copilot grounded its answers in.
+                How Microsoft's audit log typed the resources behind Copilot's answers. The values are not
+                one taxonomy, so they are grouped by what they describe.
               </Text>
             </div>
             <div className={styles.cardTools}>
               <InfoTip
-                title="What Copilot is working on"
+                title="What Copilot referenced"
                 content={{
-                  what: 'The types of organisational content (documents, meetings, chats and so on) that Copilot actually referenced when answering.',
-                  how: `Counted from the resources recorded against each Copilot interaction in the audit log, top ${o.topSegments} types. One interaction can reference several resources, so this counts references rather than interactions.`,
+                  what: `The raw AccessedResources.Type values recorded against each Copilot interaction, top ${o.topSegments} by reference count, grouped by what each value actually describes. One interaction can reference several resources, so this counts references rather than interactions.`,
+                  how: 'Read the groups separately, not as one ranking. Only "Tenant content" answers what Copilot is working on, and it undercounts: a file Copilot cited is typed CITATION rather than by its file type, so those references are counted under "How it was used" instead. "Grounding from outside the tenant" is not your content at all.',
                   source:
-                    'The clearest available evidence that Copilot is doing work on your own data rather than answering generic questions any free chatbot could. A population whose Copilot use never touches tenant content is getting little that a licence pays for.',
+                    'Microsoft publishes no list of possible values for this field - the Purview documentation says it "can contain values like the filetype extension (pptx, docx, etc.) or describe the type of resource (for non-SharePoint resources)" - and can add new ones at any time. Anything this version does not recognise, and any reference whose type was empty, is shown as Unclassified rather than being counted as content.',
                 }}
               />
               {sql?.resourceTypes && <SqlPopover sql={sql.resourceTypes} title="SQL behind this chart" />}
             </div>
           </div>
           <div className={styles.cardBody}>
-            <CategoryBarChart categories={summary.topResourceTypes} valueLabel="References" />
+            <ResourceTypesPanel rows={summary.topResourceTypes} />
           </div>
         </Card>
       )}
