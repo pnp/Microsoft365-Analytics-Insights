@@ -138,6 +138,49 @@ the refusal of unmarked or changed targets and the read-only no-op on an
 identical rerun apply exactly as they do on the command line. It ignores the
 connection string the tool was started with.
 
+#### Viewing it in the portal
+
+A finished run prints the two settings a web application needs:
+
+```
+  connectionStrings   SPOInsightsEntities = Server=(localdb)\MSSQLLocalDB;Database=ContosoDemo_X;Integrated Security=True
+  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True
+```
+
+**The portal decides which workloads it can measure from `ImportJobSettings`, not
+from the rows in the database**, and every one of those flags is opt-in with a
+default of `false`. Without `GraphCopilotUsageReports=True` the Licence
+assignments report renders Copilot as *"Not measured"* for every user even though
+the database is full of Copilot activity: the Copilot audit and interaction
+sources are positive evidence only and never produce activity bands. No
+generated data can change that, so the generator prints the setting instead.
+
+It then runs the Licence assignments report's **own coverage query** against the
+finished database and prints what the portal will be able to measure:
+
+```
+Default reporting period 2026-08-03 to 2026-08-30, licence "Contoso Demo Workplace" (40 users):
+  teams      available        40 measured, 0 unknown
+  ...
+  copilot    available        24 measured, 16 unknown
+```
+
+Copilot unknowns are expected and correct: the official per-user report covers
+Copilot-licensed users only. *Every* user unknown is the symptom to look for.
+
+Two further things are worth knowing when a workload reads as unmeasured:
+
+- The official Copilot report is a **rolling 28-day** snapshot, and nothing in
+  this product imports a `report_period_days = 7` row, so Copilot licence bands
+  are only produced for a **28-day** reporting period. Other periods report
+  `missingCoverage`, which the portal shows as "Not measured". This applies to
+  real tenants too, not just the demo.
+- The demo warms its rolling Copilot counters up over the 28 days *before* the
+  window starts, so the official report rows cover the whole generated window.
+  Before that warm-up existed they began 27 days in, which left short-history
+  demos (`--days 31` to `--days 35`) with no Copilot coverage at all while the
+  M365 workloads still measured fine.
+
 ### Copilot activity
 
 `CopilotActivityGenerator` inserts:
