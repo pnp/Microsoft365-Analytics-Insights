@@ -462,7 +462,7 @@ export default function LicensedUsersPanel({
                   <td className={table.td}>
                     {formatDate(row.lastInteractionUtc)}
                     {row.daysSinceLastUse !== null && row.daysSinceLastUse > 0 && (
-                      <Text size={100} block className={styles.muted}>
+                      <Text size={100} block className={table.tdSub}>
                         {row.daysSinceLastUse} days ago
                       </Text>
                     )}
