@@ -35,18 +35,19 @@ const BY_KEY: Record<string, BandDef> = Object.fromEntries(ACTIVITY_BANDS.map((b
  * "active days", which the figures only become if a service's source says so.
  */
 export const BAND_DESCRIPTIONS: Record<BandKey, string> = {
-  high: 'Active across three quarters or more of what was measured.',
-  moderate: 'Active across a quarter to under three quarters of what was measured.',
-  low: 'Active across under a quarter of what was measured, but active at least once.',
-  zero: 'Never active, across a period that was measured in full.',
-  unknown: 'The period could not be measured in full, so activity is not known - this does not mean zero.',
+  high: 'Active in three quarters or more of the weeks that were measured.',
+  moderate: 'Active in a quarter to under three quarters of the weeks that were measured.',
+  low: 'Active in under a quarter of the weeks that were measured, but active in at least one.',
+  zero: 'Active in none of the weeks, across a period whose every week was measured in full.',
+  unknown: 'At least one week could not be measured in full, so activity is not known - this does not mean zero.',
 };
 
 /** A one-line summary of how the levels are worked out, for a column tooltip. */
 export const BAND_METHOD =
-  'Activity levels describe how much of the measured period someone was active in: ' +
-  'High = 75% or more, Moderate = 25\u201374%, Low = under 25%, No activity = never (across a period measured in full). ' +
-  'Where the period could not be measured in full the level is Unknown, not zero.';
+  "Activity levels describe how many of the period's weeks someone was active in: " +
+  'High = three quarters or more, Moderate = a quarter to under three quarters, Low = under a quarter, ' +
+  'No activity = none. A week is only counted when every one of its days was imported; where a week could ' +
+  'not be measured in full the level is Unknown, not zero.';
 
 export function bandLabel(band: string): string {
   return BY_KEY[band]?.label ?? band;

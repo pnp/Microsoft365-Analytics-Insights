@@ -26,7 +26,7 @@ namespace Tests.UnitTests
     internal sealed class LicenceActivitySqlFixture : IDisposable
     {
         private const string RetainedDatabasePrefix = "UT_LicenceActivityScale_";
-        private const string RetainedMarker = "300000-users|50-skus|v2";
+        private const string RetainedMarker = "300000-users|50-skus|v3-daily-positive-only";
         private static readonly Regex RetainedDatabaseName = new Regex(
             "^" + RetainedDatabasePrefix + "[0-9a-f]{32}$",
             RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -743,6 +743,36 @@ SELECT n,
        END
 FROM Numbers;
 
+-- The four Microsoft 365 tables are Graph's DAILY user-detail reports, so a realistic import leaves
+-- a row on EVERY day of the window and only for the people who were active that day. The weekly
+-- reading a person belongs to is still sample_number, so the activity pattern - and therefore every
+-- band the acceptance matrix asserts - is unchanged; what changes is that the rows are spread across
+-- all 180 days instead of being piled onto 26 Sundays, and that the people who did nothing have no
+-- row at all rather than an explicit zero one.
+--
+-- Seeding one day per week would model an import that only ever ran on Sundays, which licence
+-- activity now (correctly) reports as unmeasured. #SyntheticSamples is still used as-is for the
+-- Copilot table, whose source is a weekly rolling report rather than a daily one.
+CREATE TABLE #SyntheticReportDays
+(
+    report_date date NOT NULL PRIMARY KEY,
+    sample_number int NOT NULL,
+    day_offset int NOT NULL
+);
+
+;WITH D1(n) AS
+(
+    SELECT n FROM (VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)) AS n(n)
+),
+DayNumbers(n) AS
+(
+    SELECT TOP (180) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1
+    FROM D1 AS a CROSS JOIN D1 AS b CROSS JOIN D1 AS c
+)
+INSERT #SyntheticReportDays (report_date, sample_number, day_offset)
+SELECT DATEADD(DAY, n, CONVERT(date, '20000103', 112)), n / 7, n % 7
+FROM DayNumbers;
+
 INSERT dbo.teams_user_activity_log WITH (TABLOCK)
 (
     private_chat_count, team_chat_count, calls_count, meetings_count,
@@ -764,10 +794,10 @@ SELECT CASE WHEN activity.is_active = 1 THEN 1 + (users.id + samples.sample_numb
        CASE WHEN activity.is_active = 1 THEN (users.id * 7 + samples.sample_number) % 6 ELSE 0 END,
        CASE WHEN activity.is_active = 1 THEN (users.id * 11 + samples.sample_number) % 5 ELSE 0 END,
        0,
-       users.id, samples.sample_date,
-       CASE WHEN activity.is_active = 1 THEN samples.sample_date ELSE NULL END
+       users.id, samples.report_date,
+       CASE WHEN activity.is_active = 1 THEN samples.report_date ELSE NULL END
 FROM dbo.users AS users
-CROSS JOIN #SyntheticSamples AS samples
+CROSS JOIN #SyntheticReportDays AS samples
 CROSS APPLY
 (
     SELECT CAST(CASE
@@ -778,7 +808,8 @@ CROSS APPLY
          AND samples.sample_number % 10 = users.id % 10 THEN 1
         ELSE 0
     END AS int) AS is_active
-) AS activity;
+) AS activity
+WHERE activity.is_active = 1 AND (users.id + samples.day_offset) % 3 = 0;
 
 INSERT dbo.outlook_user_activity_log WITH (TABLOCK)
 (
@@ -790,10 +821,10 @@ SELECT CASE WHEN activity.is_active = 1 THEN 1 + (users.id + samples.sample_numb
        CASE WHEN activity.is_active = 1 THEN 1 + (users.id * 5 + samples.sample_number) % 25 ELSE 0 END,
        CASE WHEN activity.is_active = 1 THEN (users.id + samples.sample_number) % 3 ELSE 0 END,
        CASE WHEN activity.is_active = 1 THEN (users.id * 7 + samples.sample_number) % 4 ELSE 0 END,
-       users.id, samples.sample_date,
-       CASE WHEN activity.is_active = 1 THEN samples.sample_date ELSE NULL END
+       users.id, samples.report_date,
+       CASE WHEN activity.is_active = 1 THEN samples.report_date ELSE NULL END
 FROM dbo.users AS users
-CROSS JOIN #SyntheticSamples AS samples
+CROSS JOIN #SyntheticReportDays AS samples
 CROSS APPLY
 (
     SELECT CAST(CASE
@@ -804,7 +835,8 @@ CROSS APPLY
          AND samples.sample_number % 10 = users.id % 10 THEN 1
         ELSE 0
     END AS int) AS is_active
-) AS activity;
+) AS activity
+WHERE activity.is_active = 1 AND (users.id + samples.day_offset) % 3 = 0;
 
 INSERT dbo.onedrive_user_activity_log WITH (TABLOCK)
 (
@@ -815,10 +847,10 @@ SELECT CASE WHEN activity.is_active = 1 THEN 1 + (users.id * 3 + samples.sample_
        CASE WHEN activity.is_active = 1 THEN (users.id + samples.sample_number) % 5 ELSE 0 END,
        CASE WHEN activity.is_active = 1 THEN (users.id * 7 + samples.sample_number) % 3 ELSE 0 END,
        CASE WHEN activity.is_active = 1 THEN (users.id * 11 + samples.sample_number) % 2 ELSE 0 END,
-       users.id, samples.sample_date,
-       CASE WHEN activity.is_active = 1 THEN samples.sample_date ELSE NULL END
+       users.id, samples.report_date,
+       CASE WHEN activity.is_active = 1 THEN samples.report_date ELSE NULL END
 FROM dbo.users AS users
-CROSS JOIN #SyntheticSamples AS samples
+CROSS JOIN #SyntheticReportDays AS samples
 CROSS APPLY
 (
     SELECT CAST(CASE
@@ -829,7 +861,8 @@ CROSS APPLY
          AND samples.sample_number % 10 = users.id % 10 THEN 1
         ELSE 0
     END AS int) AS is_active
-) AS activity;
+) AS activity
+WHERE activity.is_active = 1 AND (users.id + samples.day_offset) % 3 = 0;
 
 INSERT dbo.sharepoint_user_activity_log WITH (TABLOCK)
 (
@@ -840,10 +873,10 @@ SELECT CASE WHEN activity.is_active = 1 THEN 1 + (users.id * 5 + samples.sample_
        CASE WHEN activity.is_active = 1 THEN (users.id + samples.sample_number) % 4 ELSE 0 END,
        CASE WHEN activity.is_active = 1 THEN (users.id * 7 + samples.sample_number) % 4 ELSE 0 END,
        CASE WHEN activity.is_active = 1 THEN (users.id * 13 + samples.sample_number) % 2 ELSE 0 END,
-       users.id, samples.sample_date,
-       CASE WHEN activity.is_active = 1 THEN samples.sample_date ELSE NULL END
+       users.id, samples.report_date,
+       CASE WHEN activity.is_active = 1 THEN samples.report_date ELSE NULL END
 FROM dbo.users AS users
-CROSS JOIN #SyntheticSamples AS samples
+CROSS JOIN #SyntheticReportDays AS samples
 CROSS APPLY
 (
     SELECT CAST(CASE
@@ -854,7 +887,8 @@ CROSS APPLY
          AND samples.sample_number % 10 = users.id % 10 THEN 1
         ELSE 0
     END AS int) AS is_active
-) AS activity;
+) AS activity
+WHERE activity.is_active = 1 AND (users.id + samples.day_offset) % 3 = 0;
 
 INSERT dbo.copilot_usage_user_activity_log WITH (TABLOCK)
 (
@@ -882,7 +916,8 @@ CROSS APPLY
     END AS int) AS is_active
 ) AS activity;
 
-DROP TABLE #SyntheticSamples;";
+DROP TABLE #SyntheticSamples;
+DROP TABLE #SyntheticReportDays;";
     }
 
     internal sealed class LicenceActivitySqlMeasurement
