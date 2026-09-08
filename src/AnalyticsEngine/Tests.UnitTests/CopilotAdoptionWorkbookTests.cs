@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.Xlsx;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -213,6 +214,49 @@ namespace Tests.UnitTests
                 "Non-Latin department names must survive the export verbatim.");
             StringAssert.Contains(text, AmpersandDepartment,
                 "An ampersand and angle brackets must be escaped on write and decode back to the original.");
+        }
+
+        [TestMethod]
+        public void Workbook_SaysWhatEachResourceTypeValueActuallyDescribes()
+        {
+            // Issue #468: the workbook used to introduce these rows as "what Copilot grounded its
+            // answers in", which is false for CITATION - the value that is usually the biggest row.
+            // The exported sheet has to carry the same classification the portal shows, or the two
+            // deliverables tell an admin different things about the same numbers.
+            //
+            // The expected labels are written out literally rather than read back from KindLabel:
+            // deriving them from the same method production uses would make this test pass even if
+            // the two kinds' labels were swapped.
+            var lines = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()))
+                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => l.Trim())
+                .ToList();
+
+            // Scope the search to the resource-type table. Searching the whole flattened workbook
+            // would still pass today, but would silently start checking the wrong cell the moment
+            // another table gained a "Kind" header or a "docx" row.
+            var tableStart = lines.IndexOf("Resource type");
+            Assert.AreNotEqual(-1, tableStart, "The resource-type table is missing from the workbook.");
+            var table = lines.Skip(tableStart).ToList();
+
+            AssertFollowedBy(table, "Resource type", "Kind");
+            AssertFollowedBy(table, "Kind", "References");
+            AssertFollowedBy(table, "CITATION", "How it was used");
+            AssertFollowedBy(table, "docx", "Tenant content");
+        }
+
+        /// <summary>
+        /// Asserts that a cell holding <paramref name="value"/> is immediately followed by one holding
+        /// <paramref name="expectedNext"/>. Cells come back in document order, so this pins the value
+        /// to its own row rather than merely finding both somewhere in the workbook.
+        /// </summary>
+        private static void AssertFollowedBy(List<string> cells, string value, string expectedNext)
+        {
+            var index = cells.IndexOf(value);
+            Assert.AreNotEqual(-1, index, $"'{value}' is missing from the workbook.");
+            Assert.IsTrue(index + 1 < cells.Count, $"'{value}' is the last cell in the workbook.");
+            Assert.AreEqual(expectedNext, cells[index + 1],
+                $"'{value}' should be followed by '{expectedNext}', not '{cells[index + 1]}'.");
         }
 
         [TestMethod]
@@ -552,7 +596,18 @@ namespace Tests.UnitTests
 
             summary.UsageByApp.Add(new AdoptionCategory { Label = "Teams", Value = 1988 });
             summary.UsageByApp.Add(new AdoptionCategory { Label = AmpersandDepartment, Value = 534 });
-            summary.TopResourceTypes.Add(new AdoptionCategory { Label = "docx", Value = 480 });
+            summary.TopResourceTypes.Add(new AdoptionResourceTypeRow
+            {
+                Label = "docx",
+                Value = 480,
+                Kind = CopilotAccessedResourceTaxonomy.Classify("docx"),
+            });
+            summary.TopResourceTypes.Add(new AdoptionResourceTypeRow
+            {
+                Label = "CITATION",
+                Value = 1200,
+                Kind = CopilotAccessedResourceTaxonomy.Classify("CITATION"),
+            });
 
             var users = new AdoptionSeries { Name = "Active licensed users" };
             var volume = new AdoptionSeries { Name = "Licensed interactions" };

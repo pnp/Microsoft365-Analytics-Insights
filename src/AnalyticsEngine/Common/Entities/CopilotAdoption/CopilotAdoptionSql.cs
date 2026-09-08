@@ -950,20 +950,24 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// The kinds of tenant content Copilot actually grounded its answers in (documents, meetings,
-        /// chats...). The clearest evidence that Copilot is doing work on the organisation's own data
-        /// rather than answering generic questions any free chatbot could.
+        /// How Microsoft's audit log typed the resources Copilot referenced when answering.
+        ///
+        /// Deliberately NOT described as "the kinds of tenant content Copilot grounded its answers
+        /// in". <c>AccessedResources[].Type</c> is one field carrying several unrelated taxonomies at
+        /// once, and two of its commonest values - CITATION and WebSearchQuery - are respectively a
+        /// usage role and grounding from outside the tenant. The caller classifies each value; see
+        /// <see cref="Common.Entities.Copilot.CopilotAccessedResourceTaxonomy"/> and issue #468.
         /// </summary>
         public static string TopResourceTypesSql()
         {
             return
-                "SELECT TOP (@top) ISNULL(rt.name, '(unknown)') AS Label,\r\n" +
+                "SELECT TOP (@top) ISNULL(rt.name, '" + Copilot.CopilotAccessedResourceTaxonomy.UnknownTypeLabel + "') AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_event_accessed_resources AS ar\r\n" +
                 "JOIN dbo.copilot_chats AS c ON c.event_id = ar.copilot_chat_id\r\n" +
                 "LEFT JOIN dbo.copilot_event_accessed_resource_types AS rt ON rt.id = ar.resource_type_id\r\n" +
                 "WHERE c.time_stamp >= @from\r\n" +
-                "GROUP BY ISNULL(rt.name, '(unknown)')\r\n" +
+                "GROUP BY ISNULL(rt.name, '" + Copilot.CopilotAccessedResourceTaxonomy.UnknownTypeLabel + "')\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }

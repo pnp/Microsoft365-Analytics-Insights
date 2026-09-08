@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -157,6 +158,32 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("value")]
         public double Value { get; set; }
+    }
+
+    /// <summary>
+    /// One row of the accessed-resource-type breakdown: a raw <c>AccessedResources[].Type</c> value
+    /// from Microsoft's Copilot audit log, how many references carried it, and what that value
+    /// actually describes.
+    ///
+    /// The kind exists because the field is not a single taxonomy - see
+    /// <see cref="CopilotResourceTypeKind"/>. Without it the chart puts a file kind, a citation and a
+    /// web search on one axis and invites the reader to compare them.
+    /// </summary>
+    public class AdoptionResourceTypeRow
+    {
+        [JsonProperty("label")]
+        public string Label { get; set; }
+
+        [JsonProperty("value")]
+        public double Value { get; set; }
+
+        /// <summary>
+        /// What the label describes. <see cref="CopilotResourceTypeKind.Unclassified"/> for a value
+        /// this version does not recognise, which is the expected outcome for anything Microsoft adds
+        /// in future.
+        /// </summary>
+        [JsonProperty("kind")]
+        public CopilotResourceTypeKind Kind { get; set; }
     }
 
     /// <summary>
@@ -413,9 +440,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("combinedByDepartment")]
         public List<AdoptionCombinedSegmentRow> CombinedByDepartment { get; set; } = new List<AdoptionCombinedSegmentRow>();
 
-        /// <summary>The kinds of tenant content Copilot grounded its answers in.</summary>
+        /// <summary>
+        /// How Microsoft's audit log typed the resources Copilot referenced, with each value's own
+        /// kind so a file type, a citation and a web search are not read as one taxonomy. See
+        /// <see cref="AdoptionResourceTypeRow"/>.
+        /// </summary>
         [JsonProperty("topResourceTypes")]
-        public List<AdoptionCategory> TopResourceTypes { get; set; } = new List<AdoptionCategory>();
+        public List<AdoptionResourceTypeRow> TopResourceTypes { get; set; } = new List<AdoptionResourceTypeRow>();
 
         /// <summary>
         /// The shape of engagement for the average active user and for the Champions, so the gap
