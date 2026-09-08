@@ -12,6 +12,20 @@ namespace Tests.FakeDataGen.Demo
     {
         // Bump when generation rules change: completed targets must not silently reuse an older shape.
         public const string FormatVersion = "contoso-demo-v1";
+
+        // Accepted ranges, shared with the interactive menu (DemoInteractive) so the two entry points
+        // cannot drift apart and offer a value the other refuses.
+        internal const int MinUsers = 1, MaxUsers = 1000000;
+        internal const int MinSkus = 10, MaxSkus = 1000;
+        internal const int MinDays = 31, MaxDays = 730;
+        internal const int MinSeed = 0, MaxSeed = int.MaxValue;
+        internal const int MinCopilotPercent = 1, MaxCopilotPercent = 99;
+        internal const int MinBatchSize = 1, MaxBatchSize = 1000;
+        internal const int MixBands = 5;
+        internal const int MinYear = 2002, MaxYear = 2100;
+        internal const string DateFormat = "yyyy-MM-dd";
+        internal const string DatabaseNamePattern = @"\AContosoDemo_[A-Za-z0-9_]{1,70}\z";
+
         public int Users { get; private set; } = 1000;
         public int Skus { get; private set; } = 50;
         public int Days { get; private set; } = 180;
@@ -47,21 +61,21 @@ namespace Tests.FakeDataGen.Demo
                 {
                     case "--database": result.Database = value; break;
                     case "--output": result.Output = value; break;
-                    case "--users": result.Users = Integer(key, value, 1, 1000000); break;
-                    case "--skus": result.Skus = Integer(key, value, 10, 1000); break;
-                    case "--days": result.Days = Integer(key, value, 31, 730); break;
-                    case "--seed": result.Seed = Integer(key, value, 0, int.MaxValue); break;
-                    case "--copilot-percent": result.CopilotPercent = Integer(key, value, 1, 99); break;
-                    case "--batch-size": result.BatchSize = Integer(key, value, 1, 1000); break;
+                    case "--users": result.Users = Integer(key, value, MinUsers, MaxUsers); break;
+                    case "--skus": result.Skus = Integer(key, value, MinSkus, MaxSkus); break;
+                    case "--days": result.Days = Integer(key, value, MinDays, MaxDays); break;
+                    case "--seed": result.Seed = Integer(key, value, MinSeed, MaxSeed); break;
+                    case "--copilot-percent": result.CopilotPercent = Integer(key, value, MinCopilotPercent, MaxCopilotPercent); break;
+                    case "--batch-size": result.BatchSize = Integer(key, value, MinBatchSize, MaxBatchSize); break;
                     case "--as-of":
-                        if (!DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
-                            DateTimeStyles.None, out var date) || date.Year < 2002 || date.Year > 2100)
+                        if (!DateTime.TryParseExact(value, DateFormat, CultureInfo.InvariantCulture,
+                            DateTimeStyles.None, out var date) || date.Year < MinYear || date.Year > MaxYear)
                             throw new ArgumentException("--as-of must be yyyy-MM-dd between 2002 and 2100.");
                         result.AsOf = DateTime.SpecifyKind(date, DateTimeKind.Utc);
                         break;
                     case "--mix":
                         result.Mix = value.Split(',').Select(v => Integer(key, v, 0, 100)).ToArray();
-                        if (result.Mix.Length != 5 || result.Mix.Sum() != 100)
+                        if (result.Mix.Length != MixBands || result.Mix.Sum() != 100)
                             throw new ArgumentException("--mix needs five percentages totalling 100: high,moderate,low,zero,inactive.");
                         break;
                     default: throw new ArgumentException("Unknown demo option: " + key + ". Use demo --help.");
@@ -69,10 +83,18 @@ namespace Tests.FakeDataGen.Demo
             }
             if (!result.Help && !result.Preview && string.IsNullOrWhiteSpace(result.Database))
                 throw new ArgumentException("Use --database ContosoDemo_<name> for a NEW local demo database, or --preview for no SQL.");
-            if (result.Database != null && !Regex.IsMatch(result.Database, @"\AContosoDemo_[A-Za-z0-9_]{1,70}\z"))
+            if (result.Database != null && !IsValidDatabaseName(result.Database))
                 throw new ArgumentException("--database must start with ContosoDemo_ and contain only ASCII letters, digits and underscores.");
             return result;
         }
+
+        /// <summary>
+        /// The only accepted shape for a demo target name. Deliberately a fixed prefix plus ASCII
+        /// identifier characters: the name is concatenated into <c>CREATE DATABASE</c>, so nothing that
+        /// could carry quoting, path or statement separators may reach SQL.
+        /// </summary>
+        internal static bool IsValidDatabaseName(string name) =>
+            name != null && Regex.IsMatch(name, DatabaseNamePattern);
 
         private static int Integer(string key, string value, int min, int max)
         {
@@ -97,6 +119,9 @@ namespace Tests.FakeDataGen.Demo
   Tests.FakeDataGen.exe demo --database ContosoDemo_Example
   Tests.FakeDataGen.exe demo --preview --users 300000 --skus 50 --days 31
   Tests.FakeDataGen.exe demo --database ContosoDemo_Repeatable --as-of 2026-09-01 --seed 42
+
+Or run Tests.FakeDataGen.exe with no arguments and pick the demo option from the menu: it
+asks for the same values, prints the equivalent command line, and runs this same generator.
 
   --database NAME          NEW database on (localdb)\MSSQLLocalDB only. Required unless preview.
   --preview                Stream the same rows to counters; no SQL, config or external services.
