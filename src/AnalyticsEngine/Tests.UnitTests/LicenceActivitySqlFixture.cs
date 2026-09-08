@@ -189,7 +189,7 @@ CREATE TABLE dbo.LicenceActivitySyntheticMarker
     marker nvarchar(100) NOT NULL PRIMARY KEY
 );
 INSERT dbo.LicenceActivitySyntheticMarker (marker)
-VALUES (N'300000-users|50-skus|v2');");
+VALUES (N'" + RetainedMarker + "');");
 
                 var directory = Path.GetDirectoryName(statePath);
                 if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
