@@ -116,14 +116,13 @@ const useStyles = makeStyles({
 /**
  * Licence activity report (issues #436 / #437).
  *
- * Answers, for an IT / licensing admin: which licences are assigned, and how much are the people who
- * hold them actually using each Microsoft 365 workload? It is deliberately an ACTIVITY report - no
- * blended "productivity" score, no "remove this licence" button; it surfaces the evidence and leaves
- * the decision with the admin.
+ * Answers, for a business leader or M365 admin: which licences are assigned, and how much are the
+ * people who hold them actually using each Microsoft 365 service? It is deliberately an ACTIVITY
+ * report - no blended "productivity" score, no "remove this licence" button; it surfaces the evidence
+ * and leaves the decision with the reader.
  *
- * Everyone signed in sees the aggregates. Drilling into named individuals additionally requires the
- * opt-in `LicenceActivity.ReadUsers` Entra role; the UI hides the drill-down without it, and the
- * server enforces it regardless.
+ * Everyone who can open the portal sees the whole report, including the per-person lists. There is no
+ * second permission level.
  */
 export default function LicenceActivityPage() {
   const styles = useStyles();
@@ -131,9 +130,6 @@ export default function LicenceActivityPage() {
   const [availability, setAvailability] = useState<LicenceActivityAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<unknown>(null);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
-  // Bumped whenever the viewer's ROLE may have changed under them, so availability (and therefore
-  // canViewUsers) is re-read instead of staying frozen at page load for the life of the tab.
-  const [availabilityKey, setAvailabilityKey] = useState(0);
 
   // The reporting window lives here, so it is preserved across demographic-filter and licence
   // changes - only the date control (or a preset click) ever changes it. Defaults to 28 days.
@@ -168,8 +164,6 @@ export default function LicenceActivityPage() {
 
   const overviewSeqRef = useRef(0);
 
-  const canViewUsers = availability?.canViewUsers === true;
-
   // --- Availability -------------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -191,7 +185,7 @@ export default function LicenceActivityPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [availabilityKey]);
+  }, []);
 
   // The scope key identifying the overview request. When it changes (date / department / country) the
   // previous overview and its snapshot id must vanish on the SAME render, so nothing stale can be shown
@@ -265,28 +259,18 @@ export default function LicenceActivityPage() {
 
   const reloadOverview = useCallback(() => setOverviewReloadKey((k) => k + 1), []);
   const handleUsersSnapshot = useCallback((id: string | null) => setUsersId(id), []);
-  const handleUsersForbidden = useCallback(() => {
-    setUsersId(null);
-    setAvailability((previous) => previous ? { ...previous, canViewUsers: false } : previous);
-    setAvailabilityKey((k) => k + 1);
-  }, []);
 
-  // The correct response to an EXPIRED snapshot (export 410, or a users 410): re-mint the snapshots in
-  // place. We drop the stale users id and error, force the drill-down to re-fetch a fresh users
-  // snapshot (its params are unchanged, so the licence/workload/page/filters are preserved), and reload
-  // the overview. The overview often comes back under the SAME cached id, which is exactly why clearing
-  // is explicit here rather than relying on the snapshot-id-changed effect. It deliberately does NOT
-  // re-export: an export must be an explicit action, never a silent re-query of freshly minted data.
+  // The correct response to figures the server no longer holds (an export 410, or a users 410): pull a
+  // fresh set in place. We drop the stale users id and error, force the drill-down to re-fetch (its
+  // params are unchanged, so the licence/workload/page/filters are preserved), and reload the
+  // overview. The overview often comes back under the SAME cached id, which is exactly why clearing is
+  // explicit here rather than relying on the id-changed effect. It deliberately does NOT re-export: an
+  // export must be an explicit action, never a silent re-query of freshly loaded figures.
   const refreshSnapshots = useCallback(() => {
     setExportError(null);
     setUsersId(null);
     setUsersRefreshToken((t) => t + 1);
     setOverviewReloadKey((k) => k + 1);
-    // Re-read availability too. The feature contract for the 410/409 recovery path is "re-mint AND
-    // recheck role": a role granted or revoked mid-session must not stay invisible until the admin
-    // reloads the whole page. (The server enforces the role independently on every /users and every
-    // /export carrying a usersId, so this is a dead-end fix, not a security fix.)
-    setAvailabilityKey((k) => k + 1);
   }, []);
 
   const selectedLicence = useMemo(
@@ -294,9 +278,9 @@ export default function LicenceActivityPage() {
     [overview, selectedLicenceTypeId],
   );
 
-  // Only attach a users snapshot to the export when the viewer is allowed per-user detail and is
-  // actually looking at a licence's list; otherwise the workbook is aggregate-only.
-  const exportUsersId = canViewUsers && selectedLicence ? usersId ?? undefined : undefined;
+  // Attach the current user list to the export whenever the reader is looking at a licence's list;
+  // otherwise the workbook is totals-only.
+  const exportUsersId = selectedLicence ? usersId ?? undefined : undefined;
 
   const onExport = async (): Promise<void> => {
     if (!overview || overviewLoading) return;
@@ -306,12 +290,6 @@ export default function LicenceActivityPage() {
       await downloadExport({ overviewId: overview.snapshotId, usersId: exportUsersId });
     } catch (err) {
       setExportError(err);
-      // A 403 here means the LicenceActivity.ReadUsers role went away mid-session while the export
-      // was still attaching a usersId. Retrying unchanged would 403 forever, so drop the individual
-      // snapshot and re-read availability: the next export is then a valid aggregate-only workbook.
-      if (describeError(err, '').kind === 'forbidden') {
-        handleUsersForbidden();
-      }
     } finally {
       setExporting(false);
     }
@@ -329,14 +307,14 @@ export default function LicenceActivityPage() {
           </div>
           <Body1 block className={styles.intro}>
             Which licences are assigned, and how much are the people who hold them actually using each Microsoft 365
-            workload. Activity is shown per workload and never blended into a single score, and anything that was not
-            imported is shown as &quot;Unknown&quot; rather than zero.
+            service. Each service is shown on its own and never blended into a single score, and anything that
+            couldn&apos;t be measured is shown as &quot;Unknown&quot; rather than as zero.
           </Body1>
           <Text role="note" block size={200} className={styles.previewNote}>
-            This report is in preview. Results are cached in memory for up to 5 minutes, so recent imports may not
-            yet appear. The first load for a new date range may take longer. Nothing shown implies a productivity
-            assessment or a recommendation to remove a licence —
-            it is activity evidence only.
+            This report is in preview. Figures are kept for up to 5 minutes before being worked out again, so a very
+            recent import may not appear straight away, and the first look at a new date range takes longer. Nothing
+            here is a judgement of anyone&apos;s productivity, or a recommendation to take a licence away &mdash; it is
+            evidence of activity only.
           </Text>
         </div>
       </div>
@@ -455,9 +433,9 @@ export default function LicenceActivityPage() {
                   content={
                     overview && !overviewLoading
                       ? exportUsersId
-                        ? 'Excel snapshot of the overview plus the exact user rows currently in view. Built from the cached snapshot, so it matches the screen rather than re-querying.'
-                        : 'Excel snapshot of the licence and workload overview (aggregate only). Built from the cached snapshot.'
-                      : 'Available once the overview has loaded.'
+                        ? 'An Excel copy of the summary plus the exact people currently listed below. Built from the figures already on screen, so it matches what you can see.'
+                        : 'An Excel copy of the licence and service summary (totals only). Built from the figures already on screen.'
+                      : 'Available once the report has loaded.'
                   }
                 >
                   <Button
@@ -519,9 +497,10 @@ export default function LicenceActivityPage() {
               )}
 
               <Text size={200} className={styles.muted}>
-                {formatCount(overview.distinctAssignedUsers)} distinct users hold a licence in this scope.
+                {formatCount(overview.distinctAssignedUsers)} people hold a licence in this selection, counting
+                each person once.
                 {overview.demographicsTruncated &&
-                  ' Department and country lists are capped and may not be exhaustive.'}
+                  ' The department and country lists are capped, so they may not show every one.'}
               </Text>
 
               <SkuAssignments
@@ -534,10 +513,10 @@ export default function LicenceActivityPage() {
                 <div>
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
-                      Workload activity
+                      Activity by service
                     </Text>
                     <Text size={200} className={styles.muted}>
-                      {licenceName(selectedLicence)} &middot; five workloads, measured separately
+                      {licenceName(selectedLicence)} &middot; five services, each measured on its own
                     </Text>
                   </div>
                   <div style={{ marginTop: '12px' }}>
@@ -550,10 +529,10 @@ export default function LicenceActivityPage() {
                 <div>
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
-                      Activity by demographic
+                      Activity by department and country
                     </Text>
                     <Text size={200} className={styles.muted}>
-                      Assigned licences and workload activity by department and country
+                      Where the licences sit in the organisation, and how much they are being used
                     </Text>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -573,47 +552,37 @@ export default function LicenceActivityPage() {
                 </div>
               )}
 
-              {canViewUsers ? (
-                <div>
-                  <div className={styles.sectionHead}>
-                    <Text weight="semibold" size={500}>
-                      User drill-down
-                    </Text>
-                    <Text size={200} className={styles.muted}>
-                      Who is and isn&apos;t using a licence
-                    </Text>
-                  </div>
-                  <div style={{ marginTop: '12px' }}>
-                    {selectedLicence ? (
-                      <UsersDrillDown
-                        key={selectedLicence.licenceTypeId}
-                        overviewId={overview.snapshotId}
-                        overviewScope={overviewKey ?? ''}
-                        licence={selectedLicence}
-                        coverage={overview.coverage}
-                        onUsersSnapshot={handleUsersSnapshot}
-                        onRefreshOverview={refreshSnapshots}
-                        onForbidden={handleUsersForbidden}
-                        refreshToken={usersRefreshToken}
-                      />
-                    ) : (
-                      <Card>
-                        <Text className={styles.muted}>
-                          Select a licence in the assignments table above to see its most and least active users, or
-                          to browse everyone who holds it.
-                        </Text>
-                      </Card>
-                    )}
-                  </div>
+              <div>
+                <div className={styles.sectionHead}>
+                  <Text weight="semibold" size={500}>
+                    People holding this licence
+                  </Text>
+                  <Text size={200} className={styles.muted}>
+                    Who is and isn&apos;t using a licence
+                  </Text>
                 </div>
-              ) : (
-                <MessageBar intent="info">
-                  <MessageBarBody>
-                    You&apos;re seeing the aggregate view. Listing the individual users behind these figures needs the
-                    opt-in <strong>LicenceActivity.ReadUsers</strong> role, which an administrator can grant in Entra.
-                  </MessageBarBody>
-                </MessageBar>
-              )}
+                <div style={{ marginTop: '12px' }}>
+                  {selectedLicence ? (
+                    <UsersDrillDown
+                      key={selectedLicence.licenceTypeId}
+                      overviewId={overview.snapshotId}
+                      overviewScope={overviewKey ?? ''}
+                      licence={selectedLicence}
+                      coverage={overview.coverage}
+                      onUsersSnapshot={handleUsersSnapshot}
+                      onRefreshOverview={refreshSnapshots}
+                      refreshToken={usersRefreshToken}
+                    />
+                  ) : (
+                    <Card>
+                      <Text className={styles.muted}>
+                        Select a licence in the assignments table above to see who is most and least active, or to
+                        browse everyone who holds it.
+                      </Text>
+                    </Card>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </>

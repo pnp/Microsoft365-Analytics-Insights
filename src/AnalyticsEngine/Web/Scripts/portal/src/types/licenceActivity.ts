@@ -109,16 +109,10 @@ export interface SnapshotEnvelope {
   expiresUtc: string;
 }
 
-/** Which parts of the tool this deployment / signed-in user can see. */
+/** Which parts of the tool this deployment can show. */
 export interface LicenceActivityAvailability {
-  /** False when the licence import (GraphUsersMetadata) is disabled - the tab stays, the report can't run. */
+  /** False when the user details import is switched off - the tab stays, the report can't run. */
   available: boolean;
-  /**
-   * True when the signed-in user holds the opt-in `LicenceActivity.ReadUsers` Entra app role. Gates the
-   * per-user drill-down in the UI; every signed-in user still gets the aggregates. The server enforces
-   * the role on the users/export endpoints regardless of this flag.
-   */
-  canViewUsers: boolean;
   /** Smallest allowed custom window, in days (backend LicenceActivityQuery.MinimumDays). */
   minimumDays: number;
   /** Largest allowed custom window, in days (backend LicenceActivityQuery.MaximumDays). */

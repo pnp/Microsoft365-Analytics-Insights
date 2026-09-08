@@ -45,7 +45,7 @@ describe('DemographicBreakdown', () => {
     renderWithProvider(
       <DemographicBreakdown title="By country" segmentLabel="Country" rows={[demo()]} truncated />,
     );
-    expect(screen.getByText(/truncated/i)).toBeInTheDocument();
+    expect(screen.getByText(/not the full list/i)).toBeInTheDocument();
   });
 
   it('caps at 50 rows and says so', () => {
@@ -53,6 +53,6 @@ describe('DemographicBreakdown', () => {
     renderWithProvider(
       <DemographicBreakdown title="By department" segmentLabel="Department" rows={many} truncated={false} />,
     );
-    expect(screen.getByText(/top 50/i)).toBeInTheDocument();
+    expect(screen.getByText(/Showing only the 50 largest/i)).toBeInTheDocument();
   });
 });

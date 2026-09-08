@@ -22,6 +22,8 @@ describe('WorkloadDistributions', () => {
     renderWithProvider(<WorkloadDistributions workloads={[dist('copilot', { unknown: 10 })]} />);
     expect(screen.getByText('Not measured')).toBeInTheDocument();
     expect(screen.getByText('Unknown 10')).toBeInTheDocument();
-    expect(screen.queryByText(/of .* active/)).not.toBeInTheDocument();
+    // The card's summary line is `N of M active (P%)`. Match that shape specifically: a looser
+    // /of .* active/ also matches the explanatory method note, which legitimately contains both words.
+    expect(screen.queryByText(/\d+ of \d+ active/)).not.toBeInTheDocument();
   });
 });

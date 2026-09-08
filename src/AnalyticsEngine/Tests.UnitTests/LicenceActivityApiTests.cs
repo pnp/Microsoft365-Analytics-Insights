@@ -25,7 +25,7 @@ namespace Tests.UnitTests
     public class LicenceActivityApiTests
     {
         [TestMethod]
-        public async Task AnonymousRequestsAreDenied_AggregatesDoNotRequireTheDetailRole()
+        public async Task AnonymousRequestsAreDenied_ButEverySignedInReaderSeesTheWholeReport()
         {
             using (var app = new Harness())
             {
@@ -33,13 +33,16 @@ namespace Tests.UnitTests
                 Assert.AreEqual(HttpStatusCode.Unauthorized, (await app.Client.GetAsync("api/LicenceActivity/availability")).StatusCode);
                 app.Principal = SignedIn();
                 var availability = await app.Json("api/LicenceActivity/availability");
-                Assert.AreEqual(false, (bool)availability["canViewUsers"]);
                 Assert.AreEqual(true, (bool)availability["available"]);
+                Assert.IsNull(availability["canViewUsers"], "The report has no second permission level to advertise.");
                 var overview = await app.Json("api/LicenceActivity/overview");
                 Assert.IsNotNull(overview["snapshotId"]);
-                Assert.AreEqual(HttpStatusCode.Forbidden,
-                    (await app.Client.GetAsync("api/LicenceActivity/users?overviewId=" + overview["snapshotId"] + "&licenceTypeId=1")).StatusCode);
-                Assert.AreEqual(0, app.Store.UserCalls);
+
+                // A reader holding no application role at all still gets the per-person list: everyone
+                // who can open the portal sees everything this report knows.
+                var users = await app.Client.GetAsync("api/LicenceActivity/users?overviewId=" + overview["snapshotId"] + "&licenceTypeId=1");
+                Assert.AreEqual(HttpStatusCode.OK, users.StatusCode);
+                Assert.AreEqual(1, app.Store.UserCalls);
             }
         }
 
@@ -51,7 +54,10 @@ namespace Tests.UnitTests
                 app.Sources.UserMetadata = false;
                 var availability = await app.Json("api/LicenceActivity/availability");
                 Assert.AreEqual(false, (bool)availability["available"]);
-                StringAssert.Contains(availability["messages"].ToString(), "GraphUsersMetadata");
+                var messages = availability["messages"].ToString();
+                StringAssert.Contains(messages, "user details import");
+                Assert.IsFalse(messages.Contains("GraphUsersMetadata"),
+                    "This report is read by business leaders and M365 admins, so it must not quote internal setting names.");
                 Assert.AreEqual(HttpStatusCode.PreconditionFailed, (await app.Client.GetAsync("api/LicenceActivity/overview")).StatusCode);
                 Assert.AreEqual(0, app.Store.OverviewCalls);
             }
@@ -94,7 +100,6 @@ namespace Tests.UnitTests
                 Assert.AreEqual(HttpStatusCode.BadRequest,
                     (await app.Client.GetAsync("api/LicenceActivity/overview?departmentId=not-an-integer")).StatusCode);
                 Assert.AreEqual(0, app.Store.OverviewCalls);
-                app.Principal = SignedIn(LicenceActivityAPIController.UserDetailRole);
                 var overview = await app.Json("api/LicenceActivity/overview?from=2000-05-02&to=2000-06-22&departmentId=7&countryId=0");
                 var id = (string)overview["snapshotId"];
                 var users = await app.Json("api/LicenceActivity/users?overviewId=" + id + "&licenceTypeId=1&workload=outlook&top=25&search=Contoso&page=2&pageSize=10&sort=activity&direction=desc");
@@ -113,11 +118,10 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task Excel_IsTheCachedCurrentSnapshot_RechecksDetailAccess_AndRefusesExpiry()
+        public async Task Excel_IsTheCachedCurrentReport_AndRefusesExpiry()
         {
             using (var app = new Harness())
             {
-                app.Principal = SignedIn(LicenceActivityAPIController.UserDetailRole);
                 var overview = await app.Json("api/LicenceActivity/overview");
                 var id = (string)overview["snapshotId"];
                 var users = await app.Json("api/LicenceActivity/users?overviewId=" + id + "&licenceTypeId=1");
@@ -130,8 +134,6 @@ namespace Tests.UnitTests
                     Assert.IsNotNull(zip.GetEntry("xl/workbook.xml"));
                 Assert.AreEqual(1, app.Store.OverviewCalls, "Export must not run a fresh overview query.");
                 Assert.AreEqual(1, app.Store.UserCalls, "Export must not run a fresh user query.");
-                app.Principal = SignedIn();
-                Assert.AreEqual(HttpStatusCode.Forbidden, (await app.Client.GetAsync(exportUrl)).StatusCode);
                 Assert.AreEqual(HttpStatusCode.OK, (await app.Client.GetAsync("api/LicenceActivity/export?overviewId=" + id)).StatusCode);
                 app.Now = app.Now.AddMinutes(6);
                 Assert.AreEqual(HttpStatusCode.Gone, (await app.Client.GetAsync("api/LicenceActivity/export?overviewId=" + id)).StatusCode);
@@ -144,7 +146,6 @@ namespace Tests.UnitTests
         {
             using (var app = new Harness())
             {
-                app.Principal = SignedIn(LicenceActivityAPIController.UserDetailRole);
                 var overview = await app.Json("api/LicenceActivity/overview");
                 var overviewId = (string)overview["snapshotId"];
                 var usersUrl = "api/LicenceActivity/users?overviewId=" + overviewId + "&licenceTypeId=1";

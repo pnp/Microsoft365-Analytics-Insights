@@ -41,22 +41,22 @@ namespace Common.Entities.LicenceActivity
 
             AppendM365Overview(
                 sql, Teams, "teams", "dbo.teams_user_activity_log",
-                "average published message and meeting counters across supporting snapshots",
+                "Teams messages and meetings counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
             AppendM365Overview(
                 sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                "average published sent and read counters across supporting snapshots",
+                "emails sent and read counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
             AppendM365Overview(
                 sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots",
+                "files viewed or edited counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
             AppendM365Overview(
                 sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots",
+                "files viewed or edited counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
             if (sources.UsageReports) sql.Append(M365OverviewScores);
@@ -159,13 +159,13 @@ OPTION (RECOMPILE);";
             var sql = new StringBuilder(18000);
             AppendOverviewPartPreamble(sql, eligibleTable);
             AppendM365Overview(sql, Teams, "teams", "dbo.teams_user_activity_log",
-                "average published message and meeting counters across supporting snapshots", sources.UsageReports);
+                "Teams messages and meetings counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendM365Overview(sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                "average published sent and read counters across supporting snapshots", sources.UsageReports);
+                "emails sent and read counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendM365Overview(sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+                "files viewed or edited counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendM365Overview(sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+                "files viewed or edited counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendCopilotOverview(sql, sources, includeScores: false);
             sql.Append(@"
 SELECT workload_name AS Workload, status AS Status, source AS Source,
@@ -231,7 +231,7 @@ FROM #Scores;");
                     case Teams:
                         AppendM365Overview(
                             sql, Teams, "teams", "dbo.teams_user_activity_log",
-                            "average published message and meeting counters across supporting snapshots",
+                            "Teams messages and meetings counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, Teams, "dbo.teams_user_activity_log");
@@ -239,7 +239,7 @@ FROM #Scores;");
                     case Outlook:
                         AppendM365Overview(
                             sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                            "average published sent and read counters across supporting snapshots",
+                            "emails sent and read counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, Outlook, "dbo.outlook_user_activity_log");
@@ -247,7 +247,7 @@ FROM #Scores;");
                     case OneDrive:
                         AppendM365Overview(
                             sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                            "average published viewed-or-edited counter across supporting snapshots",
+                            "files viewed or edited counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, OneDrive, "dbo.onedrive_user_activity_log");
@@ -255,7 +255,7 @@ FROM #Scores;");
                     case SharePoint:
                         AppendM365Overview(
                             sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                            "average published viewed-or-edited counter across supporting snapshots",
+                            "files viewed or edited counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, SharePoint, "dbo.sharepoint_user_activity_log");
@@ -284,7 +284,7 @@ FROM #Scores;");
                 case Teams:
                     AppendM365Overview(
                         sql, Teams, "teams", "dbo.teams_user_activity_log",
-                        "average published message and meeting counters across supporting snapshots",
+                        "Teams messages and meetings counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, Teams, "dbo.teams_user_activity_log", maximumSamples);
@@ -292,7 +292,7 @@ FROM #Scores;");
                 case Outlook:
                     AppendM365Overview(
                         sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                        "average published sent and read counters across supporting snapshots",
+                        "emails sent and read counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, Outlook, "dbo.outlook_user_activity_log", maximumSamples);
@@ -300,7 +300,7 @@ FROM #Scores;");
                 case OneDrive:
                     AppendM365Overview(
                         sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                        "average published viewed-or-edited counter across supporting snapshots",
+                        "files viewed or edited counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, OneDrive, "dbo.onedrive_user_activity_log", maximumSamples);
@@ -308,7 +308,7 @@ FROM #Scores;");
                 case SharePoint:
                     AppendM365Overview(
                         sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                        "average published viewed-or-edited counter across supporting snapshots",
+                        "files viewed or edited counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, SharePoint, "dbo.sharepoint_user_activity_log", maximumSamples);
@@ -1084,7 +1084,7 @@ VALUES
 (
     {0}, '{1}', 'disabled', 'microsoftGraphUsageReport',
     N'{2}', 'weeklySupportingSnapshot',
-    N'The Microsoft 365 usage-report import is disabled. Absence cannot be interpreted as zero.',
+    N'The Microsoft 365 usage-report import is switched off, so nothing can be measured for this service. That is not the same as nobody using it.',
     NULL, NULL, NULL, 0, NULL, @expected{0}, 0, 0
 );
 ",
@@ -1142,10 +1142,10 @@ INSERT #Coverage
 SELECT {0}, '{2}', @status{0}, 'microsoftGraphUsageReport',
        N'{3}', 'weeklySupportingSnapshot',
        CASE @status{0}
-           WHEN 'available' THEN N'One settled report-date snapshot was sampled per calendar week. Frequency uses same-week last_activity_date only. Published counters are averaged as snapshot evidence and are never summed or relabelled as daily events. These tables store report dates, not an import-completion timestamp.'
-           WHEN 'partial' THEN N'At least one requested Monday-week portion lacks a settled snapshot on its exact end date. Earlier snapshots are as-of evidence only; all bands remain unknown and no user is ranked least-active.'
-           WHEN 'notImported' THEN N'The import is enabled but this workload has not stored a report yet.'
-           ELSE N'No settled report snapshot covers this requested range.'
+           WHEN 'available' THEN N'One of Microsoft''s published readings was taken for each week in the period. Someone counts as active in a week only if Microsoft recorded activity for them in that same week. The published counts are averaged across the readings, never added up and never presented as a daily total.'
+           WHEN 'partial' THEN N'At least one week in the period has no reading on its end date. Earlier readings are still shown as evidence, but activity levels stay Unknown and nobody is listed as least active for this service.'
+           WHEN 'notImported' THEN N'Collection is switched on for this service, but no report has arrived yet.'
+           ELSE N'No published reading covers the dates you selected.'
        END,
        MIN(CAST(CASE WHEN sampled_week.week_start < @from
                      THEN @from ELSE sampled_week.week_start END AS datetime)),
@@ -1276,9 +1276,10 @@ END;
                 var initialStatus = sources.CopilotAudit || sources.CopilotInteractions
                     ? NotImported
                     : Disabled;
+                // Interpolated into N'{2}' below, so these must not contain an apostrophe.
                 var initialMessage = sources.CopilotAudit || sources.CopilotInteractions
-                    ? "The enabled Copilot event source has not stored evidence in this range."
-                    : "Every per-user Copilot source is disabled.";
+                    ? "Collection is switched on for Copilot, but no Copilot activity has arrived for these dates yet."
+                    : "Copilot collection is switched off on this deployment, so nothing can be measured. That is not the same as nobody using Copilot.";
 
                 sql.AppendFormat(
                     CultureInfo.InvariantCulture,
@@ -1311,7 +1312,7 @@ IF @copilotNeedsFallback = 1
 BEGIN
     SET @copilotPreferredStatus = 'missingCoverage';
     SET @copilotPreferredMessage =
-        N'Copilot audit data exists, but no event falls in the requested range; absence cannot be interpreted as zero.';
+        N'Copilot audit records exist, but none fall inside the dates you selected. That is not the same as nobody using Copilot.';
 END;
 ");
                 if (sources.CopilotInteractions)
@@ -1324,7 +1325,7 @@ BEGIN
     SET @copilotPreferredStatus = 'missingCoverage';
     SET @copilotPreferredSource = 'copilotInteractions';
     SET @copilotPreferredMessage =
-        N'Copilot interaction history exists, but no event falls in the requested range; absence cannot be interpreted as zero.';
+        N'Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.';
 END;
 ");
                 }
@@ -1337,7 +1338,7 @@ IF @copilotNeedsFallback = 1
 BEGIN
     SET @copilotPreferredStatus = 'missingCoverage';
     SET @copilotPreferredMessage =
-        N'Copilot interaction history exists, but no event falls in the requested range; absence cannot be interpreted as zero.';
+        N'Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.';
 END;
 ");
             }
@@ -1354,7 +1355,7 @@ BEGIN
     VALUES
     (
         5, 'copilot', @copilotPreferredStatus, @copilotPreferredSource,
-        N'positive Copilot evidence only', 'unknown',
+        N'recorded Copilot activity only', 'unknown',
         @copilotPreferredMessage, NULL, NULL, @copilotLatestImport, 0, NULL,
         (SELECT COUNT(*) FROM #Weeks), 0,
         @copilotUnmatched
@@ -1521,12 +1522,12 @@ DECLARE @copilotPreferredSource varchar(64) = 'microsoftGraphCopilotUsageReport'
 DECLARE @copilotPreferredMessage nvarchar(800) =
     CASE
         WHEN @copilotLogObfuscated = 1
-            THEN N'The official Copilot report concealed every user identity, so it cannot be joined to licence holders.'
+            THEN N'Microsoft''s Copilot usage report hid every person''s identity, so its activity cannot be tied back to the people holding the licence. To fix this, turn off ''Display concealed user, group and site names in all reports'' in the Microsoft 365 admin centre (Settings > Org settings > Reports).'
         WHEN @copilotLogImported IS NULL
-            THEN N'The official per-user Copilot usage report has not been imported.'
+            THEN N'Microsoft''s per-person Copilot usage report has never been collected on this deployment.'
         WHEN @copilotLogError IS NOT NULL
-            THEN N'The latest official per-user Copilot report import failed; absence cannot be interpreted as zero.'
-        ELSE N'No fully-contained official Copilot report window covers the requested range.'
+            THEN N'The last attempt to collect Microsoft''s per-person Copilot usage report failed, so Copilot activity is unknown rather than zero.'
+        ELSE N'None of Microsoft''s Copilot usage reports fits entirely inside the dates you selected.'
     END;
 DECLARE @copilotLatestImport datetime = @copilotLogImported;
 DECLARE @copilotUnmatched int =
@@ -1605,11 +1606,11 @@ BEGIN
             report_period_days, expected_samples, observed_samples, unmatched_users
         )
         SELECT 5, 'copilot', @copilotPreferredStatus, 'microsoftGraphCopilotUsageReport',
-               N'average prompts in sampled rolling 7-day reports',
+               N'Copilot prompts counted by Microsoft, averaged across the readings',
                'weeklySampleOfRolling7DayReport',
                CASE WHEN @copilotPreferredStatus = 'available'
-                    THEN N'The latest settled, fully-contained D7 report was sampled once per calendar week; overlapping counts are averaged, never summed. Missing user rows and rows without v2 counters remain unknown. The official report covers Copilot-licensed users only.'
-                    ELSE N'At least one requested D7 window lacks a settled snapshot on its exact end date. Earlier snapshots are as-of evidence only; all bands remain unknown and no user is ranked least-active.'
+                    THEN N'Microsoft''s most recent 7-day Copilot report was read once per week; where those reports overlap the counts are averaged, never added up. People Microsoft did not list, and older reports that predate the current counters, stay Unknown. Microsoft only reports on people who hold a Copilot licence.'
+                    ELSE N'At least one week in the period has no Copilot reading on its end date. Earlier readings are still shown as evidence, but activity levels stay Unknown and nobody is listed as least active for Copilot.'
                END,
                CAST(@copilotD7EffectiveFrom AS datetime),
                CAST(@copilotD7EffectiveTo AS datetime),
@@ -1718,11 +1719,11 @@ BEGIN
             VALUES
             (
                 5, 'copilot', @copilotPreferredStatus, 'microsoftGraphCopilotUsageReport',
-                N'prompts and active usage days in one rolling report',
+                N'Copilot prompts and days used, from one rolling report',
                 'singleRollingWindow',
                 CASE WHEN @copilotPreferredStatus = 'available'
-                     THEN N'The requested dates exactly match one official rolling Copilot report window. Missing user rows and rows without active_usage_days remain unknown. The official report covers Copilot-licensed users only.'
-                     ELSE N'The source only has a longer rolling window inside the request. Its evidence is shown with the exact effective dates, but bands remain unknown for the custom range.'
+                     THEN N'The dates you selected match one of Microsoft''s rolling Copilot reports exactly. People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.'
+                     ELSE N'Microsoft only published a longer rolling report inside the dates you selected. It is shown here with the dates it really covers, but activity levels stay Unknown for your custom range.'
                 END,
                 DATEADD(DAY, 1 - @copilotLongPeriod, CAST(@copilotLongDate AS datetime)),
                 CAST(@copilotLongDate AS datetime),
@@ -1782,8 +1783,8 @@ BEGIN
              THEN 'unmatchableIdentity' ELSE 'partial' END;
     SET @copilotPreferredMessage =
         CASE WHEN @copilotPreferredStatus = 'unmatchableIdentity'
-             THEN N'The official report identities are concealed. Audit events provide positive evidence, but their absence is not a measured zero.'
-             ELSE N'Copilot audit events provide positive evidence only; no database signal proves complete event coverage, so absent users remain unknown.'
+             THEN N'Microsoft''s Copilot report hid every person''s identity, so Copilot audit records are used instead. They prove who DID use Copilot, but cannot prove that anybody else did not.'
+             ELSE N'Copilot audit records prove who DID use Copilot, but nothing confirms that every Copilot event was captured, so anyone absent stays Unknown rather than inactive.'
         END;
 
     IF @copilotIncludeScores = 1
@@ -1820,7 +1821,7 @@ BEGIN
         report_period_days, expected_samples, observed_samples, unmatched_users
     )
     SELECT 5, 'copilot', @copilotPreferredStatus, 'copilotAudit',
-           N'interactions per active calendar week', 'eventPositiveOnly',
+           N'Copilot use counted per active week', 'eventPositiveOnly',
            @copilotPreferredMessage, MIN(time_stamp), MAX(time_stamp),
            NULL,
            DATEDIFF(DAY, MAX(CAST(time_stamp AS date)), @now),
@@ -1846,8 +1847,8 @@ BEGIN
              THEN 'unmatchableIdentity' ELSE 'partial' END;
     SET @copilotPreferredMessage =
         CASE WHEN @copilotPreferredStatus = 'unmatchableIdentity'
-             THEN N'The official report identities are concealed. Interaction history provides positive evidence, but its absence is not a measured zero.'
-             ELSE N'Copilot interaction history provides positive evidence only; no database signal proves complete history for every user, so absent users remain unknown.'
+             THEN N'Microsoft''s Copilot report hid every person''s identity, so Copilot chat history is used instead. It proves who DID use Copilot, but cannot prove that anybody else did not.'
+             ELSE N'Copilot chat history proves who DID use Copilot, but nothing confirms the history is complete for everybody, so anyone absent stays Unknown rather than inactive.'
         END;
 
     IF @copilotIncludeScores = 1
@@ -1884,7 +1885,7 @@ BEGIN
         report_period_days, expected_samples, observed_samples, unmatched_users
     )
     SELECT 5, 'copilot', @copilotPreferredStatus, 'copilotInteractions',
-           N'interaction rows per active calendar week', 'eventPositiveOnly',
+           N'Copilot activity counted per active week', 'eventPositiveOnly',
            @copilotPreferredMessage, MIN(created_utc), MAX(created_utc),
            (SELECT MAX(run_finished_utc) FROM dbo.copilot_interaction_import_log),
            CASE WHEN MAX(CAST(created_utc AS date)) IS NULL THEN 0
