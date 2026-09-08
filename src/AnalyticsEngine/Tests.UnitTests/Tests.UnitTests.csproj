@@ -157,6 +157,7 @@
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
     <Compile Include="DemoGeneratorTests.cs" />
     <Compile Include="DemoGeneratorSqlTests.cs" />
+    <Compile Include="DemoInteractiveTests.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCalendar.cs">
       <Link>DemoGenerator\DemoCalendar.cs</Link>
     </Compile>
@@ -165,6 +166,9 @@
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoGenerator.cs">
       <Link>DemoGenerator\DemoGenerator.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoInteractive.cs">
+      <Link>DemoGenerator\DemoInteractive.cs</Link>
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoOptions.cs">
       <Link>DemoGenerator\DemoOptions.cs</Link>
