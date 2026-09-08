@@ -111,7 +111,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
   if (licences.length === 0) {
     return (
       <Card className={styles.card}>
-        <Text className={styles.muted}>No licence assignments were found for this scope.</Text>
+        <Text className={styles.muted}>No licence assignments were found for this selection.</Text>
       </Card>
     );
   }
@@ -124,7 +124,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
             Licence assignments
           </Text>
           <Text size={200} className={styles.muted}>
-            Select a licence to see its workload activity and, with the required role, who holds it.
+            Select a licence to see how much each service is used, and who holds it.
             {showFilter ? ` Showing ${formatCount(visible.length)} of ${formatCount(licences.length)}.` : ''}
           </Text>
         </div>
@@ -132,7 +132,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
           <Input
             className={styles.filter}
             value={filter}
-            placeholder="Filter by name or SKU"
+            placeholder="Filter by licence name or code"
             aria-label="Filter licences"
             onChange={(_e, d) => setFilter(d.value)}
           />
@@ -146,7 +146,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
           <thead className={showFilter ? styles.stickyHead : undefined}>
             <tr>
               <th className={table.th}>Licence</th>
-              <th className={`${table.th} ${table.thNumeric}`}>Assigned users</th>
+              <th className={`${table.th} ${table.thNumeric}`}>People assigned</th>
               {WORKLOADS.map((w) => (
                 <th key={w.key} className={table.th}>
                   {w.label}

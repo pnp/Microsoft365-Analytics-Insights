@@ -30,23 +30,23 @@ export const ACTIVITY_BANDS: BandDef[] = [
 const BY_KEY: Record<string, BandDef> = Object.fromEntries(ACTIVITY_BANDS.map((b) => [b.key, b]));
 
 /**
- * The official band definitions, mirroring LicenceActivityRules.Method on the backend. These describe
- * a share of observed reporting SAMPLES with activity - deliberately not "active days", which the
- * measure only becomes if a workload's source/measure says so.
+ * The official activity-level definitions, mirroring LicenceActivityRules.Method on the backend. They
+ * describe how often someone was active across the READINGS taken in the period - deliberately not
+ * "active days", which the figures only become if a service's source says so.
  */
 export const BAND_DESCRIPTIONS: Record<BandKey, string> = {
-  high: 'Active in at least 75% of observed samples.',
-  moderate: 'Active in 25% to under 75% of observed samples.',
-  low: 'Active in under 25% of observed samples (but more than none).',
-  zero: 'No activity in any sample, with complete coverage of the period.',
-  unknown: 'Coverage was incomplete, so activity could not be determined - this is not zero.',
+  high: 'Active across three quarters or more of what was measured.',
+  moderate: 'Active across a quarter to under three quarters of what was measured.',
+  low: 'Active across under a quarter of what was measured, but active at least once.',
+  zero: 'Never active, across a period that was measured in full.',
+  unknown: 'The period could not be measured in full, so activity is not known - this does not mean zero.',
 };
 
-/** A one-line summary of the banding, for a column tooltip. */
+/** A one-line summary of how the levels are worked out, for a column tooltip. */
 export const BAND_METHOD =
-  'Bands are the share of observed reporting samples with activity: high \u2265 75%, moderate 25\u201374%, ' +
-  'low under 25%, zero none (with complete coverage). Incomplete coverage is Unknown, not zero. ' +
-  'These are sample frequencies, not daily events.';
+  'Activity levels describe how much of the measured period someone was active in: ' +
+  'High = 75% or more, Moderate = 25\u201374%, Low = under 25%, No activity = never (across a period measured in full). ' +
+  'Where the period could not be measured in full the level is Unknown, not zero.';
 
 export function bandLabel(band: string): string {
   return BY_KEY[band]?.label ?? band;

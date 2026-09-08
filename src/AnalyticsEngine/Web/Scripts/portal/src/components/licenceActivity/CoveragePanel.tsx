@@ -3,6 +3,7 @@ import type { LicenceActivityCoverage, WorkloadKey } from '../../types/licenceAc
 import { WORKLOADS } from '../../types/licenceActivity';
 import { DASH, formatAge, formatDate, formatDateTime, formatMaybeCount } from './format';
 import { statusMeta } from './statuses';
+import { granularityLabel, sourceLabel } from './sources';
 
 const useStyles = makeStyles({
   card: {
@@ -76,12 +77,13 @@ interface CoveragePanelProps {
 }
 
 /**
- * States, per workload, exactly which import fed the figures and how fresh and complete it is.
+ * States, per Microsoft 365 service, exactly where the figures came from and how fresh and complete
+ * they are.
  *
- * This is load-bearing, not decoration: a workload's distribution can legitimately be all "Unknown"
- * because its source was not imported or did not cover some users, and the reader needs to see that
- * cause here rather than mistake it for an absence of activity. Every field the backend provides -
- * source, measure, freshness, sample counts, unmatched users, and the raw status - is shown.
+ * This is load-bearing, not decoration: a service's chart can legitimately be all "Unknown" because
+ * its source was never imported or did not cover some people, and the reader needs to see that cause
+ * here rather than mistake it for an absence of activity. Every field the backend provides - source,
+ * measure, freshness, reading counts, unmatched people and the status - is shown.
  */
 export default function CoveragePanel({ generatedUtc, expiresUtc, coverage, now }: CoveragePanelProps) {
   const styles = useStyles();
@@ -90,17 +92,17 @@ export default function CoveragePanel({ generatedUtc, expiresUtc, coverage, now 
     <Card className={styles.card}>
       <div className={styles.head}>
         <Text size={200} weight="semibold" className={styles.title}>
-          Data sources &amp; coverage
+          Where these figures come from
         </Text>
         <Text size={200} className={styles.generated}>
-          Snapshot generated {formatDateTime(generatedUtc)} ({formatAge(generatedUtc, now)}); expires{' '}
+          Prepared {formatDateTime(generatedUtc)} ({formatAge(generatedUtc, now)}); held for up to{' '}
           {formatDateTime(expiresUtc)}
         </Text>
       </div>
 
       {coverage.length === 0 ? (
         <Text size={200} className={styles.sub}>
-          No per-workload coverage was reported for this snapshot.
+          No source information was reported for these figures.
         </Text>
       ) : (
         <div className={styles.grid}>
@@ -116,26 +118,29 @@ export default function CoveragePanel({ generatedUtc, expiresUtc, coverage, now 
               </div>
 
               <Text size={200} className={styles.line}>
-                Source: {entry.source || DASH}
+                Source: {sourceLabel(entry.source) || DASH}
                 {entry.measure ? ` \u00b7 ${entry.measure}` : ''}
-                {entry.granularity ? ` (${entry.granularity})` : ''}
+                {entry.granularity ? ` \u00b7 ${granularityLabel(entry.granularity)}` : ''}
               </Text>
 
               <Text size={100} className={styles.sub}>
-                Imported {formatDate(entry.latestImportUtc)}
-                {entry.lagDays > 0 ? ` \u00b7 ${entry.lagDays}d lag` : ''}
-                {entry.reportPeriodDays ? ` \u00b7 ${entry.reportPeriodDays}d period` : ''}
+                Last imported {formatDate(entry.latestImportUtc)}
+                {entry.lagDays > 0 ? ` \u00b7 most recent data is ${entry.lagDays} days old` : ''}
+                {entry.reportPeriodDays ? ` \u00b7 covers ${entry.reportPeriodDays} days` : ''}
               </Text>
 
               <Text size={100} className={styles.sub}>
-                Covers {formatDate(entry.effectiveFromUtc)}
+                Data from {formatDate(entry.effectiveFromUtc)}
                 {' \u2013 '}
                 {formatDate(entry.effectiveToUtc)}
               </Text>
 
               <Text size={100} className={styles.sub}>
-                {formatMaybeCount(entry.observedSamples)} / {formatMaybeCount(entry.expectedSamples)} samples
-                {entry.unmatchedUsers > 0 ? ` \u00b7 ${entry.unmatchedUsers.toLocaleString()} unmatched` : ''}
+                {formatMaybeCount(entry.observedSamples)} of {formatMaybeCount(entry.expectedSamples)} measurements
+                taken
+                {entry.unmatchedUsers > 0
+                  ? ` \u00b7 ${entry.unmatchedUsers.toLocaleString()} people couldn't be matched`
+                  : ''}
               </Text>
 
               {entry.message && (

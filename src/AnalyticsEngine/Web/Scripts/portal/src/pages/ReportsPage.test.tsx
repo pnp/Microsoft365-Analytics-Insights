@@ -41,7 +41,7 @@ const areaData: ReportAreaData = {
 };
 
 function availability(over: Partial<LicenceActivityAvailability> = {}): LicenceActivityAvailability {
-  return { available: false, canViewUsers: false, minimumDays: 7, maximumDays: 180, messages: [], ...over };
+  return { available: false, minimumDays: 7, maximumDays: 180, messages: [], ...over };
 }
 
 beforeEach(() => {
