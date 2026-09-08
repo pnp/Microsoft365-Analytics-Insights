@@ -262,18 +262,17 @@ namespace Common.Entities.LicenceActivity
             overview.Countries = ProjectDemographics(countries, cancellationToken);
 
             if (overview.Licences.Count == 0)
-                overview.Messages.Add("No imported licence types are available.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NoLicences);
             else if (overview.DistinctAssignedUsers == 0)
-                overview.Messages.Add("Licence types are imported, but no users in the selected scope currently hold one.");
-            overview.Messages.Add(
-                "User display names are not imported by this solution. Individual results use the user principal name; search also checks the stored mail address.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NobodyHoldsALicence);
+            overview.Messages.Add(LicenceActivityRules.Notes.NoDisplayNames);
             foreach (var item in overview.Coverage.Where(item => item.Status != LicenceActivitySql.Available))
             {
                 if (!string.IsNullOrWhiteSpace(item.Message))
-                    overview.Messages.Add(item.Workload + ": " + item.Message);
+                    overview.Messages.Add(LicenceActivityRules.Notes.ForService(item.Workload, item.Message));
             }
             if (overview.DemographicsTruncated)
-                overview.Messages.Add("Department or country breakdowns are limited to the 50 largest values.");
+                overview.Messages.Add(LicenceActivityRules.Notes.DemographicsCapped);
             cancellationToken.ThrowIfCancellationRequested();
             return overview;
         }
@@ -534,13 +533,12 @@ namespace Common.Entities.LicenceActivity
 
         private void AddUserMessages(LicenceActivityUsers result, string workload)
         {
-            result.Messages.Add(
-                "Most/least lists rank the selected workload by active supporting samples, then average actions and last activity. Complete positive measurements rank before partial positive evidence, which still ranks above measured zero; unknown or incomplete evidence is excluded from least-active.");
+            result.Messages.Add(LicenceActivityRules.Notes.RankingMethod);
             var selected = _coverage[WorkloadIndex(workload)];
             if (selected.Status != LicenceActivitySql.Available && !string.IsNullOrWhiteSpace(selected.Message))
                 result.Messages.Add(selected.Message);
             if (result.TotalUsers > 0 && result.RankedUsers == 0)
-                result.Messages.Add("No user has complete or positive evidence for the selected workload and range.");
+                result.Messages.Add(LicenceActivityRules.Notes.NobodyRankable);
         }
 
         private EvidenceState Evidence(int workload, int userIndex)

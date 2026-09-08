@@ -14,11 +14,12 @@ const baseUrl = (): string =>
  * How a Licence-activity request failed, so callers can react to the case rather than a raw status.
  *   - `busy`       503: reporting capacity is busy or a report load failed. This tool does NOT poll;
  *                       the UI offers a manual "Try again".
- *   - `expired`    410/409/404: the cached snapshot the request referenced is gone, superseded, or no
- *                       longer contains that licence. The caller must NOT silently re-query - it must
+ *   - `expired`    410/409/404: the cached figures the request referenced are gone, superseded, or no
+ *                       longer contain that licence. The caller must NOT silently re-query - it must
  *                       tell the user to refresh so the exported file always matches the screen.
- *   - `forbidden`  403: the user lacks the LicenceActivity.ReadUsers role.
- *   - `precondition` 412: the licence import (GraphUsersMetadata) is disabled.
+ *   - `forbidden`  403: sign-in was rejected for this request (e.g. by the site's own access rules).
+ *                       The report itself imposes no extra permission of its own.
+ *   - `precondition` 412: the user details import is switched off on this deployment.
  *   - `badRequest` 400: an invalid parameter (e.g. a range outside 7..180 days).
  *   - `http`       anything else.
  */
@@ -67,11 +68,11 @@ function fallbackMessage(kind: LicenceActivityErrorKind, status: number, what: s
     case 'busy':
       return `The server is busy or could not prepare ${what}. Try again in a moment.`;
     case 'expired':
-      return `This snapshot has expired or was refreshed. Reload to get a current one.`;
+      return `These figures are no longer being held. Refresh the report to bring back an up-to-date set.`;
     case 'forbidden':
-      return `You do not have permission to view ${what}. Individual user detail needs the "LicenceActivity.ReadUsers" role.`;
+      return `You do not have permission to view ${what}.`;
     case 'precondition':
-      return `Licence activity is not available: the licence import is disabled on this deployment.`;
+      return `Licence activity is not available: the user details import is switched off on this deployment.`;
     case 'badRequest':
       return `That request was rejected. Check the selected dates and filters.`;
     default:
@@ -110,7 +111,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
   return response.json() as Promise<T>;
 }
 
-/** Which parts of the tool this deployment / signed-in user can see, and the allowed window bounds. */
+/** Which parts of the tool this deployment can show, and the allowed window bounds. */
 export function fetchAvailability(signal?: AbortSignal): Promise<LicenceActivityAvailability> {
   return getJson<LicenceActivityAvailability>('/availability', 'the licence activity availability', signal);
 }
@@ -123,7 +124,7 @@ function overviewQuery(params: OverviewParams): URLSearchParams {
   return qs;
 }
 
-/** The executive overview: SKU assignments, five workload distributions and per-workload coverage. */
+/** The executive overview: licence assignments, five workload distributions and per-workload coverage. */
 export function fetchOverview(params: OverviewParams, signal?: AbortSignal): Promise<LicenceActivityOverview> {
   return getJson<LicenceActivityOverview>(
     `/overview?${overviewQuery(params)}`,
@@ -148,9 +149,8 @@ function usersQuery(params: UsersParams): URLSearchParams {
 }
 
 /**
- * The users snapshot for the selected licence: one request returns the bounded most/least active
- * lists and the current browse page together. Individual user data needs the
- * `LicenceActivity.ReadUsers` role; a caller without it gets a `forbidden` error.
+ * The users list for the selected licence: one request returns the bounded most/least active
+ * lists and the current browse page together.
  */
 export function fetchUsers(params: UsersParams, signal?: AbortSignal): Promise<LicenceActivityUsers> {
   return getJson<LicenceActivityUsers>(`/users?${usersQuery(params)}`, 'the licensed users', signal);

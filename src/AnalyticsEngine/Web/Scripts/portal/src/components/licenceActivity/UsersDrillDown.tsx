@@ -38,8 +38,8 @@ const BROWSE_SORTS: { value: string; label: string }[] = [
   { value: 'activity:asc', label: 'Least active first' },
   { value: 'lastActivity:desc', label: 'Most recently active' },
   { value: 'lastActivity:asc', label: 'Longest since active' },
-  { value: 'upn:asc', label: 'UPN (A\u2013Z)' },
-  { value: 'upn:desc', label: 'UPN (Z\u2013A)' },
+  { value: 'upn:asc', label: 'Sign-in address (A\u2013Z)' },
+  { value: 'upn:desc', label: 'Sign-in address (Z\u2013A)' },
 ];
 
 const useStyles = makeStyles({
@@ -145,7 +145,7 @@ function TopCountInput({ value, onCommit, disabled }: { value: number; onCommit:
       max={MAX_TOP}
       value={text}
       disabled={disabled}
-      aria-label="Number of users in each list"
+      aria-label="Number of people in each list"
       onChange={(_e, d) => setText(d.value)}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -175,14 +175,13 @@ interface UsersDrillDownProps {
   /** Reports the snapshot id of the loaded users list, for the exact-snapshot export. Null while
    *  loading / on error. Should be a stable reference. */
   onUsersSnapshot: (usersId: string | null) => void;
-  /** Reloads the overview - the correct fix when a users request fails because the snapshot expired. */
+  /** Reloads the overview - the correct fix when a users request fails because the figures it
+   *  referenced are no longer held. */
   onRefreshOverview: () => void;
-  /** Rechecks detail permission after a current users request is forbidden. */
-  onForbidden?: () => void;
-  /** Bumped by the parent to force a fresh users fetch (re-mint) even when the params are otherwise
+  /** Bumped by the parent to force a fresh users fetch even when the params are otherwise
    *  unchanged - e.g. after an export 410, when the overview is still cached under the same id so the
    *  params never change on their own. A same-key reload keeps the current rows on screen while the
-   *  new snapshot loads. Undefined/0 means "no forced refresh yet". */
+   *  new list loads. Undefined/0 means "no forced refresh yet". */
   refreshToken?: number;
 }
 
@@ -198,7 +197,6 @@ export default function UsersDrillDown({
   coverage,
   onUsersSnapshot,
   onRefreshOverview,
-  onForbidden,
   refreshToken,
 }: UsersDrillDownProps) {
   const styles = useStyles();
@@ -233,8 +231,8 @@ export default function UsersDrillDown({
   const workloadCoverage = coverage.find((c) => c.workload === workload) ?? null;
   const coverageIncomplete = workloadCoverage != null && workloadCoverage.status !== 'available';
   const rankEmptyText = coverageIncomplete
-    ? `${workloadLabel} activity is not fully measured, so users can't be ranked here - see the note above.`
-    : 'No users to rank for this workload.';
+    ? `${workloadLabel} activity isn't fully measured, so people can't be ranked here - see the note above.`
+    : 'Nobody can be ranked for this service.';
 
   // Reset the page atomically when the scope (licence / workload / browse filter) changes, DURING
   // render - so `params` never briefly pairs a new scope with the old page, which would fire a wasted
@@ -293,12 +291,7 @@ export default function UsersDrillDown({
   }, [data?.snapshotId, onUsersSnapshot]);
 
   const errorKind = describeError(error, '').kind;
-  useEffect(() => {
-    if (errorKind === 'forbidden') onForbidden?.();
-  }, [errorKind, onForbidden]);
-
-  const retry = errorKind === 'expired' ? onRefreshOverview
-    : errorKind === 'forbidden' && onForbidden ? onForbidden : reload;
+  const retry = errorKind === 'expired' ? onRefreshOverview : reload;
 
   return (
     <Card className={styles.card}>
@@ -308,16 +301,16 @@ export default function UsersDrillDown({
             {licenceName(licence)}
           </Text>
           <Text size={200} className={styles.muted}>
-            {formatCount(licence.assignedUsers)} users hold this licence. Choose a workload to rank them by its
-            activity.
+            {formatCount(licence.assignedUsers)} people hold this licence. Choose a service to rank them by how much they
+            use it.
           </Text>
         </div>
         <div className={styles.controls}>
           <div className={styles.field}>
             <Text size={200} className={styles.muted}>
-              Workload
+              Service
             </Text>
-            <Select value={workload} aria-label="Workload" onChange={(_e, d) => setWorkload(d.value as WorkloadKey)}>
+            <Select value={workload} aria-label="Service" onChange={(_e, d) => setWorkload(d.value as WorkloadKey)}>
               {WORKLOADS.map((w) => (
                 <option key={w.key} value={w.key}>
                   {w.label}
@@ -339,14 +332,14 @@ export default function UsersDrillDown({
             appearance="subtle"
             icon={<ArrowClockwise16Regular />}
             onClick={reload}
-            aria-label="Refresh users"
+            aria-label="Refresh the list"
           >
             Refresh
           </Button>
         </div>
       </div>
 
-      {error != null && <ApiErrorBar error={error} fallback="Couldn't load the users." onRetry={retry} />}
+      {error != null && <ApiErrorBar error={error} fallback="Couldn't load the people holding this licence." onRetry={retry} />}
 
       {/* A failed load unmounts the browse controls below (they live inside `data && ...`), which
           would otherwise strand an admin whose SEARCH TERM caused the failure: every surviving
@@ -374,8 +367,8 @@ export default function UsersDrillDown({
               {workloadLabel}: {statusMeta(workloadCoverage.status).label}.
             </strong>{' '}
             {statusMeta(workloadCoverage.status).explanation}
-            {workloadCoverage.message ? ` ${workloadCoverage.message}` : ''} Users with positive evidence still appear
-            as most active; nobody is ranked least active for this workload.
+            {workloadCoverage.message ? ` ${workloadCoverage.message}` : ''} People with recorded activity still appear
+            as most active; nobody is listed as least active for this service.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -394,7 +387,7 @@ export default function UsersDrillDown({
 
       {loading && !data && (
         <div className={styles.center}>
-          <Spinner size="small" label="Loading users..." />
+          <Spinner size="small" label="Loading people..." />
         </div>
       )}
 
@@ -440,16 +433,16 @@ export default function UsersDrillDown({
           <div className={styles.browse}>
             <div className={styles.panelHead}>
               <Text weight="semibold" size={300}>
-                Browse all
+                Everyone with this licence
               </Text>
               <Text size={200} className={styles.muted}>
-                {formatCount(data.totalUsers)} users
+                {formatCount(data.totalUsers)} people
               </Text>
             </div>
 
             <Text size={100} className={styles.muted}>
-              User display names are not imported; search uses UPN or email. This is a deliberate limitation, not a
-              missing name.
+              Staff names aren&apos;t collected by this product, so people are listed and searched by their sign-in
+              address.
             </Text>
 
             <div className={styles.browseControls}>
@@ -457,7 +450,7 @@ export default function UsersDrillDown({
                 className={styles.grow}
                 value={searchDraft}
                 maxLength={MAX_SEARCH}
-                placeholder="Search UPN or email"
+                placeholder="Search by sign-in address"
                 aria-label="Search users"
                 onChange={(_e, d) => setSearchDraft(sanitiseDraft(d.value))}
                 onKeyDown={(e) => {
@@ -490,7 +483,7 @@ export default function UsersDrillDown({
               workloadLabel={workloadLabel}
               startRank={(data.query.page - 1) * data.query.pageSize + 1}
               showRank
-              emptyText={search ? 'No users match your search.' : 'No users to show for this selection.'}
+              emptyText={search ? 'Nobody matches your search.' : 'Nobody to show for this selection.'}
             />
 
             {data.totalUsers > 0 && (
@@ -498,7 +491,7 @@ export default function UsersDrillDown({
                 <Text size={200} className={styles.muted}>
                   Showing {formatCount((data.query.page - 1) * data.query.pageSize + 1)}&ndash;
                   {formatCount(Math.min(data.query.page * data.query.pageSize, data.totalUsers))} of{' '}
-                  {formatCount(data.totalUsers)} users
+                  {formatCount(data.totalUsers)} people
                 </Text>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>

@@ -72,7 +72,8 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
           {title}
         </Text>
         <Text size={200} className={styles.muted}>
-          Assigned users and per-workload activity by {segmentLabel.toLowerCase()}, largest first.
+          People assigned a licence and how much they use each service, by {segmentLabel.toLowerCase()}, largest
+          first.
         </Text>
         <BandLegend />
       </div>
@@ -80,8 +81,8 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
       {capped && (
         <MessageBar intent="info">
           <MessageBarBody>
-            Showing the top {formatCount(shown.length)} {segmentLabel.toLowerCase()} by assigned users; the full list
-            is truncated.
+            Showing only the {formatCount(shown.length)} largest by number of people assigned &mdash; this is not the
+            full list.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -91,7 +92,7 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
           <thead className={styles.stickyHead}>
             <tr>
               <th className={table.th}>{segmentLabel}</th>
-              <th className={`${table.th} ${table.thNumeric}`}>Assigned</th>
+              <th className={`${table.th} ${table.thNumeric}`}>People assigned</th>
               {WORKLOADS.map((w) => (
                 <th key={w.key} className={table.th}>
                   {w.label}

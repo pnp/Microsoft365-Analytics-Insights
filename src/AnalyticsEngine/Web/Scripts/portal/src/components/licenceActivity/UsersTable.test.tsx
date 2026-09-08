@@ -11,7 +11,7 @@ function evidence(over: Partial<LicenceActivityEvidence> = {}): LicenceActivityE
     status: 'known',
     band: 'high',
     source: 'Usage reports',
-    measure: 'reporting samples',
+    measure: 'activity counted by Microsoft',
     activeSamples: 15,
     observedSamples: 20,
     expectedSamples: 20,
@@ -34,7 +34,7 @@ function usr(over: Partial<LicenceActivityUser> = {}): LicenceActivityUser {
 }
 
 describe('UsersTable', () => {
-  it('identifies the user by UPN only (no display names exist to show or invent)', () => {
+  it('identifies the person by sign-in address only (no display names exist to show or invent)', () => {
     renderWithProvider(<UsersTable rows={[usr()]} workload="teams" workloadLabel="Teams" />);
     expect(screen.getByText('ada@contoso.com')).toBeInTheDocument();
   });
@@ -47,9 +47,9 @@ describe('UsersTable', () => {
     expect(screen.getByText('Καλημέρα κόσμε')).toBeInTheDocument();
   });
 
-  it('shows the active-sample frequency and a coloured band', () => {
+  it('shows how often the person was active and a coloured activity badge', () => {
     renderWithProvider(<UsersTable rows={[usr()]} workload="teams" workloadLabel="Teams" />);
-    // 15 / 20 observed samples = 75% (the parenthesised cell value, not the band-method tooltip).
+    // Active in 15 of the 20 measurements taken = 75% (the parenthesised cell value, not the tooltip).
     expect(screen.getByText('(75%)')).toBeInTheDocument();
     expect(screen.getByText('High')).toBeInTheDocument();
   });
@@ -83,7 +83,7 @@ describe('UsersTable', () => {
     // Collapsed: only the selected workload is summarised, so the not-imported one isn't shown yet.
     expect(screen.queryByText('Not imported')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Show all workloads/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Show all services/ }));
 
     // Expanded: every workload is listed with its coverage status.
     for (const w of WORKLOADS) {
@@ -103,8 +103,8 @@ describe('UsersTable', () => {
         workloadLabel="Teams"
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /Show all workloads/ }));
-    expect(screen.getAllByText(/0 observed of 8 expected/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /Show all services/ }));
+    expect(screen.getAllByText(/0 of 8 measured/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
   });
 });

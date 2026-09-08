@@ -140,13 +140,14 @@ function WorkloadDistributions({ workloads }: WorkloadDistributionsProps) {
   );
 
   if (ordered.length === 0) {
-    return <Text className={styles.muted}>No workload activity is available for this licence.</Text>;
+    return <Text className={styles.muted}>No activity is available for this licence.</Text>;
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
       <Text size={100} className={styles.muted}>
-        {BAND_METHOD} Active counts are users with any measured activity, out of those with complete coverage.
+        {BAND_METHOD} The &quot;active&quot; count is everyone with any measured activity, out of the people whose
+        whole period could be measured.
       </Text>
       <div className={styles.grid}>
         {ordered.map((distribution) => (
