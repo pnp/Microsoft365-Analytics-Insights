@@ -11,7 +11,8 @@ namespace Tests.FakeDataGen.Demo
     internal sealed class DemoOptions
     {
         // Bump when generation rules change: completed targets must not silently reuse an older shape.
-        public const string FormatVersion = "contoso-demo-v1";
+        // History: contoso-demo-v2 - Copilot report rows now cover the whole window (28-day warm-up).
+        public const string FormatVersion = "contoso-demo-v2";
 
         // Accepted ranges, shared with the interactive menu (DemoInteractive) so the two entry points
         // cannot drift apart and offer a value the other refuses.
@@ -41,7 +42,6 @@ namespace Tests.FakeDataGen.Demo
         public int[] Mix { get; private set; } = new[] { 30, 35, 20, 8, 7 };
         public DateTime Start => AsOf.AddDays(-Days);
         public DateTime ReportEnd => AsOf.AddDays(-3);
-        public DateTime FirstCopilotReport => Start.AddDays(27);
 
         public static DemoOptions Parse(string[] args, DateTime utcToday)
         {
@@ -130,8 +130,9 @@ asks for the same values, prints the equivalent command line, and runs this same
   --days N                 31..730 preceding calendar days (default 180).
   --as-of yyyy-MM-dd        Exclusive UTC end date (default today's UTC date).
                            Workload snapshots stop three days before this date.
-                           D28 snapshots start after 28 complete generated days; they
-                           are rolling snapshots, NOT additive daily prompt counts.
+                           D28 snapshots cover every reported date: 28 hidden days before
+                           the window warm the rolling counters. They are rolling
+                           snapshots, NOT additive daily prompt counts.
   --seed N                 0..2147483647 (default 42). Specify as-of too for reproducibility.
   --mix H,M,L,Z,I           High/moderate/low/never-active/inactive percentages, sum 100.
                            Default 30,35,20,8,7. Small populations may not contain every band.

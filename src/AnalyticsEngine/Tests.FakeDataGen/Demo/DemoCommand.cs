@@ -12,6 +12,7 @@ namespace Tests.FakeDataGen.Demo
         public static int Run(string[] args)
         {
             FileStream summaryFile = null;
+            string portalConnectionString = null;
             try
             {
                 var options = DemoOptions.Parse(args, DateTime.UtcNow);
@@ -47,6 +48,7 @@ namespace Tests.FakeDataGen.Demo
                                     database.ValidateAndComplete(summary, Console.WriteLine);
                                     summary.Status = "Complete";
                                 }
+                                portalConnectionString = database.ConnectionString;
                             }
                         }
                     }
@@ -60,6 +62,13 @@ namespace Tests.FakeDataGen.Demo
                 Console.WriteLine("Copilot audit bands (latest 28 audit days, real scorer): " + string.Join(", ", summary.AdoptionBands.Select(p => p.Key + "=" + p.Value)));
                 Console.WriteLine("Fingerprint: " + summary.Fingerprint);
                 if (options.Preview) Console.WriteLine("Preview only: no database or weekly profiles were written.");
+                if (portalConnectionString != null)
+                {
+                    // Deliberately the real clock, not the demo's as-of: this reports what a portal opened
+                    // now would be able to measure, which is different when a historical --as-of was used.
+                    DemoPortalReadiness.PrintMeasuredCoverage(portalConnectionString, DateTime.UtcNow, Console.WriteLine);
+                    DemoPortalReadiness.PrintPortalSetup(options.Database, Console.WriteLine);
+                }
                 if (summaryFile != null)
                 {
                     using (var writer = new StreamWriter(summaryFile)) writer.Write(JsonConvert.SerializeObject(summary, Formatting.Indented));
