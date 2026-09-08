@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json;
+using Common.Entities.Copilot;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,6 +8,36 @@ using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
 {
+
+    /// <summary>
+    /// How <see cref="CopilotCreditEstimation"/> reached its tenant-graph grounding decision for a
+    /// conversation. Stored as a string on the estimate rather than an enum so an older reader of the
+    /// persisted JSON cannot silently coerce a value it does not know into the first enum member.
+    /// </summary>
+    public static class CopilotTenantGroundingBasis
+    {
+        /// <summary>Not a billable custom agent, or there was nothing to analyse - no decision was made.</summary>
+        public const string NotAssessed = "NotAssessed";
+
+        /// <summary>The conversation listed no accessed resources at all.</summary>
+        public const string NoResources = "NoResources";
+
+        /// <summary>
+        /// Every accessed resource was positively identified as grounding from outside the tenant.
+        /// This is the only case that genuinely means "web search only".
+        /// </summary>
+        public const string ExternalOnly = "ExternalOnly";
+
+        /// <summary>At least one resource carried positive evidence of being a tenant resource.</summary>
+        public const string TenantResource = "TenantResource";
+
+        /// <summary>
+        /// No resource carried positive tenant evidence, but at least one could not be classified
+        /// either way, so the charge was applied on the assumption that it was tenant content. See
+        /// <see cref="CopilotCreditEstimation.UnclassifiedResources"/>.
+        /// </summary>
+        public const string UnclassifiedResource = "UnclassifiedResource";
+    }
 
     /// <summary>
     /// Detailed billing report for a Copilot audit event.
@@ -25,9 +56,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         #region Billing Constants
 
         /// <summary>
-        /// Version of the cost estimation model.
+        /// Version of the cost estimation model. Stamped into every stored estimate, so an estimate
+        /// produced by an older importer can be told apart from a current one.
+        ///
+        /// History:
+        /// 1.0.0.1 - initial model.
+        /// 1.1.0.0 - tenant-graph grounding is decided from positive evidence of a tenant resource
+        ///           rather than from an allowlist of AccessedResources[].Type values, and a resource
+        ///           this product cannot classify no longer silently produces the cheaper answer
+        ///           (#469). Estimates for the same conversation can legitimately differ across this
+        ///           boundary.
         /// </summary>
-        private const string COST_ESTIMATION_VERSION = "1.0.0.1";
+        private const string COST_ESTIMATION_VERSION = "1.1.0.0";
 
         // Based on Microsoft Copilot Studio billing documentation (as of March 2025)
         // https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management#copilot-credits-and-events-scenarios
@@ -66,6 +106,28 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         [JsonProperty("TenantGraphGroundedAnswers")]
         public int TenantGraphGroundedAnswers { get; set; }
 
+        /// <summary>
+        /// Why the tenant-graph grounding charge was or was not applied - one of the
+        /// <see cref="CopilotTenantGroundingBasis"/> constants.
+        ///
+        /// Recorded because the decision is an inference, not something the audit log states. An
+        /// estimate that rests on a SharePoint URL is worth more than one that rests on a resource
+        /// type nobody recognises, and without this the two are indistinguishable after the fact.
+        /// </summary>
+        [JsonProperty("TenantGraphGroundingBasis")]
+        public string TenantGraphGroundingBasis { get; set; }
+
+        /// <summary>
+        /// How many accessed resources carried no evidence either way - neither positive evidence of a
+        /// tenant resource nor a recognised marker for grounding from outside the tenant.
+        ///
+        /// These are charged as tenant grounding, because Microsoft documents AccessedResources as the
+        /// resources Copilot accessed to answer and gives no way to tell an unrecognised entry apart.
+        /// The count exists so that assumption is visible rather than buried.
+        /// </summary>
+        [JsonProperty("UnclassifiedResources")]
+        public int UnclassifiedResources { get; set; }
+
         [JsonProperty("DeepReasoningActions")]
         public int DeepReasoningActions { get; set; }
 
@@ -96,6 +158,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         {
             CostModelVersion = COST_ESTIMATION_VERSION,
             TotalCredits = 0,
+            TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
             ResourceTypeBreakdown = new Dictionary<string, int>(),
             CreditBreakdown = new Dictionary<string, int>(),
             ModelsUsed = new List<string>()
@@ -117,6 +180,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 {
                     CostModelVersion = COST_ESTIMATION_VERSION,
                     TotalCredits = 0,
+                    TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
                     ResourceTypeBreakdown = new Dictionary<string, int>(),
                     CreditBreakdown = new Dictionary<string, int>(),
                     ModelsUsed = new List<string>()
@@ -171,6 +235,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
                 {
                     CostModelVersion = COST_ESTIMATION_VERSION,
                     TotalCredits = 0,
+                    TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
                     ResourceTypeBreakdown = new Dictionary<string, int>(),
                     CreditBreakdown = new Dictionary<string, int>(),
                     ModelsUsed = new List<string>()
@@ -180,6 +245,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             var report = new CopilotCreditEstimation
             {
                 CostModelVersion = COST_ESTIMATION_VERSION,
+                TenantGraphGroundingBasis = CopilotTenantGroundingBasis.NotAssessed,
                 ResourceTypeBreakdown = new Dictionary<string, int>(),
                 CreditBreakdown = new Dictionary<string, int>(),
                 ModelsUsed = new List<string>()
@@ -190,9 +256,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             if (!isCustomAgent)
             {
                 // Build resource breakdown for analytics but don't charge any credits
-                report.ResourceTypeBreakdown = auditEvent.AccessedResources?
-                    .GroupBy(r => string.IsNullOrEmpty(r.Type) ? "WebPage" : r.Type)
-                    .ToDictionary(g => g.Key, g => g.Count()) ?? new Dictionary<string, int>();
+                report.ResourceTypeBreakdown = BuildResourceTypeBreakdown(auditEvent.AccessedResources);
 
                 // Track models used for analytics even if not charging
                 if (HasDeepReasoning(auditEvent.ModelTransparencyDetails))
@@ -207,11 +271,13 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             int totalCredits = 0;
 
             // STEP 1: Detect tenant graph usage
-            // If any Microsoft Graph resources (SharePoint, OneDrive, Teams files, etc.) were accessed,
-            // this indicates tenant graph grounding was used for the conversation.
             // Per Microsoft docs: "tenant graph grounding for messages" costs 10 credits
-            // PLUS the base generative answer cost of 2 credits = 12 credits total per message
-            bool hasTenantGraphResources = HasTenantGraphResources(auditEvent.AccessedResources);
+            // PLUS the base generative answer cost of 2 credits = 12 credits total per message.
+            // See AssessTenantGrounding for how the decision is reached and what it assumes.
+            var grounding = AssessTenantGrounding(auditEvent.AccessedResources);
+            bool hasTenantGraphResources = grounding.IsTenantGrounded;
+            report.TenantGraphGroundingBasis = grounding.Basis;
+            report.UnclassifiedResources = grounding.UnclassifiedResources;
 
             // STEP 2: Detect deep reasoning usage
             // Deep reasoning is indicated by the DEEP_LEO model in ModelTransparencyDetails.
@@ -267,13 +333,29 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             // STEP 5: Build resource breakdown (for reference/analytics only)
             // This shows what types of resources were accessed but does NOT affect billing.
             // Resources are billed at the message level, not per resource.
-            report.ResourceTypeBreakdown = auditEvent.AccessedResources?
-                .GroupBy(r => string.IsNullOrEmpty(r.Type) ? "WebPage" : r.Type)
-                .ToDictionary(g => g.Key, g => g.Count()) ?? new Dictionary<string, int>();
+            report.ResourceTypeBreakdown = BuildResourceTypeBreakdown(auditEvent.AccessedResources);
 
             report.TotalCredits = totalCredits;
 
             return report;
+        }
+
+        /// <summary>
+        /// Counts accessed resources by their raw <c>Type</c> value, for reference only.
+        ///
+        /// A resource with no type is counted as <c>(unknown)</c> - the same label the Copilot
+        /// Adoption reporting uses - and deliberately NOT as a web page. Microsoft publishes no list
+        /// of possible values for that field and documents it as carrying either a file extension or
+        /// a description of a non-SharePoint resource, so a missing one says nothing about where the
+        /// resource came from.
+        /// </summary>
+        private static Dictionary<string, int> BuildResourceTypeBreakdown(List<AccessedResource> accessedResources)
+        {
+            if (accessedResources == null) return new Dictionary<string, int>();
+
+            return accessedResources
+                .GroupBy(r => string.IsNullOrWhiteSpace(r?.Type) ? CopilotAccessedResourceTaxonomy.UnknownTypeLabel : r.Type)
+                .ToDictionary(g => g.Key, g => g.Count());
         }
 
         /// <summary>
@@ -296,79 +378,168 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
         }
 
         /// <summary>
-        /// Determines if the accessed resources indicate tenant graph grounding was used.
-        /// 
-        /// Tenant graph grounding provides RAG over Microsoft Graph data including:
-        /// - SharePoint sites, files, and documents
-        /// - OneDrive files and folders
-        /// - Outlook emails and calendar events
-        /// - Teams messages, channels, and meetings
-        /// - Other Microsoft 365 data synced to Graph
-        /// 
-        /// Detection Logic:
-        /// 1. Check resource Type field for known Microsoft Graph entity types
-        /// 2. Check SiteUrl field for Microsoft 365 service URLs
-        /// 3. Returns true if ANY tenant resource is found (does not count individual resources)
-        /// 
-        /// Important: This is an inference-based approach as current audit logs don't explicitly
-        /// flag tenant graph grounding. Future audit log schema updates may include explicit fields.
+        /// The outcome of the tenant-graph grounding decision for one conversation.
+        /// </summary>
+        private struct TenantGroundingAssessment
+        {
+            public bool IsTenantGrounded { get; set; }
+            public int UnclassifiedResources { get; set; }
+            public string Basis { get; set; }
+        }
+
+        /// <summary>
+        /// Decides whether a conversation should carry the tenant-graph grounding charge, and records
+        /// how that decision was reached.
+        ///
+        /// The question this answers is "did this conversation ground on tenant data?". The audit log
+        /// does not state that, so it has to be inferred - but it is inferred from POSITIVE EVIDENCE
+        /// that a resource belongs to the tenant, not from a list of resource-type names:
+        ///
+        /// 1. A SharePoint list-item id. Microsoft documents ListItemUniqueId as the "unique identifier
+        ///    for a SharePoint item", so a real one only exists for an item in the tenant's own
+        ///    SharePoint or OneDrive.
+        /// 2. A sensitivity label id. Labels are applied by the tenant's own Purview policy; content
+        ///    from the public web does not carry one.
+        /// 3. A SiteUrl on a Microsoft 365 tenant-content host, across the worldwide and sovereign
+        ///    clouds - see CopilotAccessedResourceTaxonomy.IsTenantContentUrl.
+        /// 4. Failing all of those, a Type value that names tenant content.
+        ///
+        /// Why not an allowlist of Type values: Microsoft publishes no enumeration for that field
+        /// (https://learn.microsoft.com/en-us/purview/audit-copilot#common-properties-in-copilot-audit-logs
+        /// describes it as carrying "values like the filetype extension ... or ... the type of resource
+        /// (for non-SharePoint resources)"), and one of the commonest values in practice - CITATION -
+        /// describes how the resource was used rather than what it is. An allowlist therefore silently
+        /// misclassifies whatever Microsoft adds next, which is exactly what happened in #469.
+        ///
+        /// A resource is only dismissed on positive evidence that it came from outside the tenant: a
+        /// type that marks external grounding, or a SiteUrl that resolves to a host which is not the
+        /// tenant's. That is a real finding and is quite different from a resource that says nothing.
+        ///
+        /// An unclassifiable resource - one with neither kind of evidence - is charged rather than
+        /// waved through. Microsoft documents AccessedResources as the resources Copilot accessed in
+        /// order to answer, so an entry with nothing to place it outside the tenant is more likely
+        /// tenant content than not, and the previous behaviour of quietly choosing the cheaper answer
+        /// understated the estimate by 10 credits per response message. The count is reported so the
+        /// assumption is visible: see <see cref="UnclassifiedResources"/> and
+        /// <see cref="TenantGraphGroundingBasis"/>.
+        ///
+        /// Deliberately NOT used: AISystemPlugin.Id == "BingWebSearch". Microsoft documents that as
+        /// the way to tell that Copilot referenced the public web, but their own schema example shows
+        /// it alongside an accessed Microsoft 365 document, so it cannot rule tenant grounding out.
         /// </summary>
         /// <param name="accessedResources">List of resources accessed during the Copilot interaction</param>
-        /// <returns>True if any Microsoft Graph tenant resources were accessed, false for web-only or no resources</returns>
-        private static bool HasTenantGraphResources(List<AccessedResource> accessedResources)
+        private static TenantGroundingAssessment AssessTenantGrounding(List<AccessedResource> accessedResources)
         {
             if (accessedResources == null || accessedResources.Count == 0)
             {
-                return false;
+                return new TenantGroundingAssessment
+                {
+                    IsTenantGrounded = false,
+                    UnclassifiedResources = 0,
+                    Basis = CopilotTenantGroundingBasis.NoResources,
+                };
             }
 
-            // Resource types that indicate tenant graph grounding
-            // These are Microsoft Graph entities that represent tenant data
-            var tenantGraphResourceTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                // SharePoint & OneDrive
-                "Site", "Web", "List", "Folder", "File",
-                "docx", "xlsx", "pptx", "pdf", "txt", "doc", "xls", "ppt",
-                
-                // Email & Calendar
-                "EmailMessage", "Email", "Message", "MailFolder", "Calendar", "Event",
-                
-                // Teams
-                "Team", "Channel", "Chat", "TeamsMessage", "TeamsMeeting",
-                
-                // Other Microsoft Graph entities
-                "User", "Group", "Contact", "Task", "Planner", "OneNote",
-                "Drive", "DriveItem"
-            };
+            var hasTenantResource = false;
+            var unclassified = 0;
 
-            // Check if any accessed resource is a tenant graph resource
             foreach (var resource in accessedResources)
             {
-                // Check resource type field
-                if (!string.IsNullOrEmpty(resource.Type) && tenantGraphResourceTypes.Contains(resource.Type))
+                if (HasTenantResourceEvidence(resource))
                 {
-                    return true;
+                    hasTenantResource = true;
+                    continue;
                 }
 
-                // Check if SiteUrl contains Microsoft 365 service indicators
-                if (!string.IsNullOrEmpty(resource.SiteUrl))
+                // The only things that let a resource be dismissed are positive markers that it came
+                // from outside the tenant: a type that says so, or a SiteUrl that resolves to a host
+                // which is not the tenant's. Everything else is unclassified.
+                if (HasExternalGroundingEvidence(resource))
                 {
-                    var siteUrlLower = resource.SiteUrl.ToLower();
-
-                    // Teams file URLs contain specific patterns
-                    if (siteUrlLower.Contains("sharepoint.com") ||
-                        siteUrlLower.Contains("onedrive.") ||
-                        siteUrlLower.Contains("outlook.office") ||
-                        siteUrlLower.Contains("teams.microsoft.com") ||
-                        siteUrlLower.Contains("asyncgw.teams.microsoft.com"))  // Teams async gateway for file access
-                    {
-                        return true;
-                    }
+                    continue;
                 }
+
+                unclassified++;
             }
 
-            // No tenant resources found - likely web search only
-            return false;
+            if (hasTenantResource)
+            {
+                return new TenantGroundingAssessment
+                {
+                    IsTenantGrounded = true,
+                    UnclassifiedResources = unclassified,
+                    Basis = CopilotTenantGroundingBasis.TenantResource,
+                };
+            }
+
+            if (unclassified > 0)
+            {
+                return new TenantGroundingAssessment
+                {
+                    IsTenantGrounded = true,
+                    UnclassifiedResources = unclassified,
+                    Basis = CopilotTenantGroundingBasis.UnclassifiedResource,
+                };
+            }
+
+            return new TenantGroundingAssessment
+            {
+                IsTenantGrounded = false,
+                UnclassifiedResources = 0,
+                Basis = CopilotTenantGroundingBasis.ExternalOnly,
+            };
+        }
+
+        /// <summary>
+        /// Whether one accessed resource carries positive evidence of belonging to the tenant.
+        ///
+        /// <c>Id</c> and <c>Name</c> are deliberately not treated as evidence: a public web result also
+        /// has an identifier and a human-readable name, so their presence distinguishes nothing.
+        /// </summary>
+        private static bool HasTenantResourceEvidence(AccessedResource resource)
+        {
+            if (resource == null) return false;
+
+            if (IsMeaningfulIdentifier(resource.ListItemUniqueId)) return true;
+            if (IsMeaningfulIdentifier(resource.SensitivityLabelId)) return true;
+            if (CopilotAccessedResourceTaxonomy.IsTenantContentUrl(resource.SiteUrl)) return true;
+
+            return CopilotAccessedResourceTaxonomy.Classify(resource.Type) == CopilotResourceTypeKind.TenantContent;
+        }
+
+        /// <summary>
+        /// Whether one accessed resource carries positive evidence of having come from OUTSIDE the
+        /// tenant - either a type that says so, or a SiteUrl on a host that is not the tenant's.
+        ///
+        /// Only called once tenant evidence has been ruled out, so the two can never both apply.
+        /// "The record says where this lives and it is not in the tenant" is a genuine finding; it is
+        /// not the same as a resource that says nothing at all, which stays unclassified.
+        /// </summary>
+        private static bool HasExternalGroundingEvidence(AccessedResource resource)
+        {
+            if (resource == null) return false;
+
+            if (CopilotAccessedResourceTaxonomy.Classify(resource.Type) == CopilotResourceTypeKind.ExternalGrounding)
+            {
+                return true;
+            }
+
+            return CopilotAccessedResourceTaxonomy.IsExternalWebUrl(resource.SiteUrl);
+        }
+
+        /// <summary>
+        /// Whether an identifier field actually identifies something. The audit payload carries an
+        /// all-zero GUID as a placeholder where a resource has no such identifier, and treating that
+        /// as evidence would make the check true for every resource in the record.
+        /// </summary>
+        private static bool IsMeaningfulIdentifier(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+
+            Guid parsed;
+            if (Guid.TryParse(value.Trim(), out parsed) && parsed == Guid.Empty) return false;
+
+            return true;
         }
 
         /// <summary>

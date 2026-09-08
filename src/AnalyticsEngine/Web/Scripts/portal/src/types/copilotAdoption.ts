@@ -38,6 +38,29 @@ export enum AdoptionBand {
   Champion = 5,
 }
 
+/**
+ * What a Copilot audit record's `AccessedResources[].Type` value actually describes. Numeric values
+ * match the C# CopilotResourceTypeKind enum.
+ *
+ * Microsoft publishes no enumeration for that field - the Purview docs describe it as carrying
+ * "values like the filetype extension (pptx, docx, etc.) or ... the type of resource (for
+ * non-SharePoint resources)" - so a value this version does not recognise is Unclassified rather
+ * than being folded into one of the other buckets. See issue #468.
+ */
+export enum CopilotResourceTypeKind {
+  Unclassified = 0,
+  TenantContent = 1,
+  UsageRole = 2,
+  ExternalGrounding = 3,
+}
+
+/** One row of the "what Copilot referenced" breakdown: a raw audit Type value and what it means. */
+export interface AdoptionResourceTypeRow {
+  label: string;
+  value: number;
+  kind: CopilotResourceTypeKind;
+}
+
 /** Which imports supplied the data, so no headline number is quoted without its caveats. */
 export interface AdoptionDataSources {
   auditAvailable: boolean;
@@ -265,7 +288,7 @@ export interface CopilotAdoptionSummary {
   scoreProfiles: AdoptionScoreProfile[];
   concentration: AdoptionConcentrationBand[];
   combinedByDepartment: AdoptionCombinedSegmentRow[];
-  topResourceTypes: ReportCategory[];
+  topResourceTypes: AdoptionResourceTypeRow[];
   agents: AgentEstateSummary;
   unlicensed: UnlicensedPopulationSummary;
 

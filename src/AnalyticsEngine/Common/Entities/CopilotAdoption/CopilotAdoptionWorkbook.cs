@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using Common.Entities.Xlsx;
 using System;
 using System.Collections.Generic;
@@ -619,12 +620,15 @@ namespace Common.Entities.CopilotAdoption
             {
                 sheet.AddBlankRow();
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "What Copilot grounded its answers in. The clearest evidence available that Copilot is doing "
-                    + "work on your own content rather than answering generic questions any free chatbot could."));
-                sheet.AddHeaderRow("Resource type", "References");
+                    "What Copilot referenced. These are Microsoft's own AccessedResources.Type values from the "
+                    + "audit log, which are not one taxonomy: the Kind column says whether a value names a kind "
+                    + "of organisational content, describes how the resource was used, or marks grounding from "
+                    + "outside the tenant. A file Copilot cited is typed CITATION rather than by its file type, "
+                    + "so the file-type rows undercount real file references."));
+                sheet.AddHeaderRow("Resource type", "Kind", "References");
                 foreach (var type in summary.TopResourceTypes)
                 {
-                    sheet.AddRow(type.Label, type.Value);
+                    sheet.AddRow(type.Label, CopilotAccessedResourceTaxonomy.KindLabel(type.Kind), type.Value);
                 }
             }
         }
