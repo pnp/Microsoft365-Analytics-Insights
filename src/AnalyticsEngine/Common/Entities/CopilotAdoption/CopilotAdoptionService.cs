@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -706,9 +707,13 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// What kinds of tenant content Copilot actually grounded its answers in. The clearest
-        /// available evidence that Copilot is doing work on the organisation's own data rather than
-        /// answering generic questions any free chatbot could.
+        /// How Microsoft's audit log typed the resources Copilot referenced when answering, with each
+        /// value classified by what it actually describes.
+        ///
+        /// The classification is the point: <c>AccessedResources[].Type</c> mixes file kinds, Graph
+        /// entity names, how the resource was used (CITATION) and grounding from outside the tenant
+        /// (WebSearchQuery) in one field, so charting the raw values as "kinds of tenant content" was
+        /// wrong for the largest bucket. See <see cref="CopilotAccessedResourceTaxonomy"/> and #468.
         /// </summary>
         private async Task BuildResourceTypesAsync(
             CopilotAdoptionAnalysis analysis,
@@ -734,7 +739,15 @@ namespace Common.Entities.CopilotAdoption
             if (rows == null) return;
 
             analysis.Summary.TopResourceTypes = rows
-                .Select(r => new AdoptionCategory { Label = r.Label, Value = r.Value })
+                .Select(r => new AdoptionResourceTypeRow
+                {
+                    Label = r.Label,
+                    Value = r.Value,
+                    // The query already substituted its own label for a missing type, which the
+                    // taxonomy does not recognise and so classifies as Unclassified - which is what a
+                    // reference with no type is.
+                    Kind = CopilotAccessedResourceTaxonomy.Classify(r.Label),
+                })
                 .ToList();
         }
 

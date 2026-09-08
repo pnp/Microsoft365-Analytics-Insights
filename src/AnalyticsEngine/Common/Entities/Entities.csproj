@@ -111,6 +111,7 @@
     <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
     <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
+    <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
