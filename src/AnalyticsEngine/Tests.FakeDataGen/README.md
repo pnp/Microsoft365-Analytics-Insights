@@ -25,6 +25,10 @@ Exact completed reruns are read-only no-ops; other existing targets are refused.
 reproducibility. `--help` lists all flags and the deliberately unsupported datasets.
 The operator guide lives in the wiki: [Synthetic demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data).
 
+The same demo is the **first option on the interactive menu**, so it can be run
+without knowing any of the flags - see
+[Full synthetic demo](#full-synthetic-demo-contoso) below.
+
 The older, independent interactive generator/stress-test menu is still available:
 
 ```
@@ -32,7 +36,8 @@ Tests.FakeDataGen.exe "<SQL Connection String>"
 ```
 
 The connection string is optional. Options that need SQL will refuse to run
-without one; stress tests that work in-memory still run.
+without one; stress tests that work in-memory still run. The synthetic demo
+option never uses it - it always creates its own new LocalDB database.
 
 The first time a menu option that needs the database runs in a session, the
 host invokes `App.ControlPanel.Engine.DatabaseUpgrader.CheckDbUpgraded` against
@@ -47,17 +52,20 @@ When launched, an interactive menu is shown:
 
 ```
 DATA GENERATION
-  1. Generate fake Copilot activity
-  2. Generate fake O365 audit activity
-  3. Generate combined profiling data (O365 + Copilot)
+  1. Generate a complete synthetic demo database (Contoso, new LocalDB database)
+  2. Generate fake Copilot activity
+  3. Generate fake O365 audit activity
+  4. Generate combined profiling data (O365 + Copilot)
+  5. Generate fake Copilot prompt history (AI interaction history)
 
 STRESS TESTS
-  4. ActivityAPI import stress test
-  5. ActivityAPI import stress test (DB-backed, COLD+WARM)
-  6. Copilot event import stress test
-  7. Power Platform event import stress test
-  8. Sent email importer stress test
-  9. User activity data stress test (profiling SQL inputs)
+  6. ActivityAPI import stress test
+  7. ActivityAPI import stress test (DB-backed, COLD+WARM)
+  8. Copilot event import stress test
+  9. Copilot Adoption page performance test (read-only, before/after)
+  10. Power Platform event import stress test
+  11. Sent email importer stress test
+  12. User activity data stress test (profiling SQL inputs)
 
   0. Exit
 ```
@@ -70,7 +78,7 @@ Tests.FakeDataGen/
 ├── App.config                # EF + Azure binding redirects
 ├── Copilot/                  # realistic Copilot data generators
 │   └── SQL/                  # refusal-only compatibility stub for the retired shaper
-├── Demo/                     # safe single-command generator, calendar, plan and bounded SQL sink
+├── Demo/                     # safe single-command + menu generator, calendar, plan and bounded SQL sink
 ├── Generation/               # shared synthetic activity helpers
 ├── Office365/                # O365 audit activity generator
 ├── Seeding/                  # shared user / license / lookup seed data
@@ -97,6 +105,38 @@ a company, a realistic account-enabled state, a UPN on one of several tenant
 domains, and a manager in their own company.
 
 ## Data generation
+
+### Full synthetic demo (Contoso)
+
+Menu option 1 is the interactive front end for the `demo` command. It asks for
+the values the flags carry - preview or a new database name, then optionally
+population size, SKU count, history length, end date, seed, Copilot licence
+percentage, activity mix, weekly profile compilation, SQL batch size and a JSON
+summary path. Every question that shapes the data offers the command line's own
+default, so pressing Enter through the prompts produces exactly the documented
+`demo` data set. The only menu-invented default is the timestamped target name,
+because the command line has no default target.
+
+Before it starts, it prints a summary and the **equivalent command line**, which
+records exactly what was chosen:
+
+```
+Equivalent command line: Tests.FakeDataGen.exe demo --database ContosoDemo_20260901_134530
+  --as-of 2026-09-01 --users 1000 --skus 50 --days 180 --seed 42 --copilot-percent 60
+  --mix 30,35,20,8,7 --batch-size 250
+```
+
+`--as-of` is always emitted explicitly, so the line still describes the same
+window on a later day. To generate another copy from it, give `--database` (and
+`--output`, if one was chosen) new names: a completed target is a read-only
+no-op and an existing summary file is never overwritten. The default target name
+is timestamped because demo targets are never reset.
+
+The menu option only chooses flag values: `DemoCommand` still parses and
+validates them, so the LocalDB-only rule, the `ContosoDemo_` name restriction,
+the refusal of unmarked or changed targets and the read-only no-op on an
+identical rerun apply exactly as they do on the command line. It ignores the
+connection string the tool was started with.
 
 ### Copilot activity
 
@@ -199,12 +239,13 @@ behaviour, verbosity) and reports:
 
 | # | Test | Purpose |
 | - | ---- | ------- |
-| 4 | `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
-| 5 | `ActivityApiDbStressTest` | Drives the real SQL persistence path through repeatable cold and warm scenarios. |
-| 6 | `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
-| 7 | `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across the four Power Platform workloads (Power Apps, Power Automate, Power BI, Copilot Studio). |
-| 8 | `SentEmailImporterStressTest` | Exercises sent-email persistence and sentiment-scoring boundaries with synthetic messages. |
-| 9 | `UserActivityStressTest` | Bulk-loads the user + license + per-workload activity tables so the profiling SQL in `App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql` can be exercised against realistic volumes. After the seed, optionally invokes `[profiling].[usp_CompileWeekly]` to roll the daily rows into the weekly profiling tables straight away (the same proc that `WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/Weekly.ps1` runs on schedule). |
+| 6 | `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
+| 7 | `ActivityApiDbStressTest` | Drives the real SQL persistence path through repeatable cold and warm scenarios. |
+| 8 | `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
+| 9 | `CopilotAdoptionPerfTest` | Read-only before/after timing of the Copilot Adoption page's analysis against an existing database. |
+| 10 | `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across the four Power Platform workloads (Power Apps, Power Automate, Power BI, Copilot Studio). |
+| 11 | `SentEmailImporterStressTest` | Exercises sent-email persistence and sentiment-scoring boundaries with synthetic messages. |
+| 12 | `UserActivityStressTest` | Bulk-loads the user + license + per-workload activity tables so the profiling SQL in `App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql` can be exercised against realistic volumes. After the seed, optionally invokes `[profiling].[usp_CompileWeekly]` to roll the daily rows into the weekly profiling tables straight away (the same proc that `WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/Weekly.ps1` runs on schedule). |
 
 ### Adding a new stress test
 
