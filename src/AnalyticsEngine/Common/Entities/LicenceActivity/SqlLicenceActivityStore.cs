@@ -794,6 +794,8 @@ namespace Common.Entities.LicenceActivity
             AddDate(command, "@endExclusive", query.EndExclusiveUtc);
             AddDate(command, "@settled", sources.NowUtc.Date.AddDays(-3));
             AddDate(command, "@now", sources.NowUtc.Date);
+            command.Parameters.Add("@groupFiltered", SqlDbType.Bit).Value =
+                sources.UsageReportsGroupFiltered;
             AddNullableInt(command, "@departmentId", query.DepartmentId);
             AddNullableInt(command, "@countryId", query.CountryId);
         }

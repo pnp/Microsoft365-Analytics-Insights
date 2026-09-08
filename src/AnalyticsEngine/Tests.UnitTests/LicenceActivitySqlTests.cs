@@ -1,7 +1,9 @@
 using Common.Entities.LicenceActivity;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -213,10 +215,12 @@ VALUES
     (20, 0, 0, 0, 1, '2000-06-18T12:00:00', '2000-06-18T23:59:59'),
     (3000, 0, 0, 0, 2, '2000-06-16', '2000-06-16'),
     (3000, 0, 0, 0, 2, '2000-06-24', '2000-06-24');
+-- Every one of this person's rows inside the period reports a last-activity date OUTSIDE the week
+-- it sits in, however large its counters are. Big rolling counters are not activity in that week.
 UPDATE dbo.onedrive_user_activity_log
-SET last_activity_date = CASE WHEN [date] = '2000-06-18'
+SET last_activity_date = CASE WHEN [date] < '2000-06-19'
                              THEN '2000-06-13' ELSE '2000-06-24' END
-WHERE user_id = 2 AND [date] IN ('2000-06-18', '2000-06-23');
+WHERE user_id = 2 AND [date] >= '2000-06-14' AND [date] < '2000-06-24';
 UPDATE dbo.onedrive_user_activity_log SET last_activity_date = '2000-06-19'
 WHERE user_id = 4;
 DELETE dbo.onedrive_user_activity_log WHERE user_id = 3 AND [date] = '2000-06-23';");
@@ -229,9 +233,10 @@ DELETE dbo.onedrive_user_activity_log WHERE user_id = 3 AND [date] = '2000-06-23
                 var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
                     .Workloads.Single(w => w.Workload == "onedrive");
                 Assert.AreEqual(1, distribution.High);
-                Assert.AreEqual(1, distribution.Moderate);
+                Assert.AreEqual(2, distribution.Moderate);
                 Assert.AreEqual(2, distribution.Zero);
-                Assert.AreEqual(1, distribution.Unknown);
+                Assert.AreEqual(0, distribution.Unknown,
+                    "Both part-weeks were imported day by day, so nobody is unmeasured.");
                 CollectionAssert.AreEqual(new[] { "2000-06-18", "2000-06-23" },
                     overview.Coverage.Single(c => c.Workload == "onedrive")
                         .SnapshotDates.Select(d => d.ToString("yyyy-MM-dd")).ToArray());
@@ -243,14 +248,20 @@ DELETE dbo.onedrive_user_activity_log WHERE user_id = 3 AND [date] = '2000-06-23
                 var active = users.Users.Single(u => u.UserId == 1)
                     .Workloads.Single(w => w.Workload == "onedrive");
                 Assert.AreEqual(2, active.ActiveSamples);
-                Assert.AreEqual(12d, active.AverageActions.Value,
-                    "Average the per-day maxima (20 and 4), never sum or double-count duplicate snapshots.");
+                Assert.AreEqual(5.6d, active.AverageActions.Value, 0.000001,
+                    "Average the per-day maxima across the ten measured days (one 20, nine 4s), "
+                    + "never sum or double-count duplicate rows for the same day.");
                 Assert.AreEqual(0, users.Users.Single(u => u.UserId == 2)
-                    .Workloads.Single(w => w.Workload == "onedrive").ActiveSamples);
-                Assert.IsTrue(users.MostActive.Any(u => u.UserId == 3),
-                    "A missing sample must not erase positive partial evidence.");
-                Assert.IsFalse(users.LeastActive.Any(u => u.UserId == 3));
-                Assert.AreEqual(4, users.LeastActive.Count);
+                    .Workloads.Single(w => w.Workload == "onedrive").ActiveSamples,
+                    "Positive counters do not prove activity when every last-activity date "
+                    + "falls outside the week the row sits in.");
+                var lostOneDay = users.Users.Single(u => u.UserId == 3)
+                    .Workloads.Single(w => w.Workload == "onedrive");
+                Assert.AreEqual(1, lostOneDay.ActiveSamples);
+                Assert.AreEqual(2, lostOneDay.ObservedSamples,
+                    "Losing this person's row for one day leaves the week itself measured.");
+                Assert.IsTrue(users.MostActive.Any(u => u.UserId == 3));
+                Assert.AreEqual(5, users.LeastActive.Count);
             }
         }
 
@@ -291,7 +302,7 @@ CREATE TABLE #probe
         [DataRow(28, true)]
         [DataRow(90, true)]
         [DataRow(180, true)]
-        public async Task DistinctPinnedSampleCounts_PreserveMissingZeroDuplicatesAndExpectedBoundary(
+        public async Task DistinctWeeklyReadings_PreserveZeroDuplicatesAndExpectedBoundary(
             int days, bool columnstore)
         {
             using (var fixture = LicenceActivitySqlFixture.Create(
@@ -356,13 +367,15 @@ DELETE dbo.{table} WHERE user_id = 5
                     Assert.AreEqual(dates.Length, coverage.ExpectedSamples);
                     var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
                         .Workloads.Single(w => w.Workload == workload);
-                    Assert.AreEqual(1, distribution.Zero);
-                    Assert.AreEqual(2, distribution.Unknown);
-                    Assert.AreEqual(2, distribution.High + distribution.Moderate + distribution.Low,
-                        "Two complete users have positive evidence.");
-                    Assert.AreEqual(3,
+                    Assert.AreEqual(2, distribution.Zero,
+                        "The explicit-zero user and the user with no rows at all are both measured zeros.");
+                    Assert.AreEqual(0, distribution.Unknown,
+                        "Every week was imported in full, so nobody is unmeasured.");
+                    Assert.AreEqual(3, distribution.High + distribution.Moderate + distribution.Low,
+                        "Three users have positive evidence.");
+                    Assert.AreEqual(5,
                         distribution.High + distribution.Moderate + distribution.Low + distribution.Zero,
-                        "Exactly three users have complete evidence at the expected-sample boundary.");
+                        "Everyone holding the licence has complete evidence at the expected-reading boundary.");
                     var users = await fixture.Store().LoadUsersAsync(
                         overview, query.ForUsers(1, workload, null, "activity", "desc", 5, 1, 20,
                             LicenceActivitySqlFixture.NowUtc),
@@ -371,24 +384,30 @@ DELETE dbo.{table} WHERE user_id = 5
                     Assert.AreEqual(dates.Length, active.ActiveSamples);
                     Assert.AreEqual(dates.Length, active.ObservedSamples);
                     Assert.AreEqual((workload == "teams" || workload == "outlook" ? 5d : 4d)
-                        + 16d / dates.Length, active.AverageActions.Value, 0.000001);
+                        + 16d / days, active.AverageActions.Value, 0.000001,
+                        "Average actions stays a per-report-day figure, so duplicate rows for one day "
+                        + "collapse to that day's maximum and the extra 16 is spread over the days measured.");
                     var explicitZero = users.Users.Single(u => u.UserId == 4)
                         .Workloads.Single(w => w.Workload == workload);
                     Assert.AreEqual("zero", explicitZero.Band);
                     Assert.AreEqual(dates.Length, explicitZero.ObservedSamples);
                     Assert.AreEqual(0, explicitZero.ActiveSamples);
-                    var partial = users.Users.Single(u => u.UserId == 3)
+                    var lostOneDay = users.Users.Single(u => u.UserId == 3)
                         .Workloads.Single(w => w.Workload == workload);
-                    Assert.AreEqual("partial", partial.Status);
-                    Assert.AreEqual(dates.Length - 1, partial.ObservedSamples);
-                    Assert.IsFalse(users.LeastActive.Any(u => u.UserId == 3 || u.UserId == 5));
+                    Assert.AreEqual("available", lostOneDay.Status,
+                        "Losing one of a person's report days does not unmeasure them: the week around "
+                        + "it was still imported in full.");
+                    Assert.AreEqual(dates.Length, lostOneDay.ObservedSamples);
+                    Assert.AreEqual(1, lostOneDay.ActiveSamples);
+                    CollectionAssert.Contains(users.LeastActive.Select(u => u.UserId).ToList(), 5);
                     Assert.IsTrue(users.MostActive.Any(u => u.UserId == 3));
                     var absent = users.Users.Single(u => u.UserId == 5)
                         .Workloads.Single(w => w.Workload == workload);
-                    Assert.AreEqual("missingCoverage", absent.Status);
-                    Assert.AreEqual(0, absent.ObservedSamples);
+                    Assert.AreEqual("available", absent.Status);
+                    Assert.AreEqual(dates.Length, absent.ObservedSamples);
                     Assert.AreEqual(0, absent.ActiveSamples);
-                    Assert.IsNull(absent.AverageActions);
+                    Assert.AreEqual("zero", absent.Band);
+                    Assert.AreEqual(0d, absent.AverageActions.Value);
                 }
             }
         }
@@ -437,18 +456,19 @@ DELETE dbo.{table} WHERE user_id = 5 AND [date] = '2000-06-25T12:00:00';");
                 Assert.AreEqual(1, coverage.ExpectedSamples);
                 Assert.AreEqual(1, coverage.ObservedSamples);
                 Assert.AreEqual(1, distribution.High,
-                    "Duplicate rows on the one pinned day are still one observed active sample.");
-                Assert.AreEqual(3, distribution.Zero);
-                Assert.AreEqual(1, distribution.Unknown);
+                    "Duplicate rows on the same report day are still one observed active week.");
+                Assert.AreEqual(4, distribution.Zero,
+                    "Everyone else was measured across a week imported in full and did nothing in it, "
+                    + "including the user with no report rows at all.");
+                Assert.AreEqual(0, distribution.Unknown);
                 Assert.AreEqual(0, distribution.Moderate + distribution.Low);
                 Assert.AreEqual(5, users.TotalUsers);
                 foreach (var user in users.Users)
                 {
                     var evidence = user.Workloads.Single(w => w.Workload == workload);
-                    var expectedBand = user.UserId == 1 ? "high"
-                        : user.UserId == 3 ? "unknown" : "zero";
-                    Assert.AreEqual(expectedBand, evidence.Band);
-                    Assert.AreEqual(user.UserId == 3 ? 0 : 1, evidence.ObservedSamples);
+                    Assert.AreEqual(user.UserId == 1 ? "high" : "zero", evidence.Band);
+                    Assert.AreEqual(1, evidence.ObservedSamples,
+                        "Observed readings are a property of the import, not of the person.");
                     Assert.AreEqual(user.UserId == 1 ? 1 : 0, evidence.ActiveSamples);
                 }
                 var active = users.Users.Single(u => u.UserId == 1)
@@ -459,11 +479,11 @@ DELETE dbo.{table} WHERE user_id = 5 AND [date] = '2000-06-25T12:00:00';");
                 CollectionAssert.AreEquivalent(new[] { 1 },
                     users.MostActive.Where(u => u.Workloads.Single(w => w.Workload == workload)
                         .ActiveSamples > 0).Select(u => u.UserId).ToArray());
-                Assert.IsFalse(users.MostActive.Any(u => u.UserId == 3));
-                CollectionAssert.AreEquivalent(new[] { 1, 2, 4, 5 },
+                CollectionAssert.AreEquivalent(new[] { 1, 2, 3, 4, 5 },
                     users.LeastActive.Select(u => u.UserId).ToArray());
-                Assert.IsNull(users.Users.Single(u => u.UserId == 3)
-                    .Workloads.Single(w => w.Workload == workload).AverageActions);
+                Assert.AreEqual(0d, users.Users.Single(u => u.UserId == 3)
+                    .Workloads.Single(w => w.Workload == workload).AverageActions.Value,
+                    "A person with no rows across a fully imported week did nothing, measurably.");
             }
         }
 
@@ -512,9 +532,10 @@ DELETE dbo.{table} WHERE user_id = 5 AND [date] = '2000-06-25T12:00:00';");
                 var teams = partial.Coverage.Single(c => c.Workload == "teams");
                 Assert.AreEqual("partial", teams.Status);
                 Assert.AreEqual(9, teams.ExpectedSamples);
-                Assert.AreEqual(8, teams.ObservedSamples,
-                    "The Thursday snapshot is valid as-of evidence, while the unsettled July 2 row is excluded.");
-                Assert.AreEqual("2000-06-22", teams.SnapshotDates.Last().ToString("yyyy-MM-dd"));
+                Assert.AreEqual(7, teams.ObservedSamples,
+                    "The week holding only Monday-to-Thursday reports was not imported in full, and the "
+                    + "week ending after the settled date is excluded outright.");
+                Assert.AreEqual("2000-06-18", teams.SnapshotDates.Last().ToString("yyyy-MM-dd"));
                 Assert.AreEqual(5, partial.Licences.Single(l => l.LicenceTypeId == 1)
                     .Workloads.Single(w => w.Workload == "teams").Unknown);
                 Assert.AreEqual("notImported",
@@ -559,8 +580,14 @@ DELETE dbo.{table} WHERE user_id = 5 AND [date] = '2000-06-25T12:00:00';");
         }
 
         [TestMethod]
-        public async Task PerUserMissingRows_AreUnknownAndNeverLeastActive()
+        public async Task PerUserMissingRows_AreMeasuredZeroWhileMissingReportDaysStayUnknown()
         {
+            // The rule this pins down: the Graph daily user-detail reports return only the people who
+            // did something that day, so across a week that was imported in full an absent person is
+            // measured evidence of NO activity. Unknown is reserved for a genuine hole in the
+            // measurement - a report DAY nobody has - which is a property of the import, not of a
+            // person. Before this, being quiet was indistinguishable from being unmeasured, and a
+            // real tenant came back over 97% Unknown for exactly that reason.
             using (var fixture = CreateMeasuredFixture())
             {
                 fixture.Execute(@"
@@ -584,30 +611,32 @@ WHERE user_id = 3 AND [date] = '2000-05-14';");
 
                 Assert.AreEqual("available",
                     overview.Coverage.Single(c => c.Workload == "teams").Status,
-                    "Other users still prove that every global snapshot date exists.");
+                    "Other users still prove that every report day of every week was imported.");
                 var distribution = overview.Licences.Single(l => l.LicenceTypeId == 1)
                     .Workloads.Single(w => w.Workload == "teams");
                 Assert.AreEqual(1, distribution.High);
                 Assert.AreEqual(1, distribution.Moderate);
-                Assert.AreEqual(0, distribution.Low);
-                Assert.AreEqual(1, distribution.Zero);
-                Assert.AreEqual(2, distribution.Unknown);
+                Assert.AreEqual(1, distribution.Low);
+                Assert.AreEqual(2, distribution.Zero);
+                Assert.AreEqual(0, distribution.Unknown,
+                    "Nobody is Unknown while every week was imported in full.");
                 foreach (var workload in new[] { "outlook", "onedrive", "sharepoint" })
                 {
                     var other = overview.Licences.Single(l => l.LicenceTypeId == 1)
                         .Workloads.Single(w => w.Workload == workload);
-                    Assert.AreEqual(1, other.Zero, workload);
-                    Assert.AreEqual(2, other.Unknown, workload);
+                    Assert.AreEqual(2, other.Zero, workload);
+                    Assert.AreEqual(0, other.Unknown, workload);
                 }
 
                 var greekDepartment = overview.Departments.Single(d => d.Id == 2)
                     .Workloads.Single(w => w.Workload == "teams");
-                Assert.AreEqual(1, greekDepartment.Unknown,
-                    "A user missing one weekly row is unknown in demographic aggregates.");
+                Assert.AreEqual(0, greekDepartment.Unknown,
+                    "Losing one day of a fully imported week changes nothing for that person.");
                 var unknownDepartment = overview.Departments.Single(d => d.Id == 0)
                     .Workloads.Single(w => w.Workload == "teams");
-                Assert.AreEqual(1, unknownDepartment.Unknown,
-                    "A user missing every weekly row is unknown in demographic aggregates.");
+                Assert.AreEqual(1, unknownDepartment.Zero,
+                    "A user with no report rows at all is a measured zero in demographic aggregates.");
+                Assert.AreEqual(0, unknownDepartment.Unknown);
 
                 var users = await fixture.Store().LoadUsersAsync(
                     overview,
@@ -618,24 +647,56 @@ WHERE user_id = 3 AND [date] = '2000-05-14';");
                     NullLicenceActivityDiagnostics.Instance,
                     CancellationToken.None);
 
-                CollectionAssert.DoesNotContain(users.LeastActive.Select(u => u.UserId).ToList(), 3);
-                CollectionAssert.DoesNotContain(users.LeastActive.Select(u => u.UserId).ToList(), 5);
-                Assert.AreEqual("partial", users.Users.Single(u => u.UserId == 3)
-                    .Workloads.Single(w => w.Workload == "teams").Status);
-                Assert.AreEqual(7, users.Users.Single(u => u.UserId == 3)
-                    .Workloads.Single(w => w.Workload == "teams").ObservedSamples);
-                Assert.AreEqual("missingCoverage", users.Users.Single(u => u.UserId == 5)
-                    .Workloads.Single(w => w.Workload == "teams").Status);
-                Assert.AreEqual(0, users.Users.Single(u => u.UserId == 5)
-                    .Workloads.Single(w => w.Workload == "teams").ObservedSamples);
-                Assert.IsNull(users.Users.Single(u => u.UserId == 5)
-                    .Workloads.Single(w => w.Workload == "teams").AverageActions);
+                CollectionAssert.Contains(users.LeastActive.Select(u => u.UserId).ToList(), 5,
+                    "Someone proven to have done nothing belongs in the least-active list.");
+                var stillMeasured = users.Users.Single(u => u.UserId == 3)
+                    .Workloads.Single(w => w.Workload == "teams");
+                Assert.AreEqual("available", stillMeasured.Status);
+                Assert.AreEqual(8, stillMeasured.ObservedSamples);
+                Assert.AreEqual("low", stillMeasured.Band);
+                var absent = users.Users.Single(u => u.UserId == 5)
+                    .Workloads.Single(w => w.Workload == "teams");
+                Assert.AreEqual("available", absent.Status);
+                Assert.AreEqual(8, absent.ObservedSamples);
+                Assert.AreEqual(0, absent.ActiveSamples);
+                Assert.AreEqual(0d, absent.AverageActions.Value);
                 Assert.IsTrue(users.Users.Single(u => u.UserId == 5).Workloads
                     .Where(w => w.Workload != "copilot")
-                    .All(w => w.Status == "missingCoverage" && w.Band == "unknown"));
+                    .All(w => w.Status == "available" && w.Band == "zero"));
                 Assert.AreEqual("zero", users.Users.Single(u => u.UserId == 4)
                     .Workloads.Single(w => w.Workload == "teams").Band,
                     "A complete set of explicit zero rows remains a measured zero.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AMissingReportDay_MakesItsWholeWeekUnknownForEveryone()
+        {
+            // The other half of the rule above: absence only means "no activity" once the week behind
+            // it was imported in full. Lose one day and the week proves nothing either way, so the
+            // whole workload falls back to Unknown rather than quietly reporting the quiet people as
+            // inactive.
+            using (var fixture = CreateMeasuredFixture())
+            {
+                fixture.Execute(
+                    "DELETE FROM dbo.teams_user_activity_log WHERE [date] = '2000-06-20';");
+
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    OverviewQuery(), Sources(usageReports: true),
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+
+                var teams = overview.Coverage.Single(c => c.Workload == "teams");
+                Assert.AreEqual("partial", teams.Status);
+                Assert.AreEqual(8, teams.ExpectedSamples);
+                Assert.AreEqual(7, teams.ObservedSamples,
+                    "The week containing the missing Tuesday is no longer a measured reading.");
+                Assert.AreEqual(5, overview.Licences.Single(l => l.LicenceTypeId == 1)
+                    .Workloads.Single(w => w.Workload == "teams").Unknown);
+                Assert.AreEqual("available",
+                    overview.Coverage.Single(c => c.Workload == "outlook").Status,
+                    "One workload's import gap must not contaminate the others.");
+                Assert.AreEqual(0, overview.Licences.Single(l => l.LicenceTypeId == 1)
+                    .Workloads.Single(w => w.Workload == "outlook").Unknown);
             }
         }
 
@@ -1392,6 +1453,14 @@ VALUES
             SeedOneUsageTable(fixture, "sharepoint_user_activity_log", sampleDates);
         }
 
+        /// <summary>
+        /// Seeds one usage-report table for the given weekly readings.
+        ///
+        /// A reading is a WEEK, and licence activity only treats a week as measured when every one of
+        /// its days was imported - so each sample date here seeds its whole Monday-to-sample-date week,
+        /// which is what a healthy daily import actually leaves behind. Seeding only the week's last
+        /// day would model an import that ran once a week, and would (correctly) come back as partial.
+        /// </summary>
         internal static void SeedOneUsageTable(
             LicenceActivitySqlFixture fixture,
             string table,
@@ -1399,10 +1468,12 @@ VALUES
         {
             for (var index = 0; index < sampleDates.Length; index++)
             {
-                var date = sampleDates[index];
                 var activeUsers = index == 0
                     ? "1,2,3"
                     : index == 1 ? "1,2" : "1";
+                var days = string.Join(",", ReportDaysOfWeekEndingOn(sampleDates[index])
+                    .Select(day => "('" + day + "')"));
+                var spine = $"CROSS JOIN (VALUES {days}) AS reading(report_date)";
 
                 if (table == "teams_user_activity_log")
                 {
@@ -1423,9 +1494,9 @@ SELECT CASE WHEN id IN ({activeUsers}) THEN 2 ELSE 0 END,
        CASE WHEN id IN ({activeUsers}) THEN 1 ELSE 0 END,
        0, 0, 0, 0, 0, 0, 0, 0,
        CASE WHEN id IN ({activeUsers}) THEN 1 ELSE 0 END,
-       0, 0, id, '{date}',
-       CASE WHEN id IN ({activeUsers}) THEN '{date}' ELSE NULL END
-FROM dbo.users;");
+       0, 0, id, reading.report_date,
+       CASE WHEN id IN ({activeUsers}) THEN reading.report_date ELSE NULL END
+FROM dbo.users {spine};");
                 }
                 else if (table == "outlook_user_activity_log")
                 {
@@ -1436,9 +1507,9 @@ INSERT dbo.outlook_user_activity_log
 SELECT CASE WHEN id IN ({activeUsers}) THEN 2 ELSE 0 END,
        CASE WHEN id IN ({activeUsers}) THEN 1 ELSE 0 END,
        CASE WHEN id IN ({activeUsers}) THEN 3 ELSE 0 END,
-       0, 0, id, '{date}',
-       CASE WHEN id IN ({activeUsers}) THEN '{date}' ELSE NULL END
-FROM dbo.users;");
+       0, 0, id, reading.report_date,
+       CASE WHEN id IN ({activeUsers}) THEN reading.report_date ELSE NULL END
+FROM dbo.users {spine};");
                 }
                 else
                 {
@@ -1448,11 +1519,20 @@ INSERT dbo.{table}
      user_id, [date], last_activity_date)
 SELECT CASE WHEN id IN ({activeUsers}) THEN 4 ELSE 0 END,
        CASE WHEN id IN ({activeUsers}) THEN 1 ELSE 0 END,
-       0, 0, id, '{date}',
-       CASE WHEN id IN ({activeUsers}) THEN '{date}' ELSE NULL END
-FROM dbo.users;");
+       0, 0, id, reading.report_date,
+       CASE WHEN id IN ({activeUsers}) THEN reading.report_date ELSE NULL END
+FROM dbo.users {spine};");
                 }
             }
+        }
+
+        /// <summary>Monday through the given week-end date, inclusive, as yyyy-MM-dd.</summary>
+        internal static IEnumerable<string> ReportDaysOfWeekEndingOn(string weekEnd)
+        {
+            var end = DateTime.ParseExact(weekEnd, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var start = end.AddDays(-(((int)end.DayOfWeek + 6) % 7));
+            for (var day = start; day <= end; day = day.AddDays(1))
+                yield return day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
 
         private static LicenceActivityQuery OverviewQuery()

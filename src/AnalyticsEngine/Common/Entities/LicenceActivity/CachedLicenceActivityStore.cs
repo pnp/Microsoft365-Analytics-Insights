@@ -81,6 +81,7 @@ namespace Common.Entities.LicenceActivity
                 CopilotUsageReports = sources.CopilotUsageReports,
                 CopilotAudit = sources.CopilotAudit,
                 CopilotInteractions = sources.CopilotInteractions,
+                UsageReportsGroupFiltered = sources.UsageReportsGroupFiltered,
                 NowUtc = sources.NowUtc
             };
     }
