@@ -108,10 +108,14 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             LastCopilotCommitMs = swCopilot.Elapsed.TotalMilliseconds;
 
             // DLP commit. Deliberately AFTER the Copilot commit: copilot_dlp_events.copilot_chat_id is a
-            // foreign key to copilot_chats, and those rows are created by the Copilot merge above. Runs
-            // unconditionally because it serves two independently-toggled sources - Copilot-embedded DLP
-            // (which needs no DLP permission) and the DLP.All feed - and with nothing staged the merges
-            // return before opening a connection.
+            // foreign key to copilot_chats, and those rows are created by the Copilot merge above. Both
+            // DLP merges also INNER JOIN their parent (copilot_chats / audit_events) rather than assuming
+            // it exists - which is safe because audit_events is written by the staging merge BEFORE the
+            // metadata pass runs: SaveMetadataAsync re-reads the just-saved events out of the database to
+            // build eventsJustSavedById, and only events found there reach ProcessExtendedProperties.
+            // Runs unconditionally because it serves two independently-toggled sources - Copilot-embedded
+            // DLP (which needs no DLP permission) and the DLP.All feed - and with nothing staged the
+            // merges return before opening a connection.
             var swDlp = System.Diagnostics.Stopwatch.StartNew();
             await _dlpEventResolver.CommitAllChanges();
             swDlp.Stop();
