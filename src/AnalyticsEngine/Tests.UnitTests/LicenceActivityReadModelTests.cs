@@ -68,19 +68,54 @@ namespace Tests.UnitTests
             var result = model.BuildUsers(overview, query, CancellationToken.None);
 
             AssertEvidence(result, 1, "teams", "available", "zero");
-            AssertEvidence(result, 2, "teams", "missingCoverage", "unknown");
+            AssertEvidence(result, 2, "teams", "available", "zero");
             AssertEvidence(result, 3, "teams", "partial", "unknown");
             AssertEvidence(result, 4, "outlook", "disabled", "unknown");
             AssertEvidence(result, 2, "copilot", "partial", "unknown");
             CollectionAssert.Contains(result.MostActive.Select(user => user.UserId).ToList(), 3);
-            CollectionAssert.DoesNotContain(result.LeastActive.Select(user => user.UserId).ToList(), 2);
-            CollectionAssert.DoesNotContain(result.LeastActive.Select(user => user.UserId).ToList(), 3);
+            CollectionAssert.Contains(result.LeastActive.Select(user => user.UserId).ToList(), 2,
+                "Someone with no rows across a fully measured period did nothing, provably, so they "
+                + "belong in the least-active list rather than being withheld as unmeasured.");
+            CollectionAssert.DoesNotContain(result.LeastActive.Select(user => user.UserId).ToList(), 3,
+                "A short reading count is still incomplete evidence and stays out of least-active.");
 
             var teams = overview.Licences.Single().Workloads.Single(item => item.Workload == "teams");
-            Assert.AreEqual(1, teams.Zero);
-            Assert.AreEqual(3, teams.Unknown);
+            Assert.AreEqual(3, teams.Zero,
+                "The explicit zero plus the two people with no rows at all are all measured zeros.");
+            Assert.AreEqual(1, teams.Unknown,
+                "Only the person whose own evidence is incomplete stays Unknown.");
             Assert.AreEqual(0, overview.Licences.Single().Workloads
                 .Single(item => item.Workload == "copilot").Zero);
+        }
+
+        [TestMethod]
+        public void AGroupFilteredUsageImport_LeavesUnmeasuredPeopleUnknownRatherThanInactive()
+        {
+            // UserGroupsFilter scopes the usage-report import but NOT the user import, so the two
+            // populations differ. Calling someone inactive because they hold a licence and have no
+            // rows would then be a confident wrong answer about someone nobody ever looked at.
+            var model = Model(
+                new[] { Sku(1, "Contoso") },
+                Users(1, 2),
+                new[] { Member(1, 1), Member(2, 1) },
+                AvailableCoverage(),
+                Scores(("teams", 1, Score(4, 4))),
+                usageReportsGroupFiltered: true);
+            var overview = model.BuildOverview(Query(), CancellationToken.None);
+            var result = model.BuildUsers(
+                overview,
+                Query().ForUsers(1, "teams", null, "activity", "desc", 10, 1, 100, Now),
+                CancellationToken.None);
+
+            AssertEvidence(result, 1, "teams", "available", "high");
+            AssertEvidence(result, 2, "teams", "missingCoverage", "unknown");
+            var teams = overview.Licences.Single().Workloads.Single(item => item.Workload == "teams");
+            Assert.AreEqual(0, teams.Zero);
+            Assert.AreEqual(1, teams.Unknown);
+            CollectionAssert.DoesNotContain(result.LeastActive.Select(user => user.UserId).ToList(), 2);
+            CollectionAssert.Contains(overview.Messages,
+                LicenceActivityRules.Notes.UsageReportsGroupFiltered,
+                "The reader has to be told why those people are Unknown.");
         }
 
         [TestMethod]
@@ -346,8 +381,10 @@ namespace Tests.UnitTests
             IReadOnlyList<LicenceActivityDirectoryUser> users,
             IReadOnlyList<LicenceActivityMembership> memberships,
             IReadOnlyList<LicenceActivityCoverage> coverage,
-            IReadOnlyDictionary<string, IReadOnlyDictionary<int, LicenceActivityScore>> scores) =>
-            new LicenceActivityReadModel(Query(), licences, users, memberships, coverage, scores);
+            IReadOnlyDictionary<string, IReadOnlyDictionary<int, LicenceActivityScore>> scores,
+            bool usageReportsGroupFiltered = false) =>
+            new LicenceActivityReadModel(
+                Query(), licences, users, memberships, coverage, scores, usageReportsGroupFiltered);
 
         private static LicenceActivityQuery Query() =>
             LicenceActivityQuery.Create("2000-05-01", "2000-06-25", Now);

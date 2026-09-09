@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act, within, configure } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../test/renderWithProvider';
 import LicenceActivityPage from './LicenceActivityPage';
@@ -36,6 +36,20 @@ const mockAvailability = vi.mocked(fetchAvailability);
 const mockOverview = vi.mocked(fetchOverview);
 const mockUsers = vi.mocked(fetchUsers);
 const mockDownload = vi.mocked(downloadExport);
+
+// The report now mounts a Fluent TabList and a headline summary above the drill-down, so the full
+// availability -> overview -> users settle chain does a little more work on first paint. Give the
+// async matchers headroom over the 1000ms default (the jsdom render of the Fluent tree is slow), and
+// the whole-page integration tests a longer per-test budget than the 5s default.
+configure({ asyncUtilTimeout: 3000 });
+vi.setConfig({ testTimeout: 20000 });
+
+/** Reveal the People tab, where the per-user drill-down controls live. The drill-down is mounted
+ *  eagerly (so the export snapshot and users load exactly as before), but its buttons only become
+ *  reachable to role queries once its panel is the visible one. */
+function showPeopleTab(): void {
+  fireEvent.click(screen.getByRole('tab', { name: 'People' }));
+}
 
 const echo: LicenceActivityQueryEcho = {
   from: '2026-04-22',
@@ -282,6 +296,7 @@ describe('LicenceActivityPage - export', () => {
     await act(async () => {});
 
     const events = userEvent.setup();
+    showPeopleTab();
     const top = screen.getByRole('spinbutton', { name: 'Number of people in each list' });
     await events.clear(top);
     await events.type(top, '25');
@@ -420,6 +435,7 @@ describe('LicenceActivityPage - browse page survives an expiry refresh', () => {
     await act(async () => {});
 
     // Move off the defaults: a non-default workload and sort and search, then browse to page 2.
+    showPeopleTab();
     fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'outlook' } });
     await waitFor(() => expect(usersParams()).toMatchObject({ workload: 'outlook', page: 1 }));
     fireEvent.change(await screen.findByLabelText('Sort users'), { target: { value: 'upn:asc' } });
@@ -488,6 +504,7 @@ describe('LicenceActivityPage - a real scope change resets the browse page', () 
     await act(async () => {});
 
     // Browse to page 2 of the current (all-departments) scope.
+    showPeopleTab();
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(usersParams()).toMatchObject({ overviewId: 'ov-dept-all', page: 2 }));
 
@@ -554,9 +571,128 @@ describe('LicenceActivityPage - preview label', () => {
   it('explains cache lag, cold-load behaviour, and the no-judgement note', async () => {
     mockAvailability.mockResolvedValue(availability());
     await act(async () => { renderWithProvider(<LicenceActivityPage />); });
-    const note = screen.getByRole('note');
+    const note = screen.getByText(/This report is in preview/);
+    expect(note).toHaveAttribute('role', 'note');
     expect(note.textContent).toMatch(/5 minutes/i);
     expect(note.textContent).toMatch(/first look/i);
     expect(note.textContent).toMatch(/evidence of activity/i);
+  });
+});
+
+describe('LicenceActivityPage - information architecture (tabs)', () => {
+  // The single active (non-hidden) tab panel. Keep-mounted panels are hidden with the `hidden`
+  // attribute, so exactly one panel is exposed to the accessibility tree at a time.
+  const activePanel = () => screen.getByRole('tabpanel');
+
+  it('splits the report into four tabs and leads with a headline Overview', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'By service' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /By department/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'People' })).toBeInTheDocument();
+
+    const overview = activePanel();
+    expect(overview).toHaveAttribute('id', 'la-panel-overview');
+    expect(within(overview).getByText('People with a licence')).toBeVisible();
+    expect(within(overview).getByText('120')).toBeVisible(); // distinctAssignedUsers headline
+    expect(within(overview).getByText('Licence assignments')).toBeVisible();
+    expect(within(overview).getByRole('note')).toHaveTextContent(
+      'Unknown means insufficient data, not no activity. No activity means complete reporting data shows no usage.',
+    );
+    fireEvent.click(within(overview).getByText('Why is activity Unknown?'));
+    expect(within(overview).getByText(/The official Copilot usage report covers Copilot-licensed users only/)).toBeVisible();
+    expect(within(overview).getByText(/Under Where these figures come from, select Show data sources/)).toBeVisible();
+  });
+
+  it('demotes the coverage panel to a collapsible summary that still reveals every field', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findByRole('tab', { name: 'Overview' });
+
+    // Collapsed by default: the full provenance panel (its "held for up to" caption is unique to it)
+    // is not in the primary flow until asked for.
+    expect(screen.queryByText(/held for up to/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /show data sources/i }));
+    expect(screen.getByText(/held for up to/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Usage reports/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the per-service breakdown reachable, with the licence context, under By service', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findByRole('tab', { name: 'Overview' });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'By service' }));
+
+    const panel = activePanel();
+    expect(panel).toHaveAttribute('id', 'la-panel-byService');
+    expect(within(panel).getByText('Activity by service')).toBeVisible();
+    expect(within(panel).getByLabelText('Selected licence')).toBeVisible();
+    expect(within(panel).getAllByRole('note')).toHaveLength(WORKLOADS.length);
+    for (const w of WORKLOADS) {
+      expect(within(panel).getAllByText(w.label).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps the department and country breakdowns reachable under their tab', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findByRole('tab', { name: 'Overview' });
+
+    fireEvent.click(screen.getByRole('tab', { name: /By department/ }));
+
+    const panel = activePanel();
+    expect(panel).toHaveAttribute('id', 'la-panel-byDemographic');
+    expect(within(panel).getByText('Activity by department and country')).toBeVisible();
+    expect(within(panel).getByText('By department')).toBeVisible();
+    expect(within(panel).getByText('By country')).toBeVisible();
+    expect(within(panel).getAllByRole('note')).toHaveLength(2);
+    // Non-Latin (Greek) demographic values render, scoped to the breakdown (not the filter dropdown).
+    expect(within(panel).getByText('Μηχανικοί')).toBeVisible();
+    expect(within(panel).getByText('Ελλάδα')).toBeVisible();
+  });
+
+  it('keeps the per-user drill-down reachable under the People tab', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findByRole('tab', { name: 'Overview' });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }));
+
+    const panel = activePanel();
+    expect(panel).toHaveAttribute('id', 'la-panel-people');
+    expect(within(panel).getByText('People holding this licence')).toBeVisible();
+    expect(within(panel).getByLabelText('Selected licence')).toBeVisible();
+    await waitFor(() => expect(within(panel).getByText('Most active')).toBeVisible());
+    expect(within(panel).getByText('Least active')).toBeVisible();
+    expect(within(panel).getByText('Everyone with this licence')).toBeVisible();
+    expect(within(panel).getAllByText('ada@contoso.com').length).toBeGreaterThan(0);
+  });
+
+  it('switches the selected licence from the By service tab without leaving it', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findByRole('tab', { name: 'Overview' });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'By service' }));
+    const select = within(activePanel()).getByLabelText('Selected licence') as HTMLSelectElement;
+    expect(select.value).toBe('10'); // defaults to the most-assigned licence (E5, 100 users)
+
+    fireEvent.change(select, { target: { value: '20' } });
+    expect(activePanel()).toHaveAttribute('id', 'la-panel-byService'); // still on By service
+    expect(within(activePanel()).getByLabelText('Selected licence')).toHaveValue('20');
+  });
+
+  it('keeps the reporting-window control visible above the tabs on every tab', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />);
+    await screen.findByRole('tab', { name: 'Overview' });
+
+    expect(screen.getByRole('button', { name: 'Last settled week' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }));
+    expect(screen.getByRole('button', { name: 'Last settled week' })).toBeInTheDocument();
   });
 });

@@ -35,18 +35,27 @@ const BY_KEY: Record<string, BandDef> = Object.fromEntries(ACTIVITY_BANDS.map((b
  * "active days", which the figures only become if a service's source says so.
  */
 export const BAND_DESCRIPTIONS: Record<BandKey, string> = {
-  high: 'Active across three quarters or more of what was measured.',
-  moderate: 'Active across a quarter to under three quarters of what was measured.',
-  low: 'Active across under a quarter of what was measured, but active at least once.',
-  zero: 'Never active, across a period that was measured in full.',
-  unknown: 'The period could not be measured in full, so activity is not known - this does not mean zero.',
+  high: 'Active in three quarters or more of the weeks that were measured.',
+  moderate: 'Active in a quarter to under three quarters of the weeks that were measured.',
+  low: 'Active in under a quarter of the weeks that were measured, but active in at least one.',
+  zero: 'Complete reporting data shows no activity in any week for this user and period. Every week was measured in full.',
+  unknown:
+    'At least one week could not be measured in full, so there is not enough reporting data to determine activity ' +
+    'for this user and period. Reports or user rows may be missing, coverage may be incomplete, or usage counters ' +
+    'may be unavailable. This is not evidence of no activity.',
 };
+
+export const COPILOT_COVERAGE_NOTE =
+  'The official Copilot usage report covers Copilot-licensed users only. These charts can also include people with ' +
+  'other licences, so someone without a Copilot licence may appear as Unknown rather than inactive. ' +
+  'Unknown alone does not tell you whether someone has a Copilot licence.';
 
 /** A one-line summary of how the levels are worked out, for a column tooltip. */
 export const BAND_METHOD =
-  'Activity levels describe how much of the measured period someone was active in: ' +
-  'High = 75% or more, Moderate = 25\u201374%, Low = under 25%, No activity = never (across a period measured in full). ' +
-  'Where the period could not be measured in full the level is Unknown, not zero.';
+  "Activity levels describe how many of the period's weeks someone was active in: " +
+  'High = three quarters or more, Moderate = a quarter to under three quarters, Low = under a quarter, ' +
+  'No activity = none. A week is only counted when every one of its days was imported; where a week could ' +
+  'not be measured in full the level is Unknown, not zero.';
 
 export function bandLabel(band: string): string {
   return BY_KEY[band]?.label ?? band;

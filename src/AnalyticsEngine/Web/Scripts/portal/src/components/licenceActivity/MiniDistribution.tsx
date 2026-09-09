@@ -1,7 +1,8 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { LicenceActivityDistribution } from '../../types/licenceActivity';
-import { ACTIVITY_BANDS, distributionTotal } from './bands';
+import { ACTIVITY_BANDS, BAND_DESCRIPTIONS, distributionTotal } from './bands';
 import { formatCount } from './format';
+import ActivityCoverageHelp from './ActivityCoverageHelp';
 
 const useStyles = makeStyles({
   bar: {
@@ -59,6 +60,7 @@ export function MiniDistribution({ distribution }: { distribution: LicenceActivi
               key={b.key}
               className={styles.seg}
               style={{ width: `${(count / total) * 100}%`, backgroundColor: b.colour }}
+              title={`${b.label}: ${formatCount(count)}. ${BAND_DESCRIPTIONS[b.key]}`}
             />
           ) : null;
         })
@@ -71,15 +73,18 @@ export function MiniDistribution({ distribution }: { distribution: LicenceActivi
 export function BandLegend() {
   const styles = useStyles();
   return (
-    <div className={styles.legend}>
-      {ACTIVITY_BANDS.map((b) => (
-        <span key={b.key} className={styles.legendItem}>
-          <span className={styles.swatch} style={{ backgroundColor: b.colour }} aria-hidden />
-          <Text size={100} className={styles.legendLabel}>
-            {b.label}
-          </Text>
-        </span>
-      ))}
-    </div>
+    <>
+      <div className={styles.legend}>
+        {ACTIVITY_BANDS.map((b) => (
+          <span key={b.key} className={styles.legendItem} title={BAND_DESCRIPTIONS[b.key]}>
+            <span className={styles.swatch} style={{ backgroundColor: b.colour }} aria-hidden />
+            <Text size={100} className={styles.legendLabel}>
+              {b.label}
+            </Text>
+          </span>
+        ))}
+      </div>
+      <ActivityCoverageHelp showCopilot />
+    </>
   );
 }
