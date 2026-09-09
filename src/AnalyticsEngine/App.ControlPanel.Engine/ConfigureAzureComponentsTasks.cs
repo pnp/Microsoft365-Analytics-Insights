@@ -79,6 +79,7 @@ namespace App.ControlPanel.Engine
             if (sqlReachable && dbInfo.AuthMethod == SqlConnectionAuthMethod.EntraId)
             {
                 await GrantAppServiceDatabaseAccess(webApp, dbInfo);
+                await GrantAutomationAccountDatabaseAccess(automationAccount, dbInfo);
             }
 
             // Find downloaded installer app
@@ -205,6 +206,48 @@ namespace App.ControlPanel.Engine
                 current.Data.Name,
                 principalId.Value,
                 SqlContainedUserScript.AppServiceRoles);
+        }
+
+        /// <summary>
+        /// Grants the Automation account's managed identity access to the analytics database.
+        /// </summary>
+        /// <remarks>
+        /// The Graph usage-report maintenance runbooks connect to the database directly. With SQL
+        /// authentication they use the stored "SQLCredential"; with Microsoft Entra ID there is no
+        /// credential to store, so they authenticate as the Automation account and need a contained user.
+        /// They run Ola Hallengren's IndexOptimize and create/drop objects in the profiling schema, so
+        /// db_owner is the role that actually covers what they do. See issue #117.
+        /// </remarks>
+        private async Task GrantAutomationAccountDatabaseAccess(AutomationAccountResource automationAccount, DatabasePaaSInfo dbInfo)
+        {
+            if (automationAccount == null) return;
+
+            AutomationAccountResource current;
+            try
+            {
+                current = await automationAccount.GetAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not re-read the Automation account to find its managed identity: {ex.Message}");
+                current = automationAccount;
+            }
+
+            var principalId = current?.Data?.Identity?.PrincipalId;
+            if (principalId == null || principalId == Guid.Empty)
+            {
+                _logger.LogWarning(
+                    "The Automation account has no system-assigned managed identity, so the Graph usage-report maintenance " +
+                    "runbooks will not be able to connect to a database that has SQL authentication disabled.");
+                return;
+            }
+
+            var task = new SqlIdentityAccessTask(_logger);
+            await task.GrantDatabaseAccessAsync(
+                dbInfo.ConnectionString,
+                current.Data.Name,
+                principalId.Value,
+                new[] { "db_owner" });
         }
 
         /// <summary>

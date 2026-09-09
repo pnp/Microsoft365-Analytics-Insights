@@ -24,6 +24,15 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
         public const string CONFIG_PARAM_NAME_SQL_USERNAME = "sqlusername";
         public const string CONFIG_PARAM_NAME_SQL_PASSWORD = "sqlpassword";
 
+        /// <summary>
+        /// "true" when the database authenticates with Microsoft Entra ID, in which case there is no SQL
+        /// login to store as an automation credential and the runbooks use the account's managed identity.
+        /// </summary>
+        public const string CONFIG_PARAM_NAME_USE_ENTRA_AUTH = "useEntraAuth";
+
+        /// <summary>Name of the Automation credential holding the (deprecated) SQL login.</summary>
+        public const string CRED_SQL_NAME = "SQLCredential";
+
         private readonly bool _allowPublicAccess;
 
         public AutomationAccountTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, bool allowPublicAccess = true) : base(config, logger, azureLocation, tags)
@@ -42,7 +51,13 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                     Location = base.AzureLocation,
                     Sku = new AutomationSku(AutomationSkuName.Free),
                     Name = _config.ResourceName,
-                    IsPublicNetworkAccessAllowed = _allowPublicAccess
+                    IsPublicNetworkAccessAllowed = _allowPublicAccess,
+
+                    // The runbooks need an identity of their own when the database has SQL authentication
+                    // disabled - there is no credential to store for them. Always enabled so the identity
+                    // exists regardless of how the database is configured later. See issue #117.
+                    Identity = new Azure.ResourceManager.Models.ManagedServiceIdentity(
+                        Azure.ResourceManager.Models.ManagedServiceIdentityType.SystemAssigned)
                 };
                 base.EnsureTagsOnNew(newAutomationAccountInfo.Tags);     // Add configured tags
 
@@ -64,13 +79,30 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 _logger.LogInformation($"Using existing Automation account '{automationAccount.Data.Name}'.");
                 await base.EnsureTagsOnExisting(automationAccount.Data.Tags, automationAccount.GetTagResource());
 
-                if (automationAccount.Data.IsPublicNetworkAccessAllowed != _allowPublicAccess)
+                var needsIdentity = automationAccount.Data.Identity == null
+                    || automationAccount.Data.Identity.PrincipalId == null;
+
+                if (automationAccount.Data.IsPublicNetworkAccessAllowed != _allowPublicAccess || needsIdentity)
                 {
-                    _logger.LogInformation($"Updating Automation account '{automationAccount.Data.Name}' public network access to '{(_allowPublicAccess ? "enabled" : "disabled")}'...");
+                    if (needsIdentity)
+                    {
+                        _logger.LogInformation($"Enabling a system-assigned managed identity on Automation account '{automationAccount.Data.Name}'...");
+                    }
+                    if (automationAccount.Data.IsPublicNetworkAccessAllowed != _allowPublicAccess)
+                    {
+                        _logger.LogInformation($"Updating Automation account '{automationAccount.Data.Name}' public network access to '{(_allowPublicAccess ? "enabled" : "disabled")}'...");
+                    }
+
                     var patch = new AutomationAccountPatch
                     {
                         IsPublicNetworkAccessAllowed = _allowPublicAccess
                     };
+                    if (needsIdentity)
+                    {
+                        patch.Identity = new Azure.ResourceManager.Models.ManagedServiceIdentity(
+                            Azure.ResourceManager.Models.ManagedServiceIdentityType.SystemAssigned);
+                    }
+
                     try
                     {
                         var updateReq = await automationAccount.UpdateAsync(patch);
@@ -78,7 +110,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                     }
                     catch (RequestFailedException ex)
                     {
-                        _logger.LogWarning($"Could not update Automation account '{_config.ResourceName}' public access setting: {ex.Message}");
+                        _logger.LogWarning($"Could not update Automation account '{_config.ResourceName}': {ex.Message}");
                     }
                 }
             }
@@ -113,10 +145,23 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             await CreateVariableIfMissingAsync(variables, CONFIG_PARAM_NAME_WEEKS_TO_KEEP, varWeeksToKeep);
 
             // Creds
-            _logger.LogInformation($"Creating/updating automation credentials for '{_config.ResourceName}'...");
-            const string CRED_SQL_NAME = "SQLCredential";
-            var credSql = new AutomationCredentialCreateOrUpdateContent(CRED_SQL_NAME, _config[CONFIG_PARAM_NAME_SQL_USERNAME], _config[CONFIG_PARAM_NAME_SQL_PASSWORD]);
-            await automationAccount.GetAutomationCredentials().CreateOrUpdateAsync(WaitUntil.Completed, CRED_SQL_NAME, credSql);
+            // With Microsoft Entra ID authentication there is no SQL login to store, and creating an empty
+            // credential would make the runbooks pick the SQL path and fail. They detect the credential's
+            // absence and use this account's managed identity instead. See issue #117.
+            var useEntraAuth = _config.ContainsKey(CONFIG_PARAM_NAME_USE_ENTRA_AUTH)
+                && string.Equals(_config[CONFIG_PARAM_NAME_USE_ENTRA_AUTH], "true", StringComparison.OrdinalIgnoreCase);
+            if (useEntraAuth)
+            {
+                _logger.LogInformation(
+                    $"Skipping the '{CRED_SQL_NAME}' automation credential for '{_config.ResourceName}': the database uses " +
+                    "Microsoft Entra ID authentication, so the runbooks will sign in with the Automation account's managed identity.");
+            }
+            else
+            {
+                _logger.LogInformation($"Creating/updating automation credentials for '{_config.ResourceName}'...");
+                var credSql = new AutomationCredentialCreateOrUpdateContent(CRED_SQL_NAME, _config[CONFIG_PARAM_NAME_SQL_USERNAME], _config[CONFIG_PARAM_NAME_SQL_PASSWORD]);
+                await automationAccount.GetAutomationCredentials().CreateOrUpdateAsync(WaitUntil.Completed, CRED_SQL_NAME, credSql);
+            }
 
             // Schedules
             // Re-running the installer must NOT update existing schedules: doing so would reset

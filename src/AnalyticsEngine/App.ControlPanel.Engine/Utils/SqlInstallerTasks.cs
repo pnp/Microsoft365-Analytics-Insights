@@ -115,6 +115,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 ConnectionString = _dbInfo.ConnectionString
             };
 
+            // Same reasoning as the schema upgrade: the downloaded control-panel process has to authenticate
+            // for itself, and a token-less connection string means Microsoft Entra ID. See issue #117.
+            if (AzureSqlTokenAuth.NeedsAccessToken(status.ConnectionString))
+            {
+                status.EntraTenantId = _config.InstallerAccount?.DirectoryId;
+                status.EntraClientId = _config.InstallerAccount?.ClientId;
+                status.EntraClientSecret = _config.InstallerAccount?.Secret;
+            }
+
             // Write a temp file to pass to control-panel
             var tempFileName = Path.GetTempFileName();
             File.WriteAllText(tempFileName, status.ToBase64());
