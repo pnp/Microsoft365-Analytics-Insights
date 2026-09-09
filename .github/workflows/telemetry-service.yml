@@ -39,7 +39,6 @@ permissions:
 
 env:
   DOTNET_VERSION: '10.0.x'
-  NODE_VERSION: '22.x'
   SERVICE_DIR: src/TelemetryService
   CLIENT_DIR: src/TelemetryService/web.client
 
@@ -62,10 +61,13 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      # The Node major is pinned repo-wide in the root .nvmrc so this workflow, the release build
+      # and a developer machine all agree. It used to carry its own '22.x', which drifted from the
+      # rest of the repo the moment either side moved.
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ${{ env.CLIENT_DIR }}/package-lock.json
 
