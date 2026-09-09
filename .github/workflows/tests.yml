@@ -94,6 +94,16 @@ jobs:
       - name: Checkout source
         if: needs.setup_tests.outputs.run_aitracker == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+      # Same pinned Node as every other npm step in the repo, read from the repo-root .nvmrc.
+      # Left to the runner image this job would test the tracker on whatever Node ubuntu-latest
+      # currently ships, which is not necessarily the version the release build uses.
+      - name: Setup Node
+        if: needs.setup_tests.outputs.run_aitracker == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: src/SPO/AITracker/TypeScript/package-lock.json
       - name: Run AI Tracker tests
         if: needs.setup_tests.outputs.run_aitracker == 'true'
         run: |
@@ -135,6 +145,17 @@ jobs:
       - name: Setup MSBuild
         if: needs.setup_tests.outputs.run_dotnet == 'true'
         uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      # Tests.UnitTests references Web, and building Web runs `npm install` + `npm run build` for
+      # the portal SPA. That makes this job an npm consumer even though nothing here mentions npm,
+      # so it needs the pinned Node too - and Web.csproj's CheckNodeVersion guard now fails the
+      # build outright if it is absent or wrong. Read from the repo-root .nvmrc; never hardcode.
+      - name: Setup Node
+        if: needs.setup_tests.outputs.run_dotnet == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
       - name: Cache NuGet Packages
         id: nuget-packages
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5

@@ -72,8 +72,8 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
           {title}
         </Text>
         <Text size={200} className={styles.muted}>
-          People assigned a licence and how much they use each service, by {segmentLabel.toLowerCase()}, largest
-          first.
+          People with any imported licence, not necessarily a licence for every service, by {segmentLabel.toLowerCase()},
+          largest first.
         </Text>
         <BandLegend />
       </div>
