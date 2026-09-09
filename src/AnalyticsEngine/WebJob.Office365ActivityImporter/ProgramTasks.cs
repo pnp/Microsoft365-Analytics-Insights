@@ -166,7 +166,16 @@ namespace WebJob.Office365ActivityImporter
                             _logger,
                             new PowerPlatformLicensingCreditSource(httpClient, _logger),
                             store,
-                            _settings.CopilotStudioCreditsTrailingWindowDays);
+                            _settings.CopilotStudioCreditsTrailingWindowDays,
+                            clock: null,
+                            // Links per-user credits to dbo.users on the Entra object id the user import
+                            // already stores in azure_ad_id, falling back to a directory lookup for anyone
+                            // not imported yet. The Graph client is the same one the user import uses, so
+                            // this needs no additional permission.
+                            userResolver: new AgentCostUserResolver(
+                                new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, _logger),
+                                _manualGraphCallClient == null ? null : new GraphEntraUserLookup(_manualGraphCallClient, _logger),
+                                _logger));
                     },
                     azureCostImporterFactory: () =>
                     {

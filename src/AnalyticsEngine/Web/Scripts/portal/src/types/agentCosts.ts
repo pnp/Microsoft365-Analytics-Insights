@@ -115,8 +115,12 @@ export interface AgentCostFilterOption {
 
 /** One user's billed Copilot Studio credits over the window, straight from Microsoft. */
 export interface AgentCostUserRow {
-  /** The identifier the licensing API reported. Not resolved to a name - nothing verifies its format. */
-  userId: string;
+  /** The resolved users-table key, or null when the identifier could not be matched to a person. */
+  userId: number | null;
+  /** The identifier the licensing API reported - an Entra object id. Always present. */
+  entraObjectId: string | null;
+  /** The person's UPN, or null when they are not in the users table. */
+  userPrincipalName: string | null;
   billedCredits: number;
   activeDays: number;
 }

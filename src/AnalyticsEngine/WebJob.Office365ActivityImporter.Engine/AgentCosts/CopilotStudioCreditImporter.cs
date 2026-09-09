@@ -30,6 +30,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly int _trailingWindowDays;
 
         /// <summary>
+        /// Resolves the Entra object ids on per-user rows to <c>dbo.users</c>. Optional: when absent the
+        /// rows are stored unlinked, which is exactly what happens for a user who cannot be resolved anyway.
+        /// </summary>
+        private readonly AgentCostUserResolver _userResolver;
+
+        /// <summary>
         /// Stops a broken or looping continuation token from paging for ever. A tenant's daily consumption is
         /// a few thousand rows at most, and the page size is 5000, so this is far above any real response.
         /// </summary>
@@ -40,12 +46,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             ICopilotStudioCreditSource source,
             IAgentCostStore store,
             int trailingWindowDays = AppConfig.DefaultCopilotStudioCreditsTrailingWindowDays,
-            IClock clock = null)
+            IClock clock = null,
+            AgentCostUserResolver userResolver = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _source = source ?? throw new ArgumentNullException(nameof(source));
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _clock = clock ?? SystemClock.Instance;
+            _userResolver = userResolver;
             _trailingWindowDays = trailingWindowDays > 0
                 ? Math.Min(trailingWindowDays, AppConfig.MaxCopilotStudioCreditsTrailingWindowDays)
                 : AppConfig.DefaultCopilotStudioCreditsTrailingWindowDays;
@@ -434,6 +442,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 }
 
                 log.RowsRead = rowsRead;
+                await LinkUsersAsync(mapped);
                 log.RowsSaved = await _store.UpsertCopilotStudioUserCreditsAsync(mapped);
 
                 _logger.LogInformation($"Copilot Studio per-user credits: read {log.RowsRead:N0} row(s) across "
@@ -455,6 +464,71 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             await SafeSaveLogAsync(log);
             return new AgentCostImportOutcome(log);
+        }
+
+        /// <summary>
+        /// Points the mapped rows at their <c>dbo.users</c> row, so the stored credits carry a real foreign
+        /// key rather than an opaque identifier.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately swallows everything. Attribution is a decoration on a billing figure: if resolving
+        /// it fails, the right outcome is a row that reports its spend against the raw object id and gets
+        /// linked on a later cycle - not a lost import. The rows are linked <b>before</b> the upsert so a
+        /// row is never written unlinked when it could have been linked.
+        /// </remarks>
+        private async Task LinkUsersAsync(IReadOnlyList<CopilotStudioCreditUserDaily> rows)
+        {
+            if (_userResolver == null || rows == null || rows.Count == 0) return;
+
+            try
+            {
+                var resolution = await _userResolver.ResolveAsync(rows.Select(r => r.EntraObjectId));
+
+                foreach (var row in rows)
+                {
+                    if (!string.IsNullOrWhiteSpace(row.EntraObjectId)
+                        && resolution.UserIdsByObjectId.TryGetValue(row.EntraObjectId, out var userId))
+                    {
+                        row.UserId = userId;
+                    }
+                }
+
+                if (resolution.NotInDirectory > 0)
+                {
+                    _logger.LogInformation(
+                        $"Copilot Studio per-user credits: {resolution.NotInDirectory:N0} identifier(s) are not in the "
+                        + "directory - normally people who have since been deleted. Their credits are still reported, "
+                        + "against the raw identifier.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    $"Copilot Studio per-user credits: could not attribute rows to users ({ex.Message}). "
+                    + "The credits themselves are unaffected and will be linked on a later cycle.");
+            }
+        }
+
+        /// <summary>
+        /// Makes a bounded attempt at rows earlier runs could not attribute.
+        /// </summary>
+        /// <remarks>
+        /// Separate from the import because it covers rows <b>outside</b> the trailing window, which the
+        /// import will never re-read. Without it a row whose user was created five minutes too late would
+        /// stay unattributed for ever.
+        /// </remarks>
+        public async Task LinkOutstandingUsersAsync()
+        {
+            if (_userResolver == null) return;
+
+            try
+            {
+                await _userResolver.ResolveOutstandingAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Copilot Studio per-user credits: could not re-attribute older rows ({ex.Message}).");
+            }
         }
 
         /// <summary>
@@ -490,7 +564,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 byHash.Add(hash, new CopilotStudioCreditUserDaily
                 {
                     UsageDate = usageDate.Date,
-                    UserId = row.UserId,
+                    EntraObjectId = row.UserId,
                     EnvironmentId = row.EnvironmentId,
                     EnvironmentName = environmentName,
                     BilledCredits = row.Consumed,

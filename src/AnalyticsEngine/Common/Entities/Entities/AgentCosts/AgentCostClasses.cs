@@ -181,13 +181,18 @@ namespace Common.Entities.Entities.AgentCosts
     /// <see cref="CopilotStudioCreditDaily"/> deliberately carries no user column - the two tables come from
     /// different endpoints and neither is derived from the other.</para>
     ///
-    /// <para><b>The user is stored as the raw identifier the API returns, with no foreign key to
-    /// <c>dbo.users</c>.</b> Microsoft documents <c>userId</c> only as a string. Measured against a live
-    /// tenant it is a <b>GUID</b> - an Entra object id, not a UPN - but that is an observation, not a
-    /// contract, and <c>dbo.users</c> has no Entra-object-id column to join it to. Resolving it to a person
-    /// therefore needs a schema addition and a Graph-side backfill; until then the raw value is stored, and a
-    /// join built on a guess would produce confidently wrong attribution, which on a spend report is worse
-    /// than no join at all.</para>
+    /// <para><b>The raw identifier from the API is kept in <c>entra_object_id</c>, and
+    /// <c>user_id</c> is a real foreign key to <c>dbo.users</c>.</b> Microsoft documents the licensing
+    /// API's <c>userId</c> only as a string, but measured against a live tenant it is an Entra object id -
+    /// the same value <c>dbo.users.azure_ad_id</c> already carries, because the user import maps it from
+    /// Graph's <c>user.id</c>. The importer resolves one to the other; when a user is not in
+    /// <c>dbo.users</c> yet it is fetched from Graph by object id.</para>
+    ///
+    /// <para>The foreign key is <b>nullable on purpose</b>. A billing row must never be lost because its
+    /// user could not be resolved - the person may have been deleted from the directory, or created since
+    /// the last user import. Such a row still reports its credits, attributed to the raw object id, and is
+    /// re-resolved on later cycles. Losing spend to make a key tidy would be the wrong trade on a cost
+    /// report.</para>
     /// </summary>
     [Table("copilot_studio_credit_user_daily")]
     public class CopilotStudioCreditUserDaily : AbstractEFEntity
@@ -196,12 +201,23 @@ namespace Common.Entities.Entities.AgentCosts
         public DateTime UsageDate { get; set; }
 
         /// <summary>
-        /// The user identifier exactly as the licensing API reported it. See the class remarks for why this
-        /// is not a foreign key.
+        /// The user identifier exactly as the licensing API reported it - in practice an Entra object id.
+        /// Always stored, whether or not it could be resolved, so an unresolved row still reports its spend
+        /// and can be re-resolved later.
         /// </summary>
-        [Column("user_id")]
+        [Column("entra_object_id")]
         [MaxLength(200)]
-        public string UserId { get; set; }
+        public string EntraObjectId { get; set; }
+
+        /// <summary>
+        /// The resolved <c>dbo.users</c> row, or null when the identifier could not be matched to a user.
+        /// Null is a real state here, not a defect - see the class remarks.
+        /// </summary>
+        [ForeignKey(nameof(User))]
+        [Column("user_id")]
+        public int? UserId { get; set; }
+
+        public User User { get; set; }
 
         [Column("environment_id")]
         [MaxLength(200)]
@@ -241,7 +257,7 @@ namespace Common.Entities.Entities.AgentCosts
 
         public override string ToString()
         {
-            return $"{UsageDate:yyyy-MM-dd} {UserId}: {BilledCredits} credit(s)";
+            return $"{UsageDate:yyyy-MM-dd} {EntraObjectId}: {BilledCredits} credit(s)";
         }
     }
 

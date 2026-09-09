@@ -16,9 +16,16 @@
     /// measurement to take and it is out of scope for the prove-it performance rule. Upgrade time is
     /// independent of tenant size and no maintenance window is needed.</para>
     ///
-    /// <para><c>user_id</c> is a plain column with <b>no foreign key</b> to <c>dbo.users</c>: Microsoft
-    /// documents it only as a string, so joining it would rest on an assumption about its format rather than
-    /// a fact.</para>
+    /// <para><c>user_id</c> is a real foreign key to <c>dbo.users</c>, resolved by the importer from the
+    /// Entra object id the licensing API returns and <c>dbo.users.azure_ad_id</c>, which the user import
+    /// already populates from Graph's <c>user.id</c>. The raw identifier is kept alongside it in
+    /// <c>entra_object_id</c>.</para>
+    ///
+    /// <para>The key is <b>nullable and does not cascade</b>. Nullable because a billing row must survive a
+    /// user who cannot be resolved - deleted from the directory, or created since the last user import - and
+    /// is re-resolved on later cycles. Non-cascading because deleting a user must not silently erase spend
+    /// history and change historical totals; production never deletes users, so this only ever surfaces as a
+    /// loud failure rather than quiet data loss.</para>
     /// </summary>
     public partial class AgentCostUserCredits : DbMigration
     {
@@ -30,7 +37,8 @@
                     {
                         id = c.Int(nullable: false, identity: true),
                         usage_date = c.DateTime(nullable: false),
-                        user_id = c.String(maxLength: 200),
+                        entra_object_id = c.String(maxLength: 200),
+                        user_id = c.Int(),
                         environment_id = c.String(maxLength: 200),
                         environment_name = c.String(maxLength: 255),
                         agent_id = c.String(maxLength: 200),
@@ -40,12 +48,18 @@
                         imported_utc = c.DateTime(nullable: false),
                     })
                 .PrimaryKey(t => t.id)
-                .Index(t => new { t.usage_date, t.dimension_hash }, unique: true);
+                .ForeignKey("dbo.users", t => t.user_id)
+                .Index(t => new { t.usage_date, t.dimension_hash }, unique: true)
+                .Index(t => t.user_id)
+                .Index(t => t.entra_object_id);
             
         }
         
         public override void Down()
         {
+            DropForeignKey("dbo.copilot_studio_credit_user_daily", "user_id", "dbo.users");
+            DropIndex("dbo.copilot_studio_credit_user_daily", new[] { "entra_object_id" });
+            DropIndex("dbo.copilot_studio_credit_user_daily", new[] { "user_id" });
             DropIndex("dbo.copilot_studio_credit_user_daily", new[] { "usage_date", "dimension_hash" });
             DropTable("dbo.copilot_studio_credit_user_daily");
         }

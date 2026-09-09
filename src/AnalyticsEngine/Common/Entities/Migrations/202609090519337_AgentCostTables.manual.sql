@@ -55,6 +55,13 @@
    ===================================================================================================== */
 
 SET NOCOUNT ON;
+
+/* QUOTED_IDENTIFIER must be ON for the xs:base64Binary() call that rebuilds the model blob further
+   down. SSMS connects with it ON, but sqlcmd defaults it OFF, so without this the stamp fails with
+   "INSERT failed because the following SET options have incorrect settings: 'QUOTED_IDENTIFIER'" -
+   after the schema work has already succeeded, leaving the migration unstamped and blocking the next
+   script in the chain. */
+SET QUOTED_IDENTIFIER ON;
 GO
 
 DECLARE @migration nvarchar(200) = N'202609090519337_AgentCostTables';

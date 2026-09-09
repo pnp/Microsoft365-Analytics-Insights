@@ -91,6 +91,10 @@
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
     <Compile Include="AgentCosts\AgentCostImportPhase.cs" />
     <Compile Include="AgentCosts\AgentCostRowHasher.cs" />
+    <Compile Include="AgentCosts\AgentCostUserResolver.cs" />
+    <Compile Include="AgentCosts\GraphEntraUserLookup.cs" />
+    <Compile Include="AgentCosts\SqlAgentCostUserLinkStore.cs" />
+    <Compile Include="AgentCosts\UserResolution.cs" />
     <Compile Include="AgentCosts\AzureCostImporter.cs" />
     <Compile Include="AgentCosts\AzureCostManagementSource.cs" />
     <Compile Include="AgentCosts\AzureCostQueryParser.cs" />

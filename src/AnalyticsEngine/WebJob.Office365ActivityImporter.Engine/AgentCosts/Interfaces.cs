@@ -111,13 +111,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     public class CopilotStudioUserCreditRow
     {
         /// <summary>
-        /// The user identifier as returned. Microsoft documents it only as a string - it is deliberately not
-        /// assumed to be a UPN or an Entra object id, and is never joined to the user table on that guess.
+        /// The user identifier as returned. Microsoft documents it only as a string.
         /// </summary>
         /// <remarks>
-        /// Measured against a live tenant it is a GUID (an Entra object id). Recorded as an observation
-        /// rather than relied on: it is not a documented contract, and there is no Entra-object-id column on
-        /// <c>dbo.users</c> to join it to in any case.
+        /// Measured against a live tenant it is an Entra object id, and that is what the importer resolves
+        /// it as - against <c>dbo.users.azure_ad_id</c>, which the user import populates from Graph's
+        /// <c>user.id</c>. Because it is an observation rather than a documented contract, the resolution
+        /// is treated as fallible throughout: anything that does not parse as an object id, or does not
+        /// match a user, is stored with its credits and a null link rather than being forced onto a person.
         /// </remarks>
         public string UserId { get; set; }
 
