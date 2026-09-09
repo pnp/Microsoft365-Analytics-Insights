@@ -536,6 +536,12 @@ namespace Common.Entities
         public SPOInsightsDBConfiguration()
         {
             SetExecutionStrategy("System.Data.SqlClient", () => new System.Data.Entity.SqlServer.SqlAzureExecutionStrategy());
+
+            // Lets EF connect to an Azure SQL server that has SQL authentication disabled, by attaching a
+            // Microsoft Entra ID access token to connections whose connection string carries no
+            // credentials. No-op for every other connection, including the SQL-authentication strings
+            // existing installs still use. See issue #117.
+            AddInterceptor(new Sql.AzureSqlAccessTokenInterceptor());
         }
     }
 }
