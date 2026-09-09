@@ -257,6 +257,91 @@ namespace Tests.UnitTests
             Assert.AreEqual(10, seen.Distinct().Count(), "No row may be repeated on a later page.");
         }
 
+        [TestMethod]
+        public async Task AzureCosts_Replace_RemovesRowsTheLatestQueryNoLongerReturns()
+        {
+            // A Cost Management answer is a complete snapshot of its scope and window. After the meter filter
+            // is narrowed, the rows it no longer returns are no longer true - leaving them behind would
+            // overstate spend and look like a rise that never happened.
+            await _store.ReplaceAzureCostsAsync(
+                new[]
+                {
+                    CostRow(Day1, "Meter A", "GBP", 1m, estimated: false),
+                    CostRow(Day1, "Meter B", "GBP", 2m, estimated: false),
+                },
+                TestMarker, Day1, Day1);
+
+            // The next run's filter matches only Meter A.
+            await _store.ReplaceAzureCostsAsync(
+                new[] { CostRow(Day1, "Meter A", "GBP", 1m, estimated: false) },
+                TestMarker, Day1, Day1);
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var stored = await db.AzureCostDaily.Where(r => r.Scope == TestMarker).ToListAsync();
+                Assert.AreEqual(1, stored.Count, "Meter B is no longer returned, so it must no longer be stored.");
+                Assert.AreEqual("Meter A", stored[0].MeterName);
+            }
+        }
+
+        [TestMethod]
+        public async Task AzureCosts_Replace_WithNoRows_ClearsTheWindow()
+        {
+            // "The filter now matches nothing" has to remove what was there before. An early return on an
+            // empty result would leave the old rows visible for ever while the run logged cleanly.
+            await _store.ReplaceAzureCostsAsync(
+                new[] { CostRow(Day1, "Meter A", "GBP", 1m, estimated: false) }, TestMarker, Day1, Day1);
+
+            await _store.ReplaceAzureCostsAsync(new List<AzureCostDaily>(), TestMarker, Day1, Day1);
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(0, await db.AzureCostDaily.CountAsync(r => r.Scope == TestMarker));
+            }
+        }
+
+        [TestMethod]
+        public async Task AzureCosts_Replace_NeverTouchesAnotherScopeOrAnotherDay()
+        {
+            // The delete is the most dangerous operation in this feature. It must be bounded by BOTH the
+            // scope and the window, or one subscription's import would wipe another's rows.
+            var otherScope = TestMarker + "-other";
+
+            await _store.ReplaceAzureCostsAsync(
+                new[] { CostRow(Day1, "Meter A", "GBP", 1m, estimated: false) }, TestMarker, Day1, Day1);
+            await _store.ReplaceAzureCostsAsync(
+                new[] { CostRow(Day2, "Meter A", "GBP", 3m, estimated: false) }, TestMarker, Day2, Day2);
+
+            var otherRow = CostRow(Day1, "Meter A", "GBP", 9m, estimated: false);
+            otherRow.Scope = otherScope;
+            otherRow.RowHash = AgentCostRowHasher.Hash(Day1.ToString("yyyy-MM-dd"), otherScope, "Meter A", "GBP");
+            await _store.ReplaceAzureCostsAsync(new[] { otherRow }, otherScope, Day1, Day1);
+
+            try
+            {
+                // Re-run day 1 for the first scope with nothing returned.
+                await _store.ReplaceAzureCostsAsync(new List<AzureCostDaily>(), TestMarker, Day1, Day1);
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    Assert.AreEqual(0, await db.AzureCostDaily.CountAsync(r => r.Scope == TestMarker && r.UsageDate == Day1),
+                        "The targeted scope and day should have been cleared.");
+                    Assert.AreEqual(1, await db.AzureCostDaily.CountAsync(r => r.Scope == TestMarker && r.UsageDate == Day2),
+                        "A DIFFERENT DAY in the same scope must be untouched.");
+                    Assert.AreEqual(1, await db.AzureCostDaily.CountAsync(r => r.Scope == otherScope),
+                        "A DIFFERENT SCOPE must be untouched.");
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    db.AzureCostDaily.RemoveRange(db.AzureCostDaily.Where(r => r.Scope == otherScope));
+                    await db.SaveChangesAsync();
+                }
+            }
+        }
+
         private static CopilotStudioCreditDaily CreditRow(DateTime day, string agentId, string feature, decimal credits, int? users = null)
         {
             var hash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd"), TestMarker, agentId, feature);
