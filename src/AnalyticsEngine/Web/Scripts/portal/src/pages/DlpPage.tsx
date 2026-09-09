@@ -349,10 +349,11 @@ export default function DlpPage() {
           />
           <ImpactTable
             title="People"
-            description="Users whose Copilot requests were affected most often."
+            description="Users whose Copilot requests were affected most often. Select a person to see which policies affected them."
             nameHeader="User"
             rows={summary.topUsers}
             showUsers={false}
+            expandable
           />
           <ImpactTable
             title="Policies"
