@@ -805,6 +805,21 @@ namespace App.ControlPanel.Engine
             new ImportToggleCoverage(nameof(ImportTaskSettings.SentEmails), null,
                 "no check exercises the Graph mailbox read (Mail.Read); a missing grant would first appear at "
                 + "runtime."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotStudioCredits), null,
+                "no check exercises the Power Platform licensing API. It needs a token for a different audience "
+                + "(api.powerplatform.com) plus a Power Platform RBAC role assignment on the service principal, "
+                + "neither of which this installer creates - and Microsoft has not confirmed that the licensing "
+                + "entitlement routes accept an application-only token at all, so a failure here would not "
+                + "necessarily mean the install is wrong. The import records the outcome in "
+                + "agent_cost_import_log, which is where to look after the first cycle."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.AzureCostManagement), null,
+                "no check exercises Microsoft Cost Management. It needs a token for the management.azure.com "
+                + "audience and the 'Cost Management Reader' role on each configured scope, which is an Azure "
+                + "RBAC (or, for EA/MCA billing accounts, a billing-portal) assignment outside this installer's "
+                + "control. The scope itself comes from the AzureCostScopes App Service application setting, "
+                + "which is not set at install time."),
         };
 
         /// <summary>

@@ -131,6 +131,43 @@ namespace Common.Entities
         [ImportProp]
         public bool CopilotInteractionHistory { get; set; } = false;
 
+        /// <summary>
+        /// Import <b>billed</b> Microsoft Copilot Studio consumption (Copilot Credits) from the Power Platform
+        /// licensing API - what Microsoft actually charged, per agent and per day.
+        /// </summary>
+        /// <remarks>
+        /// <para>Distinct from <see cref="ImportPowerPlatform"/>, which imports Copilot Studio <i>activity</i>
+        /// from the Audit.General feed, and from the per-conversation credit <i>estimate</i> this product
+        /// derives from Copilot audit events. This one is the vendor's own billing figure.</para>
+        /// <para>Opt-in and off by default. It needs a token for the <c>api.powerplatform.com</c> audience
+        /// <b>and</b> a Power Platform RBAC role assignment on the service principal, which the installer does
+        /// not create. Note that Microsoft has not confirmed application-only access to the licensing
+        /// entitlement routes, so on some tenants this may require a signed-in administrator and will report
+        /// an authorisation failure instead of importing.</para>
+        /// <para>There is no per-user data to import: Microsoft bills Copilot Studio at the environment and
+        /// agent level, and the API returns a distinct-user count rather than identities.</para>
+        /// </remarks>
+        [ImportProp]
+        public bool CopilotStudioCredits { get; set; } = false;
+
+        /// <summary>
+        /// Import daily Azure spend from Microsoft Cost Management, so agent workloads billed directly to an
+        /// Azure subscription can be reported alongside the rest of the data.
+        /// </summary>
+        /// <remarks>
+        /// <para>Opt-in and off by default. It needs a token for the <c>management.azure.com</c> audience, the
+        /// <c>Cost Management Reader</c> role on each scope, and at least one scope in the
+        /// <c>AzureCostScopes</c> App Service application setting - without that the import declines to run
+        /// rather than guessing a subscription.</para>
+        /// <para>Which meters are imported is <b>configured, not compiled in</b>. Microsoft Cowork - the
+        /// workload this was built for - is billed through Copilot Credits managed in the Microsoft 365 admin
+        /// centre, and Microsoft publishes no Azure meter name for it, so there is no correct value to ship.
+        /// With no filter set, every meter at the scope is imported.</para>
+        /// <para>Azure billing is resource-scoped, so no per-user attribution is possible.</para>
+        /// </remarks>
+        [ImportProp]
+        public bool AzureCostManagement { get; set; } = false;
+
         IEnumerable<PropertyInfo> GetImportProps()
         {
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));

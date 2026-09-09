@@ -354,6 +354,13 @@ namespace WebJob.Office365ActivityImporter
                 await ActivityImporter.Engine.ActivityAPI.Copilot.CopilotAuditEventManager
                     .RepairDenormalisedColumnsAsync(configuredSettings.ConnectionStrings.DatabaseConnectionString, logger);
 
+                // Agent cost imports (Copilot Studio billed credits + Azure Cost Management). Kept as their
+                // own phase rather than folded into the Graph or Activity API imports: they authenticate to
+                // different audiences (api.powerplatform.com and management.azure.com) and need role
+                // assignments neither of those imports require, so a failure in one must not implicate the
+                // others. The phase handles its own errors and cadence gating.
+                await tasks.ImportAgentCosts();
+
 #if DEBUG
                 runAgain = false; // Debug only runs once; release runs forever. 
 #endif

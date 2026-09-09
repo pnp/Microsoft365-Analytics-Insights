@@ -141,6 +141,8 @@
     <Compile Include="ActivityImportCacheProviderTests.cs" />
     <Compile Include="ActivityImportCacheWindowTests.cs" />
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="AgentCostImportTests.cs" />
+    <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="ActivitySaveConcurrencyPolicyTests.cs" />

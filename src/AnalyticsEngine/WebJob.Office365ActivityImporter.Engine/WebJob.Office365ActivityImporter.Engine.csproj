@@ -89,6 +89,16 @@
     <Compile Include="ActivityAPI\Rules\ActivityStagingRules.cs" />
     <Compile Include="ActivityAPI\Rules\CopilotPrewarmPolicy.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
+    <Compile Include="AgentCosts\AgentCostImportPhase.cs" />
+    <Compile Include="AgentCosts\AgentCostRowHasher.cs" />
+    <Compile Include="AgentCosts\AzureCostImporter.cs" />
+    <Compile Include="AgentCosts\AzureCostManagementSource.cs" />
+    <Compile Include="AgentCosts\AzureCostQueryParser.cs" />
+    <Compile Include="AgentCosts\CopilotStudioCreditImporter.cs" />
+    <Compile Include="AgentCosts\CopilotStudioCreditParser.cs" />
+    <Compile Include="AgentCosts\Interfaces.cs" />
+    <Compile Include="AgentCosts\PowerPlatformLicensingCreditSource.cs" />
+    <Compile Include="AgentCosts\SqlAgentCostStore.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\StagingClasses.cs" />
