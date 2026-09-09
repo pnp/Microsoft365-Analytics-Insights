@@ -223,6 +223,36 @@ namespace Tests.UnitTests
             DatabasePaaSInfo.GetEntraIdConnectionString(string.Empty, "analytics");
         }
 
+        /// <summary>
+        /// The SQL-login path must fail with something an operator can act on. Without this the missing
+        /// password surfaced as a bare ArgumentException naming a parameter, which the installer reports as
+        /// "FATAL: Unexpected error of type 'ArgumentException'".
+        /// </summary>
+        [TestMethod]
+        public void EnsureSqlLoginUsable_MissingCredentials_ExplainsBothWaysToFixIt()
+        {
+            foreach (var missing in new[] { new[] { "sqladmin", "" }, new[] { "", "Fake123!" }, new[] { " ", " " } })
+            {
+                try
+                {
+                    DatabasePaaSInfo.EnsureSqlLoginUsable("contoso-sql.database.windows.net", missing[0], missing[1]);
+                    Assert.Fail("Expected an InvalidOperationException when there is no usable way to authenticate.");
+                }
+                catch (InvalidOperationException ex)
+                {
+                    StringAssert.Contains(ex.Message, "contoso-sql.database.windows.net");
+                    StringAssert.Contains(ex.Message, "SQL administrator credentials");
+                    StringAssert.Contains(ex.Message, "Microsoft Entra");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void EnsureSqlLoginUsable_WithCredentials_DoesNotThrow()
+        {
+            DatabasePaaSInfo.EnsureSqlLoginUsable("contoso-sql.database.windows.net", "sqladmin", "Fake123!");
+        }
+
         #endregion
 
         #region Per-server auth detection
