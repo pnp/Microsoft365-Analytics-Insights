@@ -84,9 +84,12 @@
     <Compile Include="ActivityAPI\Persistence\IActivityStagingWriter.cs" />
     <Compile Include="ActivityAPI\Persistence\ICopilotMetadataLoaderFactory.cs" />
     <Compile Include="ActivityAPI\Persistence\ISaveSessionFactory.cs" />
+    <Compile Include="ActivityAPI\Persistence\SqlUserEntraIdStore.cs" />
     <Compile Include="ActivityAPI\Rules\ActivityImportCacheWindow.cs" />
     <Compile Include="ActivityAPI\Rules\ActivitySaveConcurrencyPolicy.cs" />
     <Compile Include="ActivityAPI\Rules\ActivityStagingRules.cs" />
+    <Compile Include="ActivityAPI\Rules\AuditUserIdentity.cs" />
+    <Compile Include="ActivityAPI\Rules\AuditUserIdentityResolver.cs" />
     <Compile Include="ActivityAPI\Rules\CopilotPrewarmPolicy.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />

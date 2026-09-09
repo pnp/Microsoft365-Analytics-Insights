@@ -117,7 +117,16 @@ namespace WebJob.Office365ActivityImporter.Engine
                 _saveConcurrencyGate = new SemaphoreSlim(_maxConcurrentSaves, _maxConcurrentSaves);
             }
 
-            _stagingPass = new ActivityStagingPass(filterConfig, userGroupsCache, userGroupsFilter, logger);
+            // Resolves audit UserIds that arrive as Entra object ids rather than UPNs, so a person seen
+            // that way lands on their existing user row instead of creating a second one keyed on a GUID.
+            // Database-first (users.azure_ad_id), Graph only on a miss, and the Graph client is not even
+            // built unless something needs it.
+            var userIdentityResolver = new AuditUserIdentityResolver(
+                new SqlUserEntraIdStore(new ConnectionStringAnalyticsDbContextFactory(appConfig.ConnectionStrings.DatabaseConnectionString)),
+                new LazyGraphEntraUserLookup(appConfig, logger),
+                msg => logger?.LogWarning(msg));
+
+            _stagingPass = new ActivityStagingPass(filterConfig, userGroupsCache, userGroupsFilter, logger, userIdentityResolver);
             _cacheProvider = cacheProvider ?? new ActivityImportCacheProvider(SqlActivityImportCacheLoader.Instance, logger);
             _stagingWriter = stagingWriter ?? new SqlActivityStagingWriter(logger);
             _copilotPrewarmer = new CopilotMetadataPrewarmer(

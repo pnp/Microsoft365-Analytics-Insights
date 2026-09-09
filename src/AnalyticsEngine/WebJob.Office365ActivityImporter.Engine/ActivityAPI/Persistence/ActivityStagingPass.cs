@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Rules;
@@ -101,6 +102,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         private readonly UserGroupsFilterModel _userGroupsFilter;
         private readonly ILogger _logger;
 
+        /// <summary>
+        /// Resolves Entra object ids found in audit records to UPNs. Optional: when null the pass keeps
+        /// its original behaviour and stages whatever the record carried.
+        /// </summary>
+        private readonly IAuditUserIdentityResolver _userIdentityResolver;
+
         /// <remarks>
         /// Deliberately no null guards: the manager did not validate these either, and it dereferences them
         /// during the save. Adding an <c>ArgumentNullException</c> here would move a
@@ -109,11 +116,18 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         /// </remarks>
         public ActivityStagingPass(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache,
             UserGroupsFilterModel userGroupsFilter, ILogger logger)
+            : this(filterConfig, userGroupsCache, userGroupsFilter, logger, null)
+        {
+        }
+
+        public ActivityStagingPass(AuditFilterConfig filterConfig, UserGroupsCache userGroupsCache,
+            UserGroupsFilterModel userGroupsFilter, ILogger logger, IAuditUserIdentityResolver userIdentityResolver)
         {
             _filterConfig = filterConfig;
             _userGroupsCache = userGroupsCache;
             _userGroupsFilter = userGroupsFilter;
             _logger = logger;
+            _userIdentityResolver = userIdentityResolver;
         }
 
         /// <param name="stagingTableName">
@@ -128,6 +142,71 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
         {
             return await RunAsync(activities, cache, batch, stagingTableName, mergeLock, retryState: null);
         }
+
+        /// <summary>
+        /// The UPN to use for an audit record's <c>UserId</c>: the resolved one when it was an Entra
+        /// object id we could translate, otherwise the value exactly as it arrived.
+        /// </summary>
+        /// <remarks>
+        /// Falling back to the raw value matters. An id we cannot resolve - a deleted user, a directory
+        /// read that failed - must keep the behaviour it had before this resolution existed rather than
+        /// dropping the event or inventing an identity for it.
+        /// </remarks>
+        internal static string EffectiveUserId(string userId, IReadOnlyDictionary<string, string> resolved)
+        {
+            if (resolved == null || resolved.Count == 0 || string.IsNullOrWhiteSpace(userId))
+            {
+                return userId;
+            }
+
+            string upn;
+            return resolved.TryGetValue(userId.Trim(), out upn) && !string.IsNullOrWhiteSpace(upn) ? upn : userId;
+        }
+
+        /// <summary>
+        /// Finds the Entra object ids in this batch and resolves them to UPNs in one call.
+        /// </summary>
+        /// <remarks>
+        /// Returns an empty map - having called nothing - when every <c>UserId</c> is already a UPN, a
+        /// system principal such as <c>app@sharepoint</c>, or an unrecognised value. That is the normal
+        /// case, so the resolution path adds a per-event string check and nothing else.
+        /// </remarks>
+        private async Task<IReadOnlyDictionary<string, string>> ResolveUserIdentitiesAsync(ActivityReportSet activities)
+        {
+            if (_userIdentityResolver == null || activities == null)
+            {
+                return Empty;
+            }
+
+            HashSet<string> objectIds = null;
+            foreach (var log in activities)
+            {
+                var userId = log?.UserId;
+                if (!AuditUserIdentity.NeedsResolving(userId)) continue;
+
+                if (objectIds == null)
+                {
+                    objectIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+                objectIds.Add(userId.Trim());
+            }
+
+            if (objectIds == null)
+            {
+                return Empty;
+            }
+
+            var resolved = await _userIdentityResolver.ResolveToUpnAsync(objectIds.ToList()) ?? Empty;
+
+            _logger?.LogInformation(
+                $"Audit events import: resolved {resolved.Count} of {objectIds.Count} Entra object id(s) in this batch " +
+                "to user principal names. Unresolved ids keep their raw identifier.");
+
+            return resolved;
+        }
+
+        private static readonly IReadOnlyDictionary<string, string> Empty =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         internal async Task<ActivityStagingPassResult> RunAsync(ActivityReportSet activities, ActivityImportCache cache,
             IActivityStagingBatch batch, string stagingTableName, SemaphoreSlim mergeLock,
@@ -145,12 +224,20 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
             // serialised by mergeLock so their summed times approximate the real serialised wall-time.
             var swDedup = System.Diagnostics.Stopwatch.StartNew();
 
+            // Resolve any Entra object ids in this batch to UPNs BEFORE the loop, so a person identified
+            // by object id lands on their real user row instead of creating a second one keyed on a GUID.
+            // Costs nothing on a batch whose UserIds are all UPNs, which is the normal case: the scan is a
+            // character test per event and the resolver is never called.
+            var resolvedUserIds = await ResolveUserIdentitiesAsync(activities);
+
             // Hoisted out of the loop: all three capture only loop-invariant state, and Roslyn does not
             // cache capturing lambdas, so building them per event would allocate three delegates for every
             // one of the batch's events.
             Func<AbstractAuditLogContent, bool> urlInScope = log => _filterConfig.InScope(log);
-            Func<string, Task<bool>> userInGroupsFilter = upn => _userGroupsCache.IsInGroupsFilter(upn, _userGroupsFilter);
-            Action<AbstractAuditLogContent> stageRow = log => batch.AddRow(new AuditLogTempEntity(log, log.UserId));
+            Func<string, Task<bool>> userInGroupsFilter = userId =>
+                _userGroupsCache.IsInGroupsFilter(EffectiveUserId(userId, resolvedUserIds), _userGroupsFilter);
+            Action<AbstractAuditLogContent> stageRow = log => batch.AddRow(
+                new AuditLogTempEntity(log, EffectiveUserId(log.UserId, resolvedUserIds)));
 
             try
             {
