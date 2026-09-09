@@ -31,9 +31,13 @@ export function formatMoney(value: number | null | undefined, currency: string |
   if (value == null) return DASH;
 
   const code = currency?.trim();
+
+  // Up to six decimal places for sub-unit amounts, matching the decimal(18,6) the column is stored as.
+  // Azure meters are priced in millionths of a currency unit, so capping at two (or four) would render a
+  // real charge as "0.00" - the same failure the column width was chosen to avoid.
   const amount = value.toLocaleString(undefined, {
     minimumFractionDigits: 2,
-    maximumFractionDigits: Math.abs(value) < 1 ? 4 : 2,
+    maximumFractionDigits: value !== 0 && Math.abs(value) < 0.01 ? 6 : 2,
   });
 
   return code ? `${amount} ${code}` : amount;
@@ -41,6 +45,44 @@ export function formatMoney(value: number | null | undefined, currency: string |
 
 export function formatCount(value: number | null | undefined): string {
   return value == null ? DASH : Math.round(value).toLocaleString();
+}
+
+/**
+ * A metered quantity, keeping its fractional part.
+ *
+ * Deliberately not `formatCount`. Azure's `UsageQuantity` is routinely fractional (GB, GB-hours,
+ * fractions of a unit) and is stored as `decimal(18,6)`; rounding it to a whole number at render time
+ * would show a real 0.4 as "0" - the same mistake that made the column `decimal(18,6)` rather than the
+ * EF default in the first place.
+ */
+export function formatQuantity(value: number | null | undefined): string {
+  if (value == null) return DASH;
+  if (value === 0) return '0';
+  if (Math.abs(value) >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (Math.abs(value) >= 1) return value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+/**
+ * A display label for a stored harness value.
+ *
+ * The stored values are stable identifiers, not UI text, so they must not be rendered raw -
+ * "StandardOrCopilotChat" in a report is a leaked enum. `NotAssessed` and `Unknown` are deliberately
+ * worded so they read as "we could not tell", never as a harness in their own right.
+ */
+export function harnessLabel(value: string | null | undefined): string {
+  switch (value) {
+    case 'GitHubCopilot':
+      return 'GitHub Copilot';
+    case 'StandardOrCopilotChat':
+      return 'Standard / Copilot Chat';
+    case 'Unknown':
+      return 'Unrecognised feature';
+    case 'NotAssessed':
+      return 'No feature reported';
+    default:
+      return value || NOT_REPORTED;
+  }
 }
 
 /** A UTC ISO date as a short date. Rendered in UTC - the underlying grain is a UTC usage day. */
@@ -107,11 +149,21 @@ export const AZURE_DIMENSIONS: { key: AzureDimension; label: string }[] = [
   { key: 'subscription', label: 'Subscription' },
 ];
 
-/** Quotes a CSV field, doubling any embedded quotes. */
+/**
+ * Quotes a CSV field, doubling any embedded quotes, and neutralises spreadsheet formulas.
+ *
+ * Agent names, tool names, channels and knowledge sources are all tenant-controlled free text. A value
+ * beginning `=`, `+`, `-`, `@`, or a tab/carriage return is executed as a formula when the file is opened
+ * in Excel or Sheets - quoting does not prevent that. Prefixing with an apostrophe forces the cell to be
+ * read as text, which is the standard mitigation and is invisible once the file is open.
+ */
 function csvCell(value: string | number | null | undefined): string {
   if (value == null) return '';
   const text = String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+
+  const neutralised = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+
+  return /[",\r\n]/.test(neutralised) ? `"${neutralised.replace(/"/g, '""')}"` : neutralised;
 }
 
 /**
@@ -145,7 +197,7 @@ export function detailRowsToCsv(rows: AgentCostDetailRow[]): string {
       r.agentId ?? '',
       r.environmentName ?? '',
       r.environmentId ?? '',
-      r.harness ?? '',
+      harnessLabel(r.harness),
       r.featureName ?? '',
       r.llmModel ?? '',
       r.toolInvoked ?? '',

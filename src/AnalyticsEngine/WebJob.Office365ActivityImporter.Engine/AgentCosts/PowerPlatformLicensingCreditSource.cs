@@ -71,11 +71,40 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             return CopilotStudioCreditParser.ParseConsumptionPage(json);
         }
 
-        public async Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()
-        {
+        public async Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()        {
             var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}?api-version={ApiVersion}";
             var json = await GetJsonAsync(url, "Copilot Studio credit entitlement");
             return CopilotStudioCreditParser.ParseCapacity(json);
+        }
+
+        /// <summary>
+        /// One page of per-user consumption for the given day.
+        /// </summary>
+        /// <remarks>
+        /// Microsoft added this route in July 2026. It is the only documented source of per-user Copilot
+        /// Studio credit consumption - the per-agent route reports a distinct-user count and nothing more.
+        /// A 404 is treated as "this tenant's API does not offer the route" and returns null rather than
+        /// throwing, because a deployment against an older or restricted API surface must still get its
+        /// per-agent figures.
+        /// </remarks>
+        public async Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+        {
+            var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}/users"
+                + $"?fromDate={fromDate:yyyy-MM-dd}"
+                + $"&toDate={toDate:yyyy-MM-dd}"
+                + $"&pageSize={PageSize.ToString(CultureInfo.InvariantCulture)}"
+                + $"&api-version={ApiVersion}";
+
+            if (!string.IsNullOrEmpty(continuationToken))
+            {
+                url += $"&continuationToken={Uri.EscapeDataString(continuationToken)}";
+            }
+
+            var json = await GetJsonAsync(url, "Copilot Studio per-user credit consumption", treatNotFoundAsUnavailable: true);
+
+            // Null means the route is unavailable (404) or returned no content, which the importer treats as
+            // "nothing to import" rather than a failure.
+            return json == null ? null : CopilotStudioCreditParser.ParseUserConsumptionPage(json);
         }
 
         /// <summary>
@@ -98,10 +127,26 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
         }
 
-        private async Task<JObject> GetJsonAsync(string url, string what)
+        private async Task<JObject> GetJsonAsync(string url, string what, bool treatNotFoundAsUnavailable = false)
         {
             using (var response = await _httpClient.ExecuteHttpCallWithThrottleRetries(() => _httpClient.GetAsync(url), url))
             {
+                if (treatNotFoundAsUnavailable && response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    _logger.LogInformation($"The Power Platform licensing API has no route for {what} on this tenant "
+                        + "(HTTP 404). This is expected where the per-user entitlement routes are not available; the "
+                        + "per-agent figures are unaffected.");
+                    return null;
+                }
+
+                // 204 No Content is a documented response for the entitlement routes and simply means there
+                // is nothing for the requested range. Reading the (empty) body would parse to null anyway,
+                // but returning early keeps that explicit rather than incidental.
+                if (response.StatusCode == HttpStatusCode.NoContent)
+                {
+                    return null;
+                }
+
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
                     throw new AgentCostAuthorisationException(
@@ -156,5 +201,19 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     public class AgentCostAuthorisationException : Exception
     {
         public AgentCostAuthorisationException(string message) : base(message) { }
+    }
+
+    /// <summary>
+    /// Thrown when paging could not complete, so only part of the requested window was read.
+    /// </summary>
+    /// <remarks>
+    /// A partial read must never be stored as if it were the whole window. These are upserts keyed on the
+    /// usage date, so a truncated read would leave the missing slices at whatever they were last set to -
+    /// and, on a first import, simply absent. Either way the report would show a fall in spend that never
+    /// happened. Failing the run keeps the last good figures and retries on the next cycle.
+    /// </remarks>
+    public class AgentCostIncompleteReadException : Exception
+    {
+        public AgentCostIncompleteReadException(string message) : base(message) { }
     }
 }

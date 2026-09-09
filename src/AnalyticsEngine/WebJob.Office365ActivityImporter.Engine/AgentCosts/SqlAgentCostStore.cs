@@ -112,6 +112,42 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
         }
 
+        public async Task<int> UpsertCopilotStudioUserCreditsAsync(IReadOnlyList<CopilotStudioCreditUserDaily> rows)
+        {
+            if (rows == null || rows.Count == 0) return 0;
+
+            using (var db = _dbContextFactory.Create())
+            {
+                var from = rows.Min(r => r.UsageDate).Date;
+                var to = rows.Max(r => r.UsageDate).Date;
+
+                var stored = await db.CopilotStudioCreditUserDaily
+                    .Where(r => r.UsageDate >= from && r.UsageDate <= to)
+                    .ToListAsync();
+
+                var byHash = BuildIndex(stored, r => r.DimensionHash);
+
+                foreach (var row in rows)
+                {
+                    if (byHash.TryGetValue(row.DimensionHash, out var existing))
+                    {
+                        existing.BilledCredits = row.BilledCredits;
+                        existing.Unit = row.Unit;
+                        existing.EnvironmentName = row.EnvironmentName;
+                        existing.ImportedUtc = row.ImportedUtc;
+                    }
+                    else
+                    {
+                        db.CopilotStudioCreditUserDaily.Add(row);
+                        byHash[row.DimensionHash] = row;
+                    }
+                }
+
+                await db.SaveChangesAsync();
+                return rows.Count;
+            }
+        }
+
         public async Task SaveCapacitySnapshotAsync(CopilotStudioCreditCapacity snapshot)
         {
             if (snapshot == null) return;

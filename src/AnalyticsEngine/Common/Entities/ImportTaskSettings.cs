@@ -144,8 +144,10 @@ namespace Common.Entities
         /// not create. Note that Microsoft has not confirmed application-only access to the licensing
         /// entitlement routes, so on some tenants this may require a signed-in administrator and will report
         /// an authorisation failure instead of importing.</para>
-        /// <para>There is no per-user data to import: Microsoft bills Copilot Studio at the environment and
-        /// agent level, and the API returns a distinct-user count rather than identities.</para>
+        /// <para>Imports both the per-agent view and, where the tenant's API offers it, the per-user view
+        /// Microsoft added in July 2026. The per-user figures come from Microsoft directly - nothing is
+        /// apportioned or inferred - but they are a separate endpoint rather than a breakdown of the
+        /// per-agent one, so the two totals are not guaranteed to reconcile exactly.</para>
         /// </remarks>
         [ImportProp]
         public bool CopilotStudioCredits { get; set; } = false;

@@ -19,10 +19,11 @@ namespace Web.AnalyticsWeb.Controllers
     /// exposes the full billing tuple (agent x environment x harness x feature x model x tool x knowledge
     /// source x channel) rather than a fixed set of pre-canned charts.</para>
     ///
-    /// <para><b>There is no per-user cost anywhere in this API, by design.</b> Microsoft bills Copilot
-    /// Studio at the environment and agent level and returns only a distinct-user count; Azure billing is
-    /// resource-scoped and carries no identity at all. A per-user figure could only be produced by
-    /// apportioning, and an invented number sitting beside real billing data is worse than an absent one.</para>
+    /// <para><b>Per-user attribution is available for Copilot Studio only, and comes from Microsoft.</b>
+    /// The per-user entitlement routes Microsoft added in July 2026 report a user's billed credits directly;
+    /// nothing here is apportioned or inferred. <b>Azure spend has no per-user view and cannot have one</b> -
+    /// Azure billing is resource-scoped and no Cost Management surface, including the full cost-details
+    /// export, carries a user identity.</para>
     /// </summary>
     [Authorize]
     [RoutePrefix("api/AgentCosts")]
@@ -66,20 +67,20 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpGet, Route("summary")]
         public Task<IHttpActionResult> Summary(string from = null, string to = null, string agentId = null,
             string environmentId = null, string harness = null, string feature = null, string model = null,
-            string search = null)
+            string search = null, string tool = null, string knowledge = null, string channel = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
                 return Ok(await _store.GetSummaryAsync(query));
             });
 
         [HttpGet, Route("trend")]
         public Task<IHttpActionResult> Trend(string from = null, string to = null, string agentId = null,
             string environmentId = null, string harness = null, string feature = null, string model = null,
-            string search = null)
+            string search = null, string tool = null, string knowledge = null, string channel = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
                 return Ok(await _store.GetDailyTrendAsync(query));
             });
 
@@ -90,7 +91,7 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpGet, Route("breakdown")]
         public Task<IHttpActionResult> Breakdown(string dimension, string from = null, string to = null,
             string agentId = null, string environmentId = null, string harness = null, string feature = null,
-            string model = null, string search = null, int top = 20)
+            string model = null, string search = null, string tool = null, string knowledge = null, string channel = null, int top = 20)
             => Execute(async () =>
             {
                 if (!AgentCostDimensions.IsValid(dimension))
@@ -102,7 +103,7 @@ namespace Web.AnalyticsWeb.Controllers
                     });
                 }
 
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
                 return Ok(await _store.GetBreakdownAsync(query, dimension, top));
             });
 
@@ -110,10 +111,11 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpGet, Route("detail")]
         public Task<IHttpActionResult> Detail(string from = null, string to = null, string agentId = null,
             string environmentId = null, string harness = null, string feature = null, string model = null,
-            string search = null, int page = 1, int pageSize = 50, string sort = "credits", string direction = "desc")
+            string search = null, string tool = null, string knowledge = null, string channel = null,
+            int page = 1, int pageSize = 50, string sort = "credits", string direction = "desc")
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
                 query.Page = page;
                 query.PageSize = pageSize;
                 query.Sort = sort;
@@ -135,7 +137,7 @@ namespace Web.AnalyticsWeb.Controllers
                     });
                 }
 
-                var query = BuildQuery(from, to, null, null, null, null, null, null);
+                var query = BuildQuery(from, to, null, null, null, null, null, null, null, null, null);
                 return Ok(await _store.GetAzureBreakdownAsync(query, dimension, top));
             });
 
@@ -144,8 +146,23 @@ namespace Web.AnalyticsWeb.Controllers
         public Task<IHttpActionResult> Filters(string from = null, string to = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, null, null, null, null, null, null);
+                var query = BuildQuery(from, to, null, null, null, null, null, null, null, null, null);
                 return Ok(await _store.GetFilterOptionsAsync(query));
+            });
+
+        /// <summary>
+        /// The biggest per-user credit consumers in the window.
+        /// </summary>
+        /// <remarks>
+        /// Only Copilot Studio has this. Azure spend is resource-scoped and carries no user identity on any
+        /// Cost Management surface, so there is no equivalent endpoint for it and there cannot be one.
+        /// </remarks>
+        [HttpGet, Route("users")]
+        public Task<IHttpActionResult> Users(string from = null, string to = null, string environmentId = null, int top = 20)
+            => Execute(async () =>
+            {
+                var query = BuildQuery(from, to, null, environmentId, null, null, null, null, null, null, null);
+                return Ok(await _store.GetTopUsersAsync(query, top));
             });
 
         /// <summary>
@@ -154,12 +171,16 @@ namespace Web.AnalyticsWeb.Controllers
         /// whole report by a day for anyone not on UTC.
         /// </summary>
         private static AgentCostQuery BuildQuery(string from, string to, string agentId, string environmentId,
-            string harness, string feature, string model, string search)
+            string harness, string feature, string model, string search,
+            string tool = null, string knowledge = null, string channel = null)
         {
             var today = DateTime.UtcNow.Date;
 
-            var toDate = ParseDate(to) ?? today;
-            var fromDate = ParseDate(from) ?? toDate.AddDays(-(DefaultDays - 1));
+            // An unparseable date is rejected rather than treated as absent. Silently substituting the
+            // default window would answer a request for a period the caller never asked for, with
+            // perfectly plausible-looking figures - the worst kind of wrong answer for a cost report.
+            var toDate = ParseDate(to, nameof(to)) ?? today;
+            var fromDate = ParseDate(from, nameof(from)) ?? toDate.AddDays(-(DefaultDays - 1));
 
             if (fromDate > toDate)
             {
@@ -185,21 +206,37 @@ namespace Web.AnalyticsWeb.Controllers
                 FeatureName = Trimmed(feature),
                 LlmModel = Trimmed(model),
                 Search = Trimmed(search),
+                ToolInvoked = Trimmed(tool),
+                KnowledgeSources = Trimmed(knowledge),
+                ChannelId = Trimmed(channel),
             };
         }
 
         private static string Trimmed(string value)
             => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-        private static DateTime? ParseDate(string value)
+        /// <summary>
+        /// Parses a query-string date, or returns null when the parameter was not supplied at all.
+        /// </summary>
+        /// <exception cref="ArgumentException">
+        /// Thrown when a value WAS supplied but could not be parsed. Absent and invalid must not be
+        /// conflated: treating a typo as "use the default period" answers a different question than the one
+        /// asked, and the caller has no way to tell.
+        /// </exception>
+        private static DateTime? ParseDate(string value, string parameterName)
         {
             if (string.IsNullOrWhiteSpace(value)) return null;
 
-            return DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
-                out var parsed)
-                ? parsed.Date
-                : (DateTime?)null;
+            if (!DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                    out var parsed))
+            {
+                throw new ArgumentException(
+                    $"'{value}' is not a date this report understands. Use the form yyyy-MM-dd, for example 2026-09-01.",
+                    parameterName);
+            }
+
+            return parsed.Date;
         }
 
         /// <summary>

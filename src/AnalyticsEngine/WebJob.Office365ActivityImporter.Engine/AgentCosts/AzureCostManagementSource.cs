@@ -55,14 +55,28 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             var url = $"{BaseUrl}/{scope.Trim('/')}/providers/Microsoft.CostManagement/query?api-version={ApiVersion}";
             var body = BuildRequestBody(fromDate, toDate);
 
+            // Every page URL already visited. A nextLink that points back at a page we have read would
+            // otherwise be followed until the page cap, and MapAndAggregate would SUM the repeats - turning a
+            // server-side paging bug into inflated spend rather than an error.
+            var visited = new HashSet<string>(StringComparer.Ordinal);
             var pages = 0;
+
             while (!string.IsNullOrEmpty(url))
             {
+                if (!visited.Add(url))
+                {
+                    throw new AgentCostIncompleteReadException(
+                        $"Azure Cost Management returned a nextLink for scope '{scope}' that points back to a page already "
+                        + "read, so paging could not complete. Nothing was stored for this scope; it will be retried on the "
+                        + "next cycle.");
+                }
+
                 if (++pages > MaxPages)
                 {
-                    _logger.LogWarning($"Stopped reading Azure cost data after {MaxPages} pages for scope '{scope}'. "
-                        + "This is a safety limit; the imported window may be incomplete.");
-                    break;
+                    throw new AgentCostIncompleteReadException(
+                        $"Azure Cost Management paging for scope '{scope}' exceeded the {MaxPages}-page safety limit, so the "
+                        + "window could not be read completely. Nothing was stored for this scope rather than a partial "
+                        + "figure that would look like a drop in spend.");
                 }
 
                 var json = await PostJsonAsync(url, body, scope);
@@ -78,11 +92,24 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         }
 
         /// <summary>
-        /// Builds the query body: daily granularity, cost and quantity aggregated, grouped by the dimensions
-        /// stored on <see cref="AzureCostDaily"/>, and optionally filtered to the configured meters.
+        /// Builds the query body: daily granularity, cost and quantity aggregated, grouped by the configured
+        /// dimensions, and optionally filtered to the configured meters.
         /// </summary>
+        /// <remarks>
+        /// <b>At most two groupings.</b> Cost Management's <c>QueryDataset</c> schema declares
+        /// <c>grouping</c> with <c>maxItems: 2</c> ("Query can have up to 2 group by clauses") in every API
+        /// version, and a request carrying more is rejected outright with HTTP 400 - so a richer grain cannot be
+        /// asked for here however much we would like it. <c>aggregation</c> carries the same limit, which is why
+        /// only cost and quantity are requested.
+        /// </remarks>
         internal string BuildRequestBody(DateTime fromDate, DateTime toDate)
         {
+            var grouping = new JArray();
+            foreach (var dimension in _settings.ResolvedGroupBy)
+            {
+                grouping.Add(Dimension(dimension));
+            }
+
             var request = new JObject
             {
                 ["type"] = "ActualCost",
@@ -100,16 +127,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         ["totalCost"] = new JObject { ["name"] = "PreTaxCost", ["function"] = "Sum" },
                         ["totalQuantity"] = new JObject { ["name"] = "UsageQuantity", ["function"] = "Sum" },
                     },
-                    ["grouping"] = new JArray
-                    {
-                        Dimension("SubscriptionId"),
-                        Dimension("ResourceId"),
-                        Dimension("ResourceGroup"),
-                        Dimension("ServiceName"),
-                        Dimension("MeterCategory"),
-                        Dimension("MeterSubCategory"),
-                        Dimension("Meter"),
-                    },
+                    ["grouping"] = grouping,
                 },
             };
 

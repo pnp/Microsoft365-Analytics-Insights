@@ -335,7 +335,7 @@
             // chkCopilotStudioCredits
             // 
             this.chkCopilotStudioCredits.AutoSize = true;
-            this.chkCopilotStudioCredits.Location = new System.Drawing.Point(356, 136);
+            this.chkCopilotStudioCredits.Location = new System.Drawing.Point(356, 212);
             this.chkCopilotStudioCredits.Margin = new System.Windows.Forms.Padding(2);
             this.chkCopilotStudioCredits.Name = "chkCopilotStudioCredits";
             this.chkCopilotStudioCredits.Size = new System.Drawing.Size(280, 17);
@@ -346,7 +346,7 @@
             // chkAzureCostManagement
             // 
             this.chkAzureCostManagement.AutoSize = true;
-            this.chkAzureCostManagement.Location = new System.Drawing.Point(356, 156);
+            this.chkAzureCostManagement.Location = new System.Drawing.Point(356, 232);
             this.chkAzureCostManagement.Margin = new System.Windows.Forms.Padding(2);
             this.chkAzureCostManagement.Name = "chkAzureCostManagement";
             this.chkAzureCostManagement.Size = new System.Drawing.Size(280, 17);

@@ -55,13 +55,23 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// Runs one import across every configured scope. Returns the log row it wrote; never throws, so a
         /// failure cannot take down the import sections that run after it.
         /// </summary>
-        public async Task<AgentCostImportLog> ImportAsync()
+        public async Task<AgentCostImportOutcome> ImportAsync()
         {
             var today = _clock.UtcNow.Date;
             var windowDays = _settings.TrailingWindowDays > 0
                 ? _settings.TrailingWindowDays
                 : AzureCostImportSettings.DefaultTrailingWindowDays;
-            var from = today.AddDays(-(windowDays - 1));
+
+            // The window is the LATER of "the configured trailing days" and "everything still provisional",
+            // never just the former.
+            //
+            // Those two are not the same span, and assuming they were left rows stale for ever: Azure keeps
+            // amending an open billing period until a few days after it ends, so a charge dated the 1st is
+            // still mutable a month later - long after a 5-day trailing window has stopped re-reading it. The
+            // row would keep its first estimate, and keep saying "estimate", permanently.
+            var provisionalFrom = EarliestStillProvisionalDate(today);
+            var trailingFrom = today.AddDays(-(windowDays - 1));
+            var from = provisionalFrom < trailingFrom ? provisionalFrom : trailingFrom;
 
             var log = new AgentCostImportLog
             {
@@ -83,10 +93,22 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 _logger.LogWarning("Azure cost import is enabled but no scope is configured, so it did nothing. " + log.Error);
 
                 await SafeSaveLogAsync(log);
-                return log;
+
+                // Treated like an authorisation failure for cadence purposes: a missing setting cannot fix
+                // itself, so retrying every cycle would only repeat the same warning indefinitely.
+                return new AgentCostImportOutcome(log, isAuthorisationFailure: true);
             }
 
             var errors = new List<string>();
+            var sawAuthorisationFailure = false;
+
+            if (_settings.GroupByWasTruncated)
+            {
+                _logger.LogWarning($"AzureCostGroupBy names {_settings.GroupBy.Count} dimensions, but Cost Management "
+                    + $"accepts at most {AzureCostImportSettings.MaxGroupByDimensions} per query. Using "
+                    + $"'{string.Join(", ", _settings.ResolvedGroupBy)}' and ignoring the rest - a request with more "
+                    + "would be rejected outright.");
+            }
 
             foreach (var scope in _settings.Scopes)
             {
@@ -114,6 +136,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 catch (AgentCostAuthorisationException ex)
                 {
                     errors.Add(ex.Message);
+                    sawAuthorisationFailure = true;
                     _logger.LogError(ex, $"Azure cost import failed for scope '{scope}': " + ex.Message);
                 }
                 catch (Exception ex)
@@ -131,7 +154,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
 
             await SafeSaveLogAsync(log);
-            return log;
+
+            // Only an ALL-scopes authorisation failure earns the back-off. If one scope was refused but
+            // another worked, the run is worth repeating on the next cycle to pick up the working scope's
+            // fresher figures.
+            var allScopesRefused = sawAuthorisationFailure && errors.Count == _settings.Scopes.Count;
+            return new AgentCostImportOutcome(log, allScopesRefused);
         }
 
         private bool HasFilter => _settings.MeterFilterValues != null && _settings.MeterFilterValues.Count > 0;
@@ -181,9 +209,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 {
                     UsageDate = usageDate,
                     Scope = scope,
-                    SubscriptionId = row.SubscriptionId,
+                    // Recovered from the resource id when the query could not group by them. Cost Management
+                    // allows only two group-by clauses, so the subscription and resource group are not
+                    // returned as their own columns - but an Azure resource id contains both.
+                    SubscriptionId = row.SubscriptionId ?? SubscriptionIdFromResourceId(row.ResourceId),
                     ResourceId = Truncate(row.ResourceId, 850),
-                    ResourceGroup = row.ResourceGroup,
+                    ResourceGroup = row.ResourceGroup ?? ResourceGroupFromResourceId(row.ResourceId),
                     ServiceName = row.ServiceName,
                     MeterCategory = row.MeterCategory,
                     MeterSubCategory = row.MeterSubCategory,
@@ -211,6 +242,55 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 DateTime.DaysInMonth(usageDate.Year, usageDate.Month));
 
             return today.Date <= periodEnd.AddDays(BillingPeriodFinalisationLagDays);
+        }
+
+        /// <summary>
+        /// The earliest usage day whose cost Azure might still restate, given today's date. This is the start
+        /// of the current billing period, or of the previous one while it is still inside the finalisation
+        /// lag.
+        /// </summary>
+        /// <remarks>
+        /// Kept in step with <see cref="IsStillProvisional"/> by construction: it returns the earliest date
+        /// for which that method is still true, so a row can never be labelled an estimate while sitting
+        /// outside the window that would refresh it.
+        /// </remarks>
+        internal static DateTime EarliestStillProvisionalDate(DateTime today)
+        {
+            var startOfThisPeriod = new DateTime(today.Year, today.Month, 1);
+
+            // Within the lag, last period is still open too.
+            var startOfLastPeriod = startOfThisPeriod.AddMonths(-1);
+            return IsStillProvisional(startOfLastPeriod, today) ? startOfLastPeriod : startOfThisPeriod;
+        }
+
+        /// <summary>
+        /// Pulls the subscription id out of an Azure resource id
+        /// (<c>/subscriptions/{id}/resourceGroups/{rg}/providers/...</c>), or null when it is not there.
+        /// </summary>
+        internal static string SubscriptionIdFromResourceId(string resourceId)
+            => SegmentAfter(resourceId, "subscriptions");
+
+        /// <summary>Pulls the resource group out of an Azure resource id, or null when it is not there.</summary>
+        internal static string ResourceGroupFromResourceId(string resourceId)
+            => SegmentAfter(resourceId, "resourcegroups");
+
+        /// <summary>
+        /// The path segment following <paramref name="marker"/>, matched case-insensitively because Azure
+        /// resource ids are not case-consistent (<c>resourceGroups</c> and <c>resourcegroups</c> both occur).
+        /// </summary>
+        private static string SegmentAfter(string resourceId, string marker)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId)) return null;
+
+            var segments = resourceId.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < segments.Length - 1; i++)
+            {
+                if (string.Equals(segments[i], marker, StringComparison.OrdinalIgnoreCase))
+                {
+                    return segments[i + 1];
+                }
+            }
+            return null;
         }
 
         /// <summary>

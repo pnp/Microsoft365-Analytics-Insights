@@ -83,20 +83,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var importer = _creditImporterFactory();
 
                 var consumption = await importer.ImportAsync();
+                var users = await importer.ImportUserCreditsAsync();
                 var capacity = await importer.ImportCapacityAsync();
 
-                // Only stamp the gate on a clean run. Stamping after a failure would hide the problem for a
-                // whole interval - which is exactly how a missing role assignment becomes "it silently
-                // imported nothing all day".
-                if (string.IsNullOrEmpty(consumption.Error) && string.IsNullOrEmpty(capacity.Error))
-                {
-                    await _lastRunStore.SetLastRunUtc(CopilotStudioCreditsLastImportedKey, _clock.UtcNow);
-                }
-                else
-                {
-                    _logger.LogWarning("Copilot Studio credit import did not fully succeed, so it has NOT been recorded "
-                        + "as up to date and will be retried on the next cycle.");
-                }
+                await StampOrRetry("Copilot Studio credit import", CopilotStudioCreditsLastImportedKey,
+                    succeeded: consumption.Succeeded && users.Succeeded && capacity.Succeeded,
+                    isAuthorisationFailure: consumption.IsAuthorisationFailure || users.IsAuthorisationFailure
+                        || capacity.IsAuthorisationFailure);
             }
             catch (Exception ex)
             {
@@ -125,17 +118,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             try
             {
-                var log = await _azureCostImporterFactory().ImportAsync();
+                var outcome = await _azureCostImporterFactory().ImportAsync();
 
-                if (string.IsNullOrEmpty(log.Error))
-                {
-                    await _lastRunStore.SetLastRunUtc(AzureCostLastImportedKey, _clock.UtcNow);
-                }
-                else
-                {
-                    _logger.LogWarning("Azure Cost Management import did not fully succeed, so it has NOT been recorded "
-                        + "as up to date and will be retried on the next cycle.");
-                }
+                await StampOrRetry("Azure Cost Management import", AzureCostLastImportedKey,
+                    outcome.Succeeded, outcome.IsAuthorisationFailure);
             }
             catch (Exception ex)
             {
@@ -144,8 +130,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
         }
 
-        private async Task<bool> IsDueAsync(string cadenceKey, int intervalHours, string description)
-        {
+        private async Task<bool> IsDueAsync(string cadenceKey, int intervalHours, string description)        {
             var lastRun = await _lastRunStore.GetLastRunUtc(cadenceKey);
             if (ImportCadenceGate.ShouldRun(lastRun, intervalHours, force: false, nowUtc: _clock.UtcNow))
             {
@@ -154,6 +139,40 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             _logger.LogInformation($"Skipping {description} - last ran {lastRun:u}, and the interval is {intervalHours}h.");
             return false;
+        }
+
+        /// <summary>
+        /// Decides whether a finished run counts as "up to date" for cadence purposes.
+        /// </summary>
+        /// <remarks>
+        /// <para>A clean run stamps the gate, obviously. A <b>transient</b> failure does not, so the next
+        /// cycle retries promptly instead of hiding the problem for a whole interval - the same reasoning as
+        /// the Graph interaction-history section.</para>
+        /// <para>An <b>authorisation</b> failure is treated as a completed run and stamps the gate. Nothing
+        /// the importer does will fix a missing role assignment or an unset scope, so retrying every cycle
+        /// would send a request Microsoft has already refused every few minutes for as long as the toggle
+        /// stays on, and write an identical error row each time. The error is on the Health page and in
+        /// <c>agent_cost_import_log</c> either way; repeating it faster does not make it more visible.</para>
+        /// </remarks>
+        private async Task StampOrRetry(string description, string cadenceKey, bool succeeded, bool isAuthorisationFailure)
+        {
+            if (succeeded)
+            {
+                await _lastRunStore.SetLastRunUtc(cadenceKey, _clock.UtcNow);
+                return;
+            }
+
+            if (isAuthorisationFailure)
+            {
+                await _lastRunStore.SetLastRunUtc(cadenceKey, _clock.UtcNow);
+                _logger.LogWarning($"{description} was refused, and retrying cannot fix that, so it will wait for the "
+                    + "normal interval rather than re-asking every cycle. Fix the permission (see the error above), then "
+                    + "restart the web-job to retry immediately.");
+                return;
+            }
+
+            _logger.LogWarning($"{description} did not fully succeed, so it has NOT been recorded as up to date and "
+                + "will be retried on the next cycle.");
         }
     }
 }

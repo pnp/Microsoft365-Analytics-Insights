@@ -247,6 +247,7 @@ namespace Common.Entities.Config
                     && azureCostIntervalHours >= 0
                     ? azureCostIntervalHours
                     : AzureCostImportSettings.DefaultIntervalHours,
+                GroupBy = AzureCostImportSettings.ParseList(ConfigurationManager.AppSettings.Get("AzureCostGroupBy")),
             };
         }
 

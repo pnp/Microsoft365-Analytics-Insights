@@ -69,6 +69,63 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     }
 
     /// <summary>
+    /// The result of one agent-cost import run: the log row that was written, plus whether the failure (if
+    /// any) was an <b>authorisation</b> one.
+    /// </summary>
+    /// <remarks>
+    /// The distinction drives the cadence gate. A transient failure should be retried on the next cycle, so
+    /// the gate is deliberately not stamped for it. An authorisation failure is different in kind: no amount
+    /// of retrying fixes a missing role assignment, and retrying every cycle would send a failing request to
+    /// Microsoft every few minutes, indefinitely, while filling the import log with identical rows. Those runs
+    /// stamp the gate so the retry happens at the normal interval instead.
+    /// </remarks>
+    public class AgentCostImportOutcome
+    {
+        public AgentCostImportOutcome(AgentCostImportLog log, bool isAuthorisationFailure = false)
+        {
+            Log = log;
+            IsAuthorisationFailure = isAuthorisationFailure;
+        }
+
+        public AgentCostImportLog Log { get; }
+
+        public bool IsAuthorisationFailure { get; }
+
+        public bool Succeeded => Log != null && string.IsNullOrEmpty(Log.Error);
+    }
+
+    /// <summary>
+    /// One user's billed Copilot Studio consumption for a day, exactly as the licensing API reports it.
+    /// </summary>
+    public class CopilotStudioUserCreditRow
+    {
+        /// <summary>
+        /// The user identifier as returned. Microsoft documents it only as a string - it is deliberately not
+        /// assumed to be a UPN or an Entra object id, and is never joined to the user table on that guess.
+        /// </summary>
+        public string UserId { get; set; }
+
+        public string EnvironmentId { get; set; }
+        public decimal Consumed { get; set; }
+        public string Unit { get; set; }
+        public DateTime? AsOfDate { get; set; }
+    }
+
+    /// <summary>One page of per-user consumption rows, plus the token for the next.</summary>
+    public class CopilotStudioUserCreditPage
+    {
+        public CopilotStudioUserCreditPage(IReadOnlyList<CopilotStudioUserCreditRow> rows, string continuationToken)
+        {
+            Rows = rows ?? new List<CopilotStudioUserCreditRow>();
+            ContinuationToken = continuationToken;
+        }
+
+        public IReadOnlyList<CopilotStudioUserCreditRow> Rows { get; }
+        public string ContinuationToken { get; }
+        public bool HasMore => !string.IsNullOrEmpty(ContinuationToken);
+    }
+
+    /// <summary>
     /// Reads billed Copilot Studio consumption from whatever the Power Platform licensing surface happens to
     /// be. An interface so the importer's windowing, paging and mapping logic can be tested against a fake
     /// without HTTP - and so the real adapter's undocumented-response-shape handling stays in one place.
@@ -80,6 +137,18 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// <paramref name="continuationToken"/> for the first page.
         /// </summary>
         Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken);
+
+        /// <summary>
+        /// One page of <b>per-user</b> consumption for the given day.
+        /// </summary>
+        /// <remarks>
+        /// A separate method rather than an overload of the per-agent read, because it is a different
+        /// endpoint with a different response envelope (<c>value[].users[]</c> rather than
+        /// <c>value[].resources[]</c>) and a different documented model. Returns null when the tenant's API
+        /// does not offer the route - these endpoints are new (July 2026), so an older or restricted tenant
+        /// legitimately has nothing here and that must be distinguishable from "no consumption".
+        /// </remarks>
+        Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken);
 
         /// <summary>The tenant's current entitlement/consumption totals, or null if unavailable.</summary>
         Task<CopilotStudioCapacitySnapshot> GetCapacityAsync();
@@ -132,6 +201,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     {
         /// <summary>Inserts or updates the given rows. Returns how many rows were written.</summary>
         Task<int> UpsertCopilotStudioCreditsAsync(IReadOnlyList<CopilotStudioCreditDaily> rows);
+
+        /// <summary>Inserts or updates the given per-user rows. Returns how many rows were written.</summary>
+        Task<int> UpsertCopilotStudioUserCreditsAsync(IReadOnlyList<CopilotStudioCreditUserDaily> rows);
 
         /// <summary>Inserts or updates the given rows. Returns how many rows were written.</summary>
         Task<int> UpsertAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows);

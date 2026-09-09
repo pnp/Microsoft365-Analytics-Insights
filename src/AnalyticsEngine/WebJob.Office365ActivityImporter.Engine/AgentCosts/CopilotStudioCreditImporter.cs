@@ -55,7 +55,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// Runs one import. Returns the log row it wrote, which carries the outcome; never throws, so a
         /// failure here cannot take down the import sections that run after it.
         /// </summary>
-        public async Task<AgentCostImportLog> ImportAsync()
+        public async Task<AgentCostImportOutcome> ImportAsync()
         {
             // Microsoft's consumption figures lag, and a partially-settled day is re-read on the next run
             // anyway, so the window ends today rather than trying to guess how far behind the API is.
@@ -73,21 +73,42 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             try
             {
                 var environmentNames = await _source.GetEnvironmentNamesAsync();
-                var rows = await ReadAllPagesAsync(from, today);
-                log.RowsRead = rows.Count;
 
-                var mapped = MapAndAggregate(rows, from, today, environmentNames, _clock.UtcNow);
+                var mapped = new List<CopilotStudioCreditDaily>();
+                var rowsRead = 0;
+
+                // One request PER DAY, not one request for the whole window.
+                //
+                // The endpoint reports consumption for the range it is given, and the only per-row date is
+                // `asOfDate` - which is not part of the documented response model and appears only when the
+                // undocumented `includeFields` parameter is honoured. Asking for a seven-day range and then
+                // trusting that field to split the answer back into days would, if it were ever absent or
+                // range-level, pile a whole week's spend onto a single date. Asking for one day at a time
+                // makes the usage date a fact about the request instead of an inference about the response.
+                //
+                // The cost is a handful of extra calls on a once-a-day import, which is not a constraint.
+                for (var day = from; day <= today; day = day.AddDays(1))
+                {
+                    var rows = await ReadAllPagesAsync(day, day);
+                    rowsRead += rows.Count;
+                    mapped.AddRange(MapAndAggregate(rows, day, day, environmentNames, _clock.UtcNow));
+                }
+
+                log.RowsRead = rowsRead;
                 log.RowsSaved = await _store.UpsertCopilotStudioCreditsAsync(mapped);
 
                 _logger.LogInformation(
-                    $"Copilot Studio credits: read {log.RowsRead:N0} row(s) for {from:yyyy-MM-dd}..{today:yyyy-MM-dd}, "
-                    + $"stored {log.RowsSaved:N0} after aggregating duplicate dimension slices.");
+                    $"Copilot Studio credits: read {log.RowsRead:N0} row(s) across {(today - from).Days + 1} day(s) "
+                    + $"({from:yyyy-MM-dd}..{today:yyyy-MM-dd}), stored {log.RowsSaved:N0} after aggregating duplicate "
+                    + "dimension slices.");
             }
             catch (AgentCostAuthorisationException ex)
             {
                 // The remedy is a role assignment, so the message is the whole value of this log line.
                 log.Error = ex.Message;
                 _logger.LogError(ex, "Copilot Studio credit import failed: " + ex.Message);
+                await SafeSaveLogAsync(log);
+                return new AgentCostImportOutcome(log, isAuthorisationFailure: true);
             }
             catch (Exception ex)
             {
@@ -97,37 +118,44 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
 
             await SafeSaveLogAsync(log);
-            return log;
+            return new AgentCostImportOutcome(log);
         }
 
         private async Task<List<CopilotStudioCreditRow>> ReadAllPagesAsync(DateTime from, DateTime to)
         {
             var all = new List<CopilotStudioCreditRow>();
             string continuationToken = null;
+
+            // Every continuation token already followed. A server that keeps handing back the same token
+            // would otherwise append the same rows on each pass; those rows aggregate by dimension hash, so
+            // the repeats would be SUMMED into inflated spend rather than surfacing as an error.
+            var seenTokens = new HashSet<string>(StringComparer.Ordinal);
             var pages = 0;
 
             do
             {
                 if (++pages > MaxPages)
                 {
-                    _logger.LogWarning($"Stopped reading Copilot Studio credit consumption after {MaxPages} pages. "
-                        + "This is a safety limit; the imported window may be incomplete.");
-                    break;
+                    throw new AgentCostIncompleteReadException(
+                        $"Copilot Studio credit paging exceeded the {MaxPages}-page safety limit, so the window "
+                        + $"{from:yyyy-MM-dd}..{to:yyyy-MM-dd} could not be read completely. Nothing was stored rather "
+                        + "than a partial figure that would look like a drop in spend.");
                 }
 
                 var page = await _source.GetConsumptionPageAsync(from, to, continuationToken);
                 all.AddRange(page.Rows);
 
-                // Guard against a server that keeps handing back the same token: that would page for ever
-                // while appending the same rows.
-                if (page.HasMore && string.Equals(page.ContinuationToken, continuationToken, StringComparison.Ordinal))
+                if (!page.HasMore) break;
+
+                if (!seenTokens.Add(page.ContinuationToken))
                 {
-                    _logger.LogWarning("The Power Platform licensing API returned the same continuation token twice; "
-                        + "stopping to avoid an endless loop. The imported window may be incomplete.");
-                    break;
+                    throw new AgentCostIncompleteReadException(
+                        "The Power Platform licensing API returned a continuation token it had already returned, so "
+                        + "paging could not complete. Nothing was stored for this window; it will be retried on the next "
+                        + "cycle.");
                 }
 
-                continuationToken = page.HasMore ? page.ContinuationToken : null;
+                continuationToken = page.ContinuationToken;
             }
             while (!string.IsNullOrEmpty(continuationToken));
 
@@ -224,22 +252,23 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         }
 
         /// <summary>
-        /// The usage day for a row. Uses the API's own <c>asOfDate</c> when present, clamped to the window
-        /// that was requested; otherwise falls back to the end of the window.
+        /// The usage day for a row.
         /// </summary>
         /// <remarks>
-        /// Clamping matters because the usage date is part of the upsert key. A row dated outside the window
-        /// would be written but never revisited by a later run over that window, so a restatement of it could
-        /// never be applied - it would be stranded at its first value.
+        /// <para>Because the importer asks for exactly one day per request, the <b>requested</b> day is the
+        /// authoritative answer and is used unconditionally. The API's own <c>asOfDate</c> is deliberately
+        /// not preferred over it: that field is absent from the documented response model, so relying on it
+        /// would make the usage date - which is part of the upsert key - depend on an undocumented field
+        /// continuing to be returned.</para>
+        /// <para>It is also never clamped or rewritten. The date being a fact about the request means it is
+        /// stable across runs, so a re-read of the same day updates the row in place rather than inserting a
+        /// second copy under a shifted key as the trailing window advances.</para>
         /// </remarks>
         private static DateTime ResolveUsageDate(CopilotStudioCreditRow row, DateTime windowFrom, DateTime windowTo)
         {
-            if (!row.AsOfDate.HasValue) return windowTo.Date;
-
-            var asOf = row.AsOfDate.Value.Date;
-            if (asOf < windowFrom.Date) return windowFrom.Date;
-            if (asOf > windowTo.Date) return windowTo.Date;
-            return asOf;
+            // windowFrom == windowTo for every production call; the parameters remain so the mapping stays
+            // testable with a wider window.
+            return windowFrom == windowTo ? windowFrom.Date : (row.AsOfDate?.Date ?? windowTo.Date);
         }
 
         private async Task SafeSaveLogAsync(AgentCostImportLog log)
@@ -264,7 +293,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// run out?" rather than "where did the spend go?") and because it is cheap: one call, one row. Never
         /// throws, for the same reason as the consumption import.
         /// </summary>
-        public async Task<AgentCostImportLog> ImportCapacityAsync()
+        public async Task<AgentCostImportOutcome> ImportCapacityAsync()
         {
             var log = new AgentCostImportLog
             {
@@ -307,6 +336,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             {
                 log.Error = ex.Message;
                 _logger.LogError(ex, "Copilot Studio credit entitlement read failed: " + ex.Message);
+                await SafeSaveLogAsync(log);
+                return new AgentCostImportOutcome(log, isAuthorisationFailure: true);
             }
             catch (Exception ex)
             {
@@ -316,7 +347,160 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
 
             await SafeSaveLogAsync(log);
-            return log;
+            return new AgentCostImportOutcome(log);
+        }
+
+        /// <summary>
+        /// Imports <b>per-user</b> billed Copilot Studio consumption, from the entitlement routes Microsoft
+        /// added in July 2026.
+        /// </summary>
+        /// <remarks>
+        /// <para>This is the only documented source of per-user Copilot Studio credit consumption. It is a
+        /// separate endpoint from the per-agent read, not a breakdown of it, so the two are stored in
+        /// separate tables and their totals should not be expected to reconcile exactly.</para>
+        /// <para>Returns a log whose <c>RowsRead</c> is zero and whose error is empty when the tenant's API
+        /// does not offer the route - an older or restricted API surface is a legitimate state, not a
+        /// failure, and must not stop the per-agent figures being recorded as up to date.</para>
+        /// </remarks>
+        public async Task<AgentCostImportOutcome> ImportUserCreditsAsync()
+        {
+            var today = _clock.UtcNow.Date;
+            var from = today.AddDays(-(_trailingWindowDays - 1));
+
+            var log = new AgentCostImportLog
+            {
+                ImportName = AgentCostImportNames.CopilotStudioUserCredits,
+                ImportedUtc = _clock.UtcNow,
+                WindowFrom = from,
+                WindowTo = today,
+            };
+
+            try
+            {
+                var environmentNames = await _source.GetEnvironmentNamesAsync();
+
+                var mapped = new List<CopilotStudioCreditUserDaily>();
+                var rowsRead = 0;
+                var routeAvailable = true;
+
+                // One request per day, for the same reason as the per-agent read: the documented parameters
+                // describe a query RANGE, and whether these newer routes break a range down per day is not
+                // established. Asking for a single day makes the usage date a fact about the request.
+                for (var day = from; day <= today && routeAvailable; day = day.AddDays(1))
+                {
+                    string continuationToken = null;
+                    var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+                    var pages = 0;
+
+                    do
+                    {
+                        if (++pages > MaxPages)
+                        {
+                            throw new AgentCostIncompleteReadException(
+                                $"Copilot Studio per-user credit paging for {day:yyyy-MM-dd} exceeded the {MaxPages}-page "
+                                + "safety limit, so the day could not be read completely. Nothing was stored.");
+                        }
+
+                        var page = await _source.GetUserConsumptionPageAsync(day, day, continuationToken);
+                        if (page == null)
+                        {
+                            routeAvailable = false;
+                            break;
+                        }
+
+                        rowsRead += page.Rows.Count;
+                        mapped.AddRange(MapUserRows(page.Rows, day, environmentNames, _clock.UtcNow));
+
+                        if (!page.HasMore) break;
+
+                        if (!seenTokens.Add(page.ContinuationToken))
+                        {
+                            throw new AgentCostIncompleteReadException(
+                                "The Power Platform licensing API returned a per-user continuation token it had already "
+                                + "returned, so paging could not complete. Nothing was stored for this window.");
+                        }
+
+                        continuationToken = page.ContinuationToken;
+                    }
+                    while (!string.IsNullOrEmpty(continuationToken));
+                }
+
+                if (!routeAvailable)
+                {
+                    _logger.LogInformation("Per-user Copilot Studio credit consumption is not available on this tenant's "
+                        + "licensing API. Per-agent figures are unaffected.");
+                    await SafeSaveLogAsync(log);
+                    return new AgentCostImportOutcome(log);
+                }
+
+                log.RowsRead = rowsRead;
+                log.RowsSaved = await _store.UpsertCopilotStudioUserCreditsAsync(mapped);
+
+                _logger.LogInformation($"Copilot Studio per-user credits: read {log.RowsRead:N0} row(s) across "
+                    + $"{(today - from).Days + 1} day(s), stored {log.RowsSaved:N0}.");
+            }
+            catch (AgentCostAuthorisationException ex)
+            {
+                log.Error = ex.Message;
+                _logger.LogError(ex, "Copilot Studio per-user credit import failed: " + ex.Message);
+                await SafeSaveLogAsync(log);
+                return new AgentCostImportOutcome(log, isAuthorisationFailure: true);
+            }
+            catch (Exception ex)
+            {
+                log.Error = ex.Message;
+                _logger.LogError(ex, $"Copilot Studio per-user credit import failed: {ex.Message}. "
+                    + "No other import is affected; this one will be retried on the next cycle.");
+            }
+
+            await SafeSaveLogAsync(log);
+            return new AgentCostImportOutcome(log);
+        }
+
+        /// <summary>
+        /// Maps per-user API rows onto entities for one day, combining any that land on the same identity.
+        /// </summary>
+        internal static IReadOnlyList<CopilotStudioCreditUserDaily> MapUserRows(
+            IEnumerable<CopilotStudioUserCreditRow> rows,
+            DateTime usageDate,
+            IReadOnlyDictionary<string, string> environmentNames,
+            DateTime importedUtc)
+        {
+            var byHash = new Dictionary<string, CopilotStudioCreditUserDaily>(StringComparer.Ordinal);
+
+            foreach (var row in rows ?? Enumerable.Empty<CopilotStudioUserCreditRow>())
+            {
+                if (row == null || string.IsNullOrWhiteSpace(row.UserId)) continue;
+
+                var hash = AgentCostRowHasher.Hash(
+                    usageDate.ToString("yyyy-MM-dd"), row.UserId, row.EnvironmentId);
+
+                if (byHash.TryGetValue(hash, out var existing))
+                {
+                    existing.BilledCredits += row.Consumed;
+                    continue;
+                }
+
+                string environmentName = null;
+                if (!string.IsNullOrEmpty(row.EnvironmentId) && environmentNames != null)
+                {
+                    environmentNames.TryGetValue(row.EnvironmentId, out environmentName);
+                }
+
+                byHash.Add(hash, new CopilotStudioCreditUserDaily
+                {
+                    UsageDate = usageDate.Date,
+                    UserId = row.UserId,
+                    EnvironmentId = row.EnvironmentId,
+                    EnvironmentName = environmentName,
+                    BilledCredits = row.Consumed,
+                    Unit = row.Unit,
+                    DimensionHash = hash,
+                    ImportedUtc = importedUtc,
+                });
+            }
+
+            return byHash.Values.ToList();
         }
     }
 }

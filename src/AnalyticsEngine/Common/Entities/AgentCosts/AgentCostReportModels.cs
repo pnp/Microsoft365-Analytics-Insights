@@ -75,6 +75,15 @@ namespace Common.Entities.AgentCosts
         public string FeatureName { get; set; }
         public string LlmModel { get; set; }
 
+        /// <summary>
+        /// The remaining billing dimensions. Present so every dimension the report can PIVOT by can also be
+        /// FILTERED by - spotting that one tool or channel is driving the spend is only half an answer if you
+        /// then cannot narrow the page to it.
+        /// </summary>
+        public string ToolInvoked { get; set; }
+        public string KnowledgeSources { get; set; }
+        public string ChannelId { get; set; }
+
         /// <summary>Free-text match against the agent name. Null or empty means no name filter.</summary>
         public string Search { get; set; }
 
@@ -93,6 +102,20 @@ namespace Common.Entities.AgentCosts
         /// <summary>True once any row exists, so the UI can tell "off" from "on but not yet run".</summary>
         public bool HasCopilotStudioCreditData { get; set; }
         public bool HasAzureCostData { get; set; }
+
+        /// <summary>
+        /// True when an import has completed without error at least once. Distinguishes "has not run yet"
+        /// from "ran fine, this tenant simply has nothing to bill" - which otherwise look identical and would
+        /// leave a tenant with no Copilot Studio agents staring at a "not imported yet" notice for ever.
+        /// </summary>
+        public bool CopilotStudioCreditsHasRunCleanly { get; set; }
+        public bool AzureCostsHaveRunCleanly { get; set; }
+
+        /// <summary>
+        /// True once any per-user credit row exists. Separate from the per-agent flag because the per-user
+        /// entitlement routes are newer and a tenant can legitimately have one without the other.
+        /// </summary>
+        public bool HasPerUserCreditData { get; set; }
 
         public DateTime? CopilotStudioCreditsLastImportUtc { get; set; }
         public DateTime? AzureCostsLastImportUtc { get; set; }
@@ -222,6 +245,21 @@ namespace Common.Entities.AgentCosts
         public bool IncludesEstimates { get; set; }
     }
 
+    /// <summary>One user's billed Copilot Studio credit consumption over the window.</summary>
+    public class AgentCostUserRow
+    {
+        /// <summary>
+        /// The identifier the licensing API reported. Deliberately not resolved to a display name: nothing
+        /// verifies its format, so mapping it to a person would be a guess presented as a fact.
+        /// </summary>
+        public string UserId { get; set; }
+
+        public decimal BilledCredits { get; set; }
+
+        /// <summary>How many distinct usage days this user consumed credits on.</summary>
+        public int ActiveDays { get; set; }
+    }
+
     /// <summary>
     /// The distinct values present in the loaded data, so the UI can offer filters that are guaranteed to
     /// match something rather than a hard-coded list that may be empty on this tenant.
@@ -233,6 +271,9 @@ namespace Common.Entities.AgentCosts
         public List<string> Harnesses { get; set; } = new List<string>();
         public List<string> Features { get; set; } = new List<string>();
         public List<string> Models { get; set; } = new List<string>();
+        public List<string> Tools { get; set; } = new List<string>();
+        public List<string> KnowledgeSources { get; set; } = new List<string>();
+        public List<string> Channels { get; set; } = new List<string>();
     }
 
     public class AgentCostFilterOption

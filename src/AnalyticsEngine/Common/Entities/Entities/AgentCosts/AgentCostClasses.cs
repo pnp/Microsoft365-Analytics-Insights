@@ -49,11 +49,11 @@ namespace Common.Entities.Entities.AgentCosts
     /// <para><b>Grain:</b> usage date x environment x agent x (feature, channel, model, tool, knowledge
     /// source). The same agent on the same day produces several rows when those dimensions differ.</para>
     ///
-    /// <para><b>There is deliberately no user FK.</b> Microsoft states that Copilot Studio "usage is billed at
-    /// the environment and agent level, not at the user level", and the API returns only a distinct-user
-    /// <i>count</i> (<see cref="DistinctUsers"/>) - never user identities. A nullable user FK here would read
-    /// as "we could not attribute this spend" when the truth is that per-user attribution does not exist in
-    /// the source at all.</para>
+    /// <para><b>There is deliberately no user FK on this table.</b> This is the per-AGENT view: Microsoft
+    /// reports it at the environment and agent level, with a distinct-user <i>count</i>
+    /// (<see cref="DistinctUsers"/>) rather than identities. Per-user figures come from a different endpoint
+    /// and live in <see cref="CopilotStudioCreditUserDaily"/>; a nullable user FK here would suggest this
+    /// table could be attributed per user, which it cannot.</para>
     ///
     /// <para>This is <b>billed</b> consumption from Microsoft, and is not the same thing as the per-conversation
     /// <c>CopilotCreditEstimation</c> this product derives from audit events. The two will disagree - the
@@ -169,6 +169,77 @@ namespace Common.Entities.Entities.AgentCosts
         public override string ToString()
         {
             return $"{UsageDate:yyyy-MM-dd} {AgentName ?? AgentId} [{FeatureName}]: {BilledCredits} credit(s)";
+        }
+    }
+
+    /// <summary>
+    /// Billed Copilot Studio credit consumption attributed to an individual user, per day.
+    ///
+    /// <para>Microsoft added the per-user entitlement routes
+    /// (<c>/licensing/entitlements/{id}/users</c> and friends) in July 2026. Before that, Copilot Studio
+    /// consumption could only be seen per agent and per environment, which is why
+    /// <see cref="CopilotStudioCreditDaily"/> deliberately carries no user column - the two tables come from
+    /// different endpoints and neither is derived from the other.</para>
+    ///
+    /// <para><b>The user is stored as the raw identifier the API returns, with no foreign key to
+    /// <c>dbo.users</c>.</b> Microsoft documents <c>userId</c> only as a string; whether it is an Entra
+    /// object id, a UPN or something else is not stated, so joining it to the user table would rest on an
+    /// assumption rather than a fact. A join built on a guess produces confidently wrong attribution, which
+    /// on a spend report is worse than no join at all.</para>
+    /// </summary>
+    [Table("copilot_studio_credit_user_daily")]
+    public class CopilotStudioCreditUserDaily : AbstractEFEntity
+    {
+        [Column("usage_date")]
+        public DateTime UsageDate { get; set; }
+
+        /// <summary>
+        /// The user identifier exactly as the licensing API reported it. See the class remarks for why this
+        /// is not a foreign key.
+        /// </summary>
+        [Column("user_id")]
+        [MaxLength(200)]
+        public string UserId { get; set; }
+
+        [Column("environment_id")]
+        [MaxLength(200)]
+        public string EnvironmentId { get; set; }
+
+        [Column("environment_name")]
+        [MaxLength(255)]
+        public string EnvironmentName { get; set; }
+
+        /// <summary>
+        /// The agent these credits were spent on, when the row came from the per-agent user breakdown.
+        /// Null when the row is the user's total across all agents.
+        /// </summary>
+        [Column("agent_id")]
+        [MaxLength(200)]
+        public string AgentId { get; set; }
+
+        [Column("billed_credits")]
+        public decimal BilledCredits { get; set; }
+
+        [Column("unit")]
+        [MaxLength(50)]
+        public string Unit { get; set; }
+
+        /// <summary>
+        /// SHA-256 (hex) of the identifying dimensions, for the same reason as
+        /// <see cref="CopilotStudioCreditDaily.DimensionHash"/> - the natural key is wider than a SQL Server
+        /// index key allows, and the import re-reads a trailing window.
+        /// </summary>
+        [Column("dimension_hash")]
+        [MaxLength(64)]
+        [Required]
+        public string DimensionHash { get; set; }
+
+        [Column("imported_utc")]
+        public DateTime ImportedUtc { get; set; }
+
+        public override string ToString()
+        {
+            return $"{UsageDate:yyyy-MM-dd} {UserId}: {BilledCredits} credit(s)";
         }
     }
 
@@ -381,6 +452,7 @@ namespace Common.Entities.Entities.AgentCosts
     {
         public const string CopilotStudioCredits = "CopilotStudioCredits";
         public const string CopilotStudioCapacity = "CopilotStudioCapacity";
+        public const string CopilotStudioUserCredits = "CopilotStudioUserCredits";
         public const string AzureCostManagement = "AzureCostManagement";
     }
 }
