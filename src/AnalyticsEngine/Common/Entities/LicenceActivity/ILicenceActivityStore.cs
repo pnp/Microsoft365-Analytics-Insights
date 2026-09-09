@@ -34,19 +34,33 @@ namespace Common.Entities.LicenceActivity
         public bool CopilotUsageReports { get; set; }
         public bool CopilotAudit { get; set; }
         public bool CopilotInteractions { get; set; }
+
+        /// <summary>
+        /// True when <c>UserGroupsFilter</c> scopes the Microsoft 365 usage-report import to particular
+        /// Entra groups.
+        ///
+        /// This matters because the USER import is not filtered while the usage-report import is, so the
+        /// two populations differ. Normally a person with no rows across a fully imported week is proof
+        /// that they did nothing; under a group filter they may simply never have been looked at, and
+        /// reporting them as "No activity" would be a confident wrong answer. When this is set the
+        /// report falls back to leaving those people Unknown.
+        /// </summary>
+        public bool UsageReportsGroupFiltered { get; set; }
+
         public DateTime NowUtc { get; set; }
 
         public string CacheKey => string.Join(":", UserMetadata, UsageReports, CopilotUsageReports,
-            CopilotAudit, CopilotInteractions, NowUtc.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture));
+            CopilotAudit, CopilotInteractions, UsageReportsGroupFiltered,
+            NowUtc.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture));
     }
 
     public static class LicenceActivityRules
     {
         public const string Method =
-            "Activity levels describe how much of the measured period someone was active in: "
-            + "No activity = never, Low = under a quarter, Moderate = a quarter to under three quarters, "
-            + "High = three quarters or more. Where the period could not be measured in full the level is "
-            + "Unknown, not zero.";
+            "Activity levels describe how many of the period's weeks someone was active in: "
+            + "No activity = none, Low = under a quarter, Moderate = a quarter to under three quarters, "
+            + "High = three quarters or more. A week is only counted when every one of its days was "
+            + "imported; where a week could not be measured in full the level is Unknown, not zero.";
 
         public const string AssignmentCaveat =
             "Past activity is shown against who holds each licence today, not who held it at the time. "
@@ -126,6 +140,11 @@ namespace Common.Entities.LicenceActivity
 
             public const string DemographicsCapped =
                 "The department and country breakdowns show only the 50 largest of each.";
+
+            public const string UsageReportsGroupFiltered =
+                "This deployment only collects Microsoft 365 usage for people in particular Entra groups, "
+                + "but it lists everyone who holds a licence. Anyone outside those groups is shown as "
+                + "Unknown rather than as doing nothing, because they were never measured.";
 
             public const string RankingMethod =
                 "The most and least active lists rank people by how often they were active in the chosen service, "
