@@ -50,7 +50,7 @@ namespace Common.Entities.LicenceActivity
                     var partWatch = Stopwatch.StartNew();
                     var model = new LicenceActivityReadModel(
                         range, directory.Licences, directory.Users, directory.Memberships,
-                        facts.Overview.Coverage, facts.Scores);
+                        facts.Overview.Coverage, facts.Scores, sources.UsageReportsGroupFiltered);
                     _instrumentation?.OperationCompleted?.Invoke("read-model", partWatch.ElapsedMilliseconds);
                     diagnostics.Stage("MaterialisationCompleted", watch.ElapsedMilliseconds);
                     diagnostics.Stage("OverviewSqlCompleted", watch.ElapsedMilliseconds);
