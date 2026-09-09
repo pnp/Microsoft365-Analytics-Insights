@@ -23,7 +23,9 @@ namespace Common.Entities.Installer
         //          interaction history import).
         //          2.1.0 -> 2.2.0 added SharePointConfig.AuthClientId / AuthTenantId (optional Entra ID app
         //          registration for the interactive SharePoint sign-in, replacing the old cookie web-login).
-        const string CONFIG_VERSION = "2.2.0";
+        //          2.2.0 -> 2.3.0 added ImportTaskSettings.ImportDlp (opt-in Microsoft Purview DLP import
+        //          from the DLP.All content type; needs the separate ActivityFeed.ReadDlp permission).
+        const string CONFIG_VERSION = "2.3.0";
 
         public BaseSolutionInstallConfig()
         {

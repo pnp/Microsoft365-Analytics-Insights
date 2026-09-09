@@ -206,6 +206,11 @@ namespace Common.Entities
             modelBuilder.Entity<PowerBIDashboard>().HasIndex(d => d.DashboardId).IsUnique();
             modelBuilder.Entity<CopilotStudioBot>().HasIndex(b => b.BotId).IsUnique();
 
+            // DLP dimensions are upserted by id from the audit feed, so uniqueness is what makes the
+            // merge's "insert if not already there" safe under concurrent importer batches.
+            modelBuilder.Entity<DlpPolicy>().HasIndex(p => p.PolicyId).IsUnique();
+            modelBuilder.Entity<DlpRule>().HasIndex(r => r.RuleId).IsUnique();
+
             modelBuilder.Entity<EmailAddress>()
              .HasIndex(t => new { t.Address })
              .IsUnique();
@@ -494,6 +499,15 @@ namespace Common.Entities
         // Copilot Studio
         public virtual DbSet<CopilotStudioBot> copilot_studio_bots { get; set; }
         public virtual DbSet<CopilotStudioEventMetadata> copilot_studio_events { get; set; }
+
+        // Data Loss Prevention. The policy/rule/action dimensions are shared by both DLP sources:
+        // copilot_dlp_events (policy detail embedded in a Copilot interaction, the only source that can
+        // name the agent) and dlp_rule_matches (the standalone DLP.All feed, which has no agent).
+        public virtual DbSet<DlpPolicy> dlp_policies { get; set; }
+        public virtual DbSet<DlpRule> dlp_rules { get; set; }
+        public virtual DbSet<DlpAction> dlp_actions { get; set; }
+        public virtual DbSet<CopilotDlpEvent> copilot_dlp_events { get; set; }
+        public virtual DbSet<DlpRuleMatch> dlp_rule_matches { get; set; }
 
         // Sent email import - one row per sent message, recipients live in the join table.
         public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
