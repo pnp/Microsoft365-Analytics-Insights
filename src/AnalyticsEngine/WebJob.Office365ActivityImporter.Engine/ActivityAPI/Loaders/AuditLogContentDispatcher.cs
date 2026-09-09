@@ -27,11 +27,26 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         /// JSON deserialisation exceptions are intentionally not caught here - the caller already
         /// logs them with the originating workload name and continues to the next record.
         /// </summary>
-        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true, bool importCopilot = true)
+        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true, bool importCopilot = true, bool importDlp = true)
         {
             if (reportItem == null || logBase == null)
             {
                 return null;
+            }
+
+            // Data Loss Prevention records MUST be matched before any workload route below. A DLP record
+            // carries the workload where the match was DETECTED - "SharePoint", "Exchange", "Endpoint" -
+            // so the SharePoint/Exchange routes further down would otherwise claim it and silently drop
+            // every PolicyDetails field. Its RecordType is what identifies it.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#dlp-schema
+            if (ActivityImportConstants.DlpRecordTypes.IsDlpRecord(logBase.RecordType))
+            {
+                if (!importDlp)
+                {
+                    return null;
+                }
+
+                return reportItem.ToObject<DlpAuditLogContent>();
             }
 
             // Copilot Studio authoring records publish a top-level BotId. Route by that documented
