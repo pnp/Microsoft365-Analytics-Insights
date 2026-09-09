@@ -399,6 +399,63 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DlpEvents_AreAMinorityOfInteractionsAndSeparateBlockedFromAuditedOnly()
+        {
+            var options = Options();
+            var sink = Generate(options, t => t == DemoTables.Chats || t == DemoTables.CopilotDlpEvents
+                || t == DemoTables.DlpRuleMatches || t == DemoTables.DlpPolicies || t == DemoTables.DlpRules
+                || t == DemoTables.DlpActions || t == DemoTables.SensitivityLabels);
+
+            var chats = sink.For(DemoTables.Chats);
+            var dlp = sink.For(DemoTables.CopilotDlpEvents);
+            var tenant = sink.For(DemoTables.DlpRuleMatches);
+
+            Assert.IsTrue(chats.Count > 0, "The fixture must produce Copilot interactions to attach DLP events to.");
+            Assert.IsTrue(dlp.Count > 0, "The demo database must contain DLP events, or the DLP page renders empty.");
+
+            // A healthy tenant blocks a small minority of Copilot use. A demo database where most
+            // interactions were blocked would misrepresent the product to whoever is being shown it.
+            Assert.IsTrue(dlp.Count < chats.Count / 4,
+                $"DLP events ({dlp.Count}) should be a small minority of interactions ({chats.Count}).");
+
+            // The page's central distinction. Without both present the "Blocked" vs "Audited only"
+            // columns can't be demonstrated - and a bug collapsing them would go unnoticed.
+            const int blockedIndex = 7;
+            Assert.IsTrue(dlp.Any(r => (bool)r[blockedIndex]), "Some DLP events must be genuine blocks.");
+            Assert.IsTrue(dlp.Any(r => !(bool)r[blockedIndex]),
+                "Some DLP events must be audited-only, so the report's simulation case is demonstrated.");
+
+            // Every event must point at a real chat and real dimensions, or the merge/report joins drop it.
+            var chatIds = new HashSet<Guid>(chats.Select(r => (Guid)r[0]));
+            int policyCount = sink.For(DemoTables.DlpPolicies).Count;
+            int ruleCount = sink.For(DemoTables.DlpRules).Count;
+            int actionCount = sink.For(DemoTables.DlpActions).Count;
+            int labelCount = sink.For(DemoTables.SensitivityLabels).Count;
+            Assert.IsTrue(policyCount > 1 && ruleCount == policyCount && actionCount > 0 && labelCount > 0);
+
+            foreach (var row in dlp)
+            {
+                Assert.IsTrue(chatIds.Contains((Guid)row[0]), "Every DLP event must belong to a generated interaction.");
+                Assert.IsTrue((int)row[1] >= 1 && (int)row[1] <= policyCount, "policy id out of range");
+                Assert.IsTrue((int)row[2] >= 1 && (int)row[2] <= ruleCount, "rule id out of range");
+                Assert.IsTrue((int)row[3] >= 1 && (int)row[3] <= actionCount, "action id out of range");
+                Assert.IsTrue((int)row[6] >= 1 && (int)row[6] <= labelCount, "sensitivity label id out of range");
+            }
+
+            // The tenant-wide feed is populated too, so the page's second section isn't empty.
+            Assert.AreEqual(dlp.Count, tenant.Count);
+
+            // A rule in "Audit only" mode must never be recorded as a block - that is exactly the
+            // classification CopilotDlpRules makes, and the demo data has to agree with the importer.
+            var rulesByPolicy = sink.For(DemoTables.DlpRules).ToDictionary(r => (int)r[0], r => (string)r[5]);
+            foreach (var row in dlp)
+            {
+                if (rulesByPolicy[(int)row[2]] == "Audit only")
+                    Assert.IsFalse((bool)row[blockedIndex], "An 'Audit only' rule withheld nothing and must not be a block.");
+            }
+        }
+
+        [TestMethod]
         public void DeclaredRows_StayWithinParameterAndTextLimitsAndPreserveUnicode()
         {
             var sink = Generate(Options(), _ => true);
