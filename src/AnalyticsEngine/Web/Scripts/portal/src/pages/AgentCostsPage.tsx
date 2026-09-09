@@ -70,6 +70,13 @@ const WINDOW_OPTIONS = [
 
 const PAGE_SIZE = 50;
 
+// Fixed messages, so an effect can recognise the error IT set and clear it once its own request succeeds.
+// Without that, a panel that failed and then recovered (for example paging after a timeout) keeps showing a
+// stale banner over fresh, correct data.
+const BREAKDOWN_ERROR = 'Could not load the credit breakdown. Try changing the period or refreshing.';
+const DETAIL_ERROR = 'Could not load the billed lines. Try changing the period or refreshing.';
+const AZURE_ERROR = 'Could not load the Azure cost breakdown. Try changing the period or refreshing.';
+
 type DetailSort = 'credits' | 'date' | 'agent' | 'feature' | 'users';
 
 const useStyles = makeStyles({
@@ -264,10 +271,13 @@ export default function AgentCostsPage() {
     (async () => {
       try {
         const result = await fetchBreakdown(filters, dimension, 20, controller.signal);
-        if (!cancelled) setBreakdown(result);
+        if (!cancelled) {
+          setBreakdown(result);
+          setError((e) => (e === BREAKDOWN_ERROR ? null : e));
+        }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
-        setError(ex instanceof Error ? ex.message : 'Could not load the credit breakdown.');
+        setError(BREAKDOWN_ERROR);
       }
     })();
 
@@ -289,10 +299,13 @@ export default function AgentCostsPage() {
           { ...filters, page, pageSize: PAGE_SIZE, sort, direction },
           controller.signal,
         );
-        if (!cancelled) setDetail(result);
+        if (!cancelled) {
+          setDetail(result);
+          setError((e) => (e === DETAIL_ERROR ? null : e));
+        }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
-        setError(ex instanceof Error ? ex.message : 'Could not load the billed lines.');
+        setError(DETAIL_ERROR);
       } finally {
         if (!cancelled) setDetailLoading(false);
       }
@@ -312,10 +325,13 @@ export default function AgentCostsPage() {
     (async () => {
       try {
         const result = await fetchAzureBreakdown(filters, azureDimension, 20, controller.signal);
-        if (!cancelled) setAzure(result);
+        if (!cancelled) {
+          setAzure(result);
+          setError((e) => (e === AZURE_ERROR ? null : e));
+        }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
-        setError(ex instanceof Error ? ex.message : 'Could not load the Azure cost breakdown.');
+        setError(AZURE_ERROR);
       }
     })();
 
@@ -453,14 +469,14 @@ export default function AgentCostsPage() {
 
       {availability && (
         <div className={styles.messages}>
-          {availability.copilotStudioCreditsLastError && (
+          {availability.copilotStudioCreditsEnabled && availability.copilotStudioCreditsLastError && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <strong>Copilot Studio credit import is failing.</strong> {availability.copilotStudioCreditsLastError}
               </MessageBarBody>
             </MessageBar>
           )}
-          {availability.azureCostsLastError && (
+          {availability.azureCostsEnabled && availability.azureCostsLastError && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <strong>Azure cost import is failing.</strong> {availability.azureCostsLastError}
@@ -591,7 +607,7 @@ export default function AgentCostsPage() {
 
           {/* Filters. */}
           <Card>
-            <Text weight="semibold">Narrow the figures</Text>
+            <Text weight="semibold">Narrow the per-agent figures</Text>
             <div className={`${styles.filterBar} ${styles.body}`}>
               <label className={styles.filterField}>
                 <span className={styles.filterLabel}>Agent</span>
@@ -714,7 +730,7 @@ export default function AgentCostsPage() {
             </TabList>
 
             <div className={styles.body}>
-              <CategoryBarChart categories={categories} valueLabel="credits" showShare />
+              <CategoryBarChart categories={categories} valueLabel="credits" />
             </div>
 
             {breakdown.length > 0 && (
@@ -727,7 +743,7 @@ export default function AgentCostsPage() {
                       <th className={`${styles.th} ${styles.thNumeric}`}>Share</th>
                       <th className={`${styles.th} ${styles.thNumeric}`}>Not charged</th>
                       <th className={`${styles.th} ${styles.thNumeric}`}>Days active</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Busiest day (people)</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>Busiest slice (people)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -936,8 +952,9 @@ export default function AgentCostsPage() {
                 <Text weight="semibold">Azure spend</Text>
                 <div>
                   <Text className={styles.muted} size={200}>
-                    Daily costs from Microsoft Cost Management for the scopes this deployment is configured to read.
-                    Azure bills by resource, so these figures cannot be attributed to individual people.
+                    Daily costs from Microsoft Cost Management for the scopes this deployment is configured to read. Only the
+                    date range applies here - the Copilot filters above do not. Azure bills by resource, so these
+                    figures cannot be attributed to individual people.
                   </Text>
                 </div>
               </div>

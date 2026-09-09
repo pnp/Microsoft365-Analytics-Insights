@@ -66,6 +66,22 @@ namespace Common.Entities.AgentCosts
                     result.CopilotStudioCreditsHasRunCleanly = string.IsNullOrEmpty(creditLog.Error);
                 }
 
+                // The per-user and capacity imports are separate runs with their own failure modes: the
+                // /users route can 403 while the per-agent read succeeds. Reading only the per-agent log
+                // would leave that invisible and let stale user rows look current.
+                var userLog = await LatestLogAsync(db, AgentCostImportNames.CopilotStudioUserCredits);
+                if (userLog != null)
+                {
+                    result.PerUserCreditsLastImportUtc = userLog.ImportedUtc;
+                    result.PerUserCreditsLastError = userLog.Error;
+                }
+
+                var capacityLog = await LatestLogAsync(db, AgentCostImportNames.CopilotStudioCapacity);
+                if (capacityLog != null)
+                {
+                    result.CapacityLastError = capacityLog.Error;
+                }
+
                 var azureLog = await LatestLogAsync(db, AgentCostImportNames.AzureCostManagement);
                 if (azureLog != null)
                 {
@@ -114,8 +130,7 @@ namespace Common.Entities.AgentCosts
                 }
             }
 
-            if (result.AzureCostsEnabled && !result.HasAzureCostData)
-            {
+            if (result.AzureCostsEnabled && !result.HasAzureCostData)            {
                 if (!string.IsNullOrEmpty(result.AzureCostsLastError))
                 {
                     result.Messages.Add("The Azure cost import is switched on but is failing: " + result.AzureCostsLastError);
@@ -131,6 +146,25 @@ namespace Common.Entities.AgentCosts
                     result.Messages.Add("The Azure cost import is switched on but has not stored anything yet. Check "
                         + "that a scope is set and allow a cycle before expecting figures.");
                 }
+            }
+
+            // The per-user read is a separate run and fails separately. Surfaced only when the per-agent side
+            // is working, so an authorisation problem that stops everything is reported once, not twice.
+            if (result.CopilotStudioCreditsEnabled
+                && string.IsNullOrEmpty(result.CopilotStudioCreditsLastError)
+                && !string.IsNullOrEmpty(result.PerUserCreditsLastError))
+            {
+                result.Messages.Add("The per-person Copilot Studio figures are not updating: "
+                    + result.PerUserCreditsLastError
+                    + " The per-agent figures above are unaffected, but anything shown per person may be out of date.");
+            }
+
+            if (result.CopilotStudioCreditsEnabled
+                && string.IsNullOrEmpty(result.CopilotStudioCreditsLastError)
+                && !string.IsNullOrEmpty(result.CapacityLastError))
+            {
+                result.Messages.Add("The Copilot Credits capacity snapshot is not updating: " + result.CapacityLastError
+                    + " Any remaining-capacity figure shown may be out of date.");
             }
 
             // The most important caveat on this page, and the reason the two credit views do not add up.
