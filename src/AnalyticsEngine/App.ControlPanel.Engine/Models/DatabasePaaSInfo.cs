@@ -38,15 +38,7 @@ namespace App.ControlPanel.Engine.Entities
                     // Explain the real problem here. Otherwise GetConnectionString throws a bare
                     // ArgumentException about a parameter name, which surfaces as "FATAL: Unexpected error
                     // of type 'ArgumentException'" and tells the operator nothing. See issue #117.
-                    if (string.IsNullOrWhiteSpace(this.Server.Data.AdministratorLogin) || string.IsNullOrWhiteSpace(Config.SQLServerAdminPassword))
-                    {
-                        throw new InvalidOperationException(
-                            $"There is no way to authenticate to SQL Server '{this.Server.Data.FullyQualifiedDomainName}'. It has no " +
-                            "Microsoft Entra administrator, so Microsoft Entra ID authentication is not possible, and no SQL " +
-                            "administrator username/password is configured. Either set the SQL administrator credentials in the " +
-                            "installer, or assign a Microsoft Entra administrator to the server in the Azure portal " +
-                            "(SQL Server > Settings > Microsoft Entra ID) and re-run the installer.");
-                    }
+                    EnsureSqlLoginUsable(this.Server.Data.FullyQualifiedDomainName, this.Server.Data.AdministratorLogin, Config.SQLServerAdminPassword);
 
                     var sqlConnectionString = GetConnectionString(this.Server.Data.FullyQualifiedDomainName, Database.Data.Name, this.Server.Data.AdministratorLogin, Config.SQLServerAdminPassword);
 
@@ -57,6 +49,26 @@ namespace App.ControlPanel.Engine.Entities
                     throw new InvalidOperationException("Server/Database/Config properties not set");
                 }
             }
+        }
+
+        /// <summary>
+        /// Throws with an actionable message when there is no way to authenticate to the server: no
+        /// Microsoft Entra administrator to get a token as, and no SQL administrator login configured.
+        /// </summary>
+        /// <remarks>
+        /// Exists as its own method purely so the message is unit testable - the ARM resource types the
+        /// <see cref="ConnectionString"/> getter reads cannot be constructed in a test. See issue #117.
+        /// </remarks>
+        public static void EnsureSqlLoginUsable(string server, string username, string password)
+        {
+            if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password)) return;
+
+            throw new InvalidOperationException(
+                $"There is no way to authenticate to SQL Server '{server}'. It has no Microsoft Entra administrator, so " +
+                "Microsoft Entra ID authentication is not possible, and no SQL administrator username/password is " +
+                "configured. Either set the SQL administrator credentials in the installer, or assign a Microsoft Entra " +
+                "administrator to the server in the Azure portal (SQL Server > Settings > Microsoft Entra ID) and re-run " +
+                "the installer.");
         }
 
         /// <summary>
