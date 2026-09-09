@@ -38,9 +38,17 @@ export const BAND_DESCRIPTIONS: Record<BandKey, string> = {
   high: 'Active in three quarters or more of the weeks that were measured.',
   moderate: 'Active in a quarter to under three quarters of the weeks that were measured.',
   low: 'Active in under a quarter of the weeks that were measured, but active in at least one.',
-  zero: 'Active in none of the weeks, across a period whose every week was measured in full.',
-  unknown: 'At least one week could not be measured in full, so activity is not known - this does not mean zero.',
+  zero: 'Complete reporting data shows no activity in any week for this user and period. Every week was measured in full.',
+  unknown:
+    'At least one week could not be measured in full, so there is not enough reporting data to determine activity ' +
+    'for this user and period. Reports or user rows may be missing, coverage may be incomplete, or usage counters ' +
+    'may be unavailable. This is not evidence of no activity.',
 };
+
+export const COPILOT_COVERAGE_NOTE =
+  'The official Copilot usage report covers Copilot-licensed users only. These charts can also include people with ' +
+  'other licences, so someone without a Copilot licence may appear as Unknown rather than inactive. ' +
+  'Unknown alone does not tell you whether someone has a Copilot licence.';
 
 /** A one-line summary of how the levels are worked out, for a column tooltip. */
 export const BAND_METHOD =
