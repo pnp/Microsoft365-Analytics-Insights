@@ -101,6 +101,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             var errors = new List<string>();
             var sawAuthorisationFailure = false;
+            var sawTransientFailure = false;
 
             if (_settings.GroupByWasTruncated)
             {
@@ -143,6 +144,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 {
                     // Per-scope, so one inaccessible subscription does not cost the customer the others.
                     errors.Add($"{scope}: {ex.Message}");
+                    sawTransientFailure = true;
                     _logger.LogError(ex, $"Azure cost import failed for scope '{scope}': {ex.Message}. "
                         + "The remaining scopes and all other imports are unaffected.");
                 }
@@ -155,11 +157,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             await SafeSaveLogAsync(log);
 
-            // Only an ALL-scopes authorisation failure earns the back-off. If one scope was refused but
-            // another worked, the run is worth repeating on the next cycle to pick up the working scope's
-            // fresher figures.
-            var allScopesRefused = sawAuthorisationFailure && errors.Count == _settings.Scopes.Count;
-            return new AgentCostImportOutcome(log, allScopesRefused);
+            // Back off only when every failing scope was REFUSED. Comparing the error count to the scope
+            // count is not the same test: with one scope refused and another merely timing out, both fail,
+            // the counts match, and the timeout would be suppressed for a full interval despite being
+            // exactly the kind of failure a prompt retry fixes.
+            var allFailuresWereRefusals = sawAuthorisationFailure && !sawTransientFailure;
+            return new AgentCostImportOutcome(log, allFailuresWereRefusals);
         }
 
         private bool HasFilter => _settings.MeterFilterValues != null && _settings.MeterFilterValues.Count > 0;

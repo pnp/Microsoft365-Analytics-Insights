@@ -44,6 +44,14 @@ namespace Common.Entities.AgentCosts
                 result.HasPerUserCreditData = await db.CopilotStudioCreditUserDaily.AnyAsync();
                 result.HasAzureCostData = await db.AzureCostDaily.AnyAsync();
 
+                if (result.HasAzureCostData)
+                {
+                    // Which Azure dimensions were actually captured depends on the configured grouping, and
+                    // Cost Management only allows two of them per query - so the rest are null and a pivot on
+                    // them would be a dead end. Read it from the data rather than assuming.
+                    result.AzureDimensionsWithData = await GetPopulatedAzureDimensionsAsync(db);
+                }
+
                 if (result.HasCopilotStudioCreditData)
                 {
                     result.EarliestUsageDate = await db.CopilotStudioCreditDaily.MinAsync(r => (DateTime?)r.UsageDate);
@@ -145,6 +153,24 @@ namespace Common.Entities.AgentCosts
                 .Where(l => l.ImportName == importName)
                 .OrderByDescending(l => l.ImportedUtc)
                 .FirstOrDefaultAsync();
+        }
+
+        /// <summary>
+        /// The Azure breakdown dimensions that have at least one non-null value stored.
+        /// </summary>
+        private static async Task<List<string>> GetPopulatedAzureDimensionsAsync(AnalyticsEntitiesContext db)
+        {
+            var populated = new List<string>();
+            var rows = db.AzureCostDaily;
+
+            if (await rows.AnyAsync(r => r.MeterName != null)) populated.Add(AzureCostDimensions.Meter);
+            if (await rows.AnyAsync(r => r.ServiceName != null)) populated.Add(AzureCostDimensions.Service);
+            if (await rows.AnyAsync(r => r.MeterCategory != null)) populated.Add(AzureCostDimensions.MeterCategory);
+            if (await rows.AnyAsync(r => r.ResourceId != null)) populated.Add(AzureCostDimensions.Resource);
+            if (await rows.AnyAsync(r => r.ResourceGroup != null)) populated.Add(AzureCostDimensions.ResourceGroup);
+            if (await rows.AnyAsync(r => r.SubscriptionId != null)) populated.Add(AzureCostDimensions.Subscription);
+
+            return populated;
         }
 
         public async Task<AgentCostSummary> GetSummaryAsync(AgentCostQuery query)

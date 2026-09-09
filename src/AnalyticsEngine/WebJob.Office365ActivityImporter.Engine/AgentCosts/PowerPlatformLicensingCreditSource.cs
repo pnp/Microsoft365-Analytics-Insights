@@ -100,11 +100,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 url += $"&continuationToken={Uri.EscapeDataString(continuationToken)}";
             }
 
-            var json = await GetJsonAsync(url, "Copilot Studio per-user credit consumption", treatNotFoundAsUnavailable: true);
+            var response = await ReadAsync(url, "Copilot Studio per-user credit consumption", treatNotFoundAsUnavailable: true);
 
-            // Null means the route is unavailable (404) or returned no content, which the importer treats as
-            // "nothing to import" rather than a failure.
-            return json == null ? null : CopilotStudioCreditParser.ParseUserConsumptionPage(json);
+            // Only a MISSING ROUTE returns null. A day with no consumption comes back as 204 or an empty
+            // body, which is an empty page - not an absent route. Collapsing the two would let one quiet day
+            // abort the whole window and discard the days already read.
+            if (response.RouteUnavailable) return null;
+
+            return CopilotStudioCreditParser.ParseUserConsumptionPage(response.Json);
         }
 
         /// <summary>
@@ -127,7 +130,22 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
         }
 
-        private async Task<JObject> GetJsonAsync(string url, string what, bool treatNotFoundAsUnavailable = false)
+        private async Task<JObject> GetJsonAsync(string url, string what)
+        {
+            return (await ReadAsync(url, what, treatNotFoundAsUnavailable: false)).Json;
+        }
+
+        /// <summary>
+        /// One licensing API read, keeping "the route does not exist" separate from "the route returned
+        /// nothing".
+        /// </summary>
+        /// <remarks>
+        /// The distinction is load-bearing. A 404 means this tenant's API surface has no such route, so the
+        /// caller should stop asking. A 204 or an empty body means the route exists and simply had nothing
+        /// for the requested range, so the caller should carry on to the next day. Returning a bare null for
+        /// both let one quiet day be mistaken for a missing route.
+        /// </remarks>
+        private async Task<LicensingApiResponse> ReadAsync(string url, string what, bool treatNotFoundAsUnavailable)
         {
             using (var response = await _httpClient.ExecuteHttpCallWithThrottleRetries(() => _httpClient.GetAsync(url), url))
             {
@@ -136,15 +154,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     _logger.LogInformation($"The Power Platform licensing API has no route for {what} on this tenant "
                         + "(HTTP 404). This is expected where the per-user entitlement routes are not available; the "
                         + "per-agent figures are unaffected.");
-                    return null;
+                    return LicensingApiResponse.Unavailable;
                 }
 
-                // 204 No Content is a documented response for the entitlement routes and simply means there
-                // is nothing for the requested range. Reading the (empty) body would parse to null anyway,
-                // but returning early keeps that explicit rather than incidental.
+                // 204 No Content is a documented response and simply means there is nothing for the
+                // requested range. It is NOT the same as the route being absent.
                 if (response.StatusCode == HttpStatusCode.NoContent)
                 {
-                    return null;
+                    return LicensingApiResponse.Empty;
                 }
 
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
@@ -169,11 +186,34 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var content = await response.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(content))
                 {
-                    return null;
+                    // An empty body on a 200. Same meaning as 204: the route answered, with nothing.
+                    return LicensingApiResponse.Empty;
                 }
 
-                return JObject.Parse(content);
+                return new LicensingApiResponse(JObject.Parse(content));
             }
+        }
+
+        /// <summary>
+        /// One licensing API read: the payload, plus whether the route exists at all.
+        /// </summary>
+        private class LicensingApiResponse
+        {
+            /// <summary>The route does not exist on this tenant's API surface. Stop asking.</summary>
+            public static readonly LicensingApiResponse Unavailable = new LicensingApiResponse(null, routeUnavailable: true);
+
+            /// <summary>The route answered but had nothing for the range. Carry on.</summary>
+            public static readonly LicensingApiResponse Empty = new LicensingApiResponse(null);
+
+            public LicensingApiResponse(JObject json, bool routeUnavailable = false)
+            {
+                Json = json;
+                RouteUnavailable = routeUnavailable;
+            }
+
+            public JObject Json { get; }
+
+            public bool RouteUnavailable { get; }
         }
 
         private static async Task<string> SafeReadAsync(HttpResponseMessage response)

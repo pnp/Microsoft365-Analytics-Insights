@@ -725,6 +725,117 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, store.UserCredits.Count);
         }
 
+        [TestMethod]
+        public async Task CreditImporter_ADayWithNoPerUserData_DoesNotDiscardTheOtherDays()
+        {
+            // A quiet day comes back as 204 / an empty body, which is NOT the same as the route being
+            // absent. Treating the two alike let one empty day abort the window and throw away every row
+            // already read - and, because that path carries no error, report success while storing nothing.
+            var source = new UserCreditSource();
+            source.PagesByDay[new DateTime(2026, 9, 8)] = new CopilotStudioUserCreditPage(
+                new[] { new CopilotStudioUserCreditRow { UserId = "u1", Consumed = 5m } }, null);
+            // 2026-09-09 deliberately absent => an empty page for that day.
+
+            var store = new RecordingAgentCostStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
+
+            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 2, clock).ImportUserCreditsAsync();
+
+            Assert.IsTrue(outcome.Succeeded);
+            Assert.AreEqual(1, store.UserCredits.Count, "The day that DID have data must still be stored.");
+            Assert.AreEqual(5m, store.UserCredits[0].BilledCredits);
+        }
+
+        [TestMethod]
+        public void ImportOutcome_SeparatesRefusedFromTransient()
+        {
+            var refused = new AgentCostImportOutcome(new AgentCostImportLog { Error = "403" }, isAuthorisationFailure: true);
+            var transient = new AgentCostImportOutcome(new AgentCostImportLog { Error = "timeout" });
+            var ok = new AgentCostImportOutcome(new AgentCostImportLog());
+
+            Assert.IsTrue(refused.IsAuthorisationFailure);
+            Assert.IsFalse(refused.IsTransientFailure, "A refusal is not transient.");
+            Assert.IsTrue(transient.IsTransientFailure);
+            Assert.IsFalse(transient.IsAuthorisationFailure);
+            Assert.IsFalse(ok.IsTransientFailure, "A success is not a failure of any kind.");
+            Assert.IsTrue(ok.Succeeded);
+        }
+
+        [TestMethod]
+        public async Task AzureImporter_OneScopeRefusedAndAnotherTransient_IsNotTreatedAsRefused()
+        {
+            // Both scopes fail, so an "errors.Count == Scopes.Count" test would call the whole run refused
+            // and back off for a day - suppressing the retry the timeout deserves.
+            var settings = new AzureCostImportSettings { Scopes = new[] { "/subscriptions/a", "/subscriptions/b" } };
+            var source = new PerScopeAzureCostSource
+            {
+                Failures =
+                {
+                    { "/subscriptions/a", new AgentCostAuthorisationException("refused") },
+                    { "/subscriptions/b", new InvalidOperationException("timeout") },
+                },
+            };
+
+            var outcome = await new AzureCostImporter(Logger, source, new RecordingAgentCostStore(), settings).ImportAsync();
+
+            Assert.IsFalse(outcome.Succeeded);
+            Assert.IsFalse(outcome.IsAuthorisationFailure,
+                "A transient failure alongside a refusal must still earn a prompt retry.");
+        }
+
+        [TestMethod]
+        public async Task AzureImporter_EveryScopeRefused_BacksOff()
+        {
+            var settings = new AzureCostImportSettings { Scopes = new[] { "/subscriptions/a", "/subscriptions/b" } };
+            var source = new PerScopeAzureCostSource
+            {
+                Failures =
+                {
+                    { "/subscriptions/a", new AgentCostAuthorisationException("refused") },
+                    { "/subscriptions/b", new AgentCostAuthorisationException("refused") },
+                },
+            };
+
+            var outcome = await new AzureCostImporter(Logger, source, new RecordingAgentCostStore(), settings).ImportAsync();
+
+            Assert.IsTrue(outcome.IsAuthorisationFailure,
+                "Retrying cannot fix a role assignment, so an all-refused run waits for the normal interval.");
+        }
+
+        /// <summary>A per-user source that answers from a per-day map; an unlisted day yields an empty page.</summary>
+        private class UserCreditSource : ICopilotStudioCreditSource
+        {
+            public Dictionary<DateTime, CopilotStudioUserCreditPage> PagesByDay { get; }
+                = new Dictionary<DateTime, CopilotStudioUserCreditPage>();
+
+            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+            {
+                return Task.FromResult(PagesByDay.TryGetValue(fromDate.Date, out var page)
+                    ? page
+                    : new CopilotStudioUserCreditPage(new List<CopilotStudioUserCreditRow>(), null));
+            }
+
+            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => Task.FromResult(new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null));
+
+            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
+
+            public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
+                => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
+        }
+
+        /// <summary>An Azure source that throws a configured exception per scope.</summary>
+        private class PerScopeAzureCostSource : IAzureCostSource
+        {
+            public Dictionary<string, Exception> Failures { get; } = new Dictionary<string, Exception>();
+
+            public Task<IReadOnlyList<AzureCostRow>> GetDailyCostsAsync(string scope, DateTime fromDate, DateTime toDate)
+            {
+                if (Failures.TryGetValue(scope, out var ex)) throw ex;
+                return Task.FromResult<IReadOnlyList<AzureCostRow>>(new List<AzureCostRow>());
+            }
+        }
+
         /// <summary>A clock fixed at a known instant, so window arithmetic is assertable.</summary>
         private class FixedClock : IClock
         {

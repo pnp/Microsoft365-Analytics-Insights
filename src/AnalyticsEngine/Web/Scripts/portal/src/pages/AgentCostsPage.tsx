@@ -353,6 +353,27 @@ export default function AgentCostsPage() {
 
   const trendMax = useMemo(() => Math.max(...trend.map((p) => p.billedCredits), 1), [trend]);
 
+  /**
+   * Only the Azure dimensions that actually have data. Cost Management allows two group-by clauses per
+   * query, so whichever dimensions are not grouped are never populated and a pivot on them could only ever
+   * say "Not reported". Falls back to the full list before availability has loaded, so the control is never
+   * empty on first paint.
+   */
+  const availableAzureDimensions = useMemo(() => {
+    const withData = availability?.azureDimensionsWithData;
+    if (!withData || withData.length === 0) return AZURE_DIMENSIONS;
+    return AZURE_DIMENSIONS.filter((d) => withData.includes(d.key));
+  }, [availability]);
+
+  // Keep the selection valid: if the chosen dimension is not one of the populated ones, move to the first
+  // that is, rather than showing an empty table for a pivot the data cannot answer.
+  useEffect(() => {
+    if (availableAzureDimensions.length === 0) return;
+    if (!availableAzureDimensions.some((d) => d.key === azureDimension)) {
+      setAzureDimension(availableAzureDimensions[0].key);
+    }
+  }, [availableAzureDimensions, azureDimension]);
+
   // The per-user total is the sum of the rows SHOWN, and the caption says so. Unlike the pivot there is no
   // uncapped total to divide by: the per-user endpoint is a separate report, so the summary's per-agent
   // total is not its denominator and using it would understate every share.
@@ -859,8 +880,10 @@ export default function AgentCostsPage() {
                   <Text className={styles.muted} size={200}>
                     Billed Copilot Studio credits per person, reported by Microsoft. Nothing here is estimated or
                     shared out - but it comes from a different Microsoft report than the per-agent figures above, so
-                    the two totals will not always match exactly. Azure spend is not included: Azure bills by
-                    resource and never records who caused a charge.
+                    the two totals will not always match exactly. <strong>The agent, feature, model, tool and channel
+                    filters do not apply here</strong> - Microsoft's per-person report does not carry those
+                    dimensions, so this panel always shows everyone (narrowed only by environment). Azure spend is
+                    not included: Azure bills by resource and never records who caused a charge.
                   </Text>
                 </div>
               </div>
@@ -923,7 +946,7 @@ export default function AgentCostsPage() {
                 onChange={(_, d) => setAzureDimension(d.value as AzureDimension)}
                 disabled={loading}
               >
-                {AZURE_DIMENSIONS.map((d) => (
+                {availableAzureDimensions.map((d) => (
                   <option key={d.key} value={d.key}>
                     {d.label}
                   </option>

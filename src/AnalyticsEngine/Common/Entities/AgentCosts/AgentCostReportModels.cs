@@ -127,6 +127,17 @@ namespace Common.Entities.AgentCosts
         public DateTime? EarliestUsageDate { get; set; }
         public DateTime? LatestUsageDate { get; set; }
 
+        /// <summary>
+        /// The <see cref="AzureCostDimensions"/> values that actually have data, so the UI never offers a
+        /// pivot that can only answer "Not reported".
+        /// </summary>
+        /// <remarks>
+        /// Needed because Cost Management allows only two group-by clauses per query, so whichever
+        /// dimensions are not grouped are simply never populated. Which two those are is configurable, so
+        /// the answer cannot be hard-coded - it has to be read from the data.
+        /// </remarks>
+        public List<string> AzureDimensionsWithData { get; set; } = new List<string>();
+
         /// <summary>Plain-English notes for the admin reading the page.</summary>
         public List<string> Messages { get; set; } = new List<string>();
     }
