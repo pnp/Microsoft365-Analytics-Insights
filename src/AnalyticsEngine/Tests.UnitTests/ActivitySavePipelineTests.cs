@@ -78,6 +78,33 @@ namespace Tests.UnitTests
         private static ActivityStagingPass PassFor(AuditFilterConfig filterConfig, ILogger logger)
             => new ActivityStagingPass(filterConfig, GroupsCache(), new UserGroupsFilterModel("Finance"), logger);
 
+        private static ActivityStagingPass PassFor(AuditFilterConfig filterConfig, ILogger logger, IAuditUserIdentityResolver resolver)
+            => new ActivityStagingPass(filterConfig, GroupsCache(), new UserGroupsFilterModel("Finance"), logger, resolver);
+
+        /// <summary>Resolver stub returning a fixed object-id to UPN map, and counting its calls.</summary>
+        private sealed class StubUserIdentityResolver : IAuditUserIdentityResolver
+        {
+            private readonly Dictionary<string, string> _map;
+            public int Calls { get; private set; }
+
+            public StubUserIdentityResolver(Dictionary<string, string> map = null)
+            {
+                _map = map ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            public Task<IReadOnlyDictionary<string, string>> ResolveToUpnAsync(IReadOnlyCollection<string> ids)
+            {
+                Calls++;
+                var hits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var id in ids)
+                {
+                    string upn;
+                    if (_map.TryGetValue(id, out upn)) hits[id] = upn;
+                }
+                return Task.FromResult<IReadOnlyDictionary<string, string>>(hits);
+            }
+        }
+
         private sealed class SequenceActivityImportCacheProvider : IActivityImportCacheProvider
         {
             private readonly Queue<ActivityImportCache> _caches;
@@ -495,9 +522,89 @@ namespace Tests.UnitTests
             Assert.AreEqual("a.docx", row.FileName);
         }
 
+        /// <summary>
+        /// The point of the whole resolver: an audit record that identifies its user by Entra object id
+        /// must be staged under that person's UPN, so it lands on their existing <c>dbo.users</c> row
+        /// instead of the merge creating a second "user" named after a GUID.
+        /// </summary>
         [TestMethod]
-        public async Task SavePipeline_SlowScopeCheck_IsChargedToTheDedupPhaseNotTheMerge()
+        public async Task SavePipeline_EventIdentifiedByEntraObjectId_IsStagedUnderTheResolvedUpn()
         {
+            const string objectId = "00000000-0000-0000-0000-0000000000a1";
+            var resolver = new StubUserIdentityResolver(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { objectId, InScopeUpn }
+            });
+
+            var writer = new InMemoryActivityStagingWriter();
+            var batch = writer.CreateBatch(null);
+
+            var result = await PassFor(new AllowAllFilterConfig(), new RecordingLogger(), resolver).RunAsync(
+                SetOf(SpEvent(objectId)), ActivityImportCache.GetEmptyCache(), batch,
+                stagingTableName: null, mergeLock: null);
+
+            Assert.AreEqual(1, result.Stats.Imported,
+                "The resolved UPN is in the groups filter, so the event must survive the user-scope check.");
+            Assert.AreEqual(InScopeUpn, writer.LastBatch.Rows.Single().UserName,
+                "The staging row must carry the resolved UPN, not the object id.");
+        }
+
+        /// <summary>
+        /// An id the directory could not resolve keeps the behaviour it had before this existed: staged
+        /// verbatim. Dropping the event or inventing an identity for it would both be worse.
+        /// </summary>
+        [TestMethod]
+        public async Task SavePipeline_UnresolvableEntraObjectId_KeepsTheRawValue()
+        {
+            const string objectId = "00000000-0000-0000-0000-0000000000b2";
+            var writer = new InMemoryActivityStagingWriter();
+            var batch = writer.CreateBatch(null);
+
+            await PassFor(new AllowAllFilterConfig(), new RecordingLogger(), new StubUserIdentityResolver()).RunAsync(
+                SetOf(SpEvent(objectId)), ActivityImportCache.GetEmptyCache(), batch,
+                stagingTableName: null, mergeLock: null);
+
+            Assert.AreEqual(objectId, writer.LastBatch.Rows.Single().UserName);
+        }
+
+        /// <summary>
+        /// The resolver must not be consulted at all when every UserId is already a UPN - which is the
+        /// normal case. This is what keeps the feature free on the hot save path.
+        /// </summary>
+        [TestMethod]
+        public async Task SavePipeline_AllUpns_NeverCallsTheResolver()
+        {
+            var resolver = new StubUserIdentityResolver();
+            var writer = new InMemoryActivityStagingWriter();
+
+            await PassFor(new AllowAllFilterConfig(), new RecordingLogger(), resolver).RunAsync(
+                SetOf(SpEvent(InScopeUpn), SpEvent(OutOfScopeUpn)), ActivityImportCache.GetEmptyCache(),
+                writer.CreateBatch(null), stagingTableName: null, mergeLock: null);
+
+            Assert.AreEqual(0, resolver.Calls,
+                "A batch of ordinary UPNs must not reach the resolver, let alone the database or Graph.");
+        }
+
+        /// <summary>
+        /// <c>app@sharepoint</c> is a service principal, not a person. It must never be sent to Entra -
+        /// and it contains an '@', so a naive UPN test would already have let it through.
+        /// </summary>
+        [TestMethod]
+        public async Task SavePipeline_ServicePrincipalActivity_IsNeverSentForResolution()
+        {
+            var resolver = new StubUserIdentityResolver();
+            var writer = new InMemoryActivityStagingWriter();
+
+            await PassFor(new AllowAllFilterConfig(), new RecordingLogger(), resolver).RunAsync(
+                SetOf(SpEvent(AuditUserIdentity.SharePointAppAccount)), ActivityImportCache.GetEmptyCache(),
+                writer.CreateBatch(null), stagingTableName: null, mergeLock: null);
+
+            Assert.AreEqual(0, resolver.Calls);
+            Assert.AreEqual(AuditUserIdentity.SharePointAppAccount, writer.LastBatch.Rows.Single().UserName);
+        }
+
+        [TestMethod]
+        public async Task SavePipeline_SlowScopeCheck_IsChargedToTheDedupPhaseNotTheMerge()        {
             // The two halves of the crossed pair below exist because a single "is a timing recorded?" test
             // would pass even if the two phases were swapped.
             const int slowMs = 400;
