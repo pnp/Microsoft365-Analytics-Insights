@@ -571,7 +571,8 @@ describe('LicenceActivityPage - preview label', () => {
   it('explains cache lag, cold-load behaviour, and the no-judgement note', async () => {
     mockAvailability.mockResolvedValue(availability());
     await act(async () => { renderWithProvider(<LicenceActivityPage />); });
-    const note = screen.getByRole('note');
+    const note = screen.getByText(/This report is in preview/);
+    expect(note).toHaveAttribute('role', 'note');
     expect(note.textContent).toMatch(/5 minutes/i);
     expect(note.textContent).toMatch(/first look/i);
     expect(note.textContent).toMatch(/evidence of activity/i);
@@ -597,6 +598,12 @@ describe('LicenceActivityPage - information architecture (tabs)', () => {
     expect(within(overview).getByText('People with a licence')).toBeVisible();
     expect(within(overview).getByText('120')).toBeVisible(); // distinctAssignedUsers headline
     expect(within(overview).getByText('Licence assignments')).toBeVisible();
+    expect(within(overview).getByRole('note')).toHaveTextContent(
+      'Unknown means insufficient data, not no activity. No activity means complete reporting data shows no usage.',
+    );
+    fireEvent.click(within(overview).getByText('Why is activity Unknown?'));
+    expect(within(overview).getByText(/The official Copilot usage report covers Copilot-licensed users only/)).toBeVisible();
+    expect(within(overview).getByText(/Under Where these figures come from, select Show data sources/)).toBeVisible();
   });
 
   it('demotes the coverage panel to a collapsible summary that still reveals every field', async () => {
@@ -624,6 +631,7 @@ describe('LicenceActivityPage - information architecture (tabs)', () => {
     expect(panel).toHaveAttribute('id', 'la-panel-byService');
     expect(within(panel).getByText('Activity by service')).toBeVisible();
     expect(within(panel).getByLabelText('Selected licence')).toBeVisible();
+    expect(within(panel).getAllByRole('note')).toHaveLength(WORKLOADS.length);
     for (const w of WORKLOADS) {
       expect(within(panel).getAllByText(w.label).length).toBeGreaterThan(0);
     }
@@ -641,6 +649,7 @@ describe('LicenceActivityPage - information architecture (tabs)', () => {
     expect(within(panel).getByText('Activity by department and country')).toBeVisible();
     expect(within(panel).getByText('By department')).toBeVisible();
     expect(within(panel).getByText('By country')).toBeVisible();
+    expect(within(panel).getAllByRole('note')).toHaveLength(2);
     // Non-Latin (Greek) demographic values render, scoped to the breakdown (not the filter dropdown).
     expect(within(panel).getByText('Μηχανικοί')).toBeVisible();
     expect(within(panel).getByText('Ελλάδα')).toBeVisible();

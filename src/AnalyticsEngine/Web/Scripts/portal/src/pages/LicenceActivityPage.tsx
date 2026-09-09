@@ -332,8 +332,8 @@ export default function LicenceActivityPage() {
           </div>
           <Body1 block className={styles.intro}>
             Which licences are assigned, and how much are the people who hold them actually using each Microsoft 365
-            service. Each service is shown on its own and never blended into a single score, and anything that
-            couldn&apos;t be measured is shown as &quot;Unknown&quot; rather than as zero.
+            service. Each service is shown on its own and never blended into a single score. Missing or incomplete
+            reporting data is shown as &quot;Unknown&quot;, not proof of no activity.
           </Body1>
           <Text role="note" block size={200} className={styles.previewNote}>
             This report is in preview. Figures are kept for up to 5 minutes before being worked out again, so a very
