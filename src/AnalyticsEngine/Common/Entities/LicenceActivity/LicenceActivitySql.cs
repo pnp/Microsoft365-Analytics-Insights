@@ -101,7 +101,10 @@ SET m365_from = CASE WHEN DATEADD(DAY,
         -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
         sample_date) END,
     end_exclusive = DATEADD(DAY, 1, sample_date),
-    copilot_from = DATEADD(DAY, -6, sample_date);
+    copilot_from = DATEADD(DAY, -6, sample_date),
+    week_start = DATEADD(DAY,
+        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
+        sample_date);
 ");
         }
 
@@ -1214,13 +1217,21 @@ BEGIN
     --
     -- Deliberately NOT hinted to IX_date. That hint suited the old single-pinned-date equality seek,
     -- but over a whole week it forces the narrow date index plus a key lookup per row instead of the
-    -- covering metrics index. Measured at 300k users on a 7-day window it cost ~700k logical reads
-    -- and blew the 20s command timeout at 28.8s; unhinted the optimiser picks the covering index.
+    -- covering metrics index.
     -- Two hash aggregates, deliberately NOT a COUNT(DISTINCT ...) over the raw join. Collapsing to
     -- one row per (user, week) first and only then summing is what keeps this linear: measured at
     -- 300k users over a 180-day window the DISTINCT form cost 141.6s against 7.9s for the previous
     -- pinned-day query, while logical reads rose only 4.4x - the classic signature of a plan problem
     -- rather than a volume one.
+    --
+    -- The week is matched by EQUALITY on a week start derived from the report row's own date, never
+    -- by a date RANGE against #Weeks. A range join gives the optimiser no equality to hash on, so it
+    -- fell back to a nested loop driving into the nonclustered columnstore - which cannot seek - and
+    -- re-read the whole activity table once per covered week. See AppendM365Users for the measured
+    -- numbers. week_start is #Weeks' primary key and is the true, UNCLAMPED Monday; m365_from and
+    -- m365_to are clamped to the requested period, so they cannot be derived from a report row. The
+    -- surrounding @from/@endExclusive predicate reproduces that clamping exactly, leaving the row set
+    -- unchanged.
     ;WITH PerUserWeek AS
     (
         SELECT activity.user_id,
@@ -1228,14 +1239,16 @@ BEGIN
                MAX(CASE WHEN activity.last_activity_date >= weeks.m365_from
                          AND activity.last_activity_date < DATEADD(DAY, 1, weeks.m365_to)
                         THEN 1 ELSE 0 END) AS was_active
-        FROM #Samples AS samples
-        JOIN #Weeks AS weeks ON weeks.m365_to = samples.sample_date
-        JOIN {1} AS activity
-          ON activity.[date] >= weeks.m365_from
-         AND activity.[date] < DATEADD(DAY, 1, weeks.m365_to)
+        FROM {1} AS activity
         JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-        WHERE samples.workload = {0}
-          AND activity.[date] >= @from
+        JOIN #Weeks AS weeks
+          ON weeks.week_start = DATEADD(DAY,
+                 -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), activity.[date]) % 7) + 7) % 7),
+                 CAST(activity.[date] AS date))
+        JOIN #Samples AS samples
+          ON samples.workload = {0}
+         AND samples.sample_date = weeks.m365_to
+        WHERE activity.[date] >= @from
           AND activity.[date] < @endExclusive
         GROUP BY activity.user_id, samples.sample_date
     )
@@ -2521,6 +2534,9 @@ VALUES
     (4, @status4, @source4, @measure4, @expected4, @observed4, @period4),
     (5, @status5, @source5, @measure5, @expected5, @observed5, @period5);
 
+-- week_start is the week's true (unclamped) Monday. m365_from and sample_date are both clamped to
+-- the requested period, so neither can be derived from a report row's own date; week_start can, and
+-- that is what lets the scorers join this table by EQUALITY instead of by date range.
 CREATE TABLE #Samples
 (
     workload tinyint NOT NULL,
@@ -2528,6 +2544,7 @@ CREATE TABLE #Samples
     m365_from date NULL,
     end_exclusive date NULL,
     copilot_from date NULL,
+    week_start date NULL,
     PRIMARY KEY (workload, sample_date)
 );
 
@@ -2570,6 +2587,22 @@ CREATE TABLE #Scores
             //
             // Two predicates per row rather than one CASE pair per snapshot, so a columnstore metrics
             // index (the Azure default) can service this in batch mode.
+            //
+            // The week is matched by EQUALITY on a week start derived from the report row's own date,
+            // never by a date RANGE against #Samples. A range join gives the optimiser no equality to
+            // hash on, so it fell back to a nested loop driving into the nonclustered columnstore -
+            // which cannot seek - and therefore re-read the whole activity table once per covered
+            // week. Measured at 300k users with 8.44M rows per usage table: the range form cost
+            // 35,024,453 logical reads and 407 s for Teams over a 180-day window (and 34.5 s over a
+            // 7-day window, against the 20 s command timeout, i.e. a 503). The equality form collapses
+            // that to a single hash pass.
+            //
+            // week_start is used rather than sample_date because sample_date and m365_from are both
+            // CLAMPED to the requested period, so the first and last (partial) weeks would not match a
+            // value derived from a report row. week_start is the true Monday and is never clamped. The
+            // surrounding @from/@endExclusive predicate reproduces the clamping exactly, so the row set
+            // is unchanged: date IN [week_start, week_start+6] AND date IN [@from, @to]
+            // == date IN [m365_from, end_exclusive).
             sql.Append(@"
 ;WITH PerUserDay AS
 (
@@ -2584,21 +2617,36 @@ CREATE TABLE #Scores
     FROM " + table + @" AS activity
     JOIN #Samples AS chosen
       ON chosen.workload = " + workload + @"
-     AND activity.[date] >= chosen.m365_from
-     AND activity.[date] < chosen.end_exclusive
+     AND chosen.week_start = DATEADD(DAY,
+             -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), activity.[date]) % 7) + 7) % 7),
+             CAST(activity.[date] AS date))
     JOIN " + scopeTable + @" AS eligible ON eligible.user_id = activity.user_id
     WHERE activity.[date] >= @from AND activity.[date] < @endExclusive
     GROUP BY activity.user_id, chosen.sample_date, CAST(activity.[date] AS date)
+),
+PerUserWeek AS
+(
+    -- Collapse to one row per (user, week) BEFORE the per-user aggregate. The previous shape mixed
+    -- COUNT(DISTINCT sample_date) with AVG/MAX in a single GROUP BY, which SQL Server services with a
+    -- Table Spool feeding separate aggregate branches - it replays the ~8.4M-row day-level stream more
+    -- than once. Because a week appears exactly once here, the distinct count becomes a plain SUM.
+    SELECT user_id, sample_date,
+           MAX(was_active) AS was_active,
+           SUM(actions) AS actions_total,
+           COUNT_BIG(*) AS report_days,
+           MAX(last_activity_utc) AS last_activity_utc
+    FROM PerUserDay
+    GROUP BY user_id, sample_date
 )
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
 SELECT " + workload + @", user_id,
-       COUNT(DISTINCT CASE WHEN was_active = 1 THEN sample_date END),
+       SUM(was_active),
        @observed" + workload + @",
        CAST(CASE WHEN @observed" + workload + @" = @expected" + workload + @" THEN 1 ELSE 0 END AS bit),
-       AVG(actions),
+       SUM(actions_total) / SUM(report_days),
        MAX(last_activity_utc)
-FROM PerUserDay
+FROM PerUserWeek
 GROUP BY user_id
 OPTION (RECOMPILE);
 ");
