@@ -59,6 +59,19 @@ namespace Web.AnalyticsWeb.Models.Dlp
         [JsonProperty("usersAffected")]
         public int? UsersAffected { get; set; }
 
+        /// <summary>
+        /// For an agent row, the individual policies that affected it, ranked the same way. Null on
+        /// every other kind of row.
+        /// </summary>
+        /// <remarks>
+        /// Nested rather than returned as a flat (agent, policy) list so the UI does not have to
+        /// re-join two collections to answer "which policies blocked THIS agent" - the question the
+        /// breakdown exists for. Null (not empty) when it does not apply, so the payload of the
+        /// non-agent tables is unchanged.
+        /// </remarks>
+        [JsonProperty("policies", NullValueHandling = NullValueHandling.Ignore)]
+        public List<DlpImpactRow> Policies { get; set; }
+
         [JsonProperty("totalCount")]
         public int TotalCount => BlockedCount + AuditedCount;
     }

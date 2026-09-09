@@ -158,6 +158,10 @@ namespace Web.AnalyticsWeb.Controllers
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
                     .Take(TopN).ToListAsync(), countUsers: true);
 
+                // "Which policies blocked THIS agent" - the cross-tab the four independent tables
+                // cannot answer on their own.
+                await AttachAgentPolicyBreakdownAsync(events, summary.TopAgents);
+
                 summary.TopPolicies = ToRows(await events
                     .Where(e => e.DlpPolicyId != null)
                     .GroupBy(e => new { Id = e.Policy.PolicyId, e.Policy.Name })
@@ -258,6 +262,70 @@ namespace Web.AnalyticsWeb.Controllers
             public int Blocked { get; set; }
             public int Audited { get; set; }
             public int Users { get; set; }
+        }
+
+        /// <summary>
+        /// Fills in, for each agent already ranked, the policies that affected it.
+        /// </summary>
+        /// <remarks>
+        /// One grouped query for all of them rather than one per agent - a per-row query would be
+        /// N+1 against the largest tables in the schema. It is scoped to the agents actually being
+        /// displayed (at most <see cref="TopN"/>), so the IN clause stays far below SQL Server's
+        /// parameter limit and the result set is bounded by agents x policies, not by interactions.
+        /// </remarks>
+        private static async Task AttachAgentPolicyBreakdownAsync(
+            IQueryable<Common.Entities.Entities.AuditLog.CopilotDlpEvent> events,
+            List<DlpImpactRow> agents)
+        {
+            var agentIds = agents.Select(a => a.Id).Where(id => !string.IsNullOrEmpty(id)).ToList();
+            if (agentIds.Count == 0)
+            {
+                return;
+            }
+
+            var breakdown = await events
+                .Where(e => e.RelatedChat.AgentId != null
+                            && e.DlpPolicyId != null
+                            && agentIds.Contains(e.RelatedChat.Agent.AgentID))
+                .GroupBy(e => new
+                {
+                    AgentId = e.RelatedChat.Agent.AgentID,
+                    PolicyId = e.Policy.PolicyId,
+                    e.Policy.Name,
+                })
+                .Select(g => new
+                {
+                    g.Key.AgentId,
+                    g.Key.PolicyId,
+                    g.Key.Name,
+                    Blocked = g.Count(e => e.IsBlocked),
+                    Audited = g.Count(e => !e.IsBlocked),
+                })
+                .ToListAsync();
+
+            var byAgent = breakdown.GroupBy(r => r.AgentId).ToDictionary(g => g.Key, g => g.ToList());
+
+            foreach (var agent in agents)
+            {
+                if (agent.Id == null || !byAgent.TryGetValue(agent.Id, out var rows))
+                {
+                    // No policy detail for this agent: an empty list, not null, so the UI can tell
+                    // "expanded and there is nothing" apart from "this row has no breakdown".
+                    agent.Policies = new List<DlpImpactRow>();
+                    continue;
+                }
+
+                agent.Policies = rows
+                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
+                    .Select(r => new DlpImpactRow
+                    {
+                        Id = r.PolicyId,
+                        Name = string.IsNullOrEmpty(r.Name) ? r.PolicyId : r.Name,
+                        BlockedCount = r.Blocked,
+                        AuditedCount = r.Audited,
+                    })
+                    .ToList();
+            }
         }
 
         private static List<DlpImpactRow> ToRows(List<RankProjection> projections, bool countUsers)

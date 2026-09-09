@@ -26,6 +26,11 @@ export interface DlpImpactRow {
   /** Distinct users affected; null where the row IS a user. */
   usersAffected: number | null;
   totalCount: number;
+  /**
+   * For an agent row, the individual policies that affected it. Absent on every other kind of row.
+   * Nested so "which policies blocked this agent" needs no client-side join.
+   */
+  policies?: DlpImpactRow[] | null;
 }
 
 export interface DlpTrendPoint {

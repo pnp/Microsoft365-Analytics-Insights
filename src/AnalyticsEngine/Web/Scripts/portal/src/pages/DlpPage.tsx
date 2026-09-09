@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
   Title3,
   Body1,
@@ -17,7 +17,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ArrowClockwise16Regular } from '@fluentui/react-icons';
+import { ArrowClockwise16Regular, ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
 import { fetchDlpAvailability, fetchDlpSummary } from '../api/dlpApi';
 import type { DlpAvailability, DlpImpactRow, DlpSummary } from '../types/dlp';
 import Spinner from '../components/Spinner';
@@ -43,6 +43,20 @@ const useStyles = makeStyles({
   // Table cells inherit fontSizeBase300 from a bare value; pin the smaller size explicitly.
   td: { fontSize: tokens.fontSizeBase200 },
   bar: { display: 'flex', height: '8px', borderRadius: '4px', overflow: 'hidden', minWidth: '80px' },
+  // Row expander: a real button so it is keyboard reachable and announces its expanded state.
+  expander: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    background: 'none',
+    border: 'none',
+    padding: '0',
+    cursor: 'pointer',
+    font: 'inherit',
+    color: 'inherit',
+    textAlign: 'left',
+  },
+  nested: { paddingLeft: '20px', paddingTop: '4px', paddingBottom: '4px' },
 });
 
 function KpiCard({ label, value, hint, danger }: { label: string; value: number; hint?: string; danger?: boolean }) {
@@ -73,18 +87,32 @@ function ImpactTable({
   nameHeader,
   rows,
   showUsers,
+  expandable,
 }: {
   title: string;
   description: string;
   nameHeader: string;
   rows: DlpImpactRow[] | null | undefined;
   showUsers: boolean;
+  /** Allow an agent row to expand into the policies that affected it. */
+  expandable?: boolean;
 }) {
   const styles = useStyles();
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Defensive: a ranked list is only ever absent if the API contract has drifted. Rendering "nothing
   // in this period" beats taking the whole page down with a TypeError, which is exactly what an
   // unguarded .map() did when these fields were serialised under the wrong names.
   const safeRows = rows ?? [];
+  const columnCount = 3 + (showUsers ? 1 : 0);
+
+  const toggle = (key: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
   return (
     <Card className={styles.card}>
       <Text weight="semibold" size={400}>
@@ -108,16 +136,71 @@ function ImpactTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {safeRows.map((r, i) => (
-              <TableRow key={r.id ?? `${r.name}-${i}`}>
-                <TableCell className={styles.td}>{r.name ?? '—'}</TableCell>
-                <TableCell className={`${styles.td} ${r.blockedCount > 0 ? styles.blocked : ''}`}>
-                  {r.blockedCount.toLocaleString()}
-                </TableCell>
-                <TableCell className={styles.td}>{r.auditedCount.toLocaleString()}</TableCell>
-                {showUsers && <TableCell className={styles.td}>{(r.usersAffected ?? 0).toLocaleString()}</TableCell>}
-              </TableRow>
-            ))}
+            {safeRows.map((r, i) => {
+              const key = r.id ?? `${r.name}-${i}`;
+              const policies = r.policies ?? [];
+              const canExpand = expandable === true && policies.length > 0;
+              const isOpen = expanded.has(key);
+
+              return (
+                <Fragment key={key}>
+                  <TableRow>
+                    <TableCell className={styles.td}>
+                      {canExpand ? (
+                        <button
+                          type="button"
+                          className={styles.expander}
+                          aria-expanded={isOpen}
+                          onClick={() => toggle(key)}
+                        >
+                          {isOpen ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+                          <span>{r.name ?? '—'}</span>
+                        </button>
+                      ) : (
+                        (r.name ?? '—')
+                      )}
+                    </TableCell>
+                    <TableCell className={`${styles.td} ${r.blockedCount > 0 ? styles.blocked : ''}`}>
+                      {r.blockedCount.toLocaleString()}
+                    </TableCell>
+                    <TableCell className={styles.td}>{r.auditedCount.toLocaleString()}</TableCell>
+                    {showUsers && <TableCell className={styles.td}>{(r.usersAffected ?? 0).toLocaleString()}</TableCell>}
+                  </TableRow>
+
+                  {canExpand && isOpen && (
+                    <TableRow>
+                      <TableCell className={styles.td} colSpan={columnCount}>
+                        <div className={styles.nested}>
+                          <Text size={200} className={styles.muted} block style={{ marginBottom: '4px' }}>
+                            Policies affecting {r.name ?? 'this agent'}
+                          </Text>
+                          <Table size="extra-small" aria-label={`Policies affecting ${r.name ?? 'this agent'}`}>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHeaderCell>Policy</TableHeaderCell>
+                                <TableHeaderCell style={{ width: 110 }}>Blocked</TableHeaderCell>
+                                <TableHeaderCell style={{ width: 110 }}>Audited only</TableHeaderCell>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {policies.map((p, pi) => (
+                                <TableRow key={p.id ?? `${p.name}-${pi}`}>
+                                  <TableCell className={styles.td}>{p.name ?? '—'}</TableCell>
+                                  <TableCell className={`${styles.td} ${p.blockedCount > 0 ? styles.blocked : ''}`}>
+                                    {p.blockedCount.toLocaleString()}
+                                  </TableCell>
+                                  <TableCell className={styles.td}>{p.auditedCount.toLocaleString()}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
+              );
+            })}
           </TableBody>
         </Table>
       )}
@@ -258,10 +341,11 @@ export default function DlpPage() {
 
           <ImpactTable
             title="Agents"
-            description="Copilot agents whose access to content was affected by a DLP policy. This is the only view that can attribute a DLP block to a specific agent."
+            description="Copilot agents whose access to content was affected by a DLP policy. This is the only view that can attribute a DLP block to a specific agent. Select an agent to see which policies affected it."
             nameHeader="Agent"
             rows={summary.topAgents}
             showUsers
+            expandable
           />
           <ImpactTable
             title="People"

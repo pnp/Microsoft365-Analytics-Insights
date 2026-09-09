@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, fireEvent } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import DlpPage from './DlpPage';
 import type { DlpAvailability, DlpSummary } from '../types/dlp';
@@ -29,7 +29,18 @@ const summary = (over: Partial<DlpSummary> = {}): DlpSummary => ({
   agentsImpacted: 3,
   policiesInvolved: 2,
   topAgents: [
-    { id: 'agent-1', name: 'Contoso HR Agent', blockedCount: 8, auditedCount: 1, usersAffected: 4, totalCount: 9 },
+    {
+      id: 'agent-1',
+      name: 'Contoso HR Agent',
+      blockedCount: 8,
+      auditedCount: 1,
+      usersAffected: 4,
+      totalCount: 9,
+      policies: [
+        { id: 'pol-1', name: 'Block Copilot on Confidential', blockedCount: 6, auditedCount: 0, usersAffected: null, totalCount: 6 },
+        { id: 'pol-2', name: 'Payment card data', blockedCount: 2, auditedCount: 1, usersAffected: null, totalCount: 3 },
+      ],
+    },
   ],
   topUsers: [
     { id: '1', name: 'ada@contoso.com', blockedCount: 4, auditedCount: 0, usersAffected: null, totalCount: 4 },
@@ -112,5 +123,44 @@ describe('DlpPage', () => {
     mockAvailability.mockRejectedValue(new Error('availability boom'));
     renderWithProvider(<DlpPage />);
     expect(await screen.findByText('availability boom')).toBeInTheDocument();
+  });
+
+  it('reveals which policies affected a given agent when that agent is selected', async () => {
+    renderWithProvider(<DlpPage />);
+
+    const agent = await screen.findByText('Contoso HR Agent');
+
+    // Collapsed by default: the per-agent policies must not be on screen until asked for, so the
+    // table stays readable when a tenant has many agents.
+    expect(screen.queryByText('Payment card data')).not.toBeInTheDocument();
+
+    const expander = agent.closest('button');
+    expect(expander).not.toBeNull();
+    expect(expander).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(expander!);
+
+    expect(await screen.findByText('Policies affecting Contoso HR Agent')).toBeInTheDocument();
+    expect(screen.getByText('Payment card data')).toBeInTheDocument();
+    expect(expander).toHaveAttribute('aria-expanded', 'true');
+
+    // Collapses again, so the control is a real toggle rather than one-way.
+    fireEvent.click(expander!);
+    expect(screen.queryByText('Payment card data')).not.toBeInTheDocument();
+  });
+
+  it('does not offer an expander for an agent with no policy breakdown', async () => {
+    mockSummary.mockResolvedValue(
+      summary({
+        topAgents: [
+          { id: 'agent-1', name: 'Contoso HR Agent', blockedCount: 1, auditedCount: 0, usersAffected: 1, totalCount: 1, policies: [] },
+        ],
+      }),
+    );
+
+    renderWithProvider(<DlpPage />);
+
+    const agent = await screen.findByText('Contoso HR Agent');
+    expect(agent.closest('button')).toBeNull();
   });
 });
