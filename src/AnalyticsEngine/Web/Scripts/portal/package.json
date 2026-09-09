@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Web portal for the Microsoft 365 Advanced Analytics Engine - Insights (reports, Copilot adoption) and Administration (service health, configuration, permissions).",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
