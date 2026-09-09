@@ -198,6 +198,15 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, summary.TopAgents.Single().AuditedCount);
             Assert.AreEqual(1, summary.TopAgents.Single().UsersAffected);
 
+            // Per-agent policy attribution: "which policies blocked THIS agent". The separate Agents
+            // and Policies tables cannot answer this, which is the whole reason the breakdown exists.
+            var agentPolicies = summary.TopAgents.Single().Policies;
+            Assert.IsNotNull(agentPolicies, "An agent row must carry its policy breakdown.");
+            Assert.AreEqual(1, agentPolicies.Count);
+            Assert.AreEqual("Block Copilot on Confidential", agentPolicies.Single().Name);
+            Assert.AreEqual(1, agentPolicies.Single().BlockedCount, "One of this agent's two events was a block.");
+            Assert.AreEqual(1, agentPolicies.Single().AuditedCount);
+
             // Exercises SqlFunctions.StringConvert, which EF only translates at run time.
             Assert.AreEqual("ada@contoso.com", summary.TopUsers.Single().Name);
             Assert.IsFalse(summary.TopUsers.Single().Id.Contains(" "), "The user id must be trimmed of STR() padding.");
@@ -216,6 +225,8 @@ namespace Tests.UnitTests
             Assert.AreEqual("Block Copilot on Confidential", summary.TenantTopPolicies.Single().Name);
             Assert.IsNull(summary.TenantTopPolicies.Single().UsersAffected,
                 "DLP.All records carry no user attribution worth ranking, so this stays null.");
+            Assert.IsNull(summary.TopPolicies.Single().Policies,
+                "Only agent rows carry a nested breakdown; a policy row nesting policies would be meaningless.");
         }
 
         /// <summary>
