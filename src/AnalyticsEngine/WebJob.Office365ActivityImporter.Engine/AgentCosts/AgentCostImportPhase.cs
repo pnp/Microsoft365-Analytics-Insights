@@ -2,6 +2,7 @@ using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
@@ -86,10 +87,15 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var users = await importer.ImportUserCreditsAsync();
                 var capacity = await importer.ImportCapacityAsync();
 
+                var parts = new[] { consumption, users, capacity };
+
+                // Back off ONLY when every failing part was refused. The per-user route in particular may sit
+                // in a permanent 403 on tenants where Microsoft has not enabled application-only access - and
+                // if that were allowed to mark the whole run "refused", a transient failure of the far more
+                // important consumption import would be suppressed for a whole interval alongside it.
                 await StampOrRetry("Copilot Studio credit import", CopilotStudioCreditsLastImportedKey,
-                    succeeded: consumption.Succeeded && users.Succeeded && capacity.Succeeded,
-                    isAuthorisationFailure: consumption.IsAuthorisationFailure || users.IsAuthorisationFailure
-                        || capacity.IsAuthorisationFailure);
+                    succeeded: parts.All(p => p.Succeeded),
+                    isAuthorisationFailure: parts.Any(p => p.IsAuthorisationFailure) && !parts.Any(p => p.IsTransientFailure));
             }
             catch (Exception ex)
             {

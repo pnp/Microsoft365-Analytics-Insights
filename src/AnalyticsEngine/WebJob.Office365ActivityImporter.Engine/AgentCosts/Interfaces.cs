@@ -92,6 +92,17 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public bool IsAuthorisationFailure { get; }
 
         public bool Succeeded => Log != null && string.IsNullOrEmpty(Log.Error);
+
+        /// <summary>
+        /// Failed for a reason that retrying might fix - a timeout, a 500, an incomplete read.
+        /// </summary>
+        /// <remarks>
+        /// The complement of <see cref="IsAuthorisationFailure"/> among failures, and the reason the two are
+        /// tracked separately: a run made of several parts must only back off if <b>every</b> failing part
+        /// was refused. If one part is permanently unauthorised and another merely timed out, treating the
+        /// whole run as "refused" would suppress the retry the timeout deserves for a full interval.
+        /// </remarks>
+        public bool IsTransientFailure => !Succeeded && !IsAuthorisationFailure;
     }
 
     /// <summary>
