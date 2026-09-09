@@ -41,25 +41,31 @@ namespace Common.Entities.LicenceActivity
 
             AppendM365Overview(
                 sql, Teams, "teams", "dbo.teams_user_activity_log",
-                "average published message and meeting counters across supporting snapshots",
+                "Teams messages and meetings counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
             AppendM365Overview(
                 sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                "average published sent and read counters across supporting snapshots",
+                "emails sent and read counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
             AppendM365Overview(
                 sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots",
+                "files viewed or edited counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
             AppendM365Overview(
                 sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots",
+                "files viewed or edited counted by Microsoft, averaged across the readings",
                 sources.UsageReports);
 
-            if (sources.UsageReports) sql.Append(M365OverviewScores);
+            if (sources.UsageReports)
+            {
+                AppendM365OverviewScore(sql, Teams, "dbo.teams_user_activity_log");
+                AppendM365OverviewScore(sql, Outlook, "dbo.outlook_user_activity_log");
+                AppendM365OverviewScore(sql, OneDrive, "dbo.onedrive_user_activity_log");
+                AppendM365OverviewScore(sql, SharePoint, "dbo.sharepoint_user_activity_log");
+            }
             AppendCopilotOverview(sql, sources);
             sql.Append(OverviewProjection);
             return sql.ToString();
@@ -95,7 +101,10 @@ SET m365_from = CASE WHEN DATEADD(DAY,
         -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
         sample_date) END,
     end_exclusive = DATEADD(DAY, 1, sample_date),
-    copilot_from = DATEADD(DAY, -6, sample_date);
+    copilot_from = DATEADD(DAY, -6, sample_date),
+    week_start = DATEADD(DAY,
+        -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), sample_date) % 7) + 7) % 7),
+        sample_date);
 ");
         }
 
@@ -159,13 +168,13 @@ OPTION (RECOMPILE);";
             var sql = new StringBuilder(18000);
             AppendOverviewPartPreamble(sql, eligibleTable);
             AppendM365Overview(sql, Teams, "teams", "dbo.teams_user_activity_log",
-                "average published message and meeting counters across supporting snapshots", sources.UsageReports);
+                "Teams messages and meetings counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendM365Overview(sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                "average published sent and read counters across supporting snapshots", sources.UsageReports);
+                "emails sent and read counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendM365Overview(sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+                "files viewed or edited counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendM365Overview(sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                "average published viewed-or-edited counter across supporting snapshots", sources.UsageReports);
+                "files viewed or edited counted by Microsoft, averaged across the readings", sources.UsageReports);
             AppendCopilotOverview(sql, sources, includeScores: false);
             sql.Append(@"
 SELECT workload_name AS Workload, status AS Status, source AS Source,
@@ -231,7 +240,7 @@ FROM #Scores;");
                     case Teams:
                         AppendM365Overview(
                             sql, Teams, "teams", "dbo.teams_user_activity_log",
-                            "average published message and meeting counters across supporting snapshots",
+                            "Teams messages and meetings counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, Teams, "dbo.teams_user_activity_log");
@@ -239,7 +248,7 @@ FROM #Scores;");
                     case Outlook:
                         AppendM365Overview(
                             sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                            "average published sent and read counters across supporting snapshots",
+                            "emails sent and read counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, Outlook, "dbo.outlook_user_activity_log");
@@ -247,7 +256,7 @@ FROM #Scores;");
                     case OneDrive:
                         AppendM365Overview(
                             sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                            "average published viewed-or-edited counter across supporting snapshots",
+                            "files viewed or edited counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, OneDrive, "dbo.onedrive_user_activity_log");
@@ -255,7 +264,7 @@ FROM #Scores;");
                     case SharePoint:
                         AppendM365Overview(
                             sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                            "average published viewed-or-edited counter across supporting snapshots",
+                            "files viewed or edited counted by Microsoft, averaged across the readings",
                             true);
                         AppendM365OverviewScore(
                             sql, SharePoint, "dbo.sharepoint_user_activity_log");
@@ -284,7 +293,7 @@ FROM #Scores;");
                 case Teams:
                     AppendM365Overview(
                         sql, Teams, "teams", "dbo.teams_user_activity_log",
-                        "average published message and meeting counters across supporting snapshots",
+                        "Teams messages and meetings counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, Teams, "dbo.teams_user_activity_log", maximumSamples);
@@ -292,7 +301,7 @@ FROM #Scores;");
                 case Outlook:
                     AppendM365Overview(
                         sql, Outlook, "outlook", "dbo.outlook_user_activity_log",
-                        "average published sent and read counters across supporting snapshots",
+                        "emails sent and read counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, Outlook, "dbo.outlook_user_activity_log", maximumSamples);
@@ -300,7 +309,7 @@ FROM #Scores;");
                 case OneDrive:
                     AppendM365Overview(
                         sql, OneDrive, "onedrive", "dbo.onedrive_user_activity_log",
-                        "average published viewed-or-edited counter across supporting snapshots",
+                        "files viewed or edited counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, OneDrive, "dbo.onedrive_user_activity_log", maximumSamples);
@@ -308,7 +317,7 @@ FROM #Scores;");
                 case SharePoint:
                     AppendM365Overview(
                         sql, SharePoint, "sharepoint", "dbo.sharepoint_user_activity_log",
-                        "average published viewed-or-edited counter across supporting snapshots",
+                        "files viewed or edited counted by Microsoft, averaged across the readings",
                         true);
                     AppendM365OverviewScore(
                         sql, SharePoint, "dbo.sharepoint_user_activity_log", maximumSamples);
@@ -1009,6 +1018,32 @@ SELECT week_start,
 FROM WeekStarts
 OPTION (MAXRECURSION 0);
 
+-- Every calendar day each week covers, so a week can be proved measured day by day. Graph's daily
+-- user-detail reports are POSITIVE-ONLY (a date returns just the people who did something that day),
+-- so a missing day is a hole in the evidence for everyone, while a present day with no row for
+-- someone is evidence that they did nothing. Only a week whose every day was imported can carry
+-- either conclusion, which is what this spine establishes.
+CREATE TABLE #Days
+(
+    week_end date NOT NULL,
+    day date NOT NULL,
+    PRIMARY KEY (week_end, day)
+);
+
+;WITH WeekDays AS
+(
+    SELECT weeks.m365_to AS week_end, weeks.m365_from AS day
+    FROM #Weeks AS weeks
+    WHERE weeks.m365_from <= weeks.m365_to
+    UNION ALL
+    SELECT week_end, DATEADD(DAY, 1, day)
+    FROM WeekDays
+    WHERE day < week_end
+)
+INSERT #Days (week_end, day)
+SELECT week_end, day FROM WeekDays
+OPTION (MAXRECURSION 0);
+
 CREATE TABLE #Samples
 (
     workload tinyint NOT NULL,
@@ -1084,7 +1119,7 @@ VALUES
 (
     {0}, '{1}', 'disabled', 'microsoftGraphUsageReport',
     N'{2}', 'weeklySupportingSnapshot',
-    N'The Microsoft 365 usage-report import is disabled. Absence cannot be interpreted as zero.',
+    N'The Microsoft 365 usage-report import is switched off, so nothing can be measured for this service. That is not the same as nobody using it.',
     NULL, NULL, NULL, 0, NULL, @expected{0}, 0, 0
 );
 ",
@@ -1097,39 +1132,37 @@ VALUES
                 @"
 DECLARE @latest{0} datetime = (SELECT MAX([date]) FROM {1});
 
+-- One reading per WEEK, identified by the week's last day. A week qualifies only when every one of
+-- its days was imported: Graph's daily reports list just that day's active people, so absence is
+-- only evidence of inactivity once the whole week is present. Bounded by the number of days in the
+-- period (<= 180 single-row index seeks), never by the number of rows in the report table.
 INSERT #Samples (workload, sample_date)
-SELECT {0}, selected.sample_date
-FROM #Weeks AS weeks
-CROSS APPLY
+SELECT {0}, days.week_end
+FROM
 (
-    SELECT TOP (1) CAST(available.[date] AS date) AS sample_date
-    FROM {1} AS available WITH (INDEX(IX_date))
-    WHERE available.[date] >= weeks.m365_from
-      AND available.[date] < DATEADD(DAY, 1, weeks.m365_to)
-      AND available.[date] < DATEADD(DAY, 1, @settled)
-    ORDER BY available.[date] DESC
-) AS selected
-WHERE weeks.m365_from <= weeks.m365_to
-  AND weeks.m365_from <= @settled
+    SELECT days.week_end,
+           CASE WHEN present.has_row IS NULL THEN 0 ELSE 1 END AS day_imported
+    FROM #Days AS days
+    OUTER APPLY
+    (
+        SELECT TOP (1) 1 AS has_row
+        FROM {1} AS available WITH (INDEX(IX_date))
+        WHERE available.[date] >= days.[day]
+          AND available.[date] < DATEADD(DAY, 1, days.[day])
+    ) AS present
+    WHERE days.week_end <= @settled
+) AS days
+GROUP BY days.week_end
+HAVING MIN(days.day_imported) = 1
 OPTION (RECOMPILE);
 
 DECLARE @observed{0} int =
     (SELECT COUNT(*) FROM #Samples WHERE workload = {0});
-DECLARE @complete{0} int =
-(
-    SELECT COUNT(*)
-    FROM #Weeks AS weeks
-    JOIN #Samples AS samples
-      ON samples.workload = {0}
-     AND samples.sample_date = weeks.m365_to
-    WHERE weeks.m365_from <= weeks.m365_to
-      AND weeks.m365_to <= @settled
-);
 DECLARE @status{0} varchar(32) =
     CASE
         WHEN @latest{0} IS NULL THEN 'notImported'
         WHEN @expected{0} = 0 OR @observed{0} = 0 THEN 'missingCoverage'
-        WHEN @observed{0} < @expected{0} OR @complete{0} < @expected{0} THEN 'partial'
+        WHEN @observed{0} < @expected{0} THEN 'partial'
         ELSE 'available'
     END;
 
@@ -1142,10 +1175,10 @@ INSERT #Coverage
 SELECT {0}, '{2}', @status{0}, 'microsoftGraphUsageReport',
        N'{3}', 'weeklySupportingSnapshot',
        CASE @status{0}
-           WHEN 'available' THEN N'One settled report-date snapshot was sampled per calendar week. Frequency uses same-week last_activity_date only. Published counters are averaged as snapshot evidence and are never summed or relabelled as daily events. These tables store report dates, not an import-completion timestamp.'
-           WHEN 'partial' THEN N'At least one requested Monday-week portion lacks a settled snapshot on its exact end date. Earlier snapshots are as-of evidence only; all bands remain unknown and no user is ranked least-active.'
-           WHEN 'notImported' THEN N'The import is enabled but this workload has not stored a report yet.'
-           ELSE N'No settled report snapshot covers this requested range.'
+           WHEN 'available' THEN N'Every day of every week in the period was imported from Microsoft''s published reports. Someone counts as active in a week if Microsoft recorded activity for them in that week. Because those reports list only the people who were active, a fully measured week with nothing recorded for someone means they did nothing - not that they could not be measured. The published counts are averaged across the weeks, never added up and never presented as a daily total.'
+           WHEN 'partial' THEN N'At least one week in the period is missing a day of Microsoft''s reports. Those weeks cannot prove either activity or inactivity, so activity levels stay Unknown and nobody is listed as least active for this service.'
+           WHEN 'notImported' THEN N'Collection is switched on for this service, but no report has arrived yet.'
+           ELSE N'No week in the dates you selected was imported in full.'
        END,
        MIN(CAST(CASE WHEN sampled_week.week_start < @from
                      THEN @from ELSE sampled_week.week_start END AS datetime)),
@@ -1178,81 +1211,74 @@ CROSS APPLY
                 @"
 IF @status{0} = 'available'
 BEGIN
-    IF @expected{0} = 1
-    BEGIN
-        INSERT #Scores
-            (workload, user_id, active_samples, observed_samples, frequency_known)
-        SELECT {0},
-               activity.user_id,
-               MAX(CASE
-                       WHEN activity.last_activity_date >= weeks.m365_from
-                        AND activity.last_activity_date < DATEADD(DAY, 1, weeks.m365_to)
-                        AND activity.last_activity_date < DATEADD(DAY, 1, chosen.sample_date)
-                       THEN 1 ELSE 0
-                   END),
-               1,
-               -- One pinned sample day: GROUP BY user already collapses duplicate report rows.
-               CAST(1 AS bit)
-        FROM #Samples AS chosen
-        JOIN #Weeks AS weeks
-          ON chosen.sample_date >= weeks.m365_from
-         AND chosen.sample_date <= weeks.m365_to
-        JOIN {1} AS activity WITH (INDEX(IX_date))
-          ON activity.[date] >= chosen.sample_date
-         AND activity.[date] < DATEADD(DAY, 1, chosen.sample_date)
+    -- One group per user over the WEEKS that were imported in full. A week counts as active when
+    -- Microsoft's last-activity date for that user falls inside it; duplicate report rows collapse
+    -- because the week, not the row, is what is counted.
+    --
+    -- Deliberately NOT hinted to IX_date. That hint suited the old single-pinned-date equality seek,
+    -- but over a whole week it forces the narrow date index plus a key lookup per row instead of the
+    -- covering metrics index.
+    -- Two hash aggregates, deliberately NOT a COUNT(DISTINCT ...) over the raw join. Collapsing to
+    -- one row per (user, week) first and only then summing is what keeps this linear: measured at
+    -- 300k users over a 180-day window the DISTINCT form cost 141.6s against 7.9s for the previous
+    -- pinned-day query, while logical reads rose only 4.4x - the classic signature of a plan problem
+    -- rather than a volume one.
+    --
+    -- The week is matched by EQUALITY on a week start derived from the report row's own date, never
+    -- by a date RANGE against #Weeks. A range join gives the optimiser no equality to hash on, so it
+    -- fell back to a nested loop driving into the nonclustered columnstore - which cannot seek - and
+    -- re-read the whole activity table once per covered week. See AppendM365Users for the measured
+    -- numbers. week_start is #Weeks' primary key and is the true, UNCLAMPED Monday; m365_from and
+    -- m365_to are clamped to the requested period, so they cannot be derived from a report row. The
+    -- surrounding @from/@endExclusive predicate reproduces that clamping exactly, leaving the row set
+    -- unchanged.
+    ;WITH PerUserWeek AS
+    (
+        SELECT activity.user_id,
+               samples.sample_date,
+               MAX(CASE WHEN activity.last_activity_date >= weeks.m365_from
+                         AND activity.last_activity_date < DATEADD(DAY, 1, weeks.m365_to)
+                        THEN 1 ELSE 0 END) AS was_active
+        FROM {1} AS activity
         JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-        WHERE chosen.workload = {0}
-        GROUP BY activity.user_id
-        OPTION (RECOMPILE, MAXDOP 1);
-    END
-    ELSE
+        JOIN #Weeks AS weeks
+          ON weeks.week_start = DATEADD(DAY,
+                 -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), activity.[date]) % 7) + 7) % 7),
+                 CAST(activity.[date] AS date))
+        JOIN #Samples AS samples
+          ON samples.workload = {0}
+         AND samples.sample_date = weeks.m365_to
+        WHERE activity.[date] >= @from
+          AND activity.[date] < @endExclusive
+        GROUP BY activity.user_id, samples.sample_date
+    )
+    INSERT #Scores
+        (workload, user_id, active_samples, observed_samples, frequency_known)
+    SELECT {0}, per_user.user_id, SUM(per_user.was_active), @observed{0},
+           CAST(CASE WHEN @observed{0} = @expected{0} THEN 1 ELSE 0 END AS bit)
+    FROM PerUserWeek AS per_user
+    GROUP BY per_user.user_id
+    OPTION (RECOMPILE, MAXDOP 1);
+
+    -- Everyone else was measured across the same fully imported weeks and did nothing in any of
+    -- them. Recording that as an explicit zero is the whole point: without it the daily reports'
+    -- positive-only shape would leave every inactive person Unknown, which reads as ""we could not
+    -- tell"" when in fact we can.
+    --
+    -- Skipped when a group filter scopes the usage-report import: the user import is NOT filtered,
+    -- so absence would then mean ""never looked at"" rather than ""did nothing"".
+    IF @groupFiltered = 0
     BEGIN
-        -- One group per user, not one per user/report day. Counting DISTINCT pinned sample
-        -- numbers retains duplicate-day evidence exactly as the previous per-sample MAX pivot
-        -- did: a sample observed by any duplicate row counts once, and a sample positive in any
-        -- duplicate row counts as active once. COUNT(DISTINCT ...) ignores the NULLs produced by
-        -- the anchor's LEFT JOIN, so an eligible user with no matching row still scores zero
-        -- observed samples and is removed below, keeping absent distinct from observed-zero.
-        -- Preserve the eligible population through aggregation so sample-join selectivity
-        -- cannot shrink its group estimate and memory grant. Remove absent groups afterward.
-        ;WITH Chosen AS
-        (
-            SELECT samples.sample_date, weeks.m365_from,
-                   DATEADD(DAY, 1, samples.sample_date) AS end_exclusive,
-                   ROW_NUMBER() OVER (ORDER BY samples.sample_date) AS sample_number
-            FROM #Samples AS samples
-            JOIN #Weeks AS weeks
-              ON samples.sample_date = weeks.m365_to
-            WHERE samples.workload = {0}
-        ),
-        PerUser AS
-        (
-            SELECT eligible.user_id,
-                   COUNT(DISTINCT CASE WHEN activity.last_activity_date >= chosen.m365_from
-                                        AND activity.last_activity_date < chosen.end_exclusive
-                                       THEN chosen.sample_number END) AS active_samples,
-                   COUNT(DISTINCT chosen.sample_number) AS observed_samples
-            FROM #EligibleUsers AS eligible
-            LEFT JOIN
-            (
-                {1} AS activity
-                JOIN Chosen AS chosen
-                  ON CAST(activity.[date] AS date) = chosen.sample_date
-                 AND activity.[date] >= @from
-                 AND activity.[date] < @endExclusive
-            ) ON activity.user_id = eligible.user_id
-            GROUP BY eligible.user_id
-        )
         INSERT #Scores
             (workload, user_id, active_samples, observed_samples, frequency_known)
-        SELECT {0},
-                   per_user.user_id,
-                   active_samples,
-                   observed_samples,
-                   CAST(CASE WHEN observed_samples = @expected{0}
-                             THEN 1 ELSE 0 END AS bit)
-        FROM PerUser AS per_user
-        WHERE observed_samples > 0
+        SELECT {0}, eligible.user_id, 0, @observed{0},
+               CAST(CASE WHEN @observed{0} = @expected{0} THEN 1 ELSE 0 END AS bit)
+        FROM #EligibleUsers AS eligible
+        WHERE NOT EXISTS
+        (
+            SELECT 1 FROM #Scores AS scored
+            WHERE scored.workload = {0} AND scored.user_id = eligible.user_id
+        )
         OPTION (RECOMPILE, MAXDOP 1);
     END;
 END;
@@ -1276,9 +1302,10 @@ END;
                 var initialStatus = sources.CopilotAudit || sources.CopilotInteractions
                     ? NotImported
                     : Disabled;
+                // Interpolated into N'{2}' below, so these must not contain an apostrophe.
                 var initialMessage = sources.CopilotAudit || sources.CopilotInteractions
-                    ? "The enabled Copilot event source has not stored evidence in this range."
-                    : "Every per-user Copilot source is disabled.";
+                    ? "Collection is switched on for Copilot, but no Copilot activity has arrived for these dates yet."
+                    : "Copilot collection is switched off on this deployment, so nothing can be measured. That is not the same as nobody using Copilot.";
 
                 sql.AppendFormat(
                     CultureInfo.InvariantCulture,
@@ -1311,7 +1338,7 @@ IF @copilotNeedsFallback = 1
 BEGIN
     SET @copilotPreferredStatus = 'missingCoverage';
     SET @copilotPreferredMessage =
-        N'Copilot audit data exists, but no event falls in the requested range; absence cannot be interpreted as zero.';
+        N'Copilot audit records exist, but none fall inside the dates you selected. That is not the same as nobody using Copilot.';
 END;
 ");
                 if (sources.CopilotInteractions)
@@ -1324,7 +1351,7 @@ BEGIN
     SET @copilotPreferredStatus = 'missingCoverage';
     SET @copilotPreferredSource = 'copilotInteractions';
     SET @copilotPreferredMessage =
-        N'Copilot interaction history exists, but no event falls in the requested range; absence cannot be interpreted as zero.';
+        N'Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.';
 END;
 ");
                 }
@@ -1337,7 +1364,7 @@ IF @copilotNeedsFallback = 1
 BEGIN
     SET @copilotPreferredStatus = 'missingCoverage';
     SET @copilotPreferredMessage =
-        N'Copilot interaction history exists, but no event falls in the requested range; absence cannot be interpreted as zero.';
+        N'Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.';
 END;
 ");
             }
@@ -1354,7 +1381,7 @@ BEGIN
     VALUES
     (
         5, 'copilot', @copilotPreferredStatus, @copilotPreferredSource,
-        N'positive Copilot evidence only', 'unknown',
+        N'recorded Copilot activity only', 'unknown',
         @copilotPreferredMessage, NULL, NULL, @copilotLatestImport, 0, NULL,
         (SELECT COUNT(*) FROM #Weeks), 0,
         @copilotUnmatched
@@ -1362,124 +1389,6 @@ BEGIN
 END;
 ");
         }
-
-        private static readonly string M365OverviewScores = @"
-;WITH PerSample AS
-(
-    SELECT 1 AS workload,
-           activity.user_id,
-           chosen.sample_date,
-           MAX(CASE
-                   WHEN activity.last_activity_date >= weeks.m365_from
-                    AND activity.last_activity_date < DATEADD(DAY, 1, weeks.m365_to)
-                    AND activity.last_activity_date < DATEADD(DAY, 1, chosen.sample_date)
-                   THEN 1 ELSE 0
-               END) AS was_active
-    FROM #Samples AS chosen
-    JOIN #Weeks AS weeks
-      ON chosen.sample_date >= weeks.m365_from
-     AND chosen.sample_date <= weeks.m365_to
-    JOIN dbo.teams_user_activity_log AS activity
-      ON activity.[date] >= chosen.sample_date
-     AND activity.[date] < DATEADD(DAY, 1, chosen.sample_date)
-    JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-    WHERE chosen.workload = 1
-    GROUP BY activity.user_id, chosen.sample_date
-
-    UNION ALL
-
-    SELECT 2,
-           activity.user_id,
-           chosen.sample_date,
-           MAX(CASE
-                   WHEN activity.last_activity_date >= weeks.m365_from
-                    AND activity.last_activity_date < DATEADD(DAY, 1, weeks.m365_to)
-                    AND activity.last_activity_date < DATEADD(DAY, 1, chosen.sample_date)
-                   THEN 1 ELSE 0
-               END)
-    FROM #Samples AS chosen
-    JOIN #Weeks AS weeks
-      ON chosen.sample_date >= weeks.m365_from
-     AND chosen.sample_date <= weeks.m365_to
-    JOIN dbo.outlook_user_activity_log AS activity
-      ON activity.[date] >= chosen.sample_date
-     AND activity.[date] < DATEADD(DAY, 1, chosen.sample_date)
-    JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-    WHERE chosen.workload = 2
-    GROUP BY activity.user_id, chosen.sample_date
-
-    UNION ALL
-
-    SELECT 3,
-           activity.user_id,
-           chosen.sample_date,
-           MAX(CASE
-                   WHEN activity.last_activity_date >= weeks.m365_from
-                    AND activity.last_activity_date < DATEADD(DAY, 1, weeks.m365_to)
-                    AND activity.last_activity_date < DATEADD(DAY, 1, chosen.sample_date)
-                   THEN 1 ELSE 0
-               END)
-    FROM #Samples AS chosen
-    JOIN #Weeks AS weeks
-      ON chosen.sample_date >= weeks.m365_from
-     AND chosen.sample_date <= weeks.m365_to
-    JOIN dbo.onedrive_user_activity_log AS activity
-      ON activity.[date] >= chosen.sample_date
-     AND activity.[date] < DATEADD(DAY, 1, chosen.sample_date)
-    JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-    WHERE chosen.workload = 3
-    GROUP BY activity.user_id, chosen.sample_date
-
-    UNION ALL
-
-    SELECT 4,
-           activity.user_id,
-           chosen.sample_date,
-           MAX(CASE
-                   WHEN activity.last_activity_date >= weeks.m365_from
-                    AND activity.last_activity_date < DATEADD(DAY, 1, weeks.m365_to)
-                    AND activity.last_activity_date < DATEADD(DAY, 1, chosen.sample_date)
-                   THEN 1 ELSE 0
-               END)
-    FROM #Samples AS chosen
-    JOIN #Weeks AS weeks
-      ON chosen.sample_date >= weeks.m365_from
-     AND chosen.sample_date <= weeks.m365_to
-    JOIN dbo.sharepoint_user_activity_log AS activity
-      ON activity.[date] >= chosen.sample_date
-     AND activity.[date] < DATEADD(DAY, 1, chosen.sample_date)
-    JOIN #EligibleUsers AS eligible ON eligible.user_id = activity.user_id
-    WHERE chosen.workload = 4
-    GROUP BY activity.user_id, chosen.sample_date
-),
-PerUser AS
-(
-    SELECT workload,
-           user_id,
-           SUM(was_active) AS active_samples,
-           COUNT(*) AS observed_samples
-    FROM PerSample
-    GROUP BY workload, user_id
-)
-INSERT #Scores
-    (workload, user_id, active_samples, observed_samples, frequency_known)
-SELECT workload,
-       user_id,
-       active_samples,
-       observed_samples,
-       CAST(CASE
-                WHEN observed_samples =
-                     CASE workload
-                         WHEN 1 THEN @expected1
-                         WHEN 2 THEN @expected2
-                         WHEN 3 THEN @expected3
-                         ELSE @expected4
-                     END
-                THEN 1 ELSE 0
-            END AS bit)
-FROM PerUser
-OPTION (RECOMPILE);
-";
 
         private static string CopilotD7ActivityExpression(string from, string endExclusive)
         {
@@ -1521,12 +1430,12 @@ DECLARE @copilotPreferredSource varchar(64) = 'microsoftGraphCopilotUsageReport'
 DECLARE @copilotPreferredMessage nvarchar(800) =
     CASE
         WHEN @copilotLogObfuscated = 1
-            THEN N'The official Copilot report concealed every user identity, so it cannot be joined to licence holders.'
+            THEN N'Microsoft''s Copilot usage report hid every person''s identity, so its activity cannot be tied back to the people holding the licence. To fix this, turn off ''Display concealed user, group and site names in all reports'' in the Microsoft 365 admin centre (Settings > Org settings > Reports).'
         WHEN @copilotLogImported IS NULL
-            THEN N'The official per-user Copilot usage report has not been imported.'
+            THEN N'Microsoft''s per-person Copilot usage report has never been collected on this deployment.'
         WHEN @copilotLogError IS NOT NULL
-            THEN N'The latest official per-user Copilot report import failed; absence cannot be interpreted as zero.'
-        ELSE N'No fully-contained official Copilot report window covers the requested range.'
+            THEN N'The last attempt to collect Microsoft''s per-person Copilot usage report failed, so Copilot activity is unknown rather than zero.'
+        ELSE N'None of Microsoft''s Copilot usage reports fits entirely inside the dates you selected.'
     END;
 DECLARE @copilotLatestImport datetime = @copilotLogImported;
 DECLARE @copilotUnmatched int =
@@ -1605,11 +1514,11 @@ BEGIN
             report_period_days, expected_samples, observed_samples, unmatched_users
         )
         SELECT 5, 'copilot', @copilotPreferredStatus, 'microsoftGraphCopilotUsageReport',
-               N'average prompts in sampled rolling 7-day reports',
+               N'Copilot prompts counted by Microsoft, averaged across the readings',
                'weeklySampleOfRolling7DayReport',
                CASE WHEN @copilotPreferredStatus = 'available'
-                    THEN N'The latest settled, fully-contained D7 report was sampled once per calendar week; overlapping counts are averaged, never summed. Missing user rows and rows without v2 counters remain unknown. The official report covers Copilot-licensed users only.'
-                    ELSE N'At least one requested D7 window lacks a settled snapshot on its exact end date. Earlier snapshots are as-of evidence only; all bands remain unknown and no user is ranked least-active.'
+                    THEN N'Microsoft''s most recent 7-day Copilot report was read once per week; where those reports overlap the counts are averaged, never added up. People Microsoft did not list, and older reports that predate the current counters, stay Unknown. Microsoft only reports on people who hold a Copilot licence.'
+                    ELSE N'At least one week in the period has no Copilot reading on its end date. Earlier readings are still shown as evidence, but activity levels stay Unknown and nobody is listed as least active for Copilot.'
                END,
                CAST(@copilotD7EffectiveFrom AS datetime),
                CAST(@copilotD7EffectiveTo AS datetime),
@@ -1718,11 +1627,11 @@ BEGIN
             VALUES
             (
                 5, 'copilot', @copilotPreferredStatus, 'microsoftGraphCopilotUsageReport',
-                N'prompts and active usage days in one rolling report',
+                N'Copilot prompts and days used, from one rolling report',
                 'singleRollingWindow',
                 CASE WHEN @copilotPreferredStatus = 'available'
-                     THEN N'The requested dates exactly match one official rolling Copilot report window. Missing user rows and rows without active_usage_days remain unknown. The official report covers Copilot-licensed users only.'
-                     ELSE N'The source only has a longer rolling window inside the request. Its evidence is shown with the exact effective dates, but bands remain unknown for the custom range.'
+                     THEN N'The dates you selected match one of Microsoft''s rolling Copilot reports exactly. People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.'
+                     ELSE N'Microsoft only published a longer rolling report inside the dates you selected. It is shown here with the dates it really covers, but activity levels stay Unknown for your custom range.'
                 END,
                 DATEADD(DAY, 1 - @copilotLongPeriod, CAST(@copilotLongDate AS datetime)),
                 CAST(@copilotLongDate AS datetime),
@@ -1782,8 +1691,8 @@ BEGIN
              THEN 'unmatchableIdentity' ELSE 'partial' END;
     SET @copilotPreferredMessage =
         CASE WHEN @copilotPreferredStatus = 'unmatchableIdentity'
-             THEN N'The official report identities are concealed. Audit events provide positive evidence, but their absence is not a measured zero.'
-             ELSE N'Copilot audit events provide positive evidence only; no database signal proves complete event coverage, so absent users remain unknown.'
+             THEN N'Microsoft''s Copilot report hid every person''s identity, so Copilot audit records are used instead. They prove who DID use Copilot, but cannot prove that anybody else did not.'
+             ELSE N'Copilot audit records prove who DID use Copilot, but nothing confirms that every Copilot event was captured, so anyone absent stays Unknown rather than inactive.'
         END;
 
     IF @copilotIncludeScores = 1
@@ -1820,7 +1729,7 @@ BEGIN
         report_period_days, expected_samples, observed_samples, unmatched_users
     )
     SELECT 5, 'copilot', @copilotPreferredStatus, 'copilotAudit',
-           N'interactions per active calendar week', 'eventPositiveOnly',
+           N'Copilot use counted per active week', 'eventPositiveOnly',
            @copilotPreferredMessage, MIN(time_stamp), MAX(time_stamp),
            NULL,
            DATEDIFF(DAY, MAX(CAST(time_stamp AS date)), @now),
@@ -1846,8 +1755,8 @@ BEGIN
              THEN 'unmatchableIdentity' ELSE 'partial' END;
     SET @copilotPreferredMessage =
         CASE WHEN @copilotPreferredStatus = 'unmatchableIdentity'
-             THEN N'The official report identities are concealed. Interaction history provides positive evidence, but its absence is not a measured zero.'
-             ELSE N'Copilot interaction history provides positive evidence only; no database signal proves complete history for every user, so absent users remain unknown.'
+             THEN N'Microsoft''s Copilot report hid every person''s identity, so Copilot chat history is used instead. It proves who DID use Copilot, but cannot prove that anybody else did not.'
+             ELSE N'Copilot chat history proves who DID use Copilot, but nothing confirms the history is complete for everybody, so anyone absent stays Unknown rather than inactive.'
         END;
 
     IF @copilotIncludeScores = 1
@@ -1884,7 +1793,7 @@ BEGIN
         report_period_days, expected_samples, observed_samples, unmatched_users
     )
     SELECT 5, 'copilot', @copilotPreferredStatus, 'copilotInteractions',
-           N'interaction rows per active calendar week', 'eventPositiveOnly',
+           N'Copilot activity counted per active week', 'eventPositiveOnly',
            @copilotPreferredMessage, MIN(created_utc), MAX(created_utc),
            (SELECT MAX(run_finished_utc) FROM dbo.copilot_interaction_import_log),
            CASE WHEN MAX(CAST(created_utc AS date)) IS NULL THEN 0
@@ -2625,6 +2534,9 @@ VALUES
     (4, @status4, @source4, @measure4, @expected4, @observed4, @period4),
     (5, @status5, @source5, @measure5, @expected5, @observed5, @period5);
 
+-- week_start is the week's true (unclamped) Monday. m365_from and sample_date are both clamped to
+-- the requested period, so neither can be derived from a report row's own date; week_start can, and
+-- that is what lets the scorers join this table by EQUALITY instead of by date range.
 CREATE TABLE #Samples
 (
     workload tinyint NOT NULL,
@@ -2632,6 +2544,7 @@ CREATE TABLE #Samples
     m365_from date NULL,
     end_exclusive date NULL,
     copilot_from date NULL,
+    week_start date NULL,
     PRIMARY KEY (workload, sample_date)
 );
 
@@ -2659,88 +2572,41 @@ CREATE TABLE #Scores
             if (coverage.SnapshotDates == null || coverage.SnapshotDates.Count == 0)
                 return;
 
-            if (readModel)
-            {
-                AppendM365ReadModel(sql, coverage, workload, table, actionExpression, scopeTable);
-                return;
-            }
-
-            var samples = Enumerable.Range(0, coverage.SnapshotDates.Count).ToArray();
-            var aggregates = string.Join("\r\nUNION ALL\r\n", samples.Select(sample =>
-            {
-                var date = SampleParameterName(workload, sample);
-                return @"SELECT eligible.user_id, MAX(" + actionExpression + @") AS actions,
-                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
-                              AND activity.last_activity_date < chosen.end_exclusive
-                             THEN activity.last_activity_date END) AS last_activity_utc,
-                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
-                              AND activity.last_activity_date < chosen.end_exclusive
-                             THEN 1 ELSE 0 END) AS was_active
-                FROM " + table + @" AS activity
-                JOIN " + scopeTable + @" AS eligible ON eligible.user_id = activity.user_id
-                JOIN #Samples AS chosen ON chosen.workload = " + workload + @"
-                    AND chosen.sample_date = " + date + @"
-                WHERE activity.[date] >= " + date + @"
-                  AND activity.[date] < DATEADD(DAY, 1, " + date + @")
-                GROUP BY eligible.user_id";
-            }));
-            if (scopeTable == "#ReturnedUsers")
-            {
-                // At most 300 returned users: this hash is bounded to 300 x 27 samples.
-                aggregates = @"SELECT eligible.user_id, MAX(" + actionExpression + @") AS actions,
-                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
-                              AND activity.last_activity_date < chosen.end_exclusive
-                             THEN activity.last_activity_date END) AS last_activity_utc,
-                    MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
-                              AND activity.last_activity_date < chosen.end_exclusive
-                             THEN 1 ELSE 0 END) AS was_active
-                FROM " + table + @" AS activity
-                JOIN #ReturnedUsers AS eligible ON eligible.user_id = activity.user_id
-                JOIN #Samples AS chosen ON chosen.workload = " + workload + @"
-                    AND CAST(activity.[date] AS date) = chosen.sample_date
-                WHERE activity.[date] >= @from AND activity.[date] < @endExclusive
-                GROUP BY eligible.user_id, chosen.sample_date";
-            }
-            sql.AppendFormat(
-                CultureInfo.InvariantCulture,
-                @"
-;WITH PerSample AS
-(
-    {1}
-)
-INSERT #Scores
-    (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
-SELECT {0}, user_id,
-       SUM(was_active),
-       COUNT(*),
-       CAST(CASE WHEN COUNT(*) = @expected{0} THEN 1 ELSE 0 END AS bit),
-       AVG(actions),
-       MAX(last_activity_utc)
-FROM PerSample
-GROUP BY user_id
-OPTION (RECOMPILE);
-",
-                workload, aggregates);
-        }
-
-        private static void AppendM365ReadModel(
-            StringBuilder sql, LicenceActivityCoverage coverage, int workload,
-            string table, string actionExpression, string scopeTable)
-        {
-            // Two ordered aggregations over a single pass of the activity table. The inner group
-            // collapses every row for one (user, pinned snapshot) to a single sample - MAX actions,
-            // MAX activity flag and MAX clipped last-activity retain duplicate-day evidence exactly
-            // as the legacy per-date UNION ALL did. The outer group then counts the distinct samples
-            // and averages them per user. Unlike the previous per-sample pivot this emits only two
-            // predicates per row rather than one CASE pair per snapshot, so a columnstore metrics
-            // index (the Azure default) can service it in batch mode instead of scanning a wide
-            // per-snapshot projection. It is also faithful to the row-by-row scoring semantics:
-            // sample counts once, any positive duplicate is active, and frequency_known compares the
-            // distinct observed samples against the expected count for the workload.
+            // One reading per fully imported WEEK, not one pinned day inside it. #Samples carries the
+            // week span (m365_from .. end_exclusive), so this reads every report day the week holds.
+            //
+            // The inner group collapses duplicate rows for one (user, report day); the outer group
+            // counts the DISTINCT weeks the user was active in and averages their per-day counts.
+            // observed samples is the workload's covered-week count rather than a per-user tally: the
+            // daily reports list only the people who were active, so a week without a row for someone
+            // is evidence about THEM, not a gap in the measurement.
+            //
+            // average_actions stays a PER-DAY figure, unchanged in scale by the move to weekly
+            // readings, so the number an admin sees still means "how much on a day Microsoft recorded
+            // anything" rather than silently becoming a weekly total.
+            //
+            // Two predicates per row rather than one CASE pair per snapshot, so a columnstore metrics
+            // index (the Azure default) can service this in batch mode.
+            //
+            // The week is matched by EQUALITY on a week start derived from the report row's own date,
+            // never by a date RANGE against #Samples. A range join gives the optimiser no equality to
+            // hash on, so it fell back to a nested loop driving into the nonclustered columnstore -
+            // which cannot seek - and therefore re-read the whole activity table once per covered
+            // week. Measured at 300k users with 8.44M rows per usage table: the range form cost
+            // 35,024,453 logical reads and 407 s for Teams over a 180-day window (and 34.5 s over a
+            // 7-day window, against the 20 s command timeout, i.e. a 503). The equality form collapses
+            // that to a single hash pass.
+            //
+            // week_start is used rather than sample_date because sample_date and m365_from are both
+            // CLAMPED to the requested period, so the first and last (partial) weeks would not match a
+            // value derived from a report row. week_start is the true Monday and is never clamped. The
+            // surrounding @from/@endExclusive predicate reproduces the clamping exactly, so the row set
+            // is unchanged: date IN [week_start, week_start+6] AND date IN [@from, @to]
+            // == date IN [m365_from, end_exclusive).
             sql.Append(@"
 ;WITH PerUserDay AS
 (
-    SELECT activity.user_id, chosen.sample_date,
+    SELECT activity.user_id, chosen.sample_date, CAST(activity.[date] AS date) AS report_date,
            MAX(" + actionExpression + @") AS actions,
            MAX(CASE WHEN activity.last_activity_date >= chosen.m365_from
                      AND activity.last_activity_date < chosen.end_exclusive
@@ -2751,23 +2617,64 @@ OPTION (RECOMPILE);
     FROM " + table + @" AS activity
     JOIN #Samples AS chosen
       ON chosen.workload = " + workload + @"
-     AND CAST(activity.[date] AS date) = chosen.sample_date
+     AND chosen.week_start = DATEADD(DAY,
+             -(((DATEDIFF(DAY, CONVERT(date, '19000101', 112), activity.[date]) % 7) + 7) % 7),
+             CAST(activity.[date] AS date))
     JOIN " + scopeTable + @" AS eligible ON eligible.user_id = activity.user_id
     WHERE activity.[date] >= @from AND activity.[date] < @endExclusive
-    GROUP BY activity.user_id, chosen.sample_date
+    GROUP BY activity.user_id, chosen.sample_date, CAST(activity.[date] AS date)
+),
+PerUserWeek AS
+(
+    -- Collapse to one row per (user, week) BEFORE the per-user aggregate. The previous shape mixed
+    -- COUNT(DISTINCT sample_date) with AVG/MAX in a single GROUP BY, which SQL Server services with a
+    -- Table Spool feeding separate aggregate branches - it replays the ~8.4M-row day-level stream more
+    -- than once. Because a week appears exactly once here, the distinct count becomes a plain SUM.
+    SELECT user_id, sample_date,
+           MAX(was_active) AS was_active,
+           SUM(actions) AS actions_total,
+           COUNT_BIG(*) AS report_days,
+           MAX(last_activity_utc) AS last_activity_utc
+    FROM PerUserDay
+    GROUP BY user_id, sample_date
 )
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
 SELECT " + workload + @", user_id,
        SUM(was_active),
-       COUNT(*),
-       CAST(CASE WHEN COUNT(*) = @expected" + workload + @" THEN 1 ELSE 0 END AS bit),
-       AVG(actions),
+       @observed" + workload + @",
+       CAST(CASE WHEN @observed" + workload + @" = @expected" + workload + @" THEN 1 ELSE 0 END AS bit),
+       SUM(actions_total) / SUM(report_days),
        MAX(last_activity_utc)
-FROM PerUserDay
+FROM PerUserWeek
 GROUP BY user_id
 OPTION (RECOMPILE);
 ");
+
+            // The read model deliberately does NOT materialise the inactive majority: at a 200k-user
+            // tenant that would be one cached dictionary entry per person per workload. It applies the
+            // same rule in memory instead - see LicenceActivityReadModel.Evidence.
+            if (readModel) return;
+
+            sql.AppendFormat(
+                CultureInfo.InvariantCulture,
+                @"
+IF (SELECT status FROM #Coverage WHERE workload = {0}) = 'available' AND @groupFiltered = 0
+BEGIN
+    INSERT #Scores
+        (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
+    SELECT {0}, scoped.user_id, 0, @observed{0},
+           CAST(CASE WHEN @observed{0} = @expected{0} THEN 1 ELSE 0 END AS bit), 0, NULL
+    FROM {1} AS scoped
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM #Scores AS scored
+        WHERE scored.workload = {0} AND scored.user_id = scoped.user_id
+    )
+    OPTION (RECOMPILE);
+END;
+",
+                workload, scopeTable);
         }
 
         private static void AppendCopilotUsers(

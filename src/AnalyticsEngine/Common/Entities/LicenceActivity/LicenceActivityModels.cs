@@ -9,7 +9,6 @@ namespace Common.Entities.LicenceActivity
     public sealed class LicenceActivityAvailability
     {
         public bool Available { get; set; }
-        public bool CanViewUsers { get; set; }
         public int MinimumDays { get; set; } = LicenceActivityQuery.MinimumDays;
         public int MaximumDays { get; set; } = LicenceActivityQuery.MaximumDays;
         public List<string> Messages { get; set; } = new List<string>();

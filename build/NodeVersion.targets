@@ -1,0 +1,63 @@
+<!--
+  Repo-wide Node.js version guard.
+
+  The pinned major lives in ONE place: the .nvmrc at the repository root. nvm / nvm-windows / fnm
+  and `actions/setup-node`'s `node-version-file:` all read that same file, so a developer machine
+  and a CI runner cannot silently drift onto different Node majors and produce different bundles.
+
+  This targets file makes MSBuild honour the same pin, because the portal SPA is built by MSBuild
+  (Web.csproj) rather than by a workflow step - without it a Windows build would happily use
+  whatever Node happened to be on PATH.
+
+  Import it from any project that shells out to node/npm, then depend on the CheckNodeVersion
+  target from whichever target invokes npm.
+
+  Deliberately NOT overridable. An opt-out property would be set once, on the machine that has the
+  wrong Node, and would then quietly defeat the entire point of pinning.
+-->
+<Project>
+
+  <PropertyGroup>
+    <!-- This file lives in <repo>/build/, so the repository root is one level up. -->
+    <NodeVersionFile Condition="'$(NodeVersionFile)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\.nvmrc'))</NodeVersionFile>
+  </PropertyGroup>
+
+  <Target Name="CheckNodeVersion">
+
+    <Error Condition="!Exists('$(NodeVersionFile)')"
+           Text="The Node.js version pin is missing. Expected to find '$(NodeVersionFile)'. It is the single source of truth for the Node major this repository builds with, so restore it rather than removing this check." />
+
+    <ReadLinesFromFile File="$(NodeVersionFile)">
+      <Output TaskParameter="Lines" ItemName="_NodeVersionFileLine" />
+    </ReadLinesFromFile>
+
+    <PropertyGroup>
+      <_RequiredNodeVersionRaw>@(_NodeVersionFileLine)</_RequiredNodeVersionRaw>
+      <!-- Tolerates the plain forms nvm accepts: "24", "v24", "24.21.0". Aliases such as
+           "lts/krypton" are deliberately not supported - the pin must name a major. -->
+      <RequiredNodeMajor>$([System.Text.RegularExpressions.Regex]::Match($(_RequiredNodeVersionRaw), '[0-9]+').Value)</RequiredNodeMajor>
+    </PropertyGroup>
+
+    <Error Condition="'$(RequiredNodeMajor)' == ''"
+           Text="Could not read a Node.js major version from '$(NodeVersionFile)' (contents: '$(_RequiredNodeVersionRaw)'). Expected something like '24'." />
+
+    <Exec Command="node --version" ContinueOnError="true" ConsoleToMSBuild="true" StandardOutputImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="_NodeExitCode" />
+      <Output TaskParameter="ConsoleOutput" PropertyName="_InstalledNodeVersion" />
+    </Exec>
+
+    <Error Condition="'$(_NodeExitCode)' != '0'"
+           Text="Node.js is required to build this project but was not found on PATH. This repository builds with Node.js $(RequiredNodeMajor).x (the current LTS, pinned in $(NodeVersionFile)). Install it from https://nodejs.org/, or run 'nvm use' from the repository root, and then restart your command prompt or IDE." />
+
+    <PropertyGroup>
+      <_InstalledNodeMajor>$([System.Text.RegularExpressions.Regex]::Match($(_InstalledNodeVersion), '[0-9]+').Value)</_InstalledNodeMajor>
+    </PropertyGroup>
+
+    <Error Condition="'$(_InstalledNodeMajor)' != '$(RequiredNodeMajor)'"
+           Text="Wrong Node.js version: found $(_InstalledNodeVersion), but this repository builds with Node.js $(RequiredNodeMajor).x. Building the portal SPA on a different major produces a bundle that differs from the one CI ships. Install Node.js $(RequiredNodeMajor) from https://nodejs.org/ (or 'nvm install $(RequiredNodeMajor)' then 'nvm use $(RequiredNodeMajor)') and restart your command prompt or IDE. The pin lives in $(NodeVersionFile) - change it there, not here." />
+
+    <Message Importance="normal" Text="Node.js $(_InstalledNodeVersion) matches the pinned major $(RequiredNodeMajor).x." />
+
+  </Target>
+
+</Project>

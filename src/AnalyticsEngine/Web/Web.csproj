@@ -160,13 +160,16 @@
     <SpaSourceFile Include="$(SpaRoot)tsconfig.json" />
     <SpaSourceFile Include="$(SpaRoot)package.json" />
   </ItemGroup>
-  <!-- Dependencies only. Re-runs when the manifest or the lock file changes. -->
-  <Target Name="NpmInstall" Inputs="$(SpaRoot)package.json;$(SpaRoot)package-lock.json" Outputs="$(NpmInstallStampFile)">
-    <!-- Ensure Node.js is installed -->
-    <Exec Command="node --version" ContinueOnError="true">
-      <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
-    </Exec>
-    <Error Condition="'$(ErrorCode)' != '0'" Text="Node.js is required to build and run this project. To continue, please install Node.js from https://nodejs.org/, and then restart your command prompt or IDE." />
+  <!--
+    Dependencies only. Re-runs when the manifest or the lock file changes.
+
+    CheckNodeVersion is a DependsOnTargets rather than a step inside the body on purpose: MSBuild
+    resolves dependencies BEFORE the Inputs/Outputs up-to-date check, so the guard still runs on an
+    incremental build where node_modules is already current. It used to only assert that some node
+    was on PATH, which let a machine on an older major rebuild the bundle with a different
+    toolchain and never say so.
+  -->
+  <Target Name="NpmInstall" DependsOnTargets="CheckNodeVersion" Inputs="$(SpaRoot)package.json;$(SpaRoot)package-lock.json" Outputs="$(NpmInstallStampFile)">
     <Message Importance="high" Text="Restoring portal dependencies using 'npm'. This may take several minutes..." />
     <Exec Command="npm install" WorkingDirectory="$(SpaRoot)" />
     <Touch Files="$(NpmInstallStampFile)" AlwaysCreate="true" />
@@ -316,6 +319,8 @@
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
   </PropertyGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- Repo-wide Node.js pin (<repo>/.nvmrc). Defines the CheckNodeVersion target that NpmInstall depends on. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\..\..\build\NodeVersion.targets" />
   <Import Project="$(VSToolsPath)\WebApplications\Microsoft.WebApplication.targets" Condition="'$(VSToolsPath)' != ''" />
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v10.0\WebApplications\Microsoft.WebApplication.targets" Condition="false" />
   <ProjectExtensions>

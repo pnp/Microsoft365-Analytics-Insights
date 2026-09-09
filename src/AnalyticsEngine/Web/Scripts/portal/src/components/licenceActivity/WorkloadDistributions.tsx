@@ -6,12 +6,14 @@ import {
   ACTIVITY_BANDS,
   activeCount,
   activeRatePct,
+  BAND_DESCRIPTIONS,
   BAND_METHOD,
   bandCount,
   distributionTotal,
   measuredCount,
 } from './bands';
 import { formatCount, formatPct } from './format';
+import ActivityCoverageHelp from './ActivityCoverageHelp';
 
 const useStyles = makeStyles({
   grid: {
@@ -96,7 +98,7 @@ function DistributionCard({ distribution }: { distribution: LicenceActivityDistr
               key={band.key}
               className={styles.segment}
               style={{ width: `${(count / total) * 100}%`, backgroundColor: band.colour }}
-              title={`${band.label}: ${formatCount(count)}`}
+              title={`${band.label}: ${formatCount(count)}. ${BAND_DESCRIPTIONS[band.key]}`}
             />
           );
         })}
@@ -104,7 +106,7 @@ function DistributionCard({ distribution }: { distribution: LicenceActivityDistr
 
       <div className={styles.legend}>
         {ACTIVITY_BANDS.map((band) => (
-          <span key={band.key} className={styles.legendItem}>
+          <span key={band.key} className={styles.legendItem} title={BAND_DESCRIPTIONS[band.key]}>
             <span className={styles.swatch} style={{ backgroundColor: band.colour }} aria-hidden />
             <Text size={100} className={styles.legendLabel}>
               {band.label} {formatCount(bandCount(distribution, band.key))}
@@ -112,6 +114,7 @@ function DistributionCard({ distribution }: { distribution: LicenceActivityDistr
           </span>
         ))}
       </div>
+      <ActivityCoverageHelp showCopilot={distribution.workload === 'copilot'} />
     </Card>
   );
 }
@@ -140,13 +143,14 @@ function WorkloadDistributions({ workloads }: WorkloadDistributionsProps) {
   );
 
   if (ordered.length === 0) {
-    return <Text className={styles.muted}>No workload activity is available for this licence.</Text>;
+    return <Text className={styles.muted}>No activity is available for this licence.</Text>;
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
       <Text size={100} className={styles.muted}>
-        {BAND_METHOD} Active counts are users with any measured activity, out of those with complete coverage.
+        {BAND_METHOD} The &quot;active&quot; count is everyone with any measured activity, out of the people whose
+        whole period could be measured.
       </Text>
       <div className={styles.grid}>
         {ordered.map((distribution) => (
