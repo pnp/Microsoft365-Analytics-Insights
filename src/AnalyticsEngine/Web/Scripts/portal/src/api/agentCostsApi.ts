@@ -4,9 +4,11 @@ import type {
   AgentCostBreakdownRow,
   AgentCostDailyPoint,
   AgentCostDetailPage,
+  AgentCostDetailRow,
   AgentCostFilterOptions,
   AgentCostFilters,
   AgentCostSummary,
+  AgentCostUserRow,
   AzureCostBreakdownRow,
   AzureDimension,
   CreditDimension,
@@ -65,6 +67,9 @@ function filterQuery(filters: AgentCostFilters): URLSearchParams {
   if (filters.harness) qs.set('harness', filters.harness);
   if (filters.feature) qs.set('feature', filters.feature);
   if (filters.model) qs.set('model', filters.model);
+  if (filters.tool) qs.set('tool', filters.tool);
+  if (filters.knowledge) qs.set('knowledge', filters.knowledge);
+  if (filters.channel) qs.set('channel', filters.channel);
   if (filters.search?.trim()) qs.set('search', filters.search.trim());
   return qs;
 }
@@ -119,7 +124,56 @@ export function fetchAzureBreakdown(
   return getJson<AzureCostBreakdownRow[]>(`/azure?${qs}`, 'the Azure cost breakdown', signal);
 }
 
+/**
+ * The biggest per-user credit consumers. Copilot Studio only - Azure spend is resource-scoped and has no
+ * per-user view on any Cost Management surface.
+ */
+export function fetchTopUsers(
+  filters: AgentCostFilters,
+  top = 20,
+  signal?: AbortSignal,
+): Promise<AgentCostUserRow[]> {
+  const qs = new URLSearchParams({ from: filters.from, to: filters.to, top: String(top) });
+  if (filters.environmentId) qs.set('environmentId', filters.environmentId);
+  return getJson<AgentCostUserRow[]>(`/users?${qs}`, 'the per-user credit consumption', signal);
+}
+
 export function fetchFilterOptions(filters: AgentCostFilters, signal?: AbortSignal): Promise<AgentCostFilterOptions> {
   const qs = new URLSearchParams({ from: filters.from, to: filters.to });
   return getJson<AgentCostFilterOptions>(`/filters?${qs}`, 'the available filters', signal);
+}
+
+/**
+ * Fetches every row matching the current filters, by walking the pages server-side.
+ *
+ * Exists because exporting only the visible page is close to useless for a chargeback or showback
+ * conversation - the whole point of the granular grid is the filtered set, not 50 arbitrary rows of it.
+ * Capped, because this runs in the browser and the point is an export an admin can open, not a bulk
+ * extract; the caller is told when the cap truncated the result so it can say so rather than quietly
+ * hand over a partial file.
+ */
+export async function fetchAllDetailRows(
+  filters: AgentCostFilters,
+  sort: string,
+  direction: 'asc' | 'desc',
+  maxRows = 10000,
+  signal?: AbortSignal,
+): Promise<{ rows: AgentCostDetailRow[]; truncated: boolean; totalRows: number }> {
+  const pageSize = 500; // Matches SqlAgentCostReportStore.MaxPageSize.
+  const rows: AgentCostDetailRow[] = [];
+  let page = 1;
+  let totalRows = 0;
+
+  for (;;) {
+    const result = await fetchDetail({ ...filters, page, pageSize, sort, direction }, signal);
+    totalRows = result.totalRows;
+    rows.push(...result.rows);
+
+    if (result.rows.length < pageSize) break;
+    if (rows.length >= maxRows) break;
+    if (rows.length >= totalRows) break;
+    page += 1;
+  }
+
+  return { rows: rows.slice(0, maxRows), truncated: totalRows > maxRows, totalRows };
 }

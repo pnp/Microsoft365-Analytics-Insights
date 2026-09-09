@@ -9,7 +9,10 @@ export interface AgentCostAvailability {
   copilotStudioCreditsEnabled: boolean;
   azureCostsEnabled: boolean;
   hasCopilotStudioCreditData: boolean;
+  hasPerUserCreditData: boolean;
   hasAzureCostData: boolean;
+  copilotStudioCreditsHasRunCleanly: boolean;
+  azureCostsHaveRunCleanly: boolean;
   copilotStudioCreditsLastImportUtc: string | null;
   azureCostsLastImportUtc: string | null;
   copilotStudioCreditsLastError: string | null;
@@ -106,12 +109,23 @@ export interface AgentCostFilterOption {
   label: string;
 }
 
+/** One user's billed Copilot Studio credits over the window, straight from Microsoft. */
+export interface AgentCostUserRow {
+  /** The identifier the licensing API reported. Not resolved to a name - nothing verifies its format. */
+  userId: string;
+  billedCredits: number;
+  activeDays: number;
+}
+
 export interface AgentCostFilterOptions {
   agents: AgentCostFilterOption[];
   environments: AgentCostFilterOption[];
   harnesses: string[];
   features: string[];
   models: string[];
+  tools: string[];
+  knowledgeSources: string[];
+  channels: string[];
 }
 
 /** The billing dimensions credits can be pivoted by. Keep in step with `AgentCostDimensions`. */
@@ -137,5 +151,8 @@ export interface AgentCostFilters {
   harness?: string;
   feature?: string;
   model?: string;
+  tool?: string;
+  knowledge?: string;
+  channel?: string;
   search?: string;
 }

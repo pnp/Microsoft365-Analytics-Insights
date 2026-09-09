@@ -18,12 +18,14 @@ import {
 import { ArrowClockwise16Regular, ArrowDownload16Regular } from '@fluentui/react-icons';
 
 import {
+  fetchAllDetailRows,
   fetchAvailability,
   fetchAzureBreakdown,
   fetchBreakdown,
   fetchDetail,
   fetchFilterOptions,
   fetchSummary,
+  fetchTopUsers,
   fetchTrend,
 } from '../api/agentCostsApi';
 import type {
@@ -34,6 +36,7 @@ import type {
   AgentCostFilterOptions,
   AgentCostFilters,
   AgentCostSummary,
+  AgentCostUserRow,
   AzureCostBreakdownRow,
   AzureDimension,
   CreditDimension,
@@ -51,6 +54,8 @@ import {
   formatDateTime,
   formatDay,
   formatMoney,
+  formatQuantity,
+  harnessLabel,
   saveCsv,
   windowOfDays,
 } from '../components/agentCosts/agentCostShared';
@@ -126,6 +131,15 @@ function orUndefined(value: string): string | undefined {
   return value === '' ? undefined : value;
 }
 
+/**
+ * The display text for a pivot value. Only the harness dimension stores identifiers rather than
+ * human text, so only it needs translating; everything else is already what Microsoft reported.
+ */
+function labelFor(dimension: CreditDimension, value: string | null | undefined): string {
+  if (dimension === 'harness') return harnessLabel(value);
+  return value || NOT_REPORTED;
+}
+
 export default function AgentCostsPage() {
   const styles = useStyles();
 
@@ -137,6 +151,7 @@ export default function AgentCostsPage() {
   const [breakdown, setBreakdown] = useState<AgentCostBreakdownRow[]>([]);
   const [detail, setDetail] = useState<AgentCostDetailPage | null>(null);
   const [azure, setAzure] = useState<AzureCostBreakdownRow[]>([]);
+  const [topUsers, setTopUsers] = useState<AgentCostUserRow[]>([]);
 
   const [dimension, setDimension] = useState<CreditDimension>('agent');
   const [azureDimension, setAzureDimension] = useState<AzureDimension>('meter');
@@ -146,6 +161,9 @@ export default function AgentCostsPage() {
   const [harness, setHarness] = useState('');
   const [feature, setFeature] = useState('');
   const [model, setModel] = useState('');
+  const [tool, setTool] = useState('');
+  const [knowledge, setKnowledge] = useState('');
+  const [channel, setChannel] = useState('');
   const [search, setSearch] = useState('');
 
   const [page, setPage] = useState(1);
@@ -153,7 +171,10 @@ export default function AgentCostsPage() {
   const [direction, setDirection] = useState<'asc' | 'desc'>('desc');
 
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
   // Debounced so typing in the agent-name box does not fire a query per keystroke.
@@ -173,21 +194,32 @@ export default function AgentCostsPage() {
       harness: orUndefined(harness),
       feature: orUndefined(feature),
       model: orUndefined(model),
+      tool: orUndefined(tool),
+      knowledge: orUndefined(knowledge),
+      channel: orUndefined(channel),
       search: debouncedSearch.trim() || undefined,
     };
-  }, [days, agentId, environmentId, harness, feature, model, debouncedSearch]);
+  }, [days, agentId, environmentId, harness, feature, model, tool, knowledge, channel, debouncedSearch]);
 
-  // Any filter change invalidates the current page of granular rows - staying on page 7 of a result
-  // set that now has two pages would show an empty table.
+  // The effects below key off this string rather than the `filters` object. A `useMemo` object is a new
+  // reference whenever any input changes, and putting it in a dependency array alongside its own derived
+  // values would re-run the effect twice for one user action.
   const filterSignature = JSON.stringify(filters);
+
   const lastSignature = useRef(filterSignature);
   useEffect(() => {
     if (lastSignature.current !== filterSignature) {
       lastSignature.current = filterSignature;
+      // Any filter change invalidates the current page - staying on page 7 of a result set that now has
+      // two pages would show an empty table.
       setPage(1);
     }
   }, [filterSignature]);
 
+  // Loading is deliberately split into four effects rather than one. Paging or re-sorting the detail grid
+  // must not re-run the summary, the trend, the pivot, the filter options and the Azure breakdown as well -
+  // that turned a single "next page" click into seven queries against tables that grow by thousands of rows
+  // a day.
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
@@ -196,27 +228,20 @@ export default function AgentCostsPage() {
       setLoading(true);
       setError(null);
       try {
-        // Availability and filter options are independent of the pivot, so they go with the rest of
-        // the window-scoped loads in one batch rather than in a separate pass.
-        const [availabilityResult, optionsResult, summaryResult, trendResult, breakdownResult, detailResult, azureResult] =
-          await Promise.all([
-            fetchAvailability(controller.signal),
-            fetchFilterOptions(filters, controller.signal),
-            fetchSummary(filters, controller.signal),
-            fetchTrend(filters, controller.signal),
-            fetchBreakdown(filters, dimension, 20, controller.signal),
-            fetchDetail({ ...filters, page, pageSize: PAGE_SIZE, sort, direction }, controller.signal),
-            fetchAzureBreakdown(filters, azureDimension, 20, controller.signal),
-          ]);
+        const [availabilityResult, optionsResult, summaryResult, trendResult, usersResult] = await Promise.all([
+          fetchAvailability(controller.signal),
+          fetchFilterOptions(filters, controller.signal),
+          fetchSummary(filters, controller.signal),
+          fetchTrend(filters, controller.signal),
+          fetchTopUsers(filters, 20, controller.signal),
+        ]);
 
         if (cancelled) return;
         setAvailability(availabilityResult);
         setOptions(optionsResult);
         setSummary(summaryResult);
         setTrend(trendResult);
-        setBreakdown(breakdownResult);
-        setDetail(detailResult);
-        setAzure(azureResult);
+        setTopUsers(usersResult);
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
         setError(ex instanceof Error ? ex.message : 'Could not load the agent cost figures.');
@@ -229,7 +254,77 @@ export default function AgentCostsPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [filterSignature, dimension, azureDimension, page, sort, direction, reloadToken, filters]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSignature, reloadToken]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const result = await fetchBreakdown(filters, dimension, 20, controller.signal);
+        if (!cancelled) setBreakdown(result);
+      } catch (ex) {
+        if (cancelled || controller.signal.aborted) return;
+        setError(ex instanceof Error ? ex.message : 'Could not load the credit breakdown.');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSignature, dimension, reloadToken]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
+    (async () => {
+      setDetailLoading(true);
+      try {
+        const result = await fetchDetail(
+          { ...filters, page, pageSize: PAGE_SIZE, sort, direction },
+          controller.signal,
+        );
+        if (!cancelled) setDetail(result);
+      } catch (ex) {
+        if (cancelled || controller.signal.aborted) return;
+        setError(ex instanceof Error ? ex.message : 'Could not load the billed lines.');
+      } finally {
+        if (!cancelled) setDetailLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSignature, page, sort, direction, reloadToken]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const result = await fetchAzureBreakdown(filters, azureDimension, 20, controller.signal);
+        if (!cancelled) setAzure(result);
+      } catch (ex) {
+        if (cancelled || controller.signal.aborted) return;
+        setError(ex instanceof Error ? ex.message : 'Could not load the Azure cost breakdown.');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSignature, azureDimension, reloadToken]);
 
   const toggleSort = useCallback(
     (column: DetailSort) => {
@@ -245,20 +340,49 @@ export default function AgentCostsPage() {
   );
 
   const categories = useMemo(
-    () => breakdown.map((r) => ({ label: r.label || r.key || NOT_REPORTED, value: r.billedCredits })),
-    [breakdown],
+    () => breakdown.map((r) => ({ label: labelFor(dimension, r.label ?? r.key), value: r.billedCredits })),
+    [breakdown, dimension],
   );
 
-  const breakdownTotal = useMemo(() => breakdown.reduce((sum, r) => sum + r.billedCredits, 0), [breakdown]);
+  // The share denominator is the TRUE window total from the summary, not the sum of the rows on screen.
+  // The pivot is capped at the top 20, so dividing by the visible sum would make every row's share add up
+  // to 100% while omitting everything below the cut - overstating each one.
+  const shareTotal = summary?.billedCredits ?? 0;
+  const breakdownShown = useMemo(() => breakdown.reduce((sum, r) => sum + r.billedCredits, 0), [breakdown]);
+  const hasHiddenRows = shareTotal > 0 && breakdownShown < shareTotal - 0.0000005;
+
   const trendMax = useMemo(() => Math.max(...trend.map((p) => p.billedCredits), 1), [trend]);
+
+  // The per-user total is the sum of the rows SHOWN, and the caption says so. Unlike the pivot there is no
+  // uncapped total to divide by: the per-user endpoint is a separate report, so the summary's per-agent
+  // total is not its denominator and using it would understate every share.
+  const userTotal = useMemo(() => topUsers.reduce((sum, u) => sum + u.billedCredits, 0), [topUsers]);
 
   const totalPages = detail ? Math.max(1, Math.ceil(detail.totalRows / detail.pageSize)) : 1;
   const activeDimension = CREDIT_DIMENSIONS.find((d) => d.key === dimension);
 
-  const exportCsv = useCallback(() => {
+  const exportPage = useCallback(() => {
     if (!detail) return;
     saveCsv(detailRowsToCsv(detail.rows), `agent-credits-${filters.from}-to-${filters.to}-page${detail.page}.csv`);
   }, [detail, filters.from, filters.to]);
+
+  const exportAll = useCallback(async () => {
+    setExporting(true);
+    setNotice(null);
+    try {
+      const result = await fetchAllDetailRows(filters, sort, direction);
+      saveCsv(detailRowsToCsv(result.rows), `agent-credits-${filters.from}-to-${filters.to}-filtered.csv`);
+      setNotice(
+        result.truncated
+          ? `Exported the first ${result.rows.length.toLocaleString()} of ${result.totalRows.toLocaleString()} billed lines. Narrow the filters or shorten the period to export the rest.`
+          : `Exported ${result.rows.length.toLocaleString()} billed line(s).`,
+      );
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : 'Could not export the billed lines.');
+    } finally {
+      setExporting(false);
+    }
+  }, [filters, sort, direction]);
 
   return (
     <>
@@ -267,7 +391,8 @@ export default function AgentCostsPage() {
           <Title3>Agent costs</Title3>
           <Body1 className={styles.intro}>
             What Microsoft charged for your Copilot Studio agents, broken down as far as the billing data allows -
-            by agent, environment, harness, billing feature, AI model, tool and knowledge source.
+            by agent, environment, harness, billing feature, AI model, tool, knowledge source and, where Microsoft
+            reports it, by person.
           </Body1>
         </div>
         <div className={styles.controls}>
@@ -293,6 +418,14 @@ export default function AgentCostsPage() {
         <div className={styles.messages}>
           <MessageBar intent="error">
             <MessageBarBody>{error}</MessageBarBody>
+          </MessageBar>
+        </div>
+      )}
+
+      {notice && (
+        <div className={styles.messages}>
+          <MessageBar intent="success">
+            <MessageBarBody>{notice}</MessageBarBody>
           </MessageBar>
         </div>
       )}
@@ -358,7 +491,7 @@ export default function AgentCostsPage() {
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCount(summary?.peakDistinctUsersOnASlice)}</span>
                 <span className={styles.kpiLabel}>Busiest slice</span>
-                <span className={styles.kpiHint}>Most people on one agent in one day - not a tenant total</span>
+                <span className={styles.kpiHint}>Most people on a single billed line - never a tenant user total</span>
               </div>
               {summary?.unclassifiedHarnessCredits ? (
                 <div className={styles.kpi}>
@@ -467,7 +600,7 @@ export default function AgentCostsPage() {
                   <option value="">All harnesses</option>
                   {options?.harnesses.map((h) => (
                     <option key={h} value={h}>
-                      {h}
+                      {harnessLabel(h)}
                     </option>
                   ))}
                 </Select>
@@ -490,6 +623,39 @@ export default function AgentCostsPage() {
                   {options?.models.map((m) => (
                     <option key={m} value={m}>
                       {m}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className={styles.filterField}>
+                <span className={styles.filterLabel}>Tool invoked</span>
+                <Select value={tool} onChange={(_, d) => setTool(d.value)} disabled={loading}>
+                  <option value="">All tools</option>
+                  {options?.tools.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className={styles.filterField}>
+                <span className={styles.filterLabel}>Knowledge source</span>
+                <Select value={knowledge} onChange={(_, d) => setKnowledge(d.value)} disabled={loading}>
+                  <option value="">All knowledge sources</option>
+                  {options?.knowledgeSources.map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className={styles.filterField}>
+                <span className={styles.filterLabel}>Channel</span>
+                <Select value={channel} onChange={(_, d) => setChannel(d.value)} disabled={loading}>
+                  <option value="">All channels</option>
+                  {options?.channels.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
                     </option>
                   ))}
                 </Select>
@@ -546,10 +712,10 @@ export default function AgentCostsPage() {
                   <tbody>
                     {breakdown.map((r) => (
                       <tr key={r.key ?? NOT_REPORTED}>
-                        <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{r.label || r.key || NOT_REPORTED}</td>
+                        <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{labelFor(dimension, r.label ?? r.key)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>
-                          {breakdownTotal > 0 ? `${Math.round((r.billedCredits / breakdownTotal) * 1000) / 10}%` : DASH}
+                          {shareTotal > 0 ? `${Math.round((r.billedCredits / shareTotal) * 1000) / 10}%` : DASH}
                         </td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.nonBilledCredits)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.activeDays)}</td>
@@ -558,6 +724,12 @@ export default function AgentCostsPage() {
                     ))}
                   </tbody>
                 </table>
+                {hasHiddenRows && (
+                  <Text className={styles.muted} size={200}>
+                    Showing the top {breakdown.length} of this period&apos;s spend. Shares are of the full{' '}
+                    {formatCredits(shareTotal)} credits, so they will not add up to 100%.
+                  </Text>
+                )}
               </div>
             )}
           </Card>
@@ -569,19 +741,29 @@ export default function AgentCostsPage() {
                 <Text weight="semibold">Every billed line</Text>
                 <div>
                   <Text className={styles.muted} size={200}>
-                    One row per day, agent and billing dimension - the most detailed view Microsoft's billing data
+                    One row per day, agent and billing dimension - the most detailed view Microsoft&apos;s billing data
                     allows. Click a column heading to sort.
                   </Text>
                 </div>
               </div>
-              <Button
-                appearance="subtle"
-                icon={<ArrowDownload16Regular />}
-                disabled={loading || !detail || detail.rows.length === 0}
-                onClick={exportCsv}
-              >
-                Export this page (CSV)
-              </Button>
+              <div className={styles.controls}>
+                <Button
+                  appearance="subtle"
+                  icon={<ArrowDownload16Regular />}
+                  disabled={detailLoading || !detail || detail.rows.length === 0}
+                  onClick={exportPage}
+                >
+                  Export this page
+                </Button>
+                <Button
+                  appearance="primary"
+                  icon={<ArrowDownload16Regular />}
+                  disabled={exporting || detailLoading || !detail || detail.totalRows === 0}
+                  onClick={exportAll}
+                >
+                  {exporting ? 'Exporting...' : `Export all ${detail ? formatCount(detail.totalRows) : ''} rows`}
+                </Button>
+              </div>
             </div>
 
             {!detail || detail.rows.length === 0 ? (
@@ -628,7 +810,7 @@ export default function AgentCostsPage() {
                           <td className={styles.td}>{formatDay(r.usageDate)}</td>
                           <td className={styles.td}>{r.agentName || r.agentId || DASH}</td>
                           <td className={styles.td}>{r.environmentName || r.environmentId || DASH}</td>
-                          <td className={styles.td}>{r.harness || DASH}</td>
+                          <td className={styles.td}>{r.harness ? harnessLabel(r.harness) : DASH}</td>
                           <td className={styles.td}>{r.featureName || DASH}</td>
                           <td className={`${styles.td} ${r.llmModel ? '' : styles.tdMuted}`}>{r.llmModel || DASH}</td>
                           <td className={`${styles.td} ${r.toolInvoked ? '' : styles.tdMuted}`}>{r.toolInvoked || DASH}</td>
@@ -665,6 +847,62 @@ export default function AgentCostsPage() {
                   </Button>
                 </div>
               </>
+            )}
+          </Card>
+
+          {/* Who is spending the credits. Copilot Studio only. */}
+          <Card>
+            <div className={styles.cardHead}>
+              <div>
+                <Text weight="semibold">Who is spending the credits</Text>
+                <div>
+                  <Text className={styles.muted} size={200}>
+                    Billed Copilot Studio credits per person, reported by Microsoft. Nothing here is estimated or
+                    shared out - but it comes from a different Microsoft report than the per-agent figures above, so
+                    the two totals will not always match exactly. Azure spend is not included: Azure bills by
+                    resource and never records who caused a charge.
+                  </Text>
+                </div>
+              </div>
+            </div>
+
+            {topUsers.length === 0 ? (
+              <div className={styles.empty}>
+                {!availability?.copilotStudioCreditsEnabled
+                  ? 'The Copilot Studio credit import is switched off.'
+                  : availability?.hasPerUserCreditData
+                    ? 'No per-person credit usage in this period.'
+                    : "No per-person figures yet. Microsoft added these to the Power Platform licensing API in July 2026, so a tenant whose API does not offer them will only ever show the per-agent view above."}
+              </div>
+            ) : (
+              <div className={`${styles.wrap} ${styles.body}`}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th className={styles.th}>Person</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>Credits billed</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>Share</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>Days active</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topUsers.map((u) => (
+                      <tr key={u.userId}>
+                        <td className={styles.td}>{u.userId}</td>
+                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(u.billedCredits)}</td>
+                        <td className={`${styles.td} ${styles.tdNumeric}`}>
+                          {userTotal > 0 ? `${Math.round((u.billedCredits / userTotal) * 1000) / 10}%` : DASH}
+                        </td>
+                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(u.activeDays)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <Text className={styles.muted} size={200}>
+                  Shares are of the {formatCredits(userTotal)} credits shown here, which is the top{' '}
+                  {topUsers.length} people - not necessarily every person who used an agent.
+                </Text>
+              </div>
             )}
           </Card>
 
@@ -715,9 +953,9 @@ export default function AgentCostsPage() {
                       <tr key={`${r.key ?? NOT_REPORTED}-${r.currency ?? ''}`}>
                         <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{r.label || r.key || NOT_REPORTED}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatMoney(r.cost, r.currency)}</td>
-                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.quantity)}</td>
+                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatQuantity(r.quantity)}</td>
                         <td className={`${styles.td} ${styles.tdMuted}`}>
-                          {r.includesEstimates ? 'Estimate - can still change' : 'Invoiced'}
+                          {r.includesEstimates ? 'Estimate - can still change' : 'Final - billing period closed'}
                         </td>
                       </tr>
                     ))}

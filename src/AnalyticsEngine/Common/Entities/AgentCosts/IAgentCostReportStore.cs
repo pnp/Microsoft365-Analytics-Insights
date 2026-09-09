@@ -28,5 +28,15 @@ namespace Common.Entities.AgentCosts
         Task<System.Collections.Generic.List<AzureCostBreakdownRow>> GetAzureBreakdownAsync(AgentCostQuery query, string dimension, int top);
 
         Task<AgentCostFilterOptions> GetFilterOptionsAsync(AgentCostQuery query);
+
+        /// <summary>
+        /// The biggest per-user credit consumers in the window, highest first.
+        /// </summary>
+        /// <remarks>
+        /// Reads <c>copilot_studio_credit_user_daily</c>, which comes from Microsoft's per-user entitlement
+        /// routes - a different endpoint from the per-agent table, not a breakdown of it. The two totals are
+        /// therefore not guaranteed to reconcile exactly and must not be presented as if they were.
+        /// </remarks>
+        Task<System.Collections.Generic.List<AgentCostUserRow>> GetTopUsersAsync(AgentCostQuery query, int top);
     }
 }

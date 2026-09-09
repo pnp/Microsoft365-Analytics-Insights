@@ -10,6 +10,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using DataUtils;
 using WebJob.Office365ActivityImporter.Engine.AgentCosts;
 
 namespace Tests.UnitTests
@@ -301,35 +302,52 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void MapAndAggregate_UsageDateOutsideTheWindow_IsClampedIntoIt()
+        public void MapAndAggregate_WithASingleDayRequest_TakesTheUsageDateFromTheRequestNotTheResponse()
         {
-            var from = new DateTime(2026, 9, 1);
-            var to = new DateTime(2026, 9, 7);
+            // The importer asks for exactly one day per request, so the requested day is the authoritative
+            // usage date. It must NOT defer to asOfDate: that field is absent from the documented response
+            // model, and the usage date is part of the upsert key - a key that depended on an undocumented
+            // field would start producing duplicates the day Microsoft stopped returning it.
+            var day = new DateTime(2026, 9, 3);
 
             var mapped = CopilotStudioCreditImporter.MapAndAggregate(
                 new[]
                 {
                     new CopilotStudioCreditRow { ResourceId = "a", Consumed = 1m, AsOfDate = new DateTime(2026, 8, 1) },
-                    new CopilotStudioCreditRow { ResourceId = "b", Consumed = 1m, AsOfDate = new DateTime(2026, 12, 1) },
+                    new CopilotStudioCreditRow { ResourceId = "b", Consumed = 1m, AsOfDate = null },
                 },
-                from, to, null, DateTime.UtcNow);
+                day, day, null, DateTime.UtcNow);
 
-            // A row dated outside the window would be written once and never revisited by a later run over
-            // that window, so a restatement of it could never be applied.
-            Assert.IsTrue(mapped.All(r => r.UsageDate >= from && r.UsageDate <= to),
-                "Every stored usage date must fall inside the window that will be re-read next run.");
+            Assert.IsTrue(mapped.All(r => r.UsageDate == day),
+                "Every row from a single-day request belongs to that day, whatever the response claims.");
         }
 
         [TestMethod]
-        public void MapAndAggregate_NoAsOfDate_FallsBackToTheEndOfTheWindow()
+        public void MapAndAggregate_ReReadingTheSameDay_ProducesTheSameKeySoItUpdatesRatherThanDuplicates()
         {
-            var to = new DateTime(2026, 9, 7);
+            // The trailing window slides forward every run. If the same day produced a different key on a
+            // later run, the re-read would insert a second copy and spend would climb on its own.
+            var day = new DateTime(2026, 9, 3);
+            var row = new CopilotStudioCreditRow { ResourceId = "a", Consumed = 1m, FeatureName = "Generative answer" };
+
+            var runOne = CopilotStudioCreditImporter.MapAndAggregate(new[] { row }, day, day, null, DateTime.UtcNow);
+            var runTwo = CopilotStudioCreditImporter.MapAndAggregate(new[] { row }, day, day, null, DateTime.UtcNow.AddDays(1));
+
+            Assert.AreEqual(runOne.Single().UsageDate, runTwo.Single().UsageDate);
+            Assert.AreEqual(runOne.Single().DimensionHash, runTwo.Single().DimensionHash,
+                "A stable key is what makes the second run an UPDATE rather than a duplicate.");
+        }
+
+        [TestMethod]
+        public void MapAndAggregate_NoAsOfDate_UsesTheRequestedDay()
+        {
+            var day = new DateTime(2026, 9, 7);
 
             var mapped = CopilotStudioCreditImporter.MapAndAggregate(
                 new[] { new CopilotStudioCreditRow { ResourceId = "a", Consumed = 1m } },
-                new DateTime(2026, 9, 1), to, null, DateTime.UtcNow);
+                day, day, null, DateTime.UtcNow);
 
-            Assert.AreEqual(to, mapped.Single().UsageDate);
+            Assert.AreEqual(day, mapped.Single().UsageDate);
         }
 
         [TestMethod]
@@ -527,13 +545,191 @@ namespace Tests.UnitTests
             var store = new RecordingAgentCostStore();
             var importer = new AzureCostImporter(Logger, new ThrowingAzureCostSource(), store, new AzureCostImportSettings());
 
-            var log = await importer.ImportAsync();
+            var outcome = await importer.ImportAsync();
+            var log = outcome.Log;
 
             Assert.IsFalse(string.IsNullOrEmpty(log.Error),
                 "The toggle can be on while the scope setting is missing; that must be recorded, not read as 'no spend'.");
             StringAssert.Contains(log.Error, "AzureCostScopes",
                 "The message must name the setting the admin has to fill in.");
             Assert.AreEqual(1, store.Logs.Count, "The outcome must reach agent_cost_import_log.");
+            Assert.IsTrue(outcome.IsAuthorisationFailure,
+                "A missing setting cannot fix itself, so the cadence gate must back off rather than re-ask every cycle.");
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_AsksForOneDayAtATime()
+        {
+            // The licensing API aggregates over the range it is given: a seven-day request returns ONE
+            // consumed value per dimension slice covering the whole week, not seven daily rows. Asking for a
+            // range and then splitting it by the (undocumented) asOfDate would pile a week's spend onto a
+            // single day. One request per day makes the usage date a fact about the request.
+            var source = new FakeCreditSource();
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
+
+            await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 3, clock).ImportAsync();
+
+            Assert.AreEqual(3, source.RequestedRanges.Count, "A three-day window must be three requests.");
+            foreach (var range in source.RequestedRanges)
+            {
+                Assert.AreEqual(range.Item1, range.Item2,
+                    $"Every request must be for a single day, but got {range.Item1:yyyy-MM-dd}..{range.Item2:yyyy-MM-dd}.");
+            }
+
+            CollectionAssert.AreEquivalent(
+                new[] { new DateTime(2026, 9, 7), new DateTime(2026, 9, 8), new DateTime(2026, 9, 9) },
+                source.RequestedRanges.Select(r => r.Item1).ToList(),
+                "The trailing window must end today and cover exactly the configured number of days.");
+        }
+
+        [TestMethod]
+        public void AzureQuery_NeverAsksForMoreThanTwoGroupings()
+        {
+            // Cost Management's QueryDataset schema declares grouping with maxItems: 2 in every API version.
+            // A request carrying more is rejected with HTTP 400 - so exceeding it would not degrade the
+            // import, it would stop it working entirely, on every run, for every customer.
+            var settings = new AzureCostImportSettings
+            {
+                Scopes = new[] { "/subscriptions/00000000-0000-0000-0000-000000000000" },
+                GroupBy = new[] { "ResourceId", "Meter", "ServiceName", "MeterCategory" },
+            };
+
+            var source = new AzureCostManagementSource(
+                new DataUtils.Http.AutoThrottleHttpClient(false, Logger), settings, Logger);
+
+            var body = JObject.Parse(source.BuildRequestBody(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7)));
+            var grouping = (JArray)body["dataset"]["grouping"];
+
+            Assert.IsTrue(grouping.Count <= AzureCostImportSettings.MaxGroupByDimensions,
+                $"Cost Management accepts at most {AzureCostImportSettings.MaxGroupByDimensions} groupings, but the "
+                + $"request asked for {grouping.Count}.");
+
+            var aggregation = (JObject)body["dataset"]["aggregation"];
+            Assert.IsTrue(aggregation.Count <= 2, "The same maxItems: 2 limit applies to aggregation.");
+        }
+
+        [TestMethod]
+        public void AzureQuery_DefaultGrouping_KeepsTheDimensionsOtherFieldsCanBeRecoveredFrom()
+        {
+            // ResourceId is preferred over ServiceName because the subscription and resource group can be
+            // parsed back out of it, so two groupings still yield four dimensions.
+            CollectionAssert.Contains(AzureCostImportSettings.DefaultGroupBy.ToList(), "ResourceId");
+
+            const string resourceId =
+                "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/contoso-rg/providers/Microsoft.Foo/bar/baz";
+
+            Assert.AreEqual("00000000-0000-0000-0000-000000000001",
+                AzureCostImporter.SubscriptionIdFromResourceId(resourceId));
+            Assert.AreEqual("contoso-rg", AzureCostImporter.ResourceGroupFromResourceId(resourceId));
+
+            // Azure is not case-consistent about this segment.
+            Assert.AreEqual("contoso-rg",
+                AzureCostImporter.ResourceGroupFromResourceId(resourceId.Replace("resourceGroups", "resourcegroups")));
+
+            Assert.IsNull(AzureCostImporter.SubscriptionIdFromResourceId(null));
+            Assert.IsNull(AzureCostImporter.ResourceGroupFromResourceId("not-a-resource-id"));
+        }
+
+        [TestMethod]
+        public void AzureImporter_RefreshWindow_CoversEverythingStillProvisional()
+        {
+            // The trailing-days setting and the "still provisional" rule are different spans. If the window
+            // were only the former, a charge dated the 1st would stop being re-read on the 5th while still
+            // being labelled an estimate until the 5th of the NEXT month - frozen at its first value for ever.
+            var today = new DateTime(2026, 9, 20);
+            var earliest = AzureCostImporter.EarliestStillProvisionalDate(today);
+
+            Assert.IsTrue(AzureCostImporter.IsStillProvisional(earliest, today),
+                "The earliest refreshed date must itself still be provisional.");
+            Assert.IsFalse(AzureCostImporter.IsStillProvisional(earliest.AddDays(-1), today),
+                "And the day before it must not be - otherwise the window is too narrow.");
+
+            // Inside the finalisation lag the previous month is still open, so it must still be refreshed.
+            var earlyInMonth = new DateTime(2026, 9, 3);
+            Assert.AreEqual(new DateTime(2026, 8, 1), AzureCostImporter.EarliestStillProvisionalDate(earlyInMonth));
+        }
+
+        [TestMethod]
+        public void CreditParser_PerUserNestedEnvelope_IsParsed()
+        {
+            // A different envelope from the per-agent read: value[].users[], not value[].resources[].
+            var json = JObject.Parse(@"{
+                ""value"": [
+                    { ""users"": [
+                        { ""userId"": ""00000000-0000-0000-0000-0000000000u1"", ""environmentId"": ""env-1"",
+                          ""consumed"": 42.5, ""unit"": ""Count"", ""asOfDate"": ""2026-09-03T00:00:00Z"" }
+                    ] }
+                ],
+                ""continuationtoken"": """"
+            }");
+
+            var page = CopilotStudioCreditParser.ParseUserConsumptionPage(json);
+
+            Assert.AreEqual(1, page.Rows.Count);
+            Assert.AreEqual("00000000-0000-0000-0000-0000000000u1", page.Rows[0].UserId);
+            Assert.AreEqual(42.5m, page.Rows[0].Consumed);
+            Assert.IsFalse(page.HasMore);
+        }
+
+        [TestMethod]
+        public void CreditParser_PerUserFlatEnvelope_IsAlsoParsed()
+        {
+            var json = JObject.Parse(@"{ ""value"": [ { ""userId"": ""u1"", ""consumed"": 3 } ] }");
+            Assert.AreEqual("u1", CopilotStudioCreditParser.ParseUserConsumptionPage(json).Rows.Single().UserId);
+        }
+
+        [TestMethod]
+        public void CreditParser_PerUserRowWithNoUser_IsDropped()
+        {
+            // Storing it under a null identifier would create a phantom "unknown user" that silently
+            // accumulates other people's spend.
+            var json = JObject.Parse(@"{ ""value"": [ { ""consumed"": 3 }, { ""userId"": ""  "", ""consumed"": 4 }, { ""userId"": ""u1"", ""consumed"": 5 } ] }");
+
+            var rows = CopilotStudioCreditParser.ParseUserConsumptionPage(json).Rows;
+
+            Assert.AreEqual(1, rows.Count);
+            Assert.AreEqual("u1", rows[0].UserId);
+        }
+
+        [TestMethod]
+        public void MapUserRows_CombinesRepeatsAndUsesTheRequestedDay()
+        {
+            var day = new DateTime(2026, 9, 3);
+
+            var mapped = CopilotStudioCreditImporter.MapUserRows(
+                new[]
+                {
+                    new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 2m },
+                    new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 3m },
+                    new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-2", Consumed = 7m },
+                },
+                day, null, DateTime.UtcNow);
+
+            Assert.AreEqual(2, mapped.Count, "Environment is part of the identity.");
+            Assert.AreEqual(5m, mapped.Single(r => r.EnvironmentId == "env-1").BilledCredits);
+            Assert.IsTrue(mapped.All(r => r.UsageDate == day));
+        }
+
+        [TestMethod]
+        public async Task CreditImporter_WhenThePerUserRouteIsUnavailable_TheImportStillSucceeds()
+        {
+            // These routes are new (July 2026). A tenant whose API does not offer them is a legitimate
+            // state, not a failure - and must not stop the per-agent figures being recorded as up to date.
+            var source = new FakeCreditSource(); // Its per-user method returns null.
+            var store = new RecordingAgentCostStore();
+
+            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 2).ImportUserCreditsAsync();
+
+            Assert.IsTrue(outcome.Succeeded, "An unavailable route is not an error.");
+            Assert.AreEqual(0, outcome.Log.RowsRead);
+            Assert.AreEqual(0, store.UserCredits.Count);
+        }
+
+        /// <summary>A clock fixed at a known instant, so window arithmetic is assertable.</summary>
+        private class FixedClock : IClock
+        {
+            public FixedClock(DateTime utcNow) { UtcNow = utcNow; }
+            public DateTime UtcNow { get; }
         }
 
         private static AzureCostImporter NewAzureImporter(AzureCostImportSettings settings)
@@ -546,6 +742,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task CreditImporter_PagesUntilTheContinuationTokenRunsOut()
         {
+            // A one-day window, so this asserts PAGING alone rather than paging times the number of days.
             var source = new FakeCreditSource();
             source.Pages.Add(new CopilotStudioCreditPage(
                 new[] { new CopilotStudioCreditRow { ResourceId = "a", Consumed = 1m } }, "token-1"));
@@ -553,7 +750,8 @@ namespace Tests.UnitTests
                 new[] { new CopilotStudioCreditRow { ResourceId = "b", Consumed = 2m } }, null));
 
             var store = new RecordingAgentCostStore();
-            var log = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportAsync();
+            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, trailingWindowDays: 1).ImportAsync();
+            var log = outcome.Log;
 
             Assert.AreEqual(2, log.RowsRead);
             Assert.AreEqual(2, source.Calls);
@@ -562,17 +760,21 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task CreditImporter_RepeatedContinuationToken_StopsInsteadOfLoopingForever()
+        public async Task CreditImporter_RepeatedContinuationToken_FailsInsteadOfStoringDuplicatedSpend()
         {
             // A server that keeps handing back the same token would otherwise page for ever while appending
-            // the same rows - an unbounded loop inside an import cycle that no exception handler can break.
+            // the same rows - and those rows aggregate by dimension hash, so the repeats would be SUMMED into
+            // inflated spend. Failing the run keeps the last good figures instead.
             var source = new RepeatingTokenCreditSource();
             var store = new RecordingAgentCostStore();
 
-            var log = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportAsync();
+            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportAsync();
+            var log = outcome.Log;
 
             Assert.IsTrue(source.Calls <= 3, $"Expected the importer to stop quickly, but it made {source.Calls} calls.");
-            Assert.IsTrue(string.IsNullOrEmpty(log.Error), "Stopping early is a warning, not a failure.");
+            Assert.IsFalse(string.IsNullOrEmpty(log.Error),
+                "An incomplete read must be recorded as a failure, not stamped as a successful import.");
+            Assert.AreEqual(0, store.Credits.Count, "A partial window must not be written.");
         }
 
         [TestMethod]
@@ -582,7 +784,8 @@ namespace Tests.UnitTests
             var source = new FailingCreditSource(new AgentCostAuthorisationException(
                 "The Power Platform licensing API refused the request ... assign the 'Power Platform reader' role ..."));
 
-            var log = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportAsync();
+            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 7).ImportAsync();
+            var log = outcome.Log;
 
             Assert.IsFalse(string.IsNullOrEmpty(log.Error), "A refused import must not look like an empty one.");
             StringAssert.Contains(log.Error, "Power Platform reader",
@@ -598,7 +801,7 @@ namespace Tests.UnitTests
             source.Pages.Add(new CopilotStudioCreditPage(
                 new[] { new CopilotStudioCreditRow { ResourceId = "a", Consumed = 5m } }, null));
 
-            var log = await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 7).ImportAsync();
+            var log = (await new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 7).ImportAsync()).Log;
 
             Assert.IsFalse(string.IsNullOrEmpty(log.Error),
                 "The failure is still surfaced - it is the real adapter that swallows it, not the importer.");
@@ -644,14 +847,20 @@ namespace Tests.UnitTests
             public string LastContinuationToken { get; private set; }
             public bool ThrowOnEnvironmentNames { get; set; }
 
+            /// <summary>Every (fromDate, toDate) pair the importer asked for, in order.</summary>
+            public List<Tuple<DateTime, DateTime>> RequestedRanges { get; } = new List<Tuple<DateTime, DateTime>>();
+
             public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
             {
                 LastContinuationToken = continuationToken;
+                RequestedRanges.Add(Tuple.Create(fromDate, toDate));
                 var page = Calls < Pages.Count ? Pages[Calls] : new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null);
                 Calls++;
                 return Task.FromResult(page);
             }
 
+            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => Task.FromResult<CopilotStudioUserCreditPage>(null);
             public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()
                 => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
 
@@ -674,6 +883,8 @@ namespace Tests.UnitTests
                     new[] { new CopilotStudioCreditRow { ResourceId = "a", Consumed = 1m } }, "same-token"));
             }
 
+            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => Task.FromResult<CopilotStudioUserCreditPage>(null);
             public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
 
             public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
@@ -686,6 +897,9 @@ namespace Tests.UnitTests
             public FailingCreditSource(Exception exception) { _exception = exception; }
 
             public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => throw _exception;
+
+            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
                 => throw _exception;
 
             public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => throw _exception;
@@ -716,6 +930,14 @@ namespace Tests.UnitTests
             public Task<int> UpsertAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows)
             {
                 Costs.AddRange(rows);
+                return Task.FromResult(rows.Count);
+            }
+
+            public List<CopilotStudioCreditUserDaily> UserCredits { get; } = new List<CopilotStudioCreditUserDaily>();
+
+            public Task<int> UpsertCopilotStudioUserCreditsAsync(IReadOnlyList<CopilotStudioCreditUserDaily> rows)
+            {
+                UserCredits.AddRange(rows);
                 return Task.FromResult(rows.Count);
             }
 

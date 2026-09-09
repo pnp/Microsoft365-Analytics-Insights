@@ -41,6 +41,7 @@ namespace Common.Entities.AgentCosts
             using (var db = _dbContextFactory.Create())
             {
                 result.HasCopilotStudioCreditData = await db.CopilotStudioCreditDaily.AnyAsync();
+                result.HasPerUserCreditData = await db.CopilotStudioCreditUserDaily.AnyAsync();
                 result.HasAzureCostData = await db.AzureCostDaily.AnyAsync();
 
                 if (result.HasCopilotStudioCreditData)
@@ -54,6 +55,7 @@ namespace Common.Entities.AgentCosts
                 {
                     result.CopilotStudioCreditsLastImportUtc = creditLog.ImportedUtc;
                     result.CopilotStudioCreditsLastError = creditLog.Error;
+                    result.CopilotStudioCreditsHasRunCleanly = string.IsNullOrEmpty(creditLog.Error);
                 }
 
                 var azureLog = await LatestLogAsync(db, AgentCostImportNames.AzureCostManagement);
@@ -61,6 +63,7 @@ namespace Common.Entities.AgentCosts
                 {
                     result.AzureCostsLastImportUtc = azureLog.ImportedUtc;
                     result.AzureCostsLastError = azureLog.Error;
+                    result.AzureCostsHaveRunCleanly = string.IsNullOrEmpty(azureLog.Error);
                 }
             }
 
@@ -82,27 +85,55 @@ namespace Common.Entities.AgentCosts
 
             if (result.CopilotStudioCreditsEnabled && !result.HasCopilotStudioCreditData)
             {
-                result.Messages.Add(string.IsNullOrEmpty(result.CopilotStudioCreditsLastError)
-                    ? "The Copilot Studio credit import is switched on but has not stored anything yet. It runs once a "
-                      + "day, so allow a cycle before expecting figures."
-                    : "The Copilot Studio credit import is switched on but is failing. Most often this means the app "
-                      + "registration has not been given a Power Platform role: " + result.CopilotStudioCreditsLastError);
+                if (!string.IsNullOrEmpty(result.CopilotStudioCreditsLastError))
+                {
+                    result.Messages.Add("The Copilot Studio credit import is switched on but is failing. Most often this "
+                        + "means the app registration has not been given a Power Platform role: "
+                        + result.CopilotStudioCreditsLastError);
+                }
+                else if (result.CopilotStudioCreditsHasRunCleanly)
+                {
+                    // A tenant with no Copilot Studio agents gets a perfectly successful, empty result. Without
+                    // this branch it would be told to "allow a cycle" for ever.
+                    result.Messages.Add("The Copilot Studio credit import ran successfully but found no billed agent "
+                        + "usage. That is the expected result for a tenant with no Copilot Studio agents, or none that "
+                        + "have consumed credits yet.");
+                }
+                else
+                {
+                    result.Messages.Add("The Copilot Studio credit import is switched on but has not stored anything "
+                        + "yet. It runs once a day, so allow a cycle before expecting figures.");
+                }
             }
 
             if (result.AzureCostsEnabled && !result.HasAzureCostData)
             {
-                result.Messages.Add(string.IsNullOrEmpty(result.AzureCostsLastError)
-                    ? "The Azure cost import is switched on but has not stored anything yet. Check that a scope is set "
-                      + "and that the meter filter matches something in your own cost data - a filter that matches "
-                      + "nothing looks exactly like having no spend."
-                    : "The Azure cost import is switched on but is failing: " + result.AzureCostsLastError);
+                if (!string.IsNullOrEmpty(result.AzureCostsLastError))
+                {
+                    result.Messages.Add("The Azure cost import is switched on but is failing: " + result.AzureCostsLastError);
+                }
+                else if (result.AzureCostsHaveRunCleanly)
+                {
+                    result.Messages.Add("The Azure cost import ran successfully but the query matched no spend. Check "
+                        + "the meter filter against a cost export from the same scope - a filter that matches nothing "
+                        + "looks exactly like having no spend.");
+                }
+                else
+                {
+                    result.Messages.Add("The Azure cost import is switched on but has not stored anything yet. Check "
+                        + "that a scope is set and allow a cycle before expecting figures.");
+                }
             }
 
-            // The single most important caveat on this page, and the reason there is no "cost per user" column.
-            result.Messages.Add("Copilot Studio credits are billed by Microsoft per agent and per environment, never per "
-                + "person, so this report cannot show who spent what. The user counts below are how many different "
-                + "people used an agent - they cannot be added together, because the same person appears under every "
-                + "agent they used.");
+            // The most important caveat on this page, and the reason the two credit views do not add up.
+            result.Messages.Add("Copilot Studio spend is reported by Microsoft two ways: per agent, and per person. "
+                + "They come from different Microsoft endpoints rather than one being a breakdown of the other, so "
+                + "their totals will not always match exactly. The per-agent user counts are how many different people "
+                + "used an agent - those cannot be added together, because the same person appears under every agent "
+                + "they used.");
+
+            result.Messages.Add("Azure costs cannot be attributed to individual people. Azure bills by resource, and no "
+                + "Azure billing report - including the full cost export - records who caused a charge.");
 
             result.Messages.Add("Azure costs are estimates until Microsoft closes the billing period, which can take a "
                 + "few days after month end. Figures marked as estimates can still change.");
@@ -406,11 +437,19 @@ namespace Common.Entities.AgentCosts
                         Quantity = g.Sum(k => k.Row.Quantity),
                         AnyEstimated = g.Any(k => k.Row.IsEstimated),
                     })
-                    .OrderByDescending(g => g.Cost)
-                    .Take(top)
                     .ToListAsync();
 
+                // Top N is taken PER CURRENCY, in memory, rather than by ordering the whole set by raw cost.
+                // Ordering across currencies compares numbers that are not comparable: on a tenant billed in
+                // both JPY and USD, a trivial yen charge outranks a large dollar one purely because the
+                // number is bigger, and the "top" list becomes nonsense. There are only ever a handful of
+                // billing currencies, so grouping them here is cheap.
                 return grouped
+                    .GroupBy(g => g.Currency, StringComparer.OrdinalIgnoreCase)
+                    .OrderByDescending(currencyGroup => currencyGroup.Sum(g => g.Cost ?? 0m))
+                    .SelectMany(currencyGroup => currencyGroup
+                        .OrderByDescending(g => g.Cost ?? 0m)
+                        .Take(top))
                     .Select(g => new AzureCostBreakdownRow
                     {
                         Key = g.Key,
@@ -451,6 +490,9 @@ namespace Common.Entities.AgentCosts
                 var harnesses = await inWindow.Where(r => r.Harness != null).Select(r => r.Harness).Distinct().ToListAsync();
                 var features = await inWindow.Where(r => r.FeatureName != null).Select(r => r.FeatureName).Distinct().Take(200).ToListAsync();
                 var models = await inWindow.Where(r => r.LlmModel != null).Select(r => r.LlmModel).Distinct().Take(200).ToListAsync();
+                var tools = await inWindow.Where(r => r.ToolInvoked != null).Select(r => r.ToolInvoked).Distinct().Take(200).ToListAsync();
+                var knowledge = await inWindow.Where(r => r.KnowledgeSources != null).Select(r => r.KnowledgeSources).Distinct().Take(200).ToListAsync();
+                var channels = await inWindow.Where(r => r.ChannelId != null).Select(r => r.ChannelId).Distinct().Take(200).ToListAsync();
 
                 return new AgentCostFilterOptions
                 {
@@ -465,7 +507,51 @@ namespace Common.Entities.AgentCosts
                     Harnesses = harnesses.OrderBy(h => h, StringComparer.Ordinal).ToList(),
                     Features = features.OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase).ToList(),
                     Models = models.OrderBy(m => m, StringComparer.CurrentCultureIgnoreCase).ToList(),
+                    Tools = tools.OrderBy(t => t, StringComparer.CurrentCultureIgnoreCase).ToList(),
+                    KnowledgeSources = knowledge.OrderBy(k => k, StringComparer.CurrentCultureIgnoreCase).ToList(),
+                    Channels = channels.OrderBy(c => c, StringComparer.CurrentCultureIgnoreCase).ToList(),
                 };
+            }
+        }
+
+        public async Task<List<AgentCostUserRow>> GetTopUsersAsync(AgentCostQuery query, int top)
+        {
+            top = top <= 0 ? 20 : Math.Min(top, 200);
+
+            using (var db = _dbContextFactory.Create())
+            {
+                var rows = db.CopilotStudioCreditUserDaily
+                    .Where(r => r.UsageDate >= query.FromUtc && r.UsageDate <= query.ToUtc);
+
+                // Only the environment filter applies here. The per-user endpoint reports a user's
+                // consumption per environment and does not carry the agent, feature, model or tool
+                // dimensions, so applying those filters would silently return everything as though the
+                // filter had matched - worse than not offering it.
+                if (!string.IsNullOrWhiteSpace(query.EnvironmentId))
+                {
+                    rows = rows.Where(r => r.EnvironmentId == query.EnvironmentId);
+                }
+
+                var grouped = await rows
+                    .GroupBy(r => r.UserId)
+                    .Select(g => new
+                    {
+                        UserId = g.Key,
+                        Credits = g.Sum(r => (decimal?)r.BilledCredits),
+                        ActiveDays = g.Select(r => r.UsageDate).Distinct().Count(),
+                    })
+                    .OrderByDescending(g => g.Credits)
+                    .Take(top)
+                    .ToListAsync();
+
+                return grouped
+                    .Select(g => new AgentCostUserRow
+                    {
+                        UserId = g.UserId,
+                        BilledCredits = g.Credits ?? 0m,
+                        ActiveDays = g.ActiveDays,
+                    })
+                    .ToList();
             }
         }
 
@@ -485,6 +571,9 @@ namespace Common.Entities.AgentCosts
             if (!string.IsNullOrWhiteSpace(query.Harness)) filtered = filtered.Where(r => r.Harness == query.Harness);
             if (!string.IsNullOrWhiteSpace(query.FeatureName)) filtered = filtered.Where(r => r.FeatureName == query.FeatureName);
             if (!string.IsNullOrWhiteSpace(query.LlmModel)) filtered = filtered.Where(r => r.LlmModel == query.LlmModel);
+            if (!string.IsNullOrWhiteSpace(query.ToolInvoked)) filtered = filtered.Where(r => r.ToolInvoked == query.ToolInvoked);
+            if (!string.IsNullOrWhiteSpace(query.KnowledgeSources)) filtered = filtered.Where(r => r.KnowledgeSources == query.KnowledgeSources);
+            if (!string.IsNullOrWhiteSpace(query.ChannelId)) filtered = filtered.Where(r => r.ChannelId == query.ChannelId);
 
             if (!string.IsNullOrWhiteSpace(query.Search))
             {

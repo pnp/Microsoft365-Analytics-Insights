@@ -408,6 +408,10 @@
     <Compile Include="Migrations\202608310747353_DenormaliseCopilotChatUserAndTime.Designer.cs">
       <DependentUpon>202608310747353_DenormaliseCopilotChatUserAndTime.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609090647151_AgentCostUserCredits.cs" />
+    <Compile Include="Migrations\202609090647151_AgentCostUserCredits.Designer.cs">
+      <DependentUpon>202609090647151_AgentCostUserCredits.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609090519337_AgentCostTables.cs" />
     <Compile Include="Migrations\202609090519337_AgentCostTables.Designer.cs">
       <DependentUpon>202609090519337_AgentCostTables.cs</DependentUpon>
@@ -614,6 +618,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608310747353_DenormaliseCopilotChatUserAndTime.resx">
       <DependentUpon>202608310747353_DenormaliseCopilotChatUserAndTime.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609090647151_AgentCostUserCredits.resx">
+      <DependentUpon>202609090647151_AgentCostUserCredits.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609090519337_AgentCostTables.resx">
       <DependentUpon>202609090519337_AgentCostTables.cs</DependentUpon>

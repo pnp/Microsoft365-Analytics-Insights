@@ -143,6 +143,71 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             return map;
         }
 
+        /// <summary>
+        /// Parses a <b>per-user</b> consumption response.
+        /// </summary>
+        /// <remarks>
+        /// The envelope is <c>value[].users[]</c>, not <c>value[].resources[]</c>, so this cannot reuse the
+        /// per-agent parser. A flat <c>value[]</c> of user snapshots is accepted too, on the same reasoning
+        /// as the per-agent read: the documented and observed shapes differ and neither is safe to assume.
+        /// </remarks>
+        public static CopilotStudioUserCreditPage ParseUserConsumptionPage(JObject response)
+        {
+            var rows = new List<CopilotStudioUserCreditRow>();
+            if (response == null)
+            {
+                return new CopilotStudioUserCreditPage(rows, null);
+            }
+
+            var value = GetProperty(response, "value") as JArray;
+            if (value != null)
+            {
+                foreach (var entry in value)
+                {
+                    var entryObject = entry as JObject;
+                    if (entryObject == null) continue;
+
+                    var nested = GetProperty(entryObject, "users") as JArray;
+                    if (nested != null)
+                    {
+                        foreach (var nestedEntry in nested)
+                        {
+                            var row = ParseUserRow(nestedEntry as JObject);
+                            if (row != null) rows.Add(row);
+                        }
+                        continue;
+                    }
+
+                    var flat = ParseUserRow(entryObject);
+                    if (flat != null) rows.Add(flat);
+                }
+            }
+
+            var continuation = GetString(response, "continuationtoken") ?? GetString(response, "continuationToken");
+
+            return new CopilotStudioUserCreditPage(rows, continuation);
+        }
+
+        private static CopilotStudioUserCreditRow ParseUserRow(JObject row)
+        {
+            if (row == null) return null;
+
+            var userId = GetString(row, "userId");
+
+            // A row with no user is not a user row. Storing it under a null identifier would create a
+            // phantom "unknown user" bucket that silently accumulates other people's spend.
+            if (string.IsNullOrWhiteSpace(userId)) return null;
+
+            return new CopilotStudioUserCreditRow
+            {
+                UserId = userId,
+                EnvironmentId = GetString(row, "environmentId"),
+                Consumed = GetDecimal(row, "consumed") ?? 0m,
+                Unit = GetString(row, "unit"),
+                AsOfDate = GetDateTime(row, "asOfDate"),
+            };
+        }
+
         private static CopilotStudioCreditRow ParseRow(JObject row)
         {
             if (row == null) return null;

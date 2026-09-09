@@ -215,6 +215,7 @@ namespace Common.Entities
             // real spend to zero.
             modelBuilder.Entity<CopilotStudioCreditDaily>().Property(c => c.BilledCredits).HasPrecision(18, 6);
             modelBuilder.Entity<CopilotStudioCreditDaily>().Property(c => c.NonBilledCredits).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditUserDaily>().Property(c => c.BilledCredits).HasPrecision(18, 6);
             modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.Entitled).HasPrecision(18, 6);
             modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.Consumed).HasPrecision(18, 6);
             modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.Allocated).HasPrecision(18, 6);
@@ -228,6 +229,8 @@ namespace Common.Entities
             // is recalculated as usage days settle. The unique index is what makes that re-import an upsert
             // instead of a duplicate, and it leads on the usage date so a date-range report still seeks.
             modelBuilder.Entity<CopilotStudioCreditDaily>()
+                .HasIndex(c => new { c.UsageDate, c.DimensionHash }).IsUnique();
+            modelBuilder.Entity<CopilotStudioCreditUserDaily>()
                 .HasIndex(c => new { c.UsageDate, c.DimensionHash }).IsUnique();
             modelBuilder.Entity<AzureCostDaily>()
                 .HasIndex(c => new { c.UsageDate, c.RowHash }).IsUnique();
@@ -526,6 +529,13 @@ namespace Common.Entities
 
         /// <summary>Billed Copilot Studio credit consumption per agent, per day, per billing dimension.</summary>
         public virtual DbSet<CopilotStudioCreditDaily> CopilotStudioCreditDaily { get; set; }
+
+        /// <summary>
+        /// Billed Copilot Studio credit consumption attributed to an individual user, per day. From the
+        /// per-user entitlement routes Microsoft added in July 2026 - a different endpoint from the per-agent
+        /// table above, not a breakdown of it.
+        /// </summary>
+        public virtual DbSet<CopilotStudioCreditUserDaily> CopilotStudioCreditUserDaily { get; set; }
 
         /// <summary>Daily snapshot of the tenant's whole Copilot Credits entitlement and overage status.</summary>
         public virtual DbSet<CopilotStudioCreditCapacity> CopilotStudioCreditCapacity { get; set; }
