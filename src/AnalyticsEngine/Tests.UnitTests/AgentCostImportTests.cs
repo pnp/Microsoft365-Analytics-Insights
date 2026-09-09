@@ -1,3 +1,4 @@
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.AgentCosts;
 using Microsoft.Extensions.Logging;
@@ -11,6 +12,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using DataUtils;
+using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.AgentCosts;
 
 namespace Tests.UnitTests
@@ -871,6 +873,62 @@ namespace Tests.UnitTests
                 if (Failures.TryGetValue(scope, out var ex)) throw ex;
                 return Task.FromResult<IReadOnlyList<AzureCostRow>>(new List<AzureCostRow>());
             }
+        }
+
+        [TestMethod]
+        public async Task Phase_APersistentlyFailingPerUserRoute_DoesNotBlockTheCadenceGate()
+        {
+            // Measured against a real tenant: an unusable /users route can return a persistent HTTP 500 while
+            // its sibling routes return 403. A persistent 500 is indistinguishable from a transient one, so
+            // if it fed the cadence decision the whole import would be marked failed on every cycle - hitting
+            // Microsoft every few minutes for ever, and never recording the per-agent figures as up to date
+            // even though they imported perfectly.
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true },
+                CopilotStudioCreditsIntervalHours = 24,
+            };
+
+            var lastRunStore = new InMemoryImportLastRunStore();
+            var store = new RecordingAgentCostStore();
+
+            // Consumption and capacity succeed; only the per-user route fails.
+            var source = new FailingUserRouteCreditSource();
+
+            var phase = new AgentCostImportPhase(
+                Logger,
+                settings,
+                lastRunStore,
+                creditImporterFactory: () => new CopilotStudioCreditImporter(Logger, source, store, 1),
+                azureCostImporterFactory: () => new AzureCostImporter(Logger, new ThrowingAzureCostSource(), store, new AzureCostImportSettings()));
+
+            await phase.RunAsync();
+
+            var stamped = await lastRunStore.GetLastRunUtc(AgentCostImportPhase.CopilotStudioCreditsLastImportedKey);
+            Assert.IsNotNull(stamped,
+                "The per-agent import succeeded, so the gate must be stamped - otherwise a broken per-user route "
+                + "re-runs the whole import every cycle indefinitely.");
+
+            // The failure must still be recorded, not swallowed.
+            Assert.IsTrue(store.Logs.Any(l => l.ImportName == AgentCostImportNames.CopilotStudioUserCredits
+                    && !string.IsNullOrEmpty(l.Error)),
+                "The per-user failure must still reach agent_cost_import_log so an admin can see it.");
+        }
+
+        /// <summary>Succeeds for the per-agent and capacity reads; the per-user route always throws.</summary>
+        private class FailingUserRouteCreditSource : ICopilotStudioCreditSource
+        {
+            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => Task.FromResult(new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null));
+
+            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => throw new System.Net.Http.HttpRequestException("The Power Platform licensing API returned HTTP 500.");
+
+            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync()
+                => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
+
+            public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
+                => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
         }
 
         /// <summary>A clock fixed at a known instant, so window arithmetic is assertable.</summary>

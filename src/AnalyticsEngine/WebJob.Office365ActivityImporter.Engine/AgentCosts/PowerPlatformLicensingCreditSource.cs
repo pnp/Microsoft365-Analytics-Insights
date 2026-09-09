@@ -83,9 +83,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// <remarks>
         /// Microsoft added this route in July 2026. It is the only documented source of per-user Copilot
         /// Studio credit consumption - the per-agent route reports a distinct-user count and nothing more.
-        /// A 404 is treated as "this tenant's API does not offer the route" and returns null rather than
-        /// throwing, because a deployment against an older or restricted API surface must still get its
-        /// per-agent figures.
+        /// <para>A 404 is treated as "this tenant's API does not offer the route" and returns null rather
+        /// than throwing, because a deployment against an older or restricted API surface must still get its
+        /// per-agent figures. Note that 404 is <b>not</b> the only way an unusable route presents: measured
+        /// against a real tenant whose service principal was not authorised, this route returned a persistent
+        /// HTTP 500 while its siblings returned 403, and only a genuinely unrouted path produced a clean 404
+        /// (<c>RouteNotFound</c>). That is why the caller treats the whole per-user read as best effort
+        /// rather than relying on being able to recognise "unavailable" from the status code alone.</para>
         /// </remarks>
         public async Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
         {
