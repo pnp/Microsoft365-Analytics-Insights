@@ -44,6 +44,10 @@ Short summary on functionality and used technologies.
 
 - Clone this repository
 - Ensure that you are at the solution folder
+- **Switch to Node.js 22** — SPFx does not support the Node major the rest of
+  this repository is pinned to (see the `.nvmrc` in this folder, and the
+  *Node.js version* section of [`CONTRIBUTING.md`](../../../CONTRIBUTING.md)):
+  - `nvm use` (from this folder, not the repository root)
 - in the command-line run:
   - `npm install -g @rushstack/heft`
   - `npm install`

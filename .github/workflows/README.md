@@ -4,6 +4,18 @@
 are scoped to that path plus `reports/**` and their own workflow file. Changes elsewhere under
 `src/` — for example `src/TelemetryService` — do not trigger them; that has its own workflow below.
 
+## Node.js version
+
+No workflow hardcodes a Node version. Every job that runs `npm` — directly, or indirectly via
+MSBuild building the portal SPA — uses `actions/setup-node` with `node-version-file: .nvmrc`, so
+the repo-root [`.nvmrc`](../../.nvmrc) is the single place the Node major is set for CI and for
+developer machines alike. See the *Node.js version* section of
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md).
+
+Note that `build_dotnet` / `test_dotnet` need Node even though nothing in them mentions npm:
+`Web.csproj` shells out to `npm install` and `npm run build` for the portal, and its
+`CheckNodeVersion` guard fails the build if the Node major does not match the pin.
+
 ## ci
 
 * Build and release when pushes to `main` or `dev`.
