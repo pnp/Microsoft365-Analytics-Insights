@@ -1,5 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
+import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { formatCount, formatPct } from './KpiGrid';
 
 const useStyles = makeStyles({
@@ -47,6 +48,61 @@ const OUTSIDE_LABEL_W = 120;
 const STAGE_COLOURS = ['#8ec3ea', '#5aa6dd', '#2f86cc', '#1466ad', '#0a4a80'];
 
 /**
+ * What each stage name actually means, with the live thresholds substituted in.
+ *
+ * The stage labels are decided server-side (`BuildFunnel`), so this is keyed by label rather than by
+ * position: if a stage is ever renamed or reordered the tooltip simply stops appearing, which is far
+ * better than confidently explaining the wrong stage. The membership rule is stated first, because
+ * "how is this counted?" is the question the reader has when they hover a name they did not choose.
+ */
+function stageHelp(label: string, options: CopilotAdoptionOptions): string | null {
+  switch (label) {
+    case 'Licensed':
+      return (
+        'The licensed users this analysis scored - holders of a Copilot licence SKU, taken from the '
+        + 'imported licence assignments. It counts seats, not use: nobody at this stage has to have '
+        + 'touched Copilot. This is the 100% baseline every other stage is measured against, and it '
+        + 'is the scored population rather than the raw seat count, so a run that hits its row cap '
+        + 'does not open with a drop that is really an artefact of how many users were read.'
+      );
+    case 'Ever used Copilot':
+      return (
+        'Everyone counted at "Active this period", plus everyone banded Dormant - not counted as '
+        + 'active in the period, but with earlier use on record. Those two groups are exactly this '
+        + 'stage, so the drop to "Active this period" is the Dormant population. Earlier use is read '
+        + `from the audit import\u2019s history, which goes back at least ${options.historyDays} `
+        + 'days, and from Microsoft\u2019s per-user usage report.'
+      );
+    case 'Active this period':
+      return (
+        'Licensed users counted as having at least one Copilot interaction inside the selected '
+        + `reporting period (${options.windowDays} days). Users counted at "Ever used Copilot" but `
+        + 'not here are the Dormant group - earlier use on record, but not counted as active in the '
+        + 'period - and they need a conversation rather than onboarding. Where the audit import has '
+        + 'nothing for a user but Microsoft\u2019s per-user usage report does, that report is used '
+        + 'instead, and it covers Microsoft\u2019s own window rather than exactly the period '
+        + 'selected here.'
+      );
+    case 'Habitual users':
+      return (
+        `Licensed users whose engagement score reaches ${options.establishedScore} out of 100 - the `
+        + 'Established and Champion bands, which are the two this report counts as a formed habit. '
+        + 'The score is a weighted blend of how often they use Copilot, how much they do on each '
+        + 'active day, and how many Copilot surfaces they use; the Method tab sets out the weights '
+        + 'and the exact formula.'
+      );
+    case 'Champions':
+      return (
+        `Licensed users whose engagement score reaches ${options.championScore} out of 100 - the top `
+        + 'band. Champions are your advocate pool for enablement, not a target the whole population '
+        + 'is expected to reach.'
+      );
+    default:
+      return null;
+  }
+}
+
+/**
  * The adoption funnel: licensed -> ever used -> active -> habitual -> champion.
  *
  * Drawn as an actual tapering funnel rather than as a bar chart, because the audience for this page
@@ -61,7 +117,13 @@ const STAGE_COLOURS = ['#8ec3ea', '#5aa6dd', '#2f86cc', '#1466ad', '#0a4a80'];
  * than a target for the whole population and is therefore reported neutrally. See the note on
  * isTopTier below.
  */
-export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] }) {
+export default function AdoptionFunnel({
+  stages,
+  options,
+}: {
+  stages: ReportCategory[];
+  options: CopilotAdoptionOptions;
+}) {
   const styles = useStyles();
 
   if (stages.length === 0) {
@@ -118,6 +180,7 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
           // red against them contradicts that advice and points enablement budget at the people who
           // are already succeeding, so the final step is reported as a neutral "not yet" instead.
           const isTopTier = index === stages.length - 1;
+          const help = stageHelp(stage.label, options);
           const previousLabel = previous === null ? null : stages[index - 1].label;
           const dropText = isTopTier
             ? `${formatCount(lost)} not yet ${stage.label}`
@@ -165,9 +228,25 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
                 textAnchor="end"
                 fontSize={15}
                 fill={tokens.colorNeutralForeground1}
+                style={{ pointerEvents: 'none' }}
               >
                 {stage.label}
               </text>
+              {/* The stage name is the thing a reader questions first ("active by what rule?"), so
+                  the whole left gutter is a hit area for its definition rather than just the glyphs.
+                  The text opts out of pointer events so this rect keeps the hover. */}
+              {help && (
+                <rect
+                  x={0}
+                  y={y}
+                  width={LABEL_W}
+                  height={STAGE_H}
+                  fill="transparent"
+                  style={{ pointerEvents: 'all', cursor: 'help' }}
+                >
+                  <title>{`${stage.label}\n\n${help}`}</title>
+                </rect>
+              )}
 
               <text
                 x={labelX}
@@ -247,7 +326,7 @@ export default function AdoptionFunnel({ stages }: { stages: ReportCategory[] })
         Each stage is a subset of the one above it. The figure on the right is the conversion from the stage
         immediately above, not from the top - the biggest single drop is where the effort should go. The last
         step is shown in grey rather than red because it is not a loss: everyone who reaches the stage above it
-        has already formed a habit. Hover any figure for the detail.
+        has already formed a habit. Hover any stage name for how it is counted, or any figure for the detail.
       </Text>
     </div>
   );

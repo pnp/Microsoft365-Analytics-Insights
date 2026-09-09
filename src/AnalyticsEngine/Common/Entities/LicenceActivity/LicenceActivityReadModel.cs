@@ -70,6 +70,7 @@ namespace Common.Entities.LicenceActivity
         private readonly IReadOnlyDictionary<int, LicenceActivityScore>[] _scores;
         private readonly sbyte[][] _bands;
         private readonly RankValue[][] _rankValues;
+        private readonly bool _usageReportsGroupFiltered;
         private readonly object _rankingGate = new object();
         private readonly ConcurrentDictionary<string, RankingIndex> _rankings =
             new ConcurrentDictionary<string, RankingIndex>(StringComparer.Ordinal);
@@ -80,7 +81,8 @@ namespace Common.Entities.LicenceActivity
             IReadOnlyList<LicenceActivityDirectoryUser> users,
             IReadOnlyList<LicenceActivityMembership> memberships,
             IReadOnlyList<LicenceActivityCoverage> coverage,
-            IReadOnlyDictionary<string, IReadOnlyDictionary<int, LicenceActivityScore>> scores)
+            IReadOnlyDictionary<string, IReadOnlyDictionary<int, LicenceActivityScore>> scores,
+            bool usageReportsGroupFiltered = false)
         {
             if (range == null) throw new ArgumentNullException(nameof(range));
             if (licences == null) throw new ArgumentNullException(nameof(licences));
@@ -91,6 +93,7 @@ namespace Common.Entities.LicenceActivity
             if (range.DepartmentId.HasValue || range.CountryId.HasValue || range.LicenceTypeId.HasValue)
                 throw new ArgumentException("A licence activity read model must cover an unfiltered date range.", nameof(range));
 
+            _usageReportsGroupFiltered = usageReportsGroupFiltered;
             _from = range.From;
             _to = range.To;
             Id = Guid.NewGuid().ToString("N");
@@ -262,18 +265,19 @@ namespace Common.Entities.LicenceActivity
             overview.Countries = ProjectDemographics(countries, cancellationToken);
 
             if (overview.Licences.Count == 0)
-                overview.Messages.Add("No imported licence types are available.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NoLicences);
             else if (overview.DistinctAssignedUsers == 0)
-                overview.Messages.Add("Licence types are imported, but no users in the selected scope currently hold one.");
-            overview.Messages.Add(
-                "User display names are not imported by this solution. Individual results use the user principal name; search also checks the stored mail address.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NobodyHoldsALicence);
+            overview.Messages.Add(LicenceActivityRules.Notes.NoDisplayNames);
+            if (_usageReportsGroupFiltered)
+                overview.Messages.Add(LicenceActivityRules.Notes.UsageReportsGroupFiltered);
             foreach (var item in overview.Coverage.Where(item => item.Status != LicenceActivitySql.Available))
             {
                 if (!string.IsNullOrWhiteSpace(item.Message))
-                    overview.Messages.Add(item.Workload + ": " + item.Message);
+                    overview.Messages.Add(LicenceActivityRules.Notes.ForService(item.Workload, item.Message));
             }
             if (overview.DemographicsTruncated)
-                overview.Messages.Add("Department or country breakdowns are limited to the 50 largest values.");
+                overview.Messages.Add(LicenceActivityRules.Notes.DemographicsCapped);
             cancellationToken.ThrowIfCancellationRequested();
             return overview;
         }
@@ -534,13 +538,12 @@ namespace Common.Entities.LicenceActivity
 
         private void AddUserMessages(LicenceActivityUsers result, string workload)
         {
-            result.Messages.Add(
-                "Most/least lists rank the selected workload by active supporting samples, then average actions and last activity. Complete positive measurements rank before partial positive evidence, which still ranks above measured zero; unknown or incomplete evidence is excluded from least-active.");
+            result.Messages.Add(LicenceActivityRules.Notes.RankingMethod);
             var selected = _coverage[WorkloadIndex(workload)];
             if (selected.Status != LicenceActivitySql.Available && !string.IsNullOrWhiteSpace(selected.Message))
                 result.Messages.Add(selected.Message);
             if (result.TotalUsers > 0 && result.RankedUsers == 0)
-                result.Messages.Add("No user has complete or positive evidence for the selected workload and range.");
+                result.Messages.Add(LicenceActivityRules.Notes.NobodyRankable);
         }
 
         private EvidenceState Evidence(int workload, int userIndex)
@@ -551,7 +554,16 @@ namespace Common.Entities.LicenceActivity
             var status = coverage.Status ?? LicenceActivitySql.MissingCoverage;
             var active = present ? score.ActiveSamples : 0;
             var observed = coverage.ObservedSamples;
-            if (IsOfficialReport(coverage.Source))
+
+            // Sources where being absent proves nothing, so only the people we actually have rows for
+            // can be banded at all:
+            //  - the Copilot usage report, a rolling per-person report that only ever lists people who
+            //    hold a Copilot licence, so absence means "not licensed" rather than "did nothing";
+            //  - the Microsoft 365 usage reports WHEN a group filter scopes their import, because the
+            //    user import is not filtered and absence then means "never looked at".
+            var presenceGated = coverage.Source == LicenceActivitySql.CopilotReportSource
+                || (coverage.Source == LicenceActivitySql.M365ReportSource && _usageReportsGroupFiltered);
+            if (presenceGated)
             {
                 observed = present ? score.ObservedSamples : 0;
                 if (status == LicenceActivitySql.Available)
@@ -562,13 +574,28 @@ namespace Common.Entities.LicenceActivity
                         status = LicenceActivitySql.Partial;
                 }
             }
+            else if (coverage.Source == LicenceActivitySql.M365ReportSource && present)
+            {
+                // Absence is now meaningful, but a person whose own reading count falls short of the
+                // period still has incomplete evidence and must say so rather than be banded.
+                observed = score.ObservedSamples;
+                if (status == LicenceActivitySql.Available
+                    && (!score.FrequencyKnown || observed != coverage.ExpectedSamples))
+                {
+                    status = LicenceActivitySql.Partial;
+                }
+            }
+
+            // Otherwise the M365 daily reports are positive-only, so across a week that was imported in
+            // full an absent person is measured evidence of NO activity - not absent evidence. That is
+            // why the scores dictionary holds only the people with activity: everyone else resolves
+            // here to a complete, zero reading rather than to Unknown.
+            var measuredZero = !present && status == LicenceActivitySql.Available && !presenceGated;
             return new EvidenceState(
                 status, active, observed, coverage.ExpectedSamples,
-                present ? score.AverageActions : null,
+                measuredZero ? 0d : present ? score.AverageActions : null,
                 present ? score.LastActivityUtc : null,
-                !present && status == LicenceActivitySql.Available && !IsOfficialReport(coverage.Source)
-                    ? 0d
-                    : present ? score.AverageActions : null);
+                measuredZero ? 0d : present ? score.AverageActions : null);
         }
 
         private static sbyte BandCode(EvidenceState evidence)
@@ -630,10 +657,6 @@ namespace Common.Entities.LicenceActivity
                 || (!string.IsNullOrEmpty(user.Mail)
                     && user.Mail.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0);
         }
-
-        private static bool IsOfficialReport(string source) =>
-            source == LicenceActivitySql.M365ReportSource
-            || source == LicenceActivitySql.CopilotReportSource;
 
         private static int WorkloadIndex(string workload)
         {

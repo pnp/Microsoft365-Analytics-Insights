@@ -141,7 +141,7 @@ describe('UsersDrillDown', () => {
       pageSize: 50,
     });
 
-    const topInput = screen.getByLabelText('Number of users in each list');
+    const topInput = screen.getByLabelText('Number of people in each list');
     fireEvent.change(topInput, { target: { value: '25' } });
     fireEvent.blur(topInput);
     await waitFor(() => expect(lastParams()).toMatchObject({ top: 25 }));
@@ -154,7 +154,7 @@ describe('UsersDrillDown', () => {
   it('changes the workload', async () => {
     renderDrill();
     await waitFor(() => expect(mockUsers).toHaveBeenCalled());
-    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'outlook' } });
     await waitFor(() => expect(lastParams()).toMatchObject({ workload: 'outlook' }));
   });
 
@@ -308,7 +308,7 @@ describe('UsersDrillDown', () => {
     await waitFor(() => expect(mockUsers).toHaveBeenCalled());
 
     // Move well away from the defaults: a non-default workload, sort and search, then page 2.
-    fireEvent.change(screen.getByLabelText('Workload'), { target: { value: 'outlook' } });
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'outlook' } });
     await waitFor(() => expect(lastParams()).toMatchObject({ workload: 'outlook', page: 1 }));
     fireEvent.change(screen.getByLabelText('Sort users'), { target: { value: 'upn:asc' } });
     await waitFor(() => expect(lastParams()).toMatchObject({ sort: 'upn', direction: 'asc' }));

@@ -24,6 +24,51 @@ namespace Tests.UnitTests
     {
         internal static readonly DateTime Now = new DateTime(2000, 7, 1, 0, 0, 0, DateTimeKind.Utc);
 
+        /// <summary>
+        /// This report is read by business leaders and Microsoft 365 admins, so no backend identifier may
+        /// reach the screen or the Excel export. `source`, `granularity`, `status` and `band` stay stable
+        /// identifiers on the wire (SQL and the read model match on them) and are translated only for
+        /// display, so the translation tables must cover EVERY value the backend can emit. Two of the
+        /// granularities were missed first time round and rendered verbatim as "weeklySampleOfRolling7DayReport".
+        /// The portal mirrors are guarded by CoveragePanel.test.tsx; this guards the Excel path.
+        /// </summary>
+        [TestMethod]
+        public void DisplayLabels_TranslateEveryBackendVocabularyValue_SoNoIdentifierReachesTheReader()
+        {
+            var sources = new[]
+            {
+                "microsoftGraphUsageReport", "microsoftGraphCopilotUsageReport",
+                "copilotAudit", "copilotInteractions"
+            };
+            var granularities = new[]
+            {
+                "weeklySupportingSnapshot", "singleRollingWindow",
+                "weeklySampleOfRolling7DayReport", "eventPositiveOnly", "unknown"
+            };
+            var statuses = new[]
+            {
+                "available", "partial", "missingCoverage",
+                "unmatchableIdentity", "notImported", "disabled", "unknown"
+            };
+            var bands = new[] { "high", "moderate", "low", "zero", "unknown" };
+
+            foreach (var value in sources)
+                Assert.AreNotEqual(value, LicenceActivityRules.SourceLabel(value), "Untranslated source: " + value);
+            foreach (var value in granularities)
+                Assert.AreNotEqual(value, LicenceActivityRules.GranularityLabel(value), "Untranslated granularity: " + value);
+            foreach (var value in statuses)
+                Assert.AreNotEqual(value, LicenceActivityRules.StatusLabel(value), "Untranslated status: " + value);
+            foreach (var value in bands)
+                Assert.AreNotEqual(value, LicenceActivityRules.BandLabel(value), "Untranslated activity level: " + value);
+            foreach (var value in LicenceActivityQuery.Workloads)
+                Assert.AreNotEqual(value, LicenceActivityRules.WorkloadLabel(value), "Untranslated service: " + value);
+
+            // A value the backend has never emitted must still show SOMETHING rather than vanish, so an
+            // unmapped future source degrades to its identifier instead of a blank cell.
+            Assert.AreEqual("somethingNew", LicenceActivityRules.SourceLabel("somethingNew"));
+            Assert.AreEqual("somethingNew", LicenceActivityRules.GranularityLabel("somethingNew"));
+        }
+
         [DataTestMethod]
         [DataRow("x")]
         [DataRow("Καλημέρα κόσμε")]
@@ -145,7 +190,7 @@ namespace Tests.UnitTests
                 Assert.IsFalse(xml.Contains("<f>"), "Tenant text must be inline strings, never spreadsheet formulae.");
                 var workbook = Read(archive.GetEntry("xl/workbook.xml"));
                 StringAssert.Contains(workbook, "Least active");
-                StringAssert.Contains(workbook, "Workload coverage");
+                StringAssert.Contains(workbook, "Where the figures come from");
             }
             using (var archive = new ZipArchive(new MemoryStream(LicenceActivityWorkbook.Build(overview))))
                 Assert.IsFalse(Read(archive.GetEntry("xl/workbook.xml")).Contains("Least active"));

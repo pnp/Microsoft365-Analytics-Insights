@@ -48,7 +48,6 @@ namespace Tests.UnitTests
         {
             var identity = new ClaimsIdentity("synthetic-load-test");
             identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, "synthetic-administrator"));
-            identity.AddClaim(new Claim(ClaimTypes.Role, LicenceActivityAPIController.UserDetailRole));
             return new ClaimsPrincipal(identity);
         }
 

@@ -57,8 +57,10 @@
     <Compile Include="Demo\DemoCalendar.cs" />
     <Compile Include="Demo\DemoCommand.cs" />
     <Compile Include="Demo\DemoGenerator.cs" />
+    <Compile Include="Demo\DemoInteractive.cs" />
     <Compile Include="Demo\DemoOptions.cs" />
     <Compile Include="Demo\DemoPopulation.cs" />
+    <Compile Include="Demo\DemoPortalReadiness.cs" />
     <Compile Include="Demo\DemoTables.cs" />
     <Compile Include="Demo\DemoTimeline.cs" />
     <Compile Include="Demo\SqlDemoDatabase.cs" />

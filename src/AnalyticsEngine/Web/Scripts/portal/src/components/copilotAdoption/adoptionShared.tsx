@@ -67,6 +67,11 @@ const useStyles = makeStyles({
     borderBottomStyle: 'solid',
     borderBottomColor: tokens.colorNeutralStroke2,
     color: tokens.colorNeutralForeground3,
+    // Pinned to the same size as the <Text size={200}> used inside the cells. Without this the
+    // table inherits the provider's base300 size, so a bare value like a row count rendered a
+    // size larger than the names and badges sitting next to it in the same row.
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
     fontWeight: tokens.fontWeightSemibold,
     whiteSpace: 'nowrap',
   },
@@ -79,10 +84,22 @@ const useStyles = makeStyles({
     borderBottomStyle: 'solid',
     borderBottomColor: tokens.colorNeutralStroke3,
     verticalAlign: 'middle',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
   tdNumeric: {
     textAlign: 'right',
     fontVariantNumeric: 'tabular-nums',
+  },
+  /**
+   * The smaller second line inside a cell - "0 mtgs" under the Teams count, "12 licensed" under the
+   * user count. Fluent's Text hard-codes `text-align: start`, so without the explicit `inherit` the
+   * sub-line left-aligns inside a right-aligned numeric cell and the two halves of a single value
+   * end up at opposite ends of the column.
+   */
+  tdSub: {
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'inherit',
   },
   empty: {
     color: tokens.colorNeutralForeground3,

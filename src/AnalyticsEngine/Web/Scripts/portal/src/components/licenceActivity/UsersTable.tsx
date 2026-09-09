@@ -6,6 +6,7 @@ import { WORKLOADS } from '../../types/licenceActivity';
 import { BAND_METHOD, bandColour, bandForeground, bandLabel, frequencyPct } from './bands';
 import { DASH, UNKNOWN_TEXT, formatAge, formatDate } from './format';
 import { statusMeta } from './statuses';
+import { sourceLabel } from './sources';
 import { useLaTableStyles } from './tableStyles';
 
 const useStyles = makeStyles({
@@ -85,10 +86,10 @@ function formatAverage(value: number | null | undefined): string {
   return (Math.round(value * 10) / 10).toLocaleString();
 }
 
-/** Active/observed samples with expected context, distinguishing "nothing observed" from a real 0. */
+/** Active/measured counts with expected context, distinguishing "nothing measured" from a real 0. */
 function formatSamples(ev: LicenceActivityEvidence | null): string {
   if (!ev) return UNKNOWN_TEXT;
-  if (ev.observedSamples <= 0) return `${DASH}; ${ev.observedSamples} observed of ${ev.expectedSamples} expected`;
+  if (ev.observedSamples <= 0) return `${DASH}; ${ev.observedSamples} of ${ev.expectedSamples} measured`;
   const base = `${ev.activeSamples} / ${ev.observedSamples}`;
   return ev.observedSamples !== ev.expectedSamples ? `${base} of ${ev.expectedSamples}` : base;
 }
@@ -126,18 +127,18 @@ function AllWorkloadsDetail({ user }: { user: LicenceActivityUser }) {
   return (
     <div className={styles.detailInner}>
       <Text size={200} weight="semibold" block className={styles.detailTitle}>
-        All workloads for {user.userPrincipalName}
+        Every service for {user.userPrincipalName}
       </Text>
       <table className={styles.detailTable}>
         <thead>
           <tr>
-            <th className={styles.detailHead}>Workload</th>
-            <th className={styles.detailHead}>Coverage</th>
-            <th className={styles.detailHead}>Band</th>
-            <th className={styles.detailHead}>Source &middot; Measure</th>
-            <th className={styles.detailHead}>Active / observed (expected)</th>
-            <th className={styles.detailHead}>Avg</th>
-            <th className={styles.detailHead}>Last activity</th>
+            <th className={styles.detailHead}>Service</th>
+            <th className={styles.detailHead}>Data</th>
+            <th className={styles.detailHead}>Activity</th>
+            <th className={styles.detailHead}>Where it comes from</th>
+            <th className={styles.detailHead}>Active / measured (expected)</th>
+            <th className={styles.detailHead}>Average</th>
+            <th className={styles.detailHead}>Last active</th>
           </tr>
         </thead>
         <tbody>
@@ -164,7 +165,7 @@ function AllWorkloadsDetail({ user }: { user: LicenceActivityUser }) {
                 </td>
                 <td className={styles.detailCell}>
                   <Text size={200}>
-                    {ev?.source || DASH}
+                    {sourceLabel(ev?.source) || DASH}
                     {ev?.measure ? ` \u00b7 ${ev.measure}` : ''}
                   </Text>
                 </td>
@@ -213,7 +214,7 @@ export default function UsersTable({
   workloadLabel,
   showRank,
   startRank = 1,
-  emptyText = 'No users match this selection.',
+  emptyText = 'Nobody to show for this selection.',
 }: UsersTableProps) {
   const styles = useStyles();
   const table = useLaTableStyles();
@@ -240,18 +241,18 @@ export default function UsersTable({
           <tr>
             <th className={table.th} aria-label="Expand" />
             {showRank && <th className={`${table.th} ${table.thNumeric}`}>#</th>}
-            <th className={table.th}>User</th>
+            <th className={table.th}>Person</th>
             <th className={table.th}>Department</th>
             <th className={table.th}>
               <Tooltip relationship="description" content={BAND_METHOD}>
                 <span style={{ borderBottom: `1px dotted ${tokens.colorNeutralForeground4}`, cursor: 'help' }}>
-                  {workloadLabel} band
+                  {workloadLabel} activity
                 </span>
               </Tooltip>
             </th>
-            <th className={`${table.th} ${table.thNumeric}`}>Avg actions</th>
-            <th className={`${table.th} ${table.thNumeric}`}>Active samples</th>
-            <th className={table.th}>Last activity</th>
+            <th className={`${table.th} ${table.thNumeric}`}>Average actions</th>
+            <th className={`${table.th} ${table.thNumeric}`}>Active / measured</th>
+            <th className={table.th}>Last active</th>
           </tr>
         </thead>
         <tbody>
@@ -268,7 +269,7 @@ export default function UsersTable({
                       size="small"
                       icon={open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
                       aria-expanded={open}
-                      aria-label={`Show all workloads for ${row.userPrincipalName}`}
+                      aria-label={`Show all services for ${row.userPrincipalName}`}
                       onClick={() => toggle(row.userId)}
                     />
                   </td>

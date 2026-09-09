@@ -16,37 +16,39 @@ const STATUS_META: Record<string, StatusMeta> = {
   available: {
     tone: 'success',
     label: 'Available',
-    explanation: 'Measured with complete coverage of the period.',
+    explanation: 'Measured across the whole period.',
   },
   partial: {
     tone: 'warning',
     label: 'Partial',
-    explanation: 'Some reporting samples were missing, so this is a partial view and activity may be understated.',
+    explanation: 'Part of this period could not be measured in full, so activity here may be understated.',
   },
   missingCoverage: {
     tone: 'warning',
     label: 'Missing coverage',
-    explanation: 'The period was not fully covered by snapshots, so users cannot be ranked as inactive here.',
+    explanation:
+      'Part of the chosen period has no measurement behind it, so nobody can be shown as inactive for this service.',
   },
   unmatchableIdentity: {
     tone: 'warning',
-    label: 'Unmatchable identity',
-    explanation: 'The user could not be matched to this workload\u2019s identity, so their activity is unknown.',
+    label: 'Identities could not be matched',
+    explanation:
+      'Microsoft hid the identities in this report, so its activity cannot be tied back to the people holding the licence.',
   },
   notImported: {
     tone: 'subtle',
     label: 'Not imported',
-    explanation: 'This workload\u2019s usage source is not imported on this deployment.',
+    explanation: 'This service\u2019s usage data has never been collected on this deployment.',
   },
   disabled: {
     tone: 'subtle',
-    label: 'Import disabled',
-    explanation: 'This workload\u2019s import is switched off.',
+    label: 'Import switched off',
+    explanation: 'Collection for this service is switched off in the installer.',
   },
   unknown: {
     tone: 'subtle',
     label: 'Unknown',
-    explanation: 'Not measured for this user - this is not the same as measured zero activity.',
+    explanation: 'Not measured for this person \u2013 which is not the same as measured as no activity.',
   },
 };
 

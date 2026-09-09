@@ -5,9 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,7 +18,6 @@ namespace Web.AnalyticsWeb.Controllers
     [RoutePrefix("api/LicenceActivity")]
     public sealed class LicenceActivityAPIController : ApiController
     {
-        public const string UserDetailRole = "LicenceActivity.ReadUsers";
         private static readonly LicenceActivitySnapshotCache<LicenceActivityOverview> OverviewCache =
             new LicenceActivitySnapshotCache<LicenceActivityOverview>(16, TimeSpan.FromMinutes(5));
         private static readonly LicenceActivitySnapshotCache<LicenceActivityUsers> UsersCache =
@@ -47,12 +44,10 @@ namespace Web.AnalyticsWeb.Controllers
         public IHttpActionResult Availability()
         {
             var sources = _context().Sources;
-            var result = new LicenceActivityAvailability { Available = sources.UserMetadata, CanViewUsers = CanViewUsers(User) };
+            var result = new LicenceActivityAvailability { Available = sources.UserMetadata };
             if (!sources.UserMetadata)
-                result.Messages.Add("Enable GraphUsersMetadata (user metadata) in the installer to import licence-to-user assignments. This tab remains visible while the prerequisite is disabled.");
-            if (!result.CanViewUsers)
-                result.Messages.Add("Individual users require the LicenceActivity.ReadUsers application role. Aggregate reports and aggregate Excel snapshots remain available.");
-            result.Messages.Add("User display names are not imported. Search uses UPN or email; department and country filters use imported metadata.");
+                result.Messages.Add("This report needs the user details import turned on, so that licences can be matched to the people who hold them. Ask whoever installed the product to tick \"User Entra ID extended metadata\" in the installer. The tab stays visible in the meantime.");
+            result.Messages.Add("People are identified by their sign-in address. Staff names are not collected, so search and the user lists show the sign-in address instead. Department and country come from your directory.");
             return Reply(HttpStatusCode.OK, result);
         }
 
@@ -86,12 +81,11 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken)) =>
             ExecuteAsync(async () =>
             {
-                if (!CanViewUsers(User)) return ForbiddenUsers();
                 var context = _context();
                 if (!context.Sources.UserMetadata) return MissingMetadata();
                 var overview = _overviews.Find(context.Scope, overviewId);
                 if (!overview.Licences.Any(sku => sku.LicenceTypeId == licenceTypeId))
-                    return Reply(HttpStatusCode.NotFound, new { message = "That licence is not part of this snapshot." });
+                    return Reply(HttpStatusCode.NotFound, new { message = "That licence is not part of the figures currently on screen. Refresh the report and try again." });
                 var query = overview.Query.ForUsers(licenceTypeId, workload, search, sort, direction, top, page, pageSize, context.Sources.NowUtc);
                 var task = _users.GetAsync(context.Scope, overviewId + "\n" + query.CacheKey(), async (diagnostics, lifetime) =>
                 {
@@ -108,13 +102,12 @@ namespace Web.AnalyticsWeb.Controllers
         public Task<IHttpActionResult> Export(string overviewId, string usersId = null) =>
             ExecuteAsync(() =>
             {
-                if (usersId != null && !CanViewUsers(User)) return Task.FromResult(ForbiddenUsers());
                 var context = _context();
                 if (!context.Sources.UserMetadata) return Task.FromResult(MissingMetadata());
                 var overview = _overviews.Find(context.Scope, overviewId);
                 var users = usersId == null ? null : _users.Find(context.Scope, usersId);
                 if (users != null && users.OverviewId != overviewId)
-                    return Task.FromResult(Reply(HttpStatusCode.Conflict, new { message = "The snapshots do not match. Refresh the current view before exporting." }));
+                    return Task.FromResult(Reply(HttpStatusCode.Conflict, new { message = "The summary and the user list are no longer from the same set of figures. Refresh the report before exporting." }));
                 var response = Request.CreateResponse(HttpStatusCode.OK);
                 response.Content = new ByteArrayContent(LicenceActivityWorkbook.Build(overview, users));
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -126,35 +119,26 @@ namespace Web.AnalyticsWeb.Controllers
                 return Task.FromResult<IHttpActionResult>(ResponseMessage(response));
             });
 
-        internal static bool CanViewUsers(IPrincipal principal)
-        {
-            if (principal?.Identity?.IsAuthenticated != true) return false;
-            if (principal.IsInRole(UserDetailRole)) return true;
-            var claims = principal as ClaimsPrincipal;
-            return claims?.Claims.Any(c => (c.Type == "roles" || c.Type == ClaimTypes.Role)
-                && c.Value == UserDetailRole) == true;
-        }
-
         private async Task<IHttpActionResult> ExecuteAsync(Func<Task<IHttpActionResult>> action)
         {
-            if (!ModelState.IsValid) return Reply(HttpStatusCode.BadRequest, new { message = "The request contains an invalid parameter." });
+            if (!ModelState.IsValid) return Reply(HttpStatusCode.BadRequest, new { message = "That request wasn't valid. Check the selected dates and filters." });
             try { return await action(); }
             catch (ArgumentException ex) { return Reply(HttpStatusCode.BadRequest, new { message = ex.Message }); }
             catch (LicenceActivityExpiredException)
             {
-                return Reply(HttpStatusCode.Gone, new { message = "This snapshot has expired or was evicted. Refresh the current view before continuing or exporting." });
+                return Reply(HttpStatusCode.Gone, new { message = "These figures are no longer being held. Refresh the report to bring back an up-to-date set before continuing or exporting." });
             }
             catch (LicenceActivityReadModelExpiredException)
             {
-                return Reply(HttpStatusCode.Gone, new { message = "The source snapshot expired or was evicted. Refresh the current view before continuing." });
+                return Reply(HttpStatusCode.Gone, new { message = "These figures are no longer being held. Refresh the report to bring back an up-to-date set." });
             }
             catch (LicenceActivityReadModelBusyException)
             {
-                return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Another licence report snapshot is loading. Retry in a few seconds." }, true);
+                return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Another licence report is being prepared right now. Try again in a few seconds." }, true);
             }
             catch (LicenceActivityBusyException)
             {
-                return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Licence reporting is busy. Retry in a few seconds." }, true);
+                return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Licence reporting is busy. Try again in a few seconds." }, true);
             }
             catch (LicenceActivityFailedException ex)
             {
@@ -163,10 +147,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         private IHttpActionResult MissingMetadata() =>
-            Reply(HttpStatusCode.PreconditionFailed, new { message = "Enable GraphUsersMetadata to import licence assignments." });
-
-        private IHttpActionResult ForbiddenUsers() =>
-            Reply(HttpStatusCode.Forbidden, new { message = "Individual licence activity requires the LicenceActivity.ReadUsers application role." });
+            Reply(HttpStatusCode.PreconditionFailed, new { message = "This report needs the user details import turned on, so that licences can be matched to the people who hold them." });
 
         private IHttpActionResult Reply(HttpStatusCode status, object body, bool retry = false)
         {
@@ -184,7 +165,9 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 UserMetadata = settings.GraphUsersMetadata, UsageReports = settings.GraphUsageReports,
                 CopilotUsageReports = settings.GraphCopilotUsageReports, CopilotAudit = settings.Copilot,
-                CopilotInteractions = settings.CopilotInteractionHistory, NowUtc = DateTime.UtcNow
+                CopilotInteractions = settings.CopilotInteractionHistory,
+                UsageReportsGroupFiltered = !string.IsNullOrWhiteSpace(config.UserGroupsFilter),
+                NowUtc = DateTime.UtcNow
             };
             string scope;
             using (var sha = SHA256.Create())

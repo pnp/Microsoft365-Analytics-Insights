@@ -196,12 +196,16 @@ namespace Tests.FakeDataGen.Demo
             int interactions = 0, prior = 0, active = 0;
             DateTime? first = null, last = null;
             var hosts = new HashSet<int>();
-            for (int d = 0; d < timeline.Days.Length; d++)
+            // Starts before the window so the rolling 28-day Copilot counters below are already full on the
+            // window's first day. Warm-up days maintain the counters and last-activity dates but write no
+            // rows and do not feed adoption scoring, so the reported window is unchanged by their presence.
+            for (int d = -DemoTimeline.WarmupDays; d < _options.Days; d++)
             {
                 if (d % 28 == 0) _cancellation.ThrowIfCancellationRequested();
                 var date = _options.Start.AddDays(d);
-                var day = timeline.Days[d];
-                int bucket = d % 28;
+                var day = timeline.Day(d);
+                bool reported = d >= 0;
+                int bucket = ((d % 28) + 28) % 28;
                 for (int app = 0; app < 9; app++)
                 {
                     appWindow[app] -= appDays[bucket, app];
@@ -215,10 +219,13 @@ namespace Tests.FakeDataGen.Demo
                 {
                     appDays[bucket, 0] = 1;
                     lastApps[0] = date;
-                    if (!first.HasValue) first = date;
-                    last = date;
-                    if (d >= _options.Days - 28) { active++; interactions += day.CopilotTurns; }
-                    else prior += day.CopilotTurns;
+                    if (reported)
+                    {
+                        if (!first.HasValue) first = date;
+                        last = date;
+                        if (d >= _options.Days - 28) { active++; interactions += day.CopilotTurns; }
+                        else prior += day.CopilotTurns;
+                    }
                     for (int slot = 0; slot < day.CopilotTurns; slot++)
                     {
                         int host = timeline.HostIndex(d, slot);
@@ -227,32 +234,33 @@ namespace Tests.FakeDataGen.Demo
                         lastApps[app] = date;
                         if (host == 0) chatWindow[bucket]++;
                         if (timeline.Agent(d, slot) > 0) { appDays[bucket, 8] = 1; lastApps[8] = date; }
-                        if (d >= _options.Days - 28) hosts.Add(host);
+                        if (reported && d >= _options.Days - 28) hosts.Add(host);
                     }
-                    WriteCopilotEvents(user, timeline, d);
+                    if (reported) WriteCopilotEvents(user, timeline, d);
                 }
                 windowTurns += turnWindow[bucket];
                 windowChat += chatWindow[bucket];
                 for (int app = 0; app < 9; app++)
                 {
                     appWindow[app] += appDays[bucket, app];
-                    if (user.CopilotLicensed)
+                    if (reported && user.CopilotLicensed)
                     {
                         _dailyActive[d, app] += appDays[bucket, app];
                         if (appWindow[app] > 0) _rollingActive[d, app]++;
                     }
                 }
-                if (user.CopilotLicensed)
+                if (reported && user.CopilotLicensed)
                 {
                     _dailyPrompts[d] += day.CopilotTurns;
                     _rollingPrompts[d] += windowTurns;
                 }
+                if (!reported) continue;
                 if (day.SharePointFiles > 0) WriteWebEvents(user, d, day);
                 if (date > _options.ReportEnd) continue;
                 int appMask = 0;
                 for (int app = 1; app <= 7; app++) if (appDays[bucket, app] > 0) appMask |= 1 << app;
                 WriteWorkloadRows(user, d, day, lastWorkload, appMask, ref lastOffice, ref lastTeamsDevice);
-                if (user.CopilotLicensed && date >= _options.FirstCopilotReport)
+                if (user.CopilotLicensed)
                     _sink.Write(DemoTables.CopilotUsage, user.Id, date, lastApps[0], 28, windowTurns, windowChat, 0,
                         appWindow[0], lastApps[1], lastApps[2], lastApps[3], lastApps[4], lastApps[5], lastApps[6],
                         lastApps[7], lastApps[1], lastApps[8], false);
@@ -318,7 +326,7 @@ namespace Tests.FakeDataGen.Demo
 
         private void WriteCopilotEvents(DemoUser user, DemoTimeline timeline, int dayIndex)
         {
-            var day = timeline.Days[dayIndex];
+            var day = timeline.Day(dayIndex);
             int sessionId = (user.Id - 1) * _options.Days + dayIndex + 1;
             string thread = "contoso-demo-" + DemoRandom.Id(_options.Seed, 3, user.Id, dayIndex).ToString("N");
             if (user.CopilotLicensed) _sink.Write(DemoTables.InteractionSessions, sessionId, thread, user.Id);
@@ -376,11 +384,10 @@ namespace Tests.FakeDataGen.Demo
                 {
                     _sink.Write(DemoTables.CopilotCounts, _options.ReportEnd, date, "Trend", null,
                         DemoTimeline.ReportApps[app], licensed, _dailyActive[d, app], app == 0 ? (object)_dailyPrompts[d] : null, null);
-                    if (date >= _options.FirstCopilotReport)
-                        _sink.Write(DemoTables.CopilotCounts, date, date, "Summary", 28,
-                            DemoTimeline.ReportApps[app], licensed, _rollingActive[d, app],
-                            app == 0 ? (object)_rollingPrompts[d] : null,
-                            app == 0 && _rollingActive[d, 0] > 0 ? (object)((double)_rollingPrompts[d] / _rollingActive[d, 0]) : null);
+                    _sink.Write(DemoTables.CopilotCounts, date, date, "Summary", 28,
+                        DemoTimeline.ReportApps[app], licensed, _rollingActive[d, app],
+                        app == 0 ? (object)_rollingPrompts[d] : null,
+                        app == 0 && _rollingActive[d, 0] > 0 ? (object)((double)_rollingPrompts[d] / _rollingActive[d, 0]) : null);
                 }
             }
         }

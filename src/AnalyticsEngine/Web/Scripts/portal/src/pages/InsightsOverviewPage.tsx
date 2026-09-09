@@ -140,6 +140,8 @@ export default function InsightsOverviewPage() {
           <Body1>
             Chart this data over time in <Link href="#/insights/reports">Reports</Link>, or see who is getting
             value from their Copilot licence in <Link href="#/insights/copilot-adoption">Copilot Adoption</Link>.
+            {' '}Explore licence assignments and activity across services in{' '}
+            <Link href="#/insights/licence-activity">Licence activity</Link>.
           </Body1>
           <Body1>
             Teams analytics are enabled per team in{' '}

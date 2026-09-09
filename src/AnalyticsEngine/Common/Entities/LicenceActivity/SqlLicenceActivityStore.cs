@@ -625,18 +625,17 @@ namespace Common.Entities.LicenceActivity
                     }
 
                     if (overview.Licences.Count == 0)
-                        overview.Messages.Add("No imported licence types are available.");
+                        overview.Messages.Add(LicenceActivityRules.Notes.NoLicences);
                     else if (overview.DistinctAssignedUsers == 0)
-                        overview.Messages.Add("Licence types are imported, but no users in the selected scope currently hold one.");
-                    overview.Messages.Add(
-                        "User display names are not imported by this solution. Individual results use the user principal name; search also checks the stored mail address.");
+                        overview.Messages.Add(LicenceActivityRules.Notes.NobodyHoldsALicence);
+                    overview.Messages.Add(LicenceActivityRules.Notes.NoDisplayNames);
                     foreach (var coverage in overview.Coverage.Where(c => c.Status != LicenceActivitySql.Available))
                     {
                         if (!string.IsNullOrWhiteSpace(coverage.Message))
-                            overview.Messages.Add(coverage.Workload + ": " + coverage.Message);
+                            overview.Messages.Add(LicenceActivityRules.Notes.ForService(coverage.Workload, coverage.Message));
                     }
                     if (overview.DemographicsTruncated)
-                        overview.Messages.Add("Department or country breakdowns are limited to the 50 largest values.");
+                        overview.Messages.Add(LicenceActivityRules.Notes.DemographicsCapped);
                     return overview;
                 }
 
@@ -746,19 +745,18 @@ namespace Common.Entities.LicenceActivity
 
             overview.Messages.Clear();
             if (overview.Licences.Count == 0)
-                overview.Messages.Add("No imported licence types are available.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NoLicences);
             else if (overview.DistinctAssignedUsers == 0)
-                overview.Messages.Add("Licence types are imported, but no users in the selected scope currently hold one.");
-            overview.Messages.Add(
-                "User display names are not imported by this solution. Individual results use the user principal name; search also checks the stored mail address.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NobodyHoldsALicence);
+            overview.Messages.Add(LicenceActivityRules.Notes.NoDisplayNames);
             foreach (var coverage in overview.Coverage.Where(
                 coverage => coverage.Status != LicenceActivitySql.Available))
             {
                 if (!string.IsNullOrWhiteSpace(coverage.Message))
-                    overview.Messages.Add(coverage.Workload + ": " + coverage.Message);
+                    overview.Messages.Add(LicenceActivityRules.Notes.ForService(coverage.Workload, coverage.Message));
             }
             if (overview.DemographicsTruncated)
-                overview.Messages.Add("Department or country breakdowns are limited to the 50 largest values.");
+                overview.Messages.Add(LicenceActivityRules.Notes.DemographicsCapped);
         }
 
         private static OverviewPart DisabledM365Part(int workload, LicenceActivityQuery query)
@@ -770,9 +768,9 @@ namespace Common.Entities.LicenceActivity
                             Workload = LicenceActivitySql.WorkloadName(workload),
                             Status = LicenceActivitySql.Disabled,
                             Source = LicenceActivitySql.M365ReportSource,
-                            Measure = "published usage-report snapshot evidence",
+                            Measure = "counts published by Microsoft",
                             Granularity = "weeklySupportingSnapshot",
-                            Message = "The Microsoft 365 usage-report import is disabled. Absence cannot be interpreted as zero.",
+                            Message = "The Microsoft 365 usage-report import is switched off, so nothing can be measured for this service. That is not the same as nobody using it.",
                             ExpectedSamples = WeekPortionCount(query)
                         }
                     };
@@ -796,6 +794,8 @@ namespace Common.Entities.LicenceActivity
             AddDate(command, "@endExclusive", query.EndExclusiveUtc);
             AddDate(command, "@settled", sources.NowUtc.Date.AddDays(-3));
             AddDate(command, "@now", sources.NowUtc.Date);
+            command.Parameters.Add("@groupFiltered", SqlDbType.Bit).Value =
+                sources.UsageReportsGroupFiltered;
             AddNullableInt(command, "@departmentId", query.DepartmentId);
             AddNullableInt(command, "@countryId", query.CountryId);
         }
@@ -976,21 +976,20 @@ namespace Common.Entities.LicenceActivity
             await DrainRemainingResultsAsync(reader, cancellationToken).ConfigureAwait(false);
 
             if (overview.Licences.Count == 0)
-                overview.Messages.Add("No imported licence types are available.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NoLicences);
             else if (overview.DistinctAssignedUsers == 0)
-                overview.Messages.Add("Licence types are imported, but no users in the selected scope currently hold one.");
+                overview.Messages.Add(LicenceActivityRules.Notes.NobodyHoldsALicence);
 
-            overview.Messages.Add(
-                "User display names are not imported by this solution. Individual results use the user principal name; search also checks the stored mail address.");
+            overview.Messages.Add(LicenceActivityRules.Notes.NoDisplayNames);
 
             foreach (var coverage in overview.Coverage.Where(c => c.Status != LicenceActivitySql.Available))
             {
                 if (!string.IsNullOrWhiteSpace(coverage.Message))
-                    overview.Messages.Add(coverage.Workload + ": " + coverage.Message);
+                    overview.Messages.Add(LicenceActivityRules.Notes.ForService(coverage.Workload, coverage.Message));
             }
 
             if (overview.DemographicsTruncated)
-                overview.Messages.Add("Department or country breakdowns are limited to the 50 largest values.");
+                overview.Messages.Add(LicenceActivityRules.Notes.DemographicsCapped);
 
             diagnostics.Stage("ProjectionCompleted");
             return overview;
@@ -1038,8 +1037,7 @@ namespace Common.Entities.LicenceActivity
             }
             await DrainRemainingResultsAsync(reader, cancellationToken).ConfigureAwait(false);
 
-            result.Messages.Add(
-                "Most/least lists rank the selected workload by active supporting samples, then average actions and last activity. Complete positive measurements rank before partial positive evidence, which still ranks above measured zero; unknown or incomplete evidence is excluded from least-active.");
+            result.Messages.Add(LicenceActivityRules.Notes.RankingMethod);
 
             LicenceActivityCoverage selectedCoverage;
             if (coverage.TryGetValue(query.Workload, out selectedCoverage)
@@ -1049,7 +1047,7 @@ namespace Common.Entities.LicenceActivity
                 result.Messages.Add(selectedCoverage.Message);
             }
             if (result.TotalUsers > 0 && result.RankedUsers == 0)
-                result.Messages.Add("No user has complete or positive evidence for the selected workload and range.");
+                result.Messages.Add(LicenceActivityRules.Notes.NobodyRankable);
 
             diagnostics.Stage("ProjectionCompleted");
             return result;

@@ -157,7 +157,7 @@ namespace Tests.UnitTests
                 Assert.IsTrue(user.Upn.All(c => c <= 127));
                 for (int d = 0; d < options.Days; d++)
                 {
-                    var day = timeline.Days[d];
+                    var day = timeline.Day(d);
                     if (!DemoCalendar.IsWorkingDate(options.Start.AddDays(d)) || DemoTimeline.IsOnLeave(id, d) || user.Cohort == DemoCohort.Zero
                         || (user.Cohort == DemoCohort.Inactive && options.Days - d <= 60))
                     {
@@ -189,7 +189,7 @@ namespace Tests.UnitTests
                     foreach (var row in group.OrderBy(r => (DateTime)r[1]))
                     {
                         var date = (DateTime)row[1];
-                        var day = timeline.Days[(int)(date - options.Start).TotalDays];
+                        var day = timeline.Day((int)(date - options.Start).TotalDays);
                         int total = table == DemoTables.Teams ? day.Messages + day.Meetings
                             : table == DemoTables.Outlook ? day.Sent + day.Read
                             : table == DemoTables.SharePoint ? day.SharePointFiles : day.OneDriveFiles;
@@ -209,7 +209,9 @@ namespace Tests.UnitTests
             var population = new DemoPopulation(options);
             var sink = Generate(options, t => t == DemoTables.CopilotUsage || t == DemoTables.CopilotCounts);
             var details = sink.For(DemoTables.CopilotUsage);
-            Assert.AreEqual(population.Skus[1].Members * (options.Days - 29), details.Count);
+            // The official report now covers every reported day, exactly like the M365 daily tables: the
+            // rolling 28-day counters are warmed up before the window starts rather than inside it.
+            Assert.AreEqual(population.Skus[1].Members * (options.Days - 2), details.Count);
             Assert.AreEqual(details.Count, details.Select(r => r[0] + "|" + r[1] + "|" + r[3]).Distinct().Count());
             foreach (var group in details.GroupBy(r => (int)r[0]))
             {
@@ -219,9 +221,9 @@ namespace Tests.UnitTests
                 foreach (var row in group)
                 {
                     var date = (DateTime)row[1];
-                    Assert.IsTrue(date >= options.FirstCopilotReport && date <= options.ReportEnd);
+                    Assert.IsTrue(date >= options.Start && date <= options.ReportEnd);
                     int end = (int)(date - options.Start).TotalDays;
-                    var window = timeline.Days.Skip(end - 27).Take(28).ToList();
+                    var window = Enumerable.Range(end - 27, 28).Select(timeline.Day).ToList();
                     Assert.AreEqual(28, row[3]);
                     Assert.AreEqual(window.Sum(d => d.CopilotTurns), row[4]);
                     Assert.AreEqual(window.Count(d => d.CopilotTurns > 0), row[7]);
@@ -310,7 +312,7 @@ namespace Tests.UnitTests
             {
                 var timeline = new DemoTimeline(options, population.User(id));
                 for (int day = options.Days - CopilotAdoptionOptions.Default.AgentHistoryDays; day < options.Days; day++)
-                    for (int slot = 0; slot < timeline.Days[day].CopilotTurns; slot++)
+                    for (int slot = 0; slot < timeline.Day(day).CopilotTurns; slot++)
                     {
                         int agent = timeline.Agent(day, slot);
                         if (agent == 0) continue;

@@ -5,19 +5,9 @@ import ReportsPage from './ReportsPage';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
 import { fetchAvailability } from '../api/licenceActivityApi';
 import type { ReportAreaData, ReportAreas } from '../types/reports';
-import type { LicenceActivityAvailability } from '../types/licenceActivity';
 
 vi.mock('../api/reportsApi', () => ({ fetchReportAreas: vi.fn(), fetchReportArea: vi.fn() }));
-vi.mock('../api/licenceActivityApi', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../api/licenceActivityApi')>();
-  return {
-    ...actual,
-    fetchAvailability: vi.fn(),
-    fetchOverview: vi.fn(),
-    fetchUsers: vi.fn(),
-    downloadExport: vi.fn(),
-  };
-});
+vi.mock('../api/licenceActivityApi', () => ({ fetchAvailability: vi.fn() }));
 
 const mockAreas = vi.mocked(fetchReportAreas);
 const mockArea = vi.mocked(fetchReportArea);
@@ -40,56 +30,61 @@ const areaData: ReportAreaData = {
   cognitiveConfigured: true,
 };
 
-function availability(over: Partial<LicenceActivityAvailability> = {}): LicenceActivityAvailability {
-  return { available: false, canViewUsers: false, minimumDays: 7, maximumDays: 180, messages: [], ...over };
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   mockArea.mockResolvedValue(areaData);
-  // Licence activity resolves "not available" so the lazy panel settles quickly without an overview call.
-  mockAvailability.mockResolvedValue(availability());
 });
 
-describe('ReportsPage - Licence activity integration', () => {
-  it('always shows the Licence activity tab, even when no report imports are enabled', async () => {
+describe('ReportsPage', () => {
+  it('keeps the report loading state without mounting Licence activity while areas are pending', () => {
+    mockAreas.mockReturnValue(new Promise(() => {}));
+    renderWithProvider(<ReportsPage />);
+
+    expect(screen.getByText('Loading reports...')).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No built-in report charts are available yet/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Licence activity' })).toHaveAttribute('href', '#/insights/licence-activity');
+    expect(mockAvailability).not.toHaveBeenCalled();
+    expect(mockArea).not.toHaveBeenCalled();
+  });
+
+  it('shows the empty report state and a link to standalone Licence activity when imports are disabled', async () => {
     mockAreas.mockResolvedValue(NO_AREAS);
     renderWithProvider(<ReportsPage />);
 
-    // The tab exists despite every report-area flag being false...
-    expect(await screen.findByRole('tab', { name: 'Licence activity' })).toBeInTheDocument();
-    // ...it becomes the default, so its content loads...
-    expect(await screen.findByText(/not available on this deployment/i)).toBeInTheDocument();
-    // ...and the Reports month/period selector is hidden (it would look like it ignores the dates).
+    expect(await screen.findByText(/No built-in report charts are available yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Reporting period')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Licence activity' })).toHaveAttribute('href', '#/insights/licence-activity');
+    expect(mockAvailability).not.toHaveBeenCalled();
+    expect(mockArea).not.toHaveBeenCalled();
   });
 
-  it('hides the Reports period selector when the Licence activity tab is chosen', async () => {
+  it('keeps report tabs and their period control without embedding Licence activity', async () => {
     mockAreas.mockResolvedValue({ ...NO_AREAS, copilot: true });
     renderWithProvider(<ReportsPage />);
 
-    // Default lands on the report area, so the period selector is shown.
     expect(await screen.findByRole('tab', { name: 'Copilot' })).toBeInTheDocument();
     expect(screen.getByLabelText('Reporting period')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Licence activity' })).not.toBeInTheDocument();
+    await waitFor(() => expect(mockArea).toHaveBeenCalledWith('copilot', 3, undefined));
 
-    // Switching to Licence activity hides it and loads the licence panel.
-    fireEvent.click(screen.getByRole('tab', { name: 'Licence activity' }));
-    expect(await screen.findByText(/not available on this deployment/i)).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByLabelText('Reporting period')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('tab', { name: 'Copilot agents' }));
+    await waitFor(() => expect(mockArea).toHaveBeenCalledWith('copilot-agents', 3, { topAgents: 8, agentName: '' }));
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '6' } });
+    await waitFor(() => expect(mockArea).toHaveBeenCalledWith('copilot-agents', 6, { topAgents: 8, agentName: '' }));
+    expect(mockAvailability).not.toHaveBeenCalled();
   });
 
-  it('keeps a report-areas load failure visible even while the Licence activity tab is showing', async () => {
-    // The areas fetch fails; with no enabled areas the default lands on the always-present Licence tab.
+  it('surfaces report-areas errors without falling back to a Licence activity panel', async () => {
     mockAreas.mockRejectedValue(new Error('Boom: report areas failed to load (500).'));
     renderWithProvider(<ReportsPage />);
 
-    // The error is rendered OUTSIDE the tab content, so it shows even though the Licence tab wins the
-    // content switch...
     expect(await screen.findByText(/report areas failed to load/i)).toBeInTheDocument();
-    // ...and the Licence activity tab still works (its panel resolves)...
-    expect(await screen.findByText(/not available on this deployment/i)).toBeInTheDocument();
-    // ...with the error still visible alongside it, on the selected Licence tab.
-    expect(screen.getByText(/report areas failed to load/i)).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Licence activity' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Reporting period')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No built-in report charts are available yet/)).not.toBeInTheDocument();
+    expect(mockAvailability).not.toHaveBeenCalled();
+    expect(mockArea).not.toHaveBeenCalled();
   });
 });
