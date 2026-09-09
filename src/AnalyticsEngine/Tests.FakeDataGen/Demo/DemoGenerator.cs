@@ -181,6 +181,46 @@ namespace Tests.FakeDataGen.Demo
                 _sink.Write(DemoTables.InteractionApps, i + 1, "IPM.SkypeTeams.Message.Copilot." + DemoTimeline.Hosts[i]);
             _sink.Write(DemoTables.ConversationTypes, 1, "bizchat");
             _sink.Write(DemoTables.ConversationTypes, 2, "appchat");
+            WriteDlpDimensions();
+        }
+
+        /// <summary>
+        /// Synthetic Microsoft Purview DLP policies for the "DLP impact on Copilot" report.
+        /// </summary>
+        /// <remarks>
+        /// The fourth policy is deliberately left in "Audit only" mode. The report's central distinction
+        /// is between a policy that actually denied content and one that merely matched, so a demo
+        /// database that only contained blocking policies would never exercise - or demonstrate - it.
+        /// </remarks>
+        private static readonly string[,] DlpPolicySeed =
+        {
+            // policy name, rule name, severity, rule mode, action
+            { "Contoso - Copilot: Confidential content", "Confidential label", "High", "Enforce", "BlockAccess" },
+            { "Contoso - Copilot: Payment card data", "Credit card number", "High", "Enforce", "BlockAccess" },
+            { "Contoso - Copilot: HR records", "Employee record", "Medium", "Enforce", "BlockAccess" },
+            { "Contoso - Copilot: Draft policy (simulation)", "Project codename", "Low", "Audit only", "NotifyUser" },
+        };
+
+        /// <summary>Number of seeded DLP policies; also the id range used by <see cref="WriteDlpEvent"/>.</summary>
+        private static int DlpPolicyCount => DlpPolicySeed.GetLength(0);
+
+        /// <summary>True when the seeded policy at this index denies content (Enforce + BlockAccess).</summary>
+        private static bool DlpBlocks(int index) =>
+            DlpPolicySeed[index, 3] == "Enforce" && DlpPolicySeed[index, 4] == "BlockAccess";
+
+        private void WriteDlpDimensions()
+        {
+            _sink.Write(DemoTables.SensitivityLabels, 1, "00000000-0000-0000-0000-00000000c001");
+            _sink.Write(DemoTables.SensitivityLabels, 2, "00000000-0000-0000-0000-00000000c002");
+            _sink.Write(DemoTables.DlpActions, 1, "BlockAccess");
+            _sink.Write(DemoTables.DlpActions, 2, "NotifyUser");
+
+            for (int i = 0; i < DlpPolicyCount; i++)
+            {
+                _sink.Write(DemoTables.DlpPolicies, i + 1, $"00000000-0000-0000-0000-0000000000{(0xd0 + i):x2}", DlpPolicySeed[i, 0]);
+                _sink.Write(DemoTables.DlpRules, i + 1, $"00000000-0000-0000-0000-0000000000{(0xe0 + i):x2}",
+                    DlpPolicySeed[i, 1], i + 1, DlpPolicySeed[i, 2], DlpPolicySeed[i, 3]);
+            }
         }
 
         private void WriteTimeline(DemoUser user, DemoTimeline timeline)
@@ -340,6 +380,7 @@ namespace Tests.FakeDataGen.Demo
                     thread, user.Profile.UsageLocation, DemoOptions.FormatVersion, user.Id, time);
                 if (agent > 0 && agent != 5 && slot == 0)
                     _sink.Write(DemoTables.Resources, id, 1, 1, 1);
+                WriteDlpEvent(user, dayIndex, slot, id, agent, time);
                 // Graph interaction history requires a Copilot licence. Free Chat demand is
                 // visible in the audit source, but must not be invented in that Graph feed.
                 if (!user.CopilotLicensed) continue;
@@ -353,8 +394,37 @@ namespace Tests.FakeDataGen.Demo
             }
         }
 
-        private void WriteWebEvents(DemoUser user, int day, DemoDay activity)
+        /// <summary>
+        /// Occasionally attaches a DLP policy match to a Copilot interaction, plus a matching tenant-wide
+        /// rule match, so the "DLP impact on Copilot" report has data.
+        /// </summary>
+        /// <remarks>
+        /// Kept to a small minority of interactions (roughly 1 in 12) because that is what a healthy
+        /// tenant looks like - a page showing most Copilot use being blocked would misrepresent the
+        /// product. Agent-handled interactions are weighted slightly higher so the "Agents" table has
+        /// something to rank; the deterministic DemoRandom stream keeps a given seed reproducible.
+        /// </remarks>
+        private void WriteDlpEvent(DemoUser user, int dayIndex, int slot, Guid id, int agent, DateTime time)
         {
+            uint draw = DemoRandom.Value(_options.Seed, user.Id, dayIndex, 90 + slot);
+
+            // Agent traffic is the interesting case for this report, so it is affected a little more often.
+            uint threshold = agent > 0 ? 10u : 16u;
+            if (draw % threshold != 0) return;
+
+            int policy = (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 110 + slot) % (uint)DlpPolicyCount);
+            bool blocked = DlpBlocks(policy);
+            int label = (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 130 + slot) % 2) + 1;
+
+            _sink.Write(DemoTables.CopilotDlpEvents, id, policy + 1, policy + 1, blocked ? 1 : 2,
+                1, 1, label, blocked);
+
+            // The same underlying event also surfaces on the tenant-wide DLP feed for the workloads that
+            // publish there. Reported separately on the page - it carries no agent identity.
+            _sink.Write(DemoTables.DlpRuleMatches, id, policy + 1, policy + 1, blocked ? 1 : 2, blocked);
+        }
+
+        private void WriteWebEvents(DemoUser user, int day, DemoDay activity)        {
             int session = (user.Id - 1) * _options.Days + day + 1, site = user.Department + 1;
             _sink.Write(DemoTables.Sessions, session, DemoRandom.Id(_options.Seed, 5, user.Id, day).ToString("N"), user.Id);
             var start = _calendar.Timestamp(user.Zone, day, DemoRandom.Value(_options.Seed, user.Id, day, 90));

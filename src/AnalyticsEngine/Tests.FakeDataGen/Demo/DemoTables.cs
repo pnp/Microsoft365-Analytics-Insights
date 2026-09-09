@@ -111,6 +111,18 @@ namespace Tests.FakeDataGen.Demo
             N("thread_id", 450), N("client_region", 50), N("copilot_log_version", 50), I("user_id"), D("time_stamp"));
         public static readonly DemoTable Resources = T("copilot_event_accessed_resources", false,
             G("copilot_chat_id"), I("resource_name_id"), I("resource_site_url_id"), I("resource_type_id"));
+        // DLP. Declared after Chats/ResourceNames/ResourceTypes because dependency order is also the
+        // SQL buffer-flush order, and copilot_dlp_events has foreign keys into all of them.
+        public static readonly DemoTable SensitivityLabels = T("sensitivity_labels", true, I("id"), N("label_id", 100));
+        public static readonly DemoTable DlpPolicies = T("dlp_policies", true, I("id"), N("policy_id", 200), N("name", 400));
+        public static readonly DemoTable DlpRules = T("dlp_rules", true, I("id"), N("rule_id", 200), N("name", 400),
+            I("dlp_policy_id"), N("severity", 50), N("rule_mode", 50));
+        public static readonly DemoTable DlpActions = T("dlp_actions", true, I("id"), N("name", 100));
+        public static readonly DemoTable CopilotDlpEvents = T("copilot_dlp_events", false,
+            G("copilot_chat_id"), I("dlp_policy_id"), I("dlp_rule_id"), I("dlp_action_id"),
+            I("resource_name_id"), I("resource_type_id"), I("sensitivity_label_id"), B("is_blocked"));
+        public static readonly DemoTable DlpRuleMatches = T("dlp_rule_matches", false,
+            G("event_id"), I("dlp_policy_id"), I("dlp_rule_id"), I("dlp_action_id"), B("is_blocked"));
         public static readonly DemoTable SharePointAudit = T("event_meta_sharepoint", false, G("event_id"), I("url_id"),
             I("file_extension_id"), I("file_name_id"), I("related_web_id"), I("item_type_id"));
         public static readonly DemoTable Hits = T("hits", false, I("url_id"), D("hit_timestamp"), I("session_id"),
