@@ -35,6 +35,19 @@ namespace App.ControlPanel.Engine.Entities
                         return GetEntraIdConnectionString(this.Server.Data.FullyQualifiedDomainName, Database.Data.Name);
                     }
 
+                    // Explain the real problem here. Otherwise GetConnectionString throws a bare
+                    // ArgumentException about a parameter name, which surfaces as "FATAL: Unexpected error
+                    // of type 'ArgumentException'" and tells the operator nothing. See issue #117.
+                    if (string.IsNullOrWhiteSpace(this.Server.Data.AdministratorLogin) || string.IsNullOrWhiteSpace(Config.SQLServerAdminPassword))
+                    {
+                        throw new InvalidOperationException(
+                            $"There is no way to authenticate to SQL Server '{this.Server.Data.FullyQualifiedDomainName}'. It has no " +
+                            "Microsoft Entra administrator, so Microsoft Entra ID authentication is not possible, and no SQL " +
+                            "administrator username/password is configured. Either set the SQL administrator credentials in the " +
+                            "installer, or assign a Microsoft Entra administrator to the server in the Azure portal " +
+                            "(SQL Server > Settings > Microsoft Entra ID) and re-run the installer.");
+                    }
+
                     var sqlConnectionString = GetConnectionString(this.Server.Data.FullyQualifiedDomainName, Database.Data.Name, this.Server.Data.AdministratorLogin, Config.SQLServerAdminPassword);
 
                     return sqlConnectionString;
