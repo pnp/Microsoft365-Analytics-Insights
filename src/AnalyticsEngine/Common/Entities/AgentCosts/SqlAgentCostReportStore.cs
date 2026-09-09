@@ -592,11 +592,20 @@ namespace Common.Entities.AgentCosts
                     rows = rows.Where(r => r.EnvironmentId == query.EnvironmentId);
                 }
 
+                // Grouped by the Entra object id ALONE, not by (object id, user id).
+                //
+                // The object id is the person's identity in the billing feed, and it is stable. The link to
+                // dbo.users is not: a row is stored unlinked when its user cannot be resolved and is linked
+                // later by the re-attribution pass. Including the link in the group key would therefore
+                // split one person into two rows - "Alice, 4 credits" next to "Unresolved, 9 credits" -
+                // for the whole window between those two events, on a page whose entire job is to say who
+                // spent what. Grouping on the identity and aggregating the link keeps them as one person.
                 var grouped = await rows
-                    .GroupBy(r => r.UserId)
+                    .GroupBy(r => r.EntraObjectId)
                     .Select(g => new
                     {
-                        UserId = g.Key,
+                        EntraObjectId = g.Key,
+                        UserId = g.Max(r => r.UserId),
                         Credits = g.Sum(r => (decimal?)r.BilledCredits),
                         ActiveDays = g.Select(r => r.UsageDate).Distinct().Count(),
                     })
@@ -604,10 +613,23 @@ namespace Common.Entities.AgentCosts
                     .Take(top)
                     .ToListAsync();
 
+                // The names come from a second, bounded query rather than a navigation property reached
+                // through the group. It is at most `top` (<= 200) ids, and it keeps the aggregation itself
+                // to a shape SQL can always translate.
+                var userIds = grouped.Where(g => g.UserId.HasValue).Select(g => g.UserId.Value).Distinct().ToList();
+                var namesById = userIds.Count == 0
+                    ? new Dictionary<int, string>()
+                    : await db.users
+                        .Where(u => userIds.Contains(u.ID))
+                        .Select(u => new { u.ID, u.UserPrincipalName })
+                        .ToDictionaryAsync(u => u.ID, u => u.UserPrincipalName);
+
                 return grouped
                     .Select(g => new AgentCostUserRow
                     {
                         UserId = g.UserId,
+                        EntraObjectId = g.EntraObjectId,
+                        UserPrincipalName = g.UserId.HasValue && namesById.TryGetValue(g.UserId.Value, out var upn) ? upn : null,
                         BilledCredits = g.Credits ?? 0m,
                         ActiveDays = g.ActiveDays,
                     })

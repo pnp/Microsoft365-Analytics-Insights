@@ -926,8 +926,14 @@ export default function AgentCostsPage() {
                   </thead>
                   <tbody>
                     {topUsers.map((u) => (
-                      <tr key={u.userId}>
-                        <td className={styles.td}>{u.userId}</td>
+                      <tr key={u.userId ?? u.entraObjectId ?? ''}>
+                        <td className={styles.td}>
+                          {u.userPrincipalName ?? (
+                            <span title={u.entraObjectId ?? undefined}>
+                              Unresolved user{u.entraObjectId ? ` (${u.entraObjectId})` : ''}
+                            </span>
+                          )}
+                        </td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(u.billedCredits)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>
                           {userTotal > 0 ? `${Math.round((u.billedCredits / userTotal) * 1000) / 10}%` : DASH}

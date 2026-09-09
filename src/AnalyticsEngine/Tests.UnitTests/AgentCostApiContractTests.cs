@@ -132,7 +132,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UserRow_SerialisesTheFieldNamesThePortalReads()
         {
-            AssertKeys(new AgentCostUserRow(), "userId", "billedCredits", "activeDays");
+            AssertKeys(new AgentCostUserRow(),
+                "userId", "entraObjectId", "userPrincipalName", "billedCredits", "activeDays");
         }
 
         [TestMethod]

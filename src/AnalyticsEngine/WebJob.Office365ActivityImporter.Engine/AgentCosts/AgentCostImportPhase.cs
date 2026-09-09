@@ -106,6 +106,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         + "See the agent_cost_import_log entry for the reason.");
                 }
 
+                // Rows outside the trailing window are never re-read by the import, so a user who only
+                // appeared in the directory after their credits were first stored would stay unattributed
+                // for ever. This is what makes the nullable link self-healing. It runs whether or not the
+                // read above succeeded - older rows are still worth attributing - and never throws.
+                await importer.LinkOutstandingUsersAsync();
+
                 var parts = new[] { consumption, capacity };
 
                 // Back off ONLY when every failing part was refused. A transient failure alongside a refusal

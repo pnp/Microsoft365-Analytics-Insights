@@ -387,11 +387,24 @@ namespace Common.Entities.AgentCosts
     public class AgentCostUserRow
     {
         /// <summary>
-        /// The identifier the licensing API reported. Deliberately not resolved to a display name: nothing
-        /// verifies its format, so mapping it to a person would be a guess presented as a fact.
+        /// The resolved <c>dbo.users</c> key, or null when the identifier could not be matched to a person.
         /// </summary>
         [JsonProperty("userId")]
-        public string UserId { get; set; }
+        public int? UserId { get; set; }
+
+        /// <summary>
+        /// The identifier the licensing API reported - an Entra object id. Always present, so an
+        /// unresolved user can still be identified and chased up.
+        /// </summary>
+        [JsonProperty("entraObjectId")]
+        public string EntraObjectId { get; set; }
+
+        /// <summary>
+        /// The person's user principal name, or null when they are not in <c>dbo.users</c>. Null is shown
+        /// as an explicitly unresolved user rather than as a blank name.
+        /// </summary>
+        [JsonProperty("userPrincipalName")]
+        public string UserPrincipalName { get; set; }
 
         [JsonProperty("billedCredits")]
         public decimal BilledCredits { get; set; }
