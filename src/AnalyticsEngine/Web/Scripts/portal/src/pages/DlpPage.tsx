@@ -77,10 +77,14 @@ function ImpactTable({
   title: string;
   description: string;
   nameHeader: string;
-  rows: DlpImpactRow[];
+  rows: DlpImpactRow[] | null | undefined;
   showUsers: boolean;
 }) {
   const styles = useStyles();
+  // Defensive: a ranked list is only ever absent if the API contract has drifted. Rendering "nothing
+  // in this period" beats taking the whole page down with a TypeError, which is exactly what an
+  // unguarded .map() did when these fields were serialised under the wrong names.
+  const safeRows = rows ?? [];
   return (
     <Card className={styles.card}>
       <Text weight="semibold" size={400}>
@@ -89,7 +93,7 @@ function ImpactTable({
       <Text size={200} block className={styles.muted} style={{ marginBottom: '8px' }}>
         {description}
       </Text>
-      {rows.length === 0 ? (
+      {safeRows.length === 0 ? (
         <Text size={200} className={styles.muted}>
           Nothing in this period.
         </Text>
@@ -104,7 +108,7 @@ function ImpactTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((r, i) => (
+            {safeRows.map((r, i) => (
               <TableRow key={r.id ?? `${r.name}-${i}`}>
                 <TableCell className={styles.td}>{r.name ?? '—'}</TableCell>
                 <TableCell className={`${styles.td} ${r.blockedCount > 0 ? styles.blocked : ''}`}>
@@ -207,8 +211,8 @@ export default function DlpPage() {
         </MessageBar>
       )}
 
-      {availability?.reasons.map((r) => (
-        <MessageBar key={r} intent={availability.available ? 'info' : 'warning'} style={{ marginTop: '12px' }}>
+      {(availability?.reasons ?? []).map((r) => (
+        <MessageBar key={r} intent={availability?.available ? 'info' : 'warning'} style={{ marginTop: '12px' }}>
           <MessageBarBody>{r}</MessageBarBody>
         </MessageBar>
       ))}
