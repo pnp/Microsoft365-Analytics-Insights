@@ -84,15 +84,32 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var importer = _creditImporterFactory();
 
                 var consumption = await importer.ImportAsync();
-                var users = await importer.ImportUserCreditsAsync();
                 var capacity = await importer.ImportCapacityAsync();
 
-                var parts = new[] { consumption, users, capacity };
+                // The per-user read is BEST EFFORT and deliberately excluded from the cadence decision.
+                //
+                // It is an optional enrichment on a route Microsoft only added in July 2026, and a tenant
+                // that cannot serve it does not always say so cleanly: observed against a real tenant, an
+                // unusable /users route returns HTTP 500 persistently while the sibling routes return 403,
+                // and a genuinely missing route returns a clean 404 with "RouteNotFound". A persistent 500
+                // is indistinguishable from a transient one, so letting it into the gate decision would mark
+                // the whole import failed on every cycle - re-hitting Microsoft every few minutes, for ever,
+                // and never recording the per-agent figures as up to date even though they imported fine.
+                //
+                // The failure is not swallowed: it is written to agent_cost_import_log and surfaced on the
+                // Health page and the report, which is where an admin can act on it.
+                var users = await importer.ImportUserCreditsAsync();
+                if (!users.Succeeded)
+                {
+                    _logger.LogWarning("The per-user Copilot Studio credit read did not succeed. The per-agent figures "
+                        + "are unaffected and have been recorded normally; per-person figures may be missing or stale. "
+                        + "See the agent_cost_import_log entry for the reason.");
+                }
 
-                // Back off ONLY when every failing part was refused. The per-user route in particular may sit
-                // in a permanent 403 on tenants where Microsoft has not enabled application-only access - and
-                // if that were allowed to mark the whole run "refused", a transient failure of the far more
-                // important consumption import would be suppressed for a whole interval alongside it.
+                var parts = new[] { consumption, capacity };
+
+                // Back off ONLY when every failing part was refused. A transient failure alongside a refusal
+                // still deserves a prompt retry, so it must not be absorbed into "refused".
                 await StampOrRetry("Copilot Studio credit import", CopilotStudioCreditsLastImportedKey,
                     succeeded: parts.All(p => p.Succeeded),
                     isAuthorisationFailure: parts.Any(p => p.IsAuthorisationFailure) && !parts.Any(p => p.IsTransientFailure));
