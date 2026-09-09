@@ -102,6 +102,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             if (payGo != null)
             {
+                // Observed on a live tenant: payGo carries an "entitled" object and NO "consumed" one, so
+                // this legitimately stays null there. Deliberately not falling back to payGo.entitled -
+                // entitled and consumed are different quantities, and reporting one as the other on a spend
+                // page would be a straightforward lie.
                 snapshot.PayAsYouGoConsumed = GetDecimal(GetProperty(payGo, "consumed") as JObject, "value");
             }
 
@@ -205,6 +209,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 Consumed = GetDecimal(row, "consumed") ?? 0m,
                 Unit = GetString(row, "unit"),
                 AsOfDate = GetDateTime(row, "asOfDate"),
+                NonBillableQuantity = GetDecimal(GetProperty(row, "metadata") as JObject, "NonBillableQuantity"),
             };
         }
 
