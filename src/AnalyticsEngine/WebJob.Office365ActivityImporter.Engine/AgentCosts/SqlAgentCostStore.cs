@@ -93,8 +93,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// narrow the filter. Without a replace, narrowing the filter leaves the old wider rows in place, and
         /// changing the grouping re-imports the same money under different hashes - doubling the total. Both
         /// look like a real increase in spend.</para>
-        /// <para>Passing a null scope skips the deletion and upserts only, which is what the interface method
-        /// does; the importer always supplies the scope and window.</para>
+        /// <para><b>This deletes stored rows, so it must only ever be reached on a COMPLETE read.</b> Every
+        /// partial-read condition in <c>AzureCostManagementSource</c> throws
+        /// <c>AgentCostIncompleteReadException</c> rather than returning what it has, precisely so a
+        /// truncated response can never reach this method and delete the rows its missing pages would have
+        /// supplied.</para>
+        /// <para>The deletion is scoped by <c>Scope</c> as well as the window, so one subscription's import
+        /// can never remove another's rows. Passing a null scope skips the deletion and upserts only, which
+        /// is what the interface's <see cref="UpsertAzureCostsAsync"/> does.</para>
         /// </remarks>
         public async Task<int> ReplaceAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows, string scope, DateTime? from, DateTime? to)
         {

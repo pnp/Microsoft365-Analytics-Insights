@@ -80,7 +80,21 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 }
 
                 var json = await PostJsonAsync(url, body, scope);
-                if (json == null) break;
+                if (json == null)
+                {
+                    // An empty body on the FIRST request means the scope genuinely had nothing in the window.
+                    // An empty body after following a nextLink means the page chain broke part way through -
+                    // and because the write REPLACES the scope and window, silently accepting that truncated
+                    // result would delete the spend the missing pages were going to supply.
+                    if (pages > 1)
+                    {
+                        throw new AgentCostIncompleteReadException(
+                            $"Azure Cost Management returned an empty page part way through paging for scope '{scope}', "
+                            + "so the window could not be read completely. Nothing was stored for this scope rather than "
+                            + "a partial figure that would look like a drop in spend.");
+                    }
+                    break;
+                }
 
                 results.AddRange(AzureCostQueryParser.ParsePage(json));
 
