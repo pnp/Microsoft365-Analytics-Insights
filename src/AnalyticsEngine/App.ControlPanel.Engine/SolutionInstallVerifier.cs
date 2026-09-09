@@ -9,6 +9,7 @@ using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using CloudInstallEngine.Azure;
 using Common.Entities;
+using Common.Entities.Installer;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
@@ -130,11 +131,12 @@ namespace App.ControlPanel.Engine
 
         /// <summary>
         /// Return SQL details so connectivity tests can run against an existing server.
-        /// We cannot read back the SQL password, so it must come from config.
+        /// We cannot read back the SQL password, so it must come from config - unless the deployment uses
+        /// Microsoft Entra ID authentication, in which case there is no password at all (issue #117).
         /// </summary>
         public async Task<AutodetectedSqlDetails> GetSqlDetails(string sqlPassword)
         {
-            if (string.IsNullOrEmpty(sqlPassword))
+            if (string.IsNullOrEmpty(sqlPassword) && Config.SqlAuthMode != SqlServerAuthMode.EntraId)
             {
                 throw new ArgumentException($"'{nameof(sqlPassword)}' cannot be null or empty.", nameof(sqlPassword));
             }
@@ -174,11 +176,16 @@ namespace App.ControlPanel.Engine
         {
             if (config == null) return false;
 
+            // A Microsoft Entra ID deployment has no SQL login to supply, so requiring one here would make
+            // autodetection permanently unavailable for it. See issue #117.
+            var haveSqlCredentials = config.SqlAuthMode == SqlServerAuthMode.EntraId
+                || (!string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername));
+
             var installerAccErrors = config.InstallerAccount?.GetValidationErrors();
             return installerAccErrors != null && installerAccErrors.Count == 0
                 && !string.IsNullOrEmpty(config.ResourceGroupName)
                 && config.Subscription.IsValidSubscription
-                && !string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername) && !string.IsNullOrEmpty(config.SQLServerName);
+                && haveSqlCredentials && !string.IsNullOrEmpty(config.SQLServerName);
         }
 
         async Task<(ResourceGroupResource, bool)> GetResourceGroupIfValid()
