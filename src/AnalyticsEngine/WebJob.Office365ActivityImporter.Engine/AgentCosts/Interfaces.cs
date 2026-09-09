@@ -219,6 +219,18 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// <summary>Inserts or updates the given rows. Returns how many rows were written.</summary>
         Task<int> UpsertAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows);
 
+        /// <summary>
+        /// Replaces the stored Azure costs for one scope and window with exactly what was returned, removing
+        /// anything the latest query no longer reports.
+        /// </summary>
+        /// <remarks>
+        /// A Cost Management query result is a complete snapshot of its scope and window, not a delta. The
+        /// meter filter and grouping are both configurable and expected to change, so an upsert-only write
+        /// would leave superseded rows behind - narrowing a filter would keep the old wider rows, and
+        /// changing the grouping would store the same money twice under different hashes.
+        /// </remarks>
+        Task<int> ReplaceAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows, string scope, DateTime? from, DateTime? to);
+
         Task SaveCapacitySnapshotAsync(CopilotStudioCreditCapacity snapshot);
 
         Task SaveImportLogAsync(AgentCostImportLog log);

@@ -78,20 +78,61 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
         public async Task<int> UpsertAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows)
         {
-            if (rows == null || rows.Count == 0) return 0;
+            return await ReplaceAzureCostsAsync(rows, scope: null, from: null, to: null);
+        }
+
+        /// <summary>
+        /// Replaces the stored Azure costs for one scope and window with exactly what the query returned.
+        /// </summary>
+        /// <remarks>
+        /// <para>A Cost Management query result is a <b>complete snapshot</b> of that scope and window, not a
+        /// delta - so anything previously stored for the same scope and window that is no longer returned is
+        /// no longer true, and leaving it behind overstates spend.</para>
+        /// <para>This matters because the meter filter and the grouping are both configurable and are
+        /// expected to change: the documented workflow is to import unfiltered, look at the data, then
+        /// narrow the filter. Without a replace, narrowing the filter leaves the old wider rows in place, and
+        /// changing the grouping re-imports the same money under different hashes - doubling the total. Both
+        /// look like a real increase in spend.</para>
+        /// <para>Passing a null scope skips the deletion and upserts only, which is what the interface method
+        /// does; the importer always supplies the scope and window.</para>
+        /// </remarks>
+        public async Task<int> ReplaceAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows, string scope, DateTime? from, DateTime? to)
+        {
+            var incoming = rows ?? new List<AzureCostDaily>();
+
+            // NOT an early return on an empty list. "The query now matches nothing" is a real result that has
+            // to remove what was there before, and returning early would leave the old rows for ever.
+            if (incoming.Count == 0 && string.IsNullOrEmpty(scope)) return 0;
 
             using (var db = _dbContextFactory.Create())
             {
-                var from = rows.Min(r => r.UsageDate).Date;
-                var to = rows.Max(r => r.UsageDate).Date;
+                DateTime windowFrom, windowTo;
+                if (from.HasValue && to.HasValue)
+                {
+                    windowFrom = from.Value.Date;
+                    windowTo = to.Value.Date;
+                }
+                else if (incoming.Count > 0)
+                {
+                    windowFrom = incoming.Min(r => r.UsageDate).Date;
+                    windowTo = incoming.Max(r => r.UsageDate).Date;
+                }
+                else
+                {
+                    return 0;
+                }
 
-                var stored = await db.AzureCostDaily
-                    .Where(r => r.UsageDate >= from && r.UsageDate <= to)
-                    .ToListAsync();
+                var storedQuery = db.AzureCostDaily.Where(r => r.UsageDate >= windowFrom && r.UsageDate <= windowTo);
+                if (!string.IsNullOrEmpty(scope))
+                {
+                    storedQuery = storedQuery.Where(r => r.Scope == scope);
+                }
 
+                var stored = await storedQuery.ToListAsync();
                 var byHash = BuildIndex(stored, r => r.RowHash);
+                var incomingHashes = new HashSet<string>(incoming.Select(r => r.RowHash), StringComparer.Ordinal);
 
-                foreach (var row in rows)
+                foreach (var row in incoming)
                 {
                     if (byHash.TryGetValue(row.RowHash, out var existing))
                     {
@@ -107,8 +148,20 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     }
                 }
 
+                if (!string.IsNullOrEmpty(scope))
+                {
+                    var superseded = stored.Where(r => !incomingHashes.Contains(r.RowHash)).ToList();
+                    if (superseded.Count > 0)
+                    {
+                        db.AzureCostDaily.RemoveRange(superseded);
+                        _logger.LogInformation($"Azure costs for scope '{scope}': removed {superseded.Count:N0} row(s) "
+                            + $"for {windowFrom:yyyy-MM-dd}..{windowTo:yyyy-MM-dd} that the latest query no longer "
+                            + "returns. This is expected after a meter-filter or grouping change.");
+                    }
+                }
+
                 await db.SaveChangesAsync();
-                return rows.Count;
+                return incoming.Count;
             }
         }
 

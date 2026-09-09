@@ -340,7 +340,7 @@
             this.chkCopilotStudioCredits.Name = "chkCopilotStudioCredits";
             this.chkCopilotStudioCredits.Size = new System.Drawing.Size(280, 17);
             this.chkCopilotStudioCredits.TabIndex = 28;
-            this.chkCopilotStudioCredits.Text = "Copilot Studio credits (billed, per agent - needs extra role)";
+            this.chkCopilotStudioCredits.Text = "Copilot Studio credits (per agent and per person - needs extra role)";
             this.chkCopilotStudioCredits.UseVisualStyleBackColor = true;
             // 
             // chkAzureCostManagement

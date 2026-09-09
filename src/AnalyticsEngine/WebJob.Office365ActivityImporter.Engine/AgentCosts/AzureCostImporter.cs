@@ -62,14 +62,15 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 ? _settings.TrailingWindowDays
                 : AzureCostImportSettings.DefaultTrailingWindowDays;
 
-            // The window is the LATER of "the configured trailing days" and "everything still provisional",
-            // never just the former.
+            // The window is the LATER of "the configured trailing days" and "everything that still needs a
+            // refresh", never just the former.
             //
             // Those two are not the same span, and assuming they were left rows stale for ever: Azure keeps
             // amending an open billing period until a few days after it ends, so a charge dated the 1st is
             // still mutable a month later - long after a 5-day trailing window has stopped re-reading it. The
-            // row would keep its first estimate, and keep saying "estimate", permanently.
-            var provisionalFrom = EarliestStillProvisionalDate(today);
+            // refresh window also reaches a few days PAST the close, so a closing period is read at least
+            // once while final rather than keeping its last estimate for ever.
+            var provisionalFrom = EarliestRefreshDate(today);
             var trailingFrom = today.AddDays(-(windowDays - 1));
             var from = provisionalFrom < trailingFrom ? provisionalFrom : trailingFrom;
 
@@ -119,7 +120,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     log.RowsRead += rows.Count;
 
                     var mapped = MapAndAggregate(rows, scope, today, _clock.UtcNow);
-                    log.RowsSaved += await _store.UpsertAzureCostsAsync(mapped);
+
+                    // Replace, not upsert: the query answer is a complete snapshot of this scope and window,
+                    // so rows it no longer returns are no longer true. Called even when the result is empty,
+                    // because "the filter now matches nothing" has to clear what was there before.
+                    log.RowsSaved += await _store.ReplaceAzureCostsAsync(mapped, scope, from, today);
 
                     _logger.LogInformation($"Azure costs for scope '{scope}': read {rows.Count:N0} row(s) for "
                         + $"{from:yyyy-MM-dd}..{today:yyyy-MM-dd}, stored {mapped.Count:N0}.");
@@ -264,6 +269,35 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             // Within the lag, last period is still open too.
             var startOfLastPeriod = startOfThisPeriod.AddMonths(-1);
             return IsStillProvisional(startOfLastPeriod, today) ? startOfLastPeriod : startOfThisPeriod;
+        }
+
+        /// <summary>
+        /// How many days past a billing period's close it stays in the refresh window, so it is read at
+        /// least once while final. Three, against a daily cadence, tolerates two consecutive missed runs.
+        /// </summary>
+        public const int PostCloseRefreshDays = 3;
+
+        /// <summary>
+        /// The earliest usage day the import should re-read, given today's date.
+        /// </summary>
+        /// <remarks>
+        /// <para>This is deliberately <b>wider</b> than <see cref="EarliestStillProvisionalDate"/>. A period
+        /// stops being provisional <see cref="BillingPeriodFinalisationLagDays"/> days after it ends - and if
+        /// the window contracted the moment that happened, the period would never once be read while final.
+        /// Its rows would keep whatever estimate they last received, stay flagged as estimates for ever, and
+        /// any adjustment Azure made at close would be missed entirely.</para>
+        /// <para>Keeping the previous period in the window for a few days past its close guarantees at least
+        /// one read of it as final, at which point <see cref="IsStillProvisional"/> returns false and the
+        /// rows are rewritten with <c>is_estimated = 0</c>.</para>
+        /// </remarks>
+        internal static DateTime EarliestRefreshDate(DateTime today)
+        {
+            var startOfThisPeriod = new DateTime(today.Year, today.Month, 1);
+            var startOfLastPeriod = startOfThisPeriod.AddMonths(-1);
+
+            return today.Day <= BillingPeriodFinalisationLagDays + PostCloseRefreshDays
+                ? startOfLastPeriod
+                : startOfThisPeriod;
         }
 
         /// <summary>

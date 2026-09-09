@@ -17,6 +17,9 @@ export interface AgentCostAvailability {
   azureCostsLastImportUtc: string | null;
   copilotStudioCreditsLastError: string | null;
   azureCostsLastError: string | null;
+  perUserCreditsLastImportUtc: string | null;
+  perUserCreditsLastError: string | null;
+  capacityLastError: string | null;
   azureDimensionsWithData: string[];
   earliestUsageDate: string | null;
   latestUsageDate: string | null;

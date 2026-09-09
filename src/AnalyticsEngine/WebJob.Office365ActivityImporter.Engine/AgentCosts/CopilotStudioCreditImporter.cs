@@ -47,7 +47,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _clock = clock ?? SystemClock.Instance;
             _trailingWindowDays = trailingWindowDays > 0
-                ? trailingWindowDays
+                ? Math.Min(trailingWindowDays, AppConfig.MaxCopilotStudioCreditsTrailingWindowDays)
                 : AppConfig.DefaultCopilotStudioCreditsTrailingWindowDays;
         }
 

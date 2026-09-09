@@ -802,6 +802,43 @@ namespace Tests.UnitTests
                 "Retrying cannot fix a role assignment, so an all-refused run waits for the normal interval.");
         }
 
+        [TestMethod]
+        public void AzureImporter_RefreshWindow_ReachesPastAPeriodsCloseSoItIsReadWhileFinal()
+        {
+            // If the window contracted the moment a period stopped being provisional, that period would never
+            // once be read as final: its rows would keep their last estimate and stay flagged "estimate" for
+            // ever, and any adjustment Azure made at close would be missed.
+            var closesOn = new DateTime(2026, 9, 1).AddDays(AzureCostImporter.BillingPeriodFinalisationLagDays);
+
+            // The day after August closes, August must still be in the refresh window...
+            var dayAfterClose = closesOn.AddDays(1);
+            Assert.IsFalse(AzureCostImporter.IsStillProvisional(new DateTime(2026, 8, 1), dayAfterClose),
+                "August is final by this date.");
+            Assert.AreEqual(new DateTime(2026, 8, 1), AzureCostImporter.EarliestRefreshDate(dayAfterClose),
+                "...so it must still be re-read, in order to be stored as final.");
+
+            // ...and later in the month it correctly drops out.
+            Assert.AreEqual(new DateTime(2026, 9, 1), AzureCostImporter.EarliestRefreshDate(new DateTime(2026, 9, 20)));
+        }
+
+        [TestMethod]
+        public async Task AzureImporter_ReplacesEachScopeAndWindowRatherThanOnlyAdding()
+        {
+            // A Cost Management result is a complete snapshot of its scope and window. Upserting only would
+            // leave superseded rows behind, so narrowing the meter filter would keep the old wider rows and
+            // changing the grouping would store the same money twice - both looking like a rise in spend.
+            var settings = new AzureCostImportSettings { Scopes = new[] { "/subscriptions/a" } };
+            var store = new RecordingAgentCostStore();
+            var source = new PerScopeAzureCostSource();
+
+            await new AzureCostImporter(Logger, source, store, settings).ImportAsync();
+
+            Assert.AreEqual(1, store.AzureReplaceCalls.Count, "The write must go through the replace path.");
+            Assert.AreEqual("/subscriptions/a", store.AzureReplaceCalls[0].Item1,
+                "The scope must be passed, or the replace could delete another scope's rows.");
+            Assert.IsNotNull(store.AzureReplaceCalls[0].Item2, "The window must be passed even when no rows came back.");
+        }
+
         /// <summary>A per-user source that answers from a per-day map; an unlisted day yields an empty page.</summary>
         private class UserCreditSource : ICopilotStudioCreditSource
         {
@@ -1042,6 +1079,17 @@ namespace Tests.UnitTests
             {
                 Costs.AddRange(rows);
                 return Task.FromResult(rows.Count);
+            }
+
+            /// <summary>Records the replace calls, so a test can assert the scope and window were passed.</summary>
+            public List<Tuple<string, DateTime?, DateTime?>> AzureReplaceCalls { get; }
+                = new List<Tuple<string, DateTime?, DateTime?>>();
+
+            public Task<int> ReplaceAzureCostsAsync(IReadOnlyList<AzureCostDaily> rows, string scope, DateTime? from, DateTime? to)
+            {
+                AzureReplaceCalls.Add(Tuple.Create(scope, from, to));
+                Costs.AddRange(rows ?? new List<AzureCostDaily>());
+                return Task.FromResult(rows?.Count ?? 0);
             }
 
             public List<CopilotStudioCreditUserDaily> UserCredits { get; } = new List<CopilotStudioCreditUserDaily>();

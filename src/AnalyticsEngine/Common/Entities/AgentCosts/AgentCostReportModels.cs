@@ -124,6 +124,15 @@ namespace Common.Entities.AgentCosts
         public string CopilotStudioCreditsLastError { get; set; }
         public string AzureCostsLastError { get; set; }
 
+        /// <summary>
+        /// The per-user and capacity reads are separate runs with their own failure modes - the per-user
+        /// route can be refused while the per-agent one succeeds - so they carry their own status rather
+        /// than hiding behind the per-agent result.
+        /// </summary>
+        public DateTime? PerUserCreditsLastImportUtc { get; set; }
+        public string PerUserCreditsLastError { get; set; }
+        public string CapacityLastError { get; set; }
+
         public DateTime? EarliestUsageDate { get; set; }
         public DateTime? LatestUsageDate { get; set; }
 

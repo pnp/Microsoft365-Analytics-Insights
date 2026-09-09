@@ -579,6 +579,17 @@ namespace Common.Entities.Config
         public const int DefaultCopilotStudioCreditsTrailingWindowDays = 7;
 
         /// <summary>
+        /// Hard ceiling on the Copilot Studio trailing window.
+        /// </summary>
+        /// <remarks>
+        /// The import issues at least one request <b>per day</b> in the window, so the setting is a direct
+        /// multiplier on how many calls a cycle makes. 180 matches the API's observed retention horizon -
+        /// asking for more cannot return anything extra, and a mistyped value would otherwise turn one run
+        /// into thousands of requests.
+        /// </remarks>
+        public const int MaxCopilotStudioCreditsTrailingWindowDays = 180;
+
+        /// <summary>
         /// Minimum hours between Copilot Studio credit imports. Override with the
         /// <c>CopilotStudioCreditsIntervalHours</c> AppSetting; 0 disables the gate.
         /// </summary>
