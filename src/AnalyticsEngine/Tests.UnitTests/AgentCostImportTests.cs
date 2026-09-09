@@ -652,6 +652,67 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CreditParser_PerUserShapeObservedOnALiveTenant_IsParsedFully()
+        {
+            // Captured from a real tenant (values replaced with synthetic ones). Two things this pins that
+            // the public documentation does not show: asOfDate IS present on this route without the
+            // undocumented includeFields parameter, and the row carries tenantId plus a metadata object with
+            // Resources and NonBillableQuantity.
+            var json = JObject.Parse(@"{
+                ""value"": [
+                    { ""users"": [
+                        {
+                            ""tenantId"": ""00000000-0000-0000-0000-0000000000t1"",
+                            ""userId"": ""00000000-0000-0000-0000-0000000000u1"",
+                            ""consumed"": 0.0,
+                            ""unit"": ""Messages"",
+                            ""metadata"": { ""Resources"": 1, ""NonBillableQuantity"": 1.0 },
+                            ""asOfDate"": ""2026-08-15T00:00:00""
+                        }
+                    ] }
+                ]
+            }");
+
+            var row = CopilotStudioCreditParser.ParseUserConsumptionPage(json).Rows.Single();
+
+            Assert.AreEqual("00000000-0000-0000-0000-0000000000u1", row.UserId);
+            Assert.AreEqual(0m, row.Consumed);
+            Assert.AreEqual("Messages", row.Unit);
+            Assert.AreEqual(new DateTime(2026, 8, 15), row.AsOfDate.Value.Date);
+            Assert.AreEqual(1.0m, row.NonBillableQuantity,
+                "A user can be charged nothing while still having used an agent - that must not be lost.");
+        }
+
+        [TestMethod]
+        public void CreditParser_CapacityWithPayGoEntitledButNoConsumed_LeavesConsumedNull()
+        {
+            // The live-tenant shape: payGo carries "entitled" and no "consumed". Reporting entitled as
+            // consumed would be a straightforward lie on a spend page, so it must stay null.
+            var json = JObject.Parse(@"{
+                ""entitlement"": {
+                    ""capacity"": {
+                        ""entitled"": { ""value"": 25000.0 },
+                        ""consumed"": { ""value"": 0.0, ""consumptionType"": ""NotSpecified"", ""writeOff"": 0.0 },
+                        ""allocated"": { ""value"": 0.0, ""autoAllocated"": 0.0 },
+                        ""availableQuantity"": 25000.0,
+                        ""status"": ""WithinCapacity""
+                    },
+                    ""payGo"": { ""entitled"": { ""value"": 0.0 } }
+                },
+                ""entitlementId"": ""MCSMessages""
+            }");
+
+            var capacity = CopilotStudioCreditParser.ParseCapacity(json);
+
+            Assert.AreEqual(25000m, capacity.Entitled);
+            Assert.AreEqual(0m, capacity.Consumed);
+            Assert.AreEqual(25000m, capacity.Available);
+            Assert.AreEqual("WithinCapacity", capacity.Status);
+            Assert.IsNull(capacity.PayAsYouGoConsumed,
+                "payGo.entitled must NOT be reported as payGo consumption.");
+        }
+
+        [TestMethod]
         public void CreditParser_PerUserNestedEnvelope_IsParsed()
         {
             // A different envelope from the per-agent read: value[].users[], not value[].resources[].

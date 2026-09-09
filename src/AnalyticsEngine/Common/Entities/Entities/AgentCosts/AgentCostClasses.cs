@@ -182,10 +182,12 @@ namespace Common.Entities.Entities.AgentCosts
     /// different endpoints and neither is derived from the other.</para>
     ///
     /// <para><b>The user is stored as the raw identifier the API returns, with no foreign key to
-    /// <c>dbo.users</c>.</b> Microsoft documents <c>userId</c> only as a string; whether it is an Entra
-    /// object id, a UPN or something else is not stated, so joining it to the user table would rest on an
-    /// assumption rather than a fact. A join built on a guess produces confidently wrong attribution, which
-    /// on a spend report is worse than no join at all.</para>
+    /// <c>dbo.users</c>.</b> Microsoft documents <c>userId</c> only as a string. Measured against a live
+    /// tenant it is a <b>GUID</b> - an Entra object id, not a UPN - but that is an observation, not a
+    /// contract, and <c>dbo.users</c> has no Entra-object-id column to join it to. Resolving it to a person
+    /// therefore needs a schema addition and a Graph-side backfill; until then the raw value is stored, and a
+    /// join built on a guess would produce confidently wrong attribution, which on a spend report is worse
+    /// than no join at all.</para>
     /// </summary>
     [Table("copilot_studio_credit_user_daily")]
     public class CopilotStudioCreditUserDaily : AbstractEFEntity

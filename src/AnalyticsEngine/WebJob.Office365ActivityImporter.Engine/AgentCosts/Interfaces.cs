@@ -114,12 +114,30 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// The user identifier as returned. Microsoft documents it only as a string - it is deliberately not
         /// assumed to be a UPN or an Entra object id, and is never joined to the user table on that guess.
         /// </summary>
+        /// <remarks>
+        /// Measured against a live tenant it is a GUID (an Entra object id). Recorded as an observation
+        /// rather than relied on: it is not a documented contract, and there is no Entra-object-id column on
+        /// <c>dbo.users</c> to join it to in any case.
+        /// </remarks>
         public string UserId { get; set; }
 
         public string EnvironmentId { get; set; }
         public decimal Consumed { get; set; }
         public string Unit { get; set; }
         public DateTime? AsOfDate { get; set; }
+
+        /// <summary>
+        /// Usage that was NOT charged, from <c>metadata.NonBillableQuantity</c>.
+        /// </summary>
+        /// <remarks>
+        /// Parsed but not currently persisted - <c>copilot_studio_credit_user_daily</c> has no column for it,
+        /// unlike the per-agent table which does. Observed on a live tenant: a user can have
+        /// <c>consumed = 0</c> with <c>NonBillableQuantity = 1</c>, i.e. they used an agent but were not
+        /// charged. The per-user panel is a COST report so showing zero is defensible, but it does mean reach
+        /// and cost are not the same thing there. Persisting this needs an additive migration - see the
+        /// milestone issue.
+        /// </remarks>
+        public decimal? NonBillableQuantity { get; set; }
     }
 
     /// <summary>One page of per-user consumption rows, plus the token for the next.</summary>
