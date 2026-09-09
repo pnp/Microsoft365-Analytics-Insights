@@ -211,6 +211,14 @@ namespace Tests.UnitTests
             Assert.AreEqual("ada@contoso.com", summary.TopUsers.Single().Name);
             Assert.IsFalse(summary.TopUsers.Single().Id.Contains(" "), "The user id must be trimmed of STR() padding.");
 
+            // Per-user policy attribution, matched back on the integer id rather than STR()'s formatting.
+            var userPolicies = summary.TopUsers.Single().Policies;
+            Assert.IsNotNull(userPolicies, "A person row must carry its policy breakdown.");
+            Assert.AreEqual(1, userPolicies.Count);
+            Assert.AreEqual("Block Copilot on Confidential", userPolicies.Single().Name);
+            Assert.AreEqual(1, userPolicies.Single().BlockedCount, "One of this person's two events was a block.");
+            Assert.AreEqual(1, userPolicies.Single().AuditedCount);
+
             Assert.AreEqual("Block Copilot on Confidential", summary.TopPolicies.Single().Name);
             Assert.AreEqual("00000000-0000-0000-0000-00000000c001", summary.TopSensitivityLabels.Single().Name);
 

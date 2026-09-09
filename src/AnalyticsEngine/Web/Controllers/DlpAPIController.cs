@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Data.Entity.SqlServer;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Web.Http;
@@ -206,6 +207,9 @@ namespace Web.AnalyticsWeb.Controllers
                                           .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
                                           .Take(TopN).ToListAsync(), countUsers: false);
 
+                // "Which policies blocked THIS person", the same cross-tab as the agents table.
+                await AttachUserPolicyBreakdownAsync(events, summary.TopUsers);
+
                 // Grouped by date part in SQL so the trend is one aggregate query rather than pulling
                 // every matching row back to group in memory.
                 var trend = await events
@@ -264,6 +268,17 @@ namespace Web.AnalyticsWeb.Controllers
             public int Users { get; set; }
         }
 
+        /// <summary>One (subject, policy) pair with its counts, before it is attached to a ranked row.</summary>
+        private class PolicyBreakdownRow
+        {
+            /// <summary>The ranked row this belongs to, matched against <see cref="DlpImpactRow.Id"/>.</summary>
+            public string Key { get; set; }
+            public string PolicyId { get; set; }
+            public string Name { get; set; }
+            public int Blocked { get; set; }
+            public int Audited { get; set; }
+        }
+
         /// <summary>
         /// Fills in, for each agent already ranked, the policies that affected it.
         /// </summary>
@@ -303,19 +318,96 @@ namespace Web.AnalyticsWeb.Controllers
                 })
                 .ToListAsync();
 
-            var byAgent = breakdown.GroupBy(r => r.AgentId).ToDictionary(g => g.Key, g => g.ToList());
-
-            foreach (var agent in agents)
+            AttachPolicies(agents, breakdown.Select(r => new PolicyBreakdownRow
             {
-                if (agent.Id == null || !byAgent.TryGetValue(agent.Id, out var rows))
+                Key = r.AgentId,
+                PolicyId = r.PolicyId,
+                Name = r.Name,
+                Blocked = r.Blocked,
+                Audited = r.Audited,
+            }));
+        }
+
+        /// <summary>
+        /// Fills in, for each person already ranked, the policies that affected them.
+        /// </summary>
+        /// <remarks>
+        /// Same one-query-for-all shape as the agent breakdown. Users are keyed by their integer id
+        /// rather than a string, so the grouping is done on the id and only converted to the ranked
+        /// row's string form when matching - the ranked ids come from SQL's STR(), so comparing the
+        /// integers avoids depending on that formatting.
+        /// </remarks>
+        private static async Task AttachUserPolicyBreakdownAsync(
+            IQueryable<Common.Entities.Entities.AuditLog.CopilotDlpEvent> events,
+            List<DlpImpactRow> users)
+        {
+            var userIds = new List<int?>();
+            foreach (var user in users)
+            {
+                int parsed;
+                if (int.TryParse(user.Id, out parsed))
                 {
-                    // No policy detail for this agent: an empty list, not null, so the UI can tell
+                    userIds.Add(parsed);
+                }
+            }
+
+            if (userIds.Count == 0)
+            {
+                return;
+            }
+
+            var breakdown = await events
+                .Where(e => e.RelatedChat.UserId != null
+                            && e.DlpPolicyId != null
+                            && userIds.Contains(e.RelatedChat.UserId))
+                .GroupBy(e => new
+                {
+                    UserId = e.RelatedChat.UserId,
+                    PolicyId = e.Policy.PolicyId,
+                    e.Policy.Name,
+                })
+                .Select(g => new
+                {
+                    g.Key.UserId,
+                    g.Key.PolicyId,
+                    g.Key.Name,
+                    Blocked = g.Count(e => e.IsBlocked),
+                    Audited = g.Count(e => !e.IsBlocked),
+                })
+                .ToListAsync();
+
+            AttachPolicies(users, breakdown.Select(r => new PolicyBreakdownRow
+            {
+                Key = r.UserId.HasValue ? r.UserId.Value.ToString(CultureInfo.InvariantCulture) : null,
+                PolicyId = r.PolicyId,
+                Name = r.Name,
+                Blocked = r.Blocked,
+                Audited = r.Audited,
+            }));
+        }
+
+        /// <summary>
+        /// Hangs each ranked row's policies off it, ordered the same way as every other table.
+        /// </summary>
+        private static void AttachPolicies(List<DlpImpactRow> rows, IEnumerable<PolicyBreakdownRow> breakdown)
+        {
+            var byKey = breakdown
+                .Where(r => r.Key != null)
+                .GroupBy(r => r.Key)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            foreach (var row in rows)
+            {
+                List<PolicyBreakdownRow> matches;
+                if (row.Id == null || !byKey.TryGetValue(row.Id, out matches))
+                {
+                    // No policy detail for this row: an empty list, not null, so the UI can tell
                     // "expanded and there is nothing" apart from "this row has no breakdown".
-                    agent.Policies = new List<DlpImpactRow>();
+                    row.Policies = new List<DlpImpactRow>();
                     continue;
                 }
 
-                agent.Policies = rows
+                row.Policies = matches
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
                     .Select(r => new DlpImpactRow
                     {

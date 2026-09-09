@@ -43,7 +43,17 @@ const summary = (over: Partial<DlpSummary> = {}): DlpSummary => ({
     },
   ],
   topUsers: [
-    { id: '1', name: 'ada@contoso.com', blockedCount: 4, auditedCount: 0, usersAffected: null, totalCount: 4 },
+    {
+      id: '1',
+      name: 'ada@contoso.com',
+      blockedCount: 4,
+      auditedCount: 0,
+      usersAffected: null,
+      totalCount: 4,
+      policies: [
+        { id: 'pol-1', name: 'HR records policy', blockedCount: 3, auditedCount: 0, usersAffected: null, totalCount: 3 },
+      ],
+    },
   ],
   topPolicies: [
     { id: 'pol-1', name: 'Block Copilot on Confidential', blockedCount: 9, auditedCount: 2, usersAffected: 5, totalCount: 11 },
@@ -147,6 +157,23 @@ describe('DlpPage', () => {
     // Collapses again, so the control is a real toggle rather than one-way.
     fireEvent.click(expander!);
     expect(screen.queryByText('Payment card data')).not.toBeInTheDocument();
+  });
+
+  it('reveals which policies affected a given person when that person is selected', async () => {
+    renderWithProvider(<DlpPage />);
+
+    const person = await screen.findByText('ada@contoso.com');
+    expect(screen.queryByText('HR records policy')).not.toBeInTheDocument();
+
+    const expander = person.closest('button');
+    expect(expander).not.toBeNull();
+    fireEvent.click(expander!);
+
+    expect(await screen.findByText('Policies affecting ada@contoso.com')).toBeInTheDocument();
+    expect(screen.getByText('HR records policy')).toBeInTheDocument();
+
+    // Expanding a person must not expand the agent alongside it - each row owns its own state.
+    expect(screen.queryByText('Policies affecting Contoso HR Agent')).not.toBeInTheDocument();
   });
 
   it('does not offer an expander for an agent with no policy breakdown', async () => {
