@@ -72,6 +72,15 @@ namespace App.ControlPanel.Engine
                     "Fix the connectivity problem reported above and re-run the installer.");
             }
 
+            // Give the App Service's managed identity access to the database. Only needed when the database
+            // authenticates with Microsoft Entra ID - a SQL-authentication deployment already has its login
+            // in the connection string, and creating a redundant contained user there would be noise. Done
+            // BEFORE the schema upgrade so the site comes back up with working access. See issue #117.
+            if (sqlReachable && dbInfo.AuthMethod == SqlConnectionAuthMethod.EntraId)
+            {
+                await GrantAppServiceDatabaseAccess(webApp, dbInfo);
+            }
+
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
 
@@ -152,6 +161,50 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation("Skipping SharePoint web components (AITracker / SPFx) install because 'Update solution with latest release' is not selected.");
                 }
             }
+        }
+
+        /// <summary>
+        /// Grants the App Service's system-assigned managed identity access to the analytics database.
+        /// </summary>
+        /// <remarks>
+        /// Azure SQL has no ARM role that confers data-plane access, so "give the App Service its own
+        /// permissions" means creating a contained database user for its identity - which is why this is a
+        /// T-SQL step rather than another role assignment in <c>ResourceSecurityInstallJob</c>. Best-effort:
+        /// a failure is reported with the manual remedy but does not abort the install. See issue #117.
+        /// </remarks>
+        private async Task GrantAppServiceDatabaseAccess(WebSiteResource webApp, DatabasePaaSInfo dbInfo)
+        {
+            if (webApp == null) return;
+
+            // Re-read the site: when this run was the one that turned the system-assigned identity on, the
+            // cached ARM payload predates it and its PrincipalId would still be null.
+            WebSiteResource current;
+            try
+            {
+                current = await webApp.GetAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not re-read the App Service to find its managed identity: {ex.Message}");
+                current = webApp;
+            }
+
+            var principalId = current?.Data?.Identity?.PrincipalId;
+            if (principalId == null || principalId == Guid.Empty)
+            {
+                _logger.LogWarning(
+                    "The App Service has no system-assigned managed identity, so it cannot be granted database access. " +
+                    "The web application will not be able to connect to a database that has SQL authentication disabled. " +
+                    "Re-run the installer to create the identity.");
+                return;
+            }
+
+            var task = new SqlIdentityAccessTask(_logger);
+            await task.GrantDatabaseAccessAsync(
+                dbInfo.ConnectionString,
+                current.Data.Name,
+                principalId.Value,
+                SqlContainedUserScript.AppServiceRoles);
         }
 
         /// <summary>
