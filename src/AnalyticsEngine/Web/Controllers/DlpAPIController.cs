@@ -46,6 +46,23 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Rows returned per ranked table. Small - these are "top offenders" lists, not exports.</summary>
         private const int TopN = 20;
 
+        private readonly IAnalyticsDbContextFactory _contextFactory;
+
+        public DlpAPIController()
+            : this(DefaultAnalyticsDbContextFactory.Instance)
+        {
+        }
+
+        /// <summary>
+        /// Testable entry point. The queries below are EF LINQ, so a translation failure (an unsupported
+        /// expression, a bad navigation) only appears when they actually run - which is why the
+        /// integration test points this at a real, migrated database rather than trusting a compile.
+        /// </summary>
+        internal DlpAPIController(IAnalyticsDbContextFactory contextFactory)
+        {
+            _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
+        }
+
         // GET: api/Dlp/availability
         [HttpGet]
         [Route("availability")]
@@ -92,11 +109,20 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("summary")]
         public async Task<IHttpActionResult> Summary(int days = 28)
         {
+            return Ok(await BuildSummaryAsync(days));
+        }
+
+        /// <summary>
+        /// The query work behind <see cref="Summary"/>, separated so it can be executed against a real
+        /// database in tests without an ASP.NET request pipeline.
+        /// </summary>
+        internal async Task<DlpSummary> BuildSummaryAsync(int days)
+        {
             var windowDays = SnapWindow(days);
             var toUtc = DateTime.UtcNow;
             var fromUtc = toUtc.Date.AddDays(-windowDays);
 
-            using (var db = new AnalyticsEntitiesContext())
+            using (var db = _contextFactory.Create())
             {
                 var summary = new DlpSummary { FromUtc = fromUtc, ToUtc = toUtc };
 
@@ -220,7 +246,7 @@ namespace Web.AnalyticsWeb.Controllers
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
                     .Take(TopN).ToListAsync(), countUsers: false);
 
-                return Ok(summary);
+                return summary;
             }
         }
 
