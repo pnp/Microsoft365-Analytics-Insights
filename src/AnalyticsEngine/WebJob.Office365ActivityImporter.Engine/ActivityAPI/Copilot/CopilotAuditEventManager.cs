@@ -1,5 +1,6 @@
 using Common.Entities;
 using DataUtils;
+using DataUtils.Sql;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -544,7 +545,7 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 var sql = rr.ReadResourceString(
                     "WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.SQL.repair_denormalised_copilot_columns.sql");
 
-                using (var con = new SqlConnection(connectionString))
+                using (var con = AzureSqlTokenAuth.CreateConnection(connectionString))
                 {
                     await con.OpenAsync();
                     using (var cmd = new SqlCommand(sql, con) { CommandTimeout = repairTimeoutSecs })
