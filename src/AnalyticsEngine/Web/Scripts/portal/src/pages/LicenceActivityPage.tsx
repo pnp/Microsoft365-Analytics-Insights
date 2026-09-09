@@ -9,9 +9,12 @@ import {
   Card,
   Select,
   Button,
+  Tab,
+  TabList,
   Tooltip,
   MessageBar,
   MessageBarBody,
+  type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import { fetchAvailability, fetchOverview, downloadExport } from '../api/licenceActivityApi';
@@ -22,14 +25,16 @@ import type {
 } from '../types/licenceActivity';
 import Spinner from '../components/Spinner';
 import DateRangeControl from '../components/licenceActivity/DateRangeControl';
-import CoveragePanel from '../components/licenceActivity/CoveragePanel';
+import DataSourceSummary from '../components/licenceActivity/DataSourceSummary';
+import OverviewSummary from '../components/licenceActivity/OverviewSummary';
 import SkuAssignments from '../components/licenceActivity/SkuAssignments';
+import SelectedLicenceBar from '../components/licenceActivity/SelectedLicenceBar';
 import WorkloadDistributions from '../components/licenceActivity/WorkloadDistributions';
 import DemographicBreakdown from '../components/licenceActivity/DemographicBreakdown';
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
 import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErrorBar';
 import { presetRange } from '../components/licenceActivity/dateRange';
-import { formatCount, licenceName } from '../components/licenceActivity/format';
+import { formatCount } from '../components/licenceActivity/format';
 import {
   mergeDemographicOptions,
   EMPTY_CATALOGUE,
@@ -94,6 +99,14 @@ const useStyles = makeStyles({
     gap: '16px',
     marginTop: '16px',
   },
+  // A tab panel's own vertical rhythm. The panel <div> itself carries no `display` override so the
+  // `hidden` attribute can hide inactive panels (a `display: flex` on the panel would beat the UA
+  // `[hidden] { display: none }` rule and leak every panel onto the page at once).
+  panelInner: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
   sectionHead: {
     display: 'flex',
     alignItems: 'baseline',
@@ -112,6 +125,13 @@ const useStyles = makeStyles({
     padding: '32px',
   },
 });
+
+/**
+ * The report's top-level sections, split into tabs so the default view answers "what is my licence
+ * usage like?" without scrolling past the detail. The reporting window, demographic filters and the
+ * data-source summary stay above the tabs because they scope every one of them.
+ */
+type LaTab = 'overview' | 'byService' | 'byDemographic' | 'people';
 
 /**
  * Licence activity report (issues #436 / #437).
@@ -161,6 +181,11 @@ export default function LicenceActivityPage() {
 
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<unknown>(null);
+
+  // Which top-level tab is showing. Kept out of the overview scope key so it survives a date/filter
+  // change - an admin reading the People tab stays on it when they widen the window.
+  const [tab, setTab] = useState<LaTab>('overview');
+  const onTabSelect: SelectTabEventHandler = (_e, data) => setTab(data.value as LaTab);
 
   const overviewSeqRef = useRef(0);
 
@@ -433,7 +458,7 @@ export default function LicenceActivityPage() {
                   content={
                     overview && !overviewLoading
                       ? exportUsersId
-                        ? 'An Excel copy of the summary plus the exact people currently listed below. Built from the figures already on screen, so it matches what you can see.'
+                        ? 'An Excel copy of the summary plus the exact people currently listed in the People tab. Built from the figures already on screen, so it matches what you can see.'
                         : 'An Excel copy of the licence and service summary (totals only). Built from the figures already on screen.'
                       : 'Available once the report has loaded.'
                   }
@@ -478,10 +503,10 @@ export default function LicenceActivityPage() {
 
           {overview && (
             <div className={styles.stack}>
-              <CoveragePanel
+              <DataSourceSummary
+                coverage={overview.coverage}
                 generatedUtc={overview.generatedUtc}
                 expiresUtc={overview.expiresUtc}
-                coverage={overview.coverage}
               />
 
               {overview.messages.length > 0 && (
@@ -496,37 +521,87 @@ export default function LicenceActivityPage() {
                 </MessageBar>
               )}
 
-              <Text size={200} className={styles.muted}>
-                {formatCount(overview.distinctAssignedUsers)} people hold a licence in this selection, counting
-                each person once.
-                {overview.demographicsTruncated &&
-                  ' The department and country lists are capped, so they may not show every one.'}
-              </Text>
+              <TabList selectedValue={tab} onTabSelect={onTabSelect}>
+                <Tab id="la-tab-overview" value="overview" aria-controls="la-panel-overview">
+                  Overview
+                </Tab>
+                <Tab id="la-tab-byService" value="byService" aria-controls="la-panel-byService">
+                  By service
+                </Tab>
+                <Tab id="la-tab-byDemographic" value="byDemographic" aria-controls="la-panel-byDemographic">
+                  By department &amp; country
+                </Tab>
+                <Tab id="la-tab-people" value="people" aria-controls="la-panel-people">
+                  People
+                </Tab>
+              </TabList>
 
-              <SkuAssignments
-                licences={overview.licences}
-                selectedLicenceTypeId={selectedLicenceTypeId}
-                onSelect={setSelectedLicenceTypeId}
-              />
+              {/* Overview: the headline figures plus the assignments table, which doubles as the
+                  licence picker for the By service and People tabs. Panels stay mounted (toggled with
+                  `hidden`) so the drill-down keeps its page, workload and search when tabs change. */}
+              <div
+                role="tabpanel"
+                id="la-panel-overview"
+                aria-labelledby="la-tab-overview"
+                hidden={tab !== 'overview'}
+              >
+                <div className={styles.panelInner}>
+                  <OverviewSummary
+                    distinctAssignedUsers={overview.distinctAssignedUsers}
+                    licenceCount={overview.licences.length}
+                    selectedLicence={selectedLicence}
+                  />
+                  <SkuAssignments
+                    licences={overview.licences}
+                    selectedLicenceTypeId={selectedLicenceTypeId}
+                    onSelect={setSelectedLicenceTypeId}
+                  />
+                </div>
+              </div>
 
-              {selectedLicence && (
-                <div>
+              {/* By service: the selected licence's five workload distributions. */}
+              <div
+                role="tabpanel"
+                id="la-panel-byService"
+                aria-labelledby="la-tab-byService"
+                hidden={tab !== 'byService'}
+              >
+                <div className={styles.panelInner}>
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
                       Activity by service
                     </Text>
                     <Text size={200} className={styles.muted}>
-                      {licenceName(selectedLicence)} &middot; five services, each measured on its own
+                      Each Microsoft 365 service on its own, never blended into a single score
                     </Text>
                   </div>
-                  <div style={{ marginTop: '12px' }}>
-                    <WorkloadDistributions workloads={selectedLicence.workloads} />
-                  </div>
+                  {selectedLicence ? (
+                    <>
+                      <SelectedLicenceBar
+                        licences={overview.licences}
+                        selectedLicenceTypeId={selectedLicenceTypeId}
+                        onSelect={setSelectedLicenceTypeId}
+                      />
+                      <WorkloadDistributions workloads={selectedLicence.workloads} />
+                    </>
+                  ) : (
+                    <Card>
+                      <Text className={styles.muted}>
+                        Choose a licence on the Overview tab to see how much each service is used.
+                      </Text>
+                    </Card>
+                  )}
                 </div>
-              )}
+              </div>
 
-              {(overview.departments.length > 0 || overview.countries.length > 0) && (
-                <div>
+              {/* By department & country: the two aggregate demographic breakdowns. */}
+              <div
+                role="tabpanel"
+                id="la-panel-byDemographic"
+                aria-labelledby="la-tab-byDemographic"
+                hidden={tab !== 'byDemographic'}
+              >
+                <div className={styles.panelInner}>
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
                       Activity by department and country
@@ -535,48 +610,74 @@ export default function LicenceActivityPage() {
                       Where the licences sit in the organisation, and how much they are being used
                     </Text>
                   </div>
-                  <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <DemographicBreakdown
-                      title="By department"
-                      segmentLabel="Department"
-                      rows={overview.departments}
-                      truncated={overview.demographicsTruncated}
-                    />
-                    <DemographicBreakdown
-                      title="By country"
-                      segmentLabel="Country"
-                      rows={overview.countries}
-                      truncated={overview.demographicsTruncated}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <div className={styles.sectionHead}>
-                  <Text weight="semibold" size={500}>
-                    People holding this licence
-                  </Text>
-                  <Text size={200} className={styles.muted}>
-                    Who is and isn&apos;t using a licence
-                  </Text>
-                </div>
-                <div style={{ marginTop: '12px' }}>
-                  {selectedLicence ? (
-                    <UsersDrillDown
-                      key={selectedLicence.licenceTypeId}
-                      overviewId={overview.snapshotId}
-                      overviewScope={overviewKey ?? ''}
-                      licence={selectedLicence}
-                      coverage={overview.coverage}
-                      onUsersSnapshot={handleUsersSnapshot}
-                      onRefreshOverview={refreshSnapshots}
-                      refreshToken={usersRefreshToken}
-                    />
+                  {overview.demographicsTruncated && (
+                    <Text size={200} className={styles.muted}>
+                      The department and country lists are capped, so they may not show every one.
+                    </Text>
+                  )}
+                  {overview.departments.length > 0 || overview.countries.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <DemographicBreakdown
+                        title="By department"
+                        segmentLabel="Department"
+                        rows={overview.departments}
+                        truncated={overview.demographicsTruncated}
+                      />
+                      <DemographicBreakdown
+                        title="By country"
+                        segmentLabel="Country"
+                        rows={overview.countries}
+                        truncated={overview.demographicsTruncated}
+                      />
+                    </div>
                   ) : (
                     <Card>
                       <Text className={styles.muted}>
-                        Select a licence in the assignments table above to see who is most and least active, or to
+                        No department or country breakdown is available for this selection.
+                      </Text>
+                    </Card>
+                  )}
+                </div>
+              </div>
+
+              {/* People: the per-licence drill-down (most/least active and the browse table). */}
+              <div
+                role="tabpanel"
+                id="la-panel-people"
+                aria-labelledby="la-tab-people"
+                hidden={tab !== 'people'}
+              >
+                <div className={styles.panelInner}>
+                  <div className={styles.sectionHead}>
+                    <Text weight="semibold" size={500}>
+                      People holding this licence
+                    </Text>
+                    <Text size={200} className={styles.muted}>
+                      Who is and isn&apos;t using a licence
+                    </Text>
+                  </div>
+                  {selectedLicence ? (
+                    <>
+                      <SelectedLicenceBar
+                        licences={overview.licences}
+                        selectedLicenceTypeId={selectedLicenceTypeId}
+                        onSelect={setSelectedLicenceTypeId}
+                      />
+                      <UsersDrillDown
+                        key={selectedLicence.licenceTypeId}
+                        overviewId={overview.snapshotId}
+                        overviewScope={overviewKey ?? ''}
+                        licence={selectedLicence}
+                        coverage={overview.coverage}
+                        onUsersSnapshot={handleUsersSnapshot}
+                        onRefreshOverview={refreshSnapshots}
+                        refreshToken={usersRefreshToken}
+                      />
+                    </>
+                  ) : (
+                    <Card>
+                      <Text className={styles.muted}>
+                        Select a licence on the Overview tab to see who is most and least active, or to
                         browse everyone who holds it.
                       </Text>
                     </Card>
