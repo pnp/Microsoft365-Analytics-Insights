@@ -37,8 +37,9 @@ namespace App.ControlPanel.Engine
                 {
                     log?.Invoke(
                         "WARNING: the connection string has no SQL login, so Microsoft Entra ID authentication is required, " +
-                        "but no credential was supplied. This usually means the installer that launched this upgrade is older " +
-                        "than this build. Re-run the upgrade with a matching installer.");
+                        "but no credential was supplied. When the upgrade was launched by the installer, this means the " +
+                        "downloaded 'latest stable' build predates Microsoft Entra ID support. When the connection string was " +
+                        "entered by hand, use one that includes a SQL login, or run the upgrade from the installer.");
                 }
             }
 

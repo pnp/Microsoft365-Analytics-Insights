@@ -8,6 +8,7 @@ using Azure.ResourceManager.Network;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using Azure.ResourceManager.Storage;
+using Azure;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure;
 using CloudInstallEngine.Azure.InstallTasks;
@@ -38,6 +39,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly SqlServerFirewallConfigTask _sqlServerFirewallConfigTask;
         private readonly SqlDatabaseTask _sqlDatabaseTask;
         private TaskConfig _sqlServerConfig;
+        private TaskConfig _automationAccountConfig;
         private SqlAuthDecision _sqlAuthDecision;
         private readonly KeyVaultTask _keyVaultTask;
 
@@ -290,7 +292,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_SQL_DB, config.SQLServerDatabaseName)
                     .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_SQL_USERNAME, config.SQLServerAdminUsername)
                     .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_SQL_PASSWORD, config.SQLServerAdminPassword)
+                    .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_USE_ENTRA_AUTH,
+                        config.SqlAuthMode == SqlServerAuthMode.EntraId ? "true" : "false")
                     ;
+                _automationAccountConfig = automationAccountConfig;
 
                 _automationAccountTask = new AutomationAccountTask(automationAccountConfig, logger, Location, tagDic, allowPublicAccess);
                 this.AddTask(_automationAccountTask);
@@ -521,6 +526,62 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _sqlAuthDecision = SqlServerAuthDetection.Decide(state, haveSqlCredentials, _config.SqlAuthMode);
             Logger.LogInformation($"SQL authentication: {_sqlAuthDecision.Reason}");
+
+            await RepairAutomationSqlCredentialIfNeeded();
+        }
+
+        /// <summary>
+        /// Creates the Automation account's SQL credential when the install turned out to need one after all.
+        /// </summary>
+        /// <remarks>
+        /// The Automation account is provisioned before the SQL server's real capabilities are known, so it
+        /// is told what the operator asked for. When Entra ID was selected but detection fell back to a SQL
+        /// login - an install pointed at an existing SQL-authentication server, which is never reconfigured -
+        /// the credential the runbooks need was skipped. Put it back rather than leaving Graph usage-report
+        /// automation silently broken. See issue #117.
+        /// </remarks>
+        async Task RepairAutomationSqlCredentialIfNeeded()
+        {
+            if (_automationAccountTask == null || _automationAccountConfig == null) return;
+            if (_sqlAuthDecision == null || _sqlAuthDecision.UsesEntraId) return;
+            if (_config.SqlAuthMode != SqlServerAuthMode.EntraId) return;   // credential was already created
+
+            AutomationAccountResource automationAccount;
+            try
+            {
+                automationAccount = CreatedAutomationAccount;
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            if (automationAccount == null) return;
+
+            if (string.IsNullOrWhiteSpace(_config.SQLServerAdminUsername) || string.IsNullOrWhiteSpace(_config.SQLServerAdminPassword))
+            {
+                Logger.LogWarning(
+                    "This install fell back to SQL Server authentication, but no SQL administrator username/password is " +
+                    $"configured, so the Automation account's '{AutomationAccountTask.CRED_SQL_NAME}' credential could not be " +
+                    "created. The Graph usage-report maintenance runbooks will not be able to connect to the database.");
+                return;
+            }
+
+            try
+            {
+                Logger.LogInformation(
+                    $"Creating the Automation account's '{AutomationAccountTask.CRED_SQL_NAME}' credential: this install fell back " +
+                    "to SQL Server authentication, so the runbooks need a SQL login after all.");
+
+                var credential = new Azure.ResourceManager.Automation.Models.AutomationCredentialCreateOrUpdateContent(
+                    AutomationAccountTask.CRED_SQL_NAME, _config.SQLServerAdminUsername, _config.SQLServerAdminPassword);
+
+                await automationAccount.GetAutomationCredentials()
+                    .CreateOrUpdateAsync(WaitUntil.Completed, AutomationAccountTask.CRED_SQL_NAME, credential);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Could not create the Automation account's SQL credential: {ex.Message}");
+            }
         }
 
         private void AddPrivateEndpointTask(string peName, string targetResourceId, string groupId, string subnetId, ILogger logger, Dictionary<string, string> tags)
