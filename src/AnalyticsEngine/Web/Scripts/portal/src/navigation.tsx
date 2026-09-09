@@ -5,6 +5,7 @@ import {
   DataTrending20Regular,
   DocumentBulletList20Regular,
   Home20Regular,
+  Money20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
   Settings20Regular,
@@ -18,6 +19,7 @@ import { lazyWithReload } from './lazyWithReload';
 const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOverviewPage'));
 const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
+const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
@@ -88,6 +90,13 @@ export const ROUTES: PortalRoute[] = [
     label: 'Copilot Adoption',
     icon: <Sparkle20Regular />,
     element: <CopilotAdoptionPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/agent-costs',
+    label: 'Agent costs',
+    icon: <Money20Regular />,
+    element: <AgentCostsPage />,
   },
 
   {

@@ -23,7 +23,10 @@ namespace Common.Entities.Installer
         //          interaction history import).
         //          2.1.0 -> 2.2.0 added SharePointConfig.AuthClientId / AuthTenantId (optional Entra ID app
         //          registration for the interactive SharePoint sign-in, replacing the old cookie web-login).
-        const string CONFIG_VERSION = "2.2.0";
+        //          2.2.0 -> 2.3.0 added ImportTaskSettings.CopilotStudioCredits and
+        //          ImportTaskSettings.AzureCostManagement (opt-in agent cost imports: billed Copilot Studio
+        //          Copilot Credits, and daily Azure spend from Microsoft Cost Management).
+        const string CONFIG_VERSION = "2.3.0";
 
         public BaseSolutionInstallConfig()
         {

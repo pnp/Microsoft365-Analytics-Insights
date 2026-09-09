@@ -220,6 +220,34 @@ namespace Common.Entities.Config
                 && interactionBackOffHours >= 0
                 ? interactionBackOffHours
                 : DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
+
+            // ---- Agent cost imports (optional) --------------------------------------------------------
+            this.CopilotStudioCreditsIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotStudioCreditsIntervalHours"), out var creditsIntervalHours)
+                && creditsIntervalHours >= 0
+                ? creditsIntervalHours
+                : DefaultCopilotStudioCreditsIntervalHours;
+
+            this.CopilotStudioCreditsTrailingWindowDays = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotStudioCreditsTrailingWindowDays"), out var creditsWindowDays)
+                && creditsWindowDays > 0
+                ? creditsWindowDays
+                : DefaultCopilotStudioCreditsTrailingWindowDays;
+
+            this.AzureCostImport = new AzureCostImportSettings
+            {
+                Scopes = AzureCostImportSettings.ParseList(ConfigurationManager.AppSettings.Get("AzureCostScopes")),
+                MeterFilterValues = AzureCostImportSettings.ParseList(ConfigurationManager.AppSettings.Get("AzureCostMeterFilterValues")),
+                MeterFilterDimension = !string.IsNullOrWhiteSpace(ConfigurationManager.AppSettings.Get("AzureCostMeterFilterDimension"))
+                    ? ConfigurationManager.AppSettings.Get("AzureCostMeterFilterDimension").Trim()
+                    : AzureCostImportSettings.DefaultMeterFilterDimension,
+                TrailingWindowDays = int.TryParse(ConfigurationManager.AppSettings.Get("AzureCostTrailingWindowDays"), out var azureCostWindowDays)
+                    && azureCostWindowDays > 0
+                    ? azureCostWindowDays
+                    : AzureCostImportSettings.DefaultTrailingWindowDays,
+                IntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("AzureCostIntervalHours"), out var azureCostIntervalHours)
+                    && azureCostIntervalHours >= 0
+                    ? azureCostIntervalHours
+                    : AzureCostImportSettings.DefaultIntervalHours,
+            };
         }
 
         /// <summary>
@@ -529,6 +557,44 @@ namespace Common.Entities.Config
         /// <c>CopilotInteractionHistoryEmptyUserBackOffHours</c>.
         /// </summary>
         public int CopilotInteractionHistoryEmptyUserBackOffHours { get; set; } = DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
+
+        #endregion
+
+        #region Agent costs
+
+        /// <summary>Default cadence for the Copilot Studio credit import: once a day.</summary>
+        /// <remarks>
+        /// Microsoft recalculates consumption as usage days settle, and the entitlement response carries a
+        /// "last updated on" date that normally lags by a day or more. Polling more often re-reads the same
+        /// numbers.
+        /// </remarks>
+        public const int DefaultCopilotStudioCreditsIntervalHours = 24;
+
+        /// <summary>
+        /// Default trailing window re-read on every Copilot Studio credit run. Seven days balances catching
+        /// restated usage days against the cost of re-reading them; the API's own history is limited (about
+        /// 180 days in community testing, which Microsoft does not document).
+        /// </summary>
+        public const int DefaultCopilotStudioCreditsTrailingWindowDays = 7;
+
+        /// <summary>
+        /// Minimum hours between Copilot Studio credit imports. Override with the
+        /// <c>CopilotStudioCreditsIntervalHours</c> AppSetting; 0 disables the gate.
+        /// </summary>
+        public int CopilotStudioCreditsIntervalHours { get; set; } = DefaultCopilotStudioCreditsIntervalHours;
+
+        /// <summary>
+        /// How many days back the Copilot Studio credit import re-reads on every run, so restated usage days
+        /// are corrected rather than frozen at their first value. Override with
+        /// <c>CopilotStudioCreditsTrailingWindowDays</c>.
+        /// </summary>
+        public int CopilotStudioCreditsTrailingWindowDays { get; set; } = DefaultCopilotStudioCreditsTrailingWindowDays;
+
+        /// <summary>
+        /// Azure Cost Management import settings. Never null - an unconfigured instance simply reports
+        /// <see cref="AzureCostImportSettings.IsConfigured"/> false, and the import declines to run.
+        /// </summary>
+        public AzureCostImportSettings AzureCostImport { get; set; } = new AzureCostImportSettings();
 
         #endregion
     }
