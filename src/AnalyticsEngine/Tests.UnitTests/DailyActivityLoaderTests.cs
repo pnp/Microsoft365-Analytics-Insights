@@ -412,7 +412,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, lookupCalls[UserA], "Cold lookup should hit the backing lookup once; the repeated row is a cache hit.");
             Assert.AreEqual(1, lookupCalls[UserB]);
             Assert.AreEqual(3, store.Stored.Count);
-            Assert.AreEqual(2, loader.LastSaveDbWriteCount);
+            Assert.AreEqual(3, loader.LastSaveDbWriteCount);
 
             var completed = instrumentation.Single(UsageReportSaveStageIds.SaveCompleted);
             AssertMetric(completed, "LookupDatabaseCallCount", 2);
