@@ -705,6 +705,43 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Reading the result of a task that was never registered - because the feature that creates it is
+        /// disabled - must fail with a diagnosable InstallException, not ArgumentNullException. Regression
+        /// test for issue #490: CreatedAutomationAccount read _automationAccountTask unconditionally, so
+        /// GetTaskResult hit Dictionary.ContainsKey(null) and the install died with a bare
+        /// "Value cannot be null. Parameter name: key" that named neither the task nor the setting.
+        /// </summary>
+        [TestMethod]
+        public async Task DisabledOptionalTaskResultIsNullAndNeverArgumentNullException()
+        {
+            var job = new FakeOptionalTaskJob(_logger, featureEnabled: false);
+            await job.Install();
+
+            var ex = Assert.ThrowsException<InstallException>(() => { var ignored = job.OptionalResultUnguarded; },
+                "An unregistered task must raise InstallException, not the ArgumentNullException from Dictionary.ContainsKey(null).");
+            StringAssert.Contains(ex.Message, nameof(FakeCloudResourceType1),
+                "The error must name the resource type that could not be resolved.");
+
+            Assert.IsNull(job.OptionalResultNullSafe,
+                "An optional resource that was never provisioned must read as null so callers can skip it.");
+        }
+
+        /// <summary>
+        /// The other direction: when the feature IS enabled the null-safe getter must still return the real
+        /// result, so the fix cannot silently disable an optional resource that was actually provisioned.
+        /// </summary>
+        [TestMethod]
+        public async Task EnabledOptionalTaskStillReturnsItsResult()
+        {
+            var job = new FakeOptionalTaskJob(_logger, featureEnabled: true);
+            await job.Install();
+
+            Assert.IsNotNull(job.OptionalResultNullSafe, "An optional resource that WAS provisioned must not read as null.");
+            Assert.AreSame(job.OptionalResultUnguarded, job.OptionalResultNullSafe,
+                "The null-safe getter must return the same result as reading the task result directly.");
+        }
+
+        /// <summary>
         /// Needs an account with owner rights to the sub.
         /// The sub should have all the solution pre-reqs applied (resource providers, etc)
         /// </summary>
