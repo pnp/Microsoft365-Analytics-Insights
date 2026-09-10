@@ -181,20 +181,19 @@ BEGIN
       AND OBJECT_ID(N'dbo.event_meta_sharepoint') NOT IN (SELECT object_id FROM @guarded);
 
     BEGIN TRY
-        -- Lock resources name a partition (hobt_id) for PAGE/KEY/RID/HOBT locks and an object_id for
-        -- OBJECT locks, so both have to be mapped back to the table before they can be compared.
+        -- OBJECT-level locks only, deliberately. Any write to a table acquires an intent lock (IX/IU/SIX)
+        -- on the OBJECT itself, whatever it then locks at page or row level, so this is sufficient to
+        -- detect a writer - and it avoids mapping lock resources back to a table through hobt_id, which
+        -- differs by lock resource type and is easy to get subtly wrong. Getting it wrong here is not a
+        -- cosmetic bug: if the check silently finds nothing, the migration proceeds and then blocks
+        -- forever on the writer's locks, because migrations run with CommandTimeout = 0.
         SELECT @activeWriters = COUNT_BIG(DISTINCT l.request_session_id)
         FROM sys.dm_tran_locks AS l
-        LEFT JOIN sys.partitions AS p
-               ON l.resource_type IN (N'PAGE', N'KEY', N'RID', N'HOBT')
-              AND p.hobt_id = l.resource_associated_entity_id
         WHERE l.resource_database_id = DB_ID()
           AND l.request_session_id <> @@SPID
+          AND l.resource_type = N'OBJECT'
           AND l.request_mode IN (N'X', N'IX', N'U', N'IU', N'SIX')
-          AND ISNULL(p.object_id,
-                     CASE WHEN l.resource_type = N'OBJECT'
-                          THEN CAST(l.resource_associated_entity_id AS int) END)
-              IN (SELECT object_id FROM @guarded);
+          AND l.resource_associated_entity_id IN (SELECT object_id FROM @guarded);
     END TRY
     BEGIN CATCH
         SET @msg = @migration + N': WARNING - could not check for concurrent writers ('

@@ -421,7 +421,12 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                         SqlException caught = null;
                         try
                         {
-                            await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                            // LOCK_TIMEOUT matters more than it looks. If the gate ever fails to fire,
+                            // the migration proceeds and tries to DROP/CREATE the index on dbo.urls while
+                            // this blocker holds locks - and migrations run with CommandTimeout = 0, so it
+                            // would wait forever and hang the whole CI job rather than failing. With a
+                            // timeout the test fails in seconds and says why.
+                            await ExecAsync(db, "SET LOCK_TIMEOUT 15000;\r\n" + UniqueUrlsFullUrlIndex.Up_Sql);
                         }
                         catch (SqlException ex)
                         {
@@ -430,7 +435,8 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
 
                         Assert.IsNotNull(caught, "The migration must refuse to run while another session holds write locks.");
                         StringAssert.Contains(caught.Message, "ABORTED",
-                            "The abort must say so plainly enough for an admin to act on it.");
+                            "The abort must come from the concurrency gate. A lock-timeout error here instead means the "
+                            + "gate did NOT detect the writer and the migration went ahead and blocked on it.");
 
                         tx.Rollback();
                     }
