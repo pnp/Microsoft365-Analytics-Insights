@@ -28,7 +28,10 @@ namespace Common.Entities.Installer
         //          and back-compatible: SQLServerAdminUsername / SQLServerAdminPasswordHash are retained
         //          (deprecated) and an existing config with neither new field keeps using SQL auth exactly
         //          as before. See issue #117.
-        const string CONFIG_VERSION = "2.3.0";
+        //          2.3.0 -> 2.4.0 added ImportTaskSettings.CopilotStudioCredits and
+        //          ImportTaskSettings.AzureCostManagement (opt-in agent cost imports: billed Copilot Studio
+        //          Copilot Credits, and daily Azure spend from Microsoft Cost Management).
+        const string CONFIG_VERSION = "2.4.0";
 
         public BaseSolutionInstallConfig()
         {

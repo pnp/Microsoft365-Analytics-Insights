@@ -175,6 +175,12 @@
     <Compile Include="Entities\AuditLog\EventOperation.cs" />
     <Compile Include="Entities\AuditLog\SPEventType.cs" />
     <Compile Include="Entities\AuditLog\PowerPlatformEvents.cs" />
+    <Compile Include="Entities\AgentCosts\AgentCostClasses.cs" />
+    <Compile Include="Entities\AgentCosts\CopilotStudioHarnessClassifier.cs" />
+    <Compile Include="Config\AzureCostImportSettings.cs" />
+    <Compile Include="AgentCosts\AgentCostReportModels.cs" />
+    <Compile Include="AgentCosts\IAgentCostReportStore.cs" />
+    <Compile Include="AgentCosts\SqlAgentCostReportStore.cs" />
     <Compile Include="Entities\WebTraffic\Hit.cs" />
     <Compile Include="Entities\KeyWord.cs" />
     <Compile Include="Entities\Language.cs" />
@@ -402,6 +408,14 @@
     <Compile Include="Migrations\202608310747353_DenormaliseCopilotChatUserAndTime.Designer.cs">
       <DependentUpon>202608310747353_DenormaliseCopilotChatUserAndTime.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609090647151_AgentCostUserCredits.cs" />
+    <Compile Include="Migrations\202609090647151_AgentCostUserCredits.Designer.cs">
+      <DependentUpon>202609090647151_AgentCostUserCredits.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609090519337_AgentCostTables.cs" />
+    <Compile Include="Migrations\202609090519337_AgentCostTables.Designer.cs">
+      <DependentUpon>202609090519337_AgentCostTables.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.cs" />
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
@@ -605,6 +619,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608310747353_DenormaliseCopilotChatUserAndTime.resx">
       <DependentUpon>202608310747353_DenormaliseCopilotChatUserAndTime.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609090647151_AgentCostUserCredits.resx">
+      <DependentUpon>202609090647151_AgentCostUserCredits.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609090519337_AgentCostTables.resx">
+      <DependentUpon>202609090519337_AgentCostTables.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.resx">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
