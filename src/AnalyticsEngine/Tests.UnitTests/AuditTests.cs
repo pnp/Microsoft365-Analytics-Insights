@@ -47,7 +47,10 @@ namespace Tests.UnitTests
                 CommonAuditEvent newEvent = new CommonAuditEvent();
                 newEvent.Id = Guid.NewGuid();
 
-                newEvent.Operation = new EventOperation { Name = "test op " + DateTime.Now.Ticks };
+                // Guid, not DateTime.Now.Ticks: Windows only advances DateTime.Now every ~15.6ms, and
+                // AddExchangeEvent and AddGeneralEvent both run in a few ms, so ticks can produce the
+                // SAME name twice and collide on the unique IX_event_operations.
+                newEvent.Operation = new EventOperation { Name = "test op " + Guid.NewGuid().ToString("N") };
                 newEvent.User = await GetTestingUser(userCache);
                 newEvent.TimeStamp = DateTime.Now;
 
@@ -78,7 +81,7 @@ namespace Tests.UnitTests
                 CommonAuditEvent newEvent = new CommonAuditEvent();
                 newEvent.Id = Guid.NewGuid();
 
-                newEvent.Operation = new EventOperation { Name = "test op " + DateTime.Now.Ticks };
+                newEvent.Operation = new EventOperation { Name = "test op " + Guid.NewGuid().ToString("N") };
                 newEvent.User = await GetTestingUser(userCache);
                 newEvent.TimeStamp = DateTime.Now;
 
