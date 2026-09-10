@@ -2,6 +2,7 @@
 using Azure.Core;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
+using CloudInstallEngine.Azure;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
@@ -51,6 +52,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 await base.EnsureTagsOnExisting(plan.Data.Tags, plan.GetTagResource());     // Add configured tags
 
                 _logger.LogInformation($"Using existing App Service plan '{_config.ResourceName}'.");
+                if (!AppServicePlanCapabilities.SupportsAlwaysOn(plan.Data.Sku))
+                {
+                    _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(plan.Data.Name, plan.Data.Sku));
+                }
             }
 
             return plan;

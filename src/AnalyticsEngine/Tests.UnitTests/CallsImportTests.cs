@@ -105,23 +105,133 @@ namespace Tests.UnitTests
         /// reported and re-thrown - but without wrongly telling the admin to grant a permission they
         /// have already granted.
         /// </summary>
+        /// <remarks>
+        /// The example here used to be "Subscription validation request failed." That message is now
+        /// classified and diagnosed specifically (issue #273), so it is no longer an example of the
+        /// generic path. Using a genuinely unrelated Graph failure keeps this test honest.
+        /// </remarks>
         [TestMethod]
         public async Task CreateOrUpdateWebhook_WhenCreateFailsForAnotherReason_ReportsItWithoutBlamingPermissions()
         {
             var logger = new CapturingLogger();
             var subscriptions = new FakeCallRecordSubscriptionManager()
-                .FailingCreateWith(GraphError(400, "Subscription validation request failed."));
+                .FailingCreateWith(GraphError(429, "Too many requests. Please retry later."));
 
             var webhook = new CallWebhook(subscriptions, logger, new FixedClock(Now));
 
             await Assert.ThrowsExceptionAsync<ODataError>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, "the-client-state"));
 
             var critical = logger.Entries.Where(e => e.Level == LogLevel.Critical).Single();
-            StringAssert.Contains(critical.Message, "400 BadRequest");
-            StringAssert.Contains(critical.Message, "Subscription validation request failed.");
+            StringAssert.Contains(critical.Message, "Too many requests. Please retry later.");
             Assert.IsFalse(critical.Message.Contains("CallRecords.Read.All"),
                 "Only a 403 should point the admin at the Graph permission; saying so for every failure sends them down the wrong path.");
+            Assert.IsFalse(critical.Message.Contains("called BACK"),
+                "An unrelated Graph failure must not be diagnosed as a validation-callback problem.");
         }
+
+        #region Validation-callback failure diagnosis (issue #273)
+
+        /// <summary>
+        /// The failure actually observed in production: Graph accepts the request, calls back to our
+        /// notification endpoint to validate it, and something in front of that endpoint refuses the
+        /// call. Graph reports this as a 400 whose message contains the word "Forbidden" - which is what
+        /// OUR endpoint returned to Graph, not the tenant refusing a Graph permission.
+        ///
+        /// Without the diagnosis this produced a generic "couldn't create subscription" critical with no
+        /// next step, and the word "Forbidden" sent admins to re-check the app registration's Graph
+        /// permissions, which is the wrong place entirely.
+        /// </summary>
+        [TestMethod]
+        public async Task CreateOrUpdateWebhook_WhenGraphsValidationCallbackIsRefused_ExplainsItIsOurEndpointNotAPermission()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager()
+                .FailingCreateWith(GraphError(400,
+                    "Subscription validation request failed. HTTP status code is 'Forbidden'. " +
+                    "Notification endpoint must respond with 200 OK to validation request."));
+
+            var webhook = new CallWebhook(subscriptions, logger, new FixedClock(Now));
+
+            await Assert.ThrowsExceptionAsync<ODataError>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, "the-client-state"));
+
+            var critical = logger.Entries.Where(e => e.Level == LogLevel.Critical).Single();
+
+            StringAssert.Contains(critical.Message, "NOT a Graph permission problem",
+                "The whole point is to stop admins re-checking permissions because the word 'Forbidden' appears.");
+            Assert.IsFalse(critical.Message.Contains("CallRecords.Read.All"),
+                "Naming the permission here is exactly the wrong turn this diagnosis exists to prevent.");
+            StringAssert.Contains(critical.Message, WebhookUrl.ToString(),
+                "The admin needs to see which URL Graph tried to call back.");
+            StringAssert.Contains(critical.Message, "ANONYMOUSLY",
+                "An auth layer in front of the endpoint is one of the two most likely causes.");
+            StringAssert.Contains(critical.Message, "access restrictions",
+                "An IP allow-list / private endpoint is the other most likely cause.");
+            StringAssert.Contains(critical.Message, "'Forbidden'",
+                "The status our endpoint gave Graph is the most useful single detail; it must survive into the message.");
+            StringAssert.Contains(critical.Message, "Until this is fixed, NO Teams call records will be imported.",
+                "The impact line must be kept - silent data loss is the reason this is CRITICAL.");
+        }
+
+        /// <summary>
+        /// The other observed variant. A timeout points at cold start, not at a network block, so it
+        /// must NOT tell the admin to go looking at IP restrictions and auth layers.
+        /// </summary>
+        [TestMethod]
+        public async Task CreateOrUpdateWebhook_WhenGraphsValidationCallbackTimesOut_PointsAtColdStartNotAtNetworkBlocks()
+        {
+            var logger = new CapturingLogger();
+            var subscriptions = new FakeCallRecordSubscriptionManager()
+                .WithExistingSubscription("existing-sub-id", Now.AddHours(6))
+                .FailingRenewWith(GraphError(400, "Subscription validation request timed out."));
+
+            var webhook = new CallWebhook(subscriptions, logger, new FixedClock(Now));
+
+            await Assert.ThrowsExceptionAsync<ODataError>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, "the-client-state"));
+
+            var critical = logger.Entries.Where(e => e.Level == LogLevel.Critical).Single();
+
+            StringAssert.Contains(critical.Message, "Always On",
+                "Cold start is the usual cause of the timeout variant, and Always On is the fix.");
+            StringAssert.Contains(critical.Message, "renew subscription 'existing-sub-id'",
+                "The message must still say which operation failed, and on which subscription.");
+            Assert.IsFalse(critical.Message.Contains("access restrictions"),
+                "A timeout is not an IP-restriction symptom; sending the admin there wastes the diagnosis.");
+            Assert.IsFalse(critical.Message.Contains("CallRecords.Read.All"));
+        }
+
+        /// <summary>
+        /// The classifier is a pure rule, so pin its edges directly: both Graph variants, the status
+        /// extraction, and - most importantly - that it does NOT fire on unrelated messages. A
+        /// false positive would replace a correct permission diagnosis with a wrong network one.
+        /// </summary>
+        [TestMethod]
+        public void ClassifyValidationCallbackFailure_RecognisesGraphsVariantsAndNothingElse()
+        {
+            var refused = CallSubscriptionRules.ClassifyValidationCallbackFailure(
+                "Subscription validation request failed. HTTP status code is 'Forbidden'. " +
+                "Notification endpoint must respond with 200 OK to validation request.");
+            Assert.IsTrue(refused.IsValidationCallbackFailure);
+            Assert.IsFalse(refused.TimedOut);
+            Assert.AreEqual("Forbidden", refused.EndpointStatus);
+
+            var timedOut = CallSubscriptionRules.ClassifyValidationCallbackFailure("Subscription validation request timed out.");
+            Assert.IsTrue(timedOut.IsValidationCallbackFailure);
+            Assert.IsTrue(timedOut.TimedOut);
+            Assert.IsNull(timedOut.EndpointStatus, "There is no endpoint status to report when nothing responded.");
+
+            var noStatusNamed = CallSubscriptionRules.ClassifyValidationCallbackFailure(
+                "Subscription validation request failed. Notification endpoint must respond with 200 OK to validation request.");
+            Assert.IsTrue(noStatusNamed.IsValidationCallbackFailure);
+            Assert.IsNull(noStatusNamed.EndpointStatus, "Graph does not always name a status; the diagnosis must cope.");
+
+            Assert.IsFalse(CallSubscriptionRules.ClassifyValidationCallbackFailure(
+                "Insufficient privileges to complete the operation.").IsValidationCallbackFailure,
+                "A real permission failure must keep its own, different diagnosis.");
+            Assert.IsFalse(CallSubscriptionRules.ClassifyValidationCallbackFailure(null).IsValidationCallbackFailure);
+            Assert.IsFalse(CallSubscriptionRules.ClassifyValidationCallbackFailure(string.Empty).IsValidationCallbackFailure);
+        }
+
+        #endregion
 
         /// <summary>
         /// A tenant can hold call-records subscriptions belonging to other applications, and this

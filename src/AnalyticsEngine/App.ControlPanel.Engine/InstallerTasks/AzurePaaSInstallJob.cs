@@ -606,6 +606,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         public SqlServerResource CreatedSqlServer => GetTaskResult<SqlServerResource>(_sqlServerTask);
         public SqlDatabaseResource CreatedSqlDatabase => GetTaskResult<SqlDatabaseResource>(_sqlDatabaseTask);
+        public AppServicePlanResource CreatedAppServicePlan => GetTaskResult<AppServicePlanResource>(_appServicePlanTask);
         public WebSiteResource CreatedWebSiteResource => GetTaskResult<WebSiteResource>(_appServiceWebsiteTask);
 
         /// <summary>

@@ -5,9 +5,10 @@ using Azure.ResourceManager;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Redis;
 using Azure.ResourceManager.RedisEnterprise;
+using Azure.ResourceManager.AppService;
+using CloudInstallEngine.Azure;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
-using CloudInstallEngine.Azure;
 using Common.Entities;
 using Common.Entities.Installer;
 using DataUtils;
@@ -83,6 +84,9 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation($"Resource-group found with name {Config.ResourceGroupName}.");
                 }
             }
+
+            // Verify the existing App Service plan supports solution runtime features.
+            await VerifyAppServicePlanCapabilities(testRg);
 
             // Verify the installer account can create RBAC role assignments
             // (Microsoft.Authorization/roleAssignments/write). Lacking this permission is the cause of
@@ -216,6 +220,51 @@ namespace App.ControlPanel.Engine
                 }
             }
             return (null, false);
+        }
+
+        /// <summary>
+        /// Warn when an existing App Service plan cannot run Always On / 64-bit workers so Test Configuration
+        /// catches under-provisioned plans before the install writes App Service settings. Logs only; never throws.
+        /// </summary>
+        Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
+        {
+            if (testRg == null)
+            {
+                _logger.LogInformation("Skipping App Service plan capability check - resource group is not available.");
+                return Task.CompletedTask;
+            }
+
+            var planName = string.IsNullOrWhiteSpace(Config.AppServicePlanName) ? Config.AppServiceWebAppName : Config.AppServicePlanName;
+            if (string.IsNullOrWhiteSpace(planName))
+            {
+                _logger.LogInformation("Skipping App Service plan capability check - no App Service plan name is configured.");
+                return Task.CompletedTask;
+            }
+
+            try
+            {
+                var plan = testRg.GetAppServicePlans().Where(p => p.Data.Name == planName).SingleOrDefault();
+                if (plan == null)
+                {
+                    _logger.LogInformation($"App Service plan '{planName}' not found yet; skipping capability check (it will be created during install).");
+                    return Task.CompletedTask;
+                }
+
+                if (!AppServicePlanCapabilities.SupportsAlwaysOn(plan.Data.Sku))
+                {
+                    _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(plan.Data.Name, plan.Data.Sku));
+                }
+                else
+                {
+                    _logger.LogInformation($"App Service plan '{plan.Data.Name}' tier '{AppServicePlanCapabilities.GetDisplayTier(plan.Data.Sku)}' supports Always On and 64-bit workers.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not check App Service plan '{planName}' capabilities: {ex.Message}");
+            }
+
+            return Task.CompletedTask;
         }
 
         #region Configuration & Key Vault checks
