@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
@@ -500,6 +501,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             logger.LogInformation($"Importing {thingWeAreImporting} reports...");
 
+            var instrumentation = abstractActivityLoader.SaveInstrumentation ?? NullUsageReportSaveInstrumentation.Instance;
+            var instrumentationEnabled = instrumentation.IsEnabled;
+            var activeLoaderCount = 0;
+            var phaseWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
+            var reportId = abstractActivityLoader.GetType().Name;
+            if (instrumentationEnabled)
+            {
+                activeLoaderCount = UsageReportSaveInstrumentationRuntime.IncrementActiveDailyLoaders();
+                TrackDailyReportPhaseStage(instrumentation, UsageReportSaveStageIds.ReportPhaseStarted, reportId, thingWeAreImporting, "Started", m =>
+                {
+                    m["ActiveLoaderCount"] = activeLoaderCount;
+                    m["DaysBackMax"] = daysBackMax;
+                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                });
+            }
+
+            try
+            {
             var reportKey = GetReportKey(abstractActivityLoader.GetType());
             var lastSuccessfulImport = await ResolveReportSkipListInputAsync(reportKey, lastSuccessfulPhaseImport);
 
@@ -563,7 +582,59 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 await _reportCompletionStore.SaveSuccessAsync(reportKey);
             }
 
+            if (instrumentationEnabled)
+            {
+                phaseWatch.Stop();
+                TrackDailyReportPhaseStage(instrumentation, UsageReportSaveStageIds.ReportPhaseCompleted, reportId, thingWeAreImporting, "Completed", m =>
+                {
+                    m["DurationMs"] = phaseWatch.ElapsedMilliseconds;
+                    m["GraphRowCount"] = total;
+                    m["DbWriteCount"] = abstractActivityLoader.LastSaveDbWriteCount;
+                    m["ActiveLoaderCount"] = activeLoaderCount;
+                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                });
+                UsageReportSaveInstrumentationRuntime.DecrementActiveDailyLoaders();
+            }
+
             return total;
+            }
+            catch (Exception ex)
+            {
+                if (instrumentationEnabled)
+                {
+                    phaseWatch.Stop();
+                    TrackDailyReportPhaseStage(instrumentation, UsageReportSaveStageIds.ReportPhaseFailed, reportId, thingWeAreImporting, "Failed", m =>
+                    {
+                        m["DurationMs"] = phaseWatch.ElapsedMilliseconds;
+                        m["ActiveLoaderCount"] = activeLoaderCount;
+                        UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                    }, ex.GetType().Name);
+                    UsageReportSaveInstrumentationRuntime.DecrementActiveDailyLoaders();
+                }
+                throw;
+            }
+        }
+
+        private static void TrackDailyReportPhaseStage(
+            IUsageReportSaveInstrumentation instrumentation,
+            string stage,
+            string reportId,
+            string reportName,
+            string outcome,
+            Action<Dictionary<string, double>> populateMetrics,
+            string exceptionType = null)
+        {
+            var point = new UsageReportSaveTelemetryPoint
+            {
+                Stage = stage,
+                ReportId = reportId,
+                LoaderType = reportId,
+                ReportTable = reportName,
+                Outcome = outcome,
+                ExceptionType = exceptionType,
+            };
+            populateMetrics?.Invoke(point.Metrics);
+            instrumentation.Track(point);
         }
     }
 }

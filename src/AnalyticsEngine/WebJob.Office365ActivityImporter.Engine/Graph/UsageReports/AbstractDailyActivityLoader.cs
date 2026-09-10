@@ -5,7 +5,9 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
@@ -27,6 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         internal AbstractDailyActivityLoader(ManualGraphCallClient client, ILogger logger) : base(logger)
         {
             _client = client;
+            SaveInstrumentation = AnalyticsUsageReportSaveInstrumentation.ForLogger(logger);
         }
 
         public abstract DbSet<TReportDbType> GetTable(AnalyticsEntitiesContext context);
@@ -89,6 +92,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// read when the two straddle UTC midnight.
         /// </summary>
         public IClock Clock { get; set; } = SystemClock.Instance;
+
+        /// <summary>
+        /// Opt-in, privacy-safe stage diagnostics for the daily usage-report save path. The default is a
+        /// no-op unless <c>AI_USAGE_REPORT_SAVE_DIAGNOSTICS</c> is enabled and the logger can emit App
+        /// Insights events, so the hot path keeps the pre-existing cost when diagnostics are disabled.
+        /// </summary>
+        public IUsageReportSaveInstrumentation SaveInstrumentation { get; set; }
 
         /// <summary>
         /// The set of dates within the [now-daysBackMax, now) import window that are already stored in SQL, old
@@ -230,164 +240,444 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         {
             int i = 0; int dbWrites = 0; var enUS = new System.Globalization.CultureInfo("en-US");
             var db = lookupCache.DB;
+            var instrumentation = SaveInstrumentation ?? NullUsageReportSaveInstrumentation.Instance;
+            var instrumentationEnabled = instrumentation.IsEnabled;
+            var loaderType = this.GetType().Name;
+            var reportTable = instrumentationEnabled ? (UsageReportTableName.TryResolve(typeof(TReportDbType)) ?? typeof(TReportDbType).Name) : null;
+            var saveWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
+            var totals = instrumentationEnabled ? new SaveLoopMetrics() : null;
 
-            Telemetry.LogInformation($"Saving {this.GetType().Name} for {LoadedReportPages.Keys.Count} dates");
+            Telemetry.LogInformation($"Saving {loaderType} for {LoadedReportPages.Keys.Count} dates");
 
-            // Compute total once. The previous "LoadedReportPages.SelectMany(r => r.Value).Count()"
-            // call ran on every 1000-row progress print, making progress O(n^2).
             var totalReports = LoadedReportPages.Sum(kv => kv.Value.Count);
-
-            // Persist one day at a time, committing in fixed-size batches. Previously every row across every date
-            // was added to a single context and committed in ONE SaveChangesAsync, and every existing row across
-            // the whole date range was pre-loaded and tracked. At ~200k users x up to 28 days EF6 builds an
-            // insert/update command tree for every pending row at once and throws OutOfMemoryException on a small
-            // App Service (observed on a 7GB P2v2). Reading only one day at a time and flushing in batches keeps
-            // the command-tree build bounded; auto change-detection is turned off so adding a day's rows stays
-            // O(n) instead of O(n^2). AssociatedLookupId is [NotMapped] (it maps to UserID / YammerGroupID per
-            // subclass), so existing rows can only be filtered in SQL by the mapped Date column - we key them by
-            // lookup id in memory.
-            var store = StoreFor(db);
-            using (store.BeginBulkWrite())
+            if (instrumentationEnabled)
             {
-                foreach (var dateTime in LoadedReportPages.Keys)
+                TrackSaveStage(instrumentation, UsageReportSaveStageIds.SaveStarted, loaderType, reportTable, "Started", m =>
                 {
-                    // This day's existing rows, tracked (so updates go through the identity map without attach
-                    // conflicts), keyed in memory by the [NotMapped] AssociatedLookupId.
-                    var existingByLookupId = new Dictionary<int, TReportDbType>();
-                    foreach (var existingRow in await store.GetRowsForDateAsync(dateTime.Date))
+                    m["DateCount"] = LoadedReportPages.Keys.Count;
+                    m["InputRowCount"] = totalReports;
+                    m["SaveBatchSize"] = SaveBatchSize;
+                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                });
+            }
+
+            var store = StoreFor(db);
+            try
+            {
+                using (store.BeginBulkWrite())
+                {
+                    var dateIndex = 0;
+                    foreach (var dateTime in LoadedReportPages.Keys)
                     {
-                        // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.
-                        existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
-                    }
+                        var existingLoadWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
+                        var existingRows = await store.GetRowsForDateAsync(dateTime.Date);
+                        existingLoadWatch?.Stop();
 
-                    var pendingChanges = 0;
-                    foreach (var reportPage in LoadedReportPages[dateTime])
-                    {
-                        // A usage-report row with no user/group identifier (e.g. a Graph row with a null
-                        // userPrincipalName when report anonymisation is enabled on the tenant) can't be matched
-                        // to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in the loop.
-                        if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
+                        var existingByLookupId = new Dictionary<int, TReportDbType>();
+                        foreach (var existingRow in existingRows)
                         {
-                            Telemetry.LogWarning($"Skipping a {typeof(TReportDbType).Name} report row with no lookup identifier (null/empty user or group name).");
-                            continue;
+                            existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
                         }
 
-                        // Usually an Entra ID group-membership check for a group filter.
-                        if (!await IdInScope(reportPage.LookupFieldValue))
+                        if (instrumentationEnabled)
                         {
-                            Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
-                            continue;
-                        }
-
-                        var lookupId = await ResolveLookupIdAsync(reportPage, userEmailToDbIdCache, lookupCache);
-
-                        // Output progress every 1000 imports
-                        if (i > 0 && i % 1000 == 0)
-                        {
-                            Console.WriteLine($"{this.GetType().Name}: Saved {i} / {totalReports}");
-                        }
-
-                        // Upsert: reuse the existing row for this (date, lookup) if we have one, else insert.
-                        var isNewLog = !existingByLookupId.TryGetValue(lookupId, out var dateRequestedLog);
-                        if (isNewLog)
-                        {
-                            dateRequestedLog = new TReportDbType() { AssociatedLookupId = lookupId };
-                            existingByLookupId[lookupId] = dateRequestedLog;
-                        }
-
-                        // Set log stats
-                        dateRequestedLog.Date = dateTime.Date;
-
-                        // Example: "2017-08-30"
-                        var activityDate = DateTime.MinValue;
-                        if (!string.IsNullOrEmpty(reportPage.LastActivityDateString))
-                        {
-                            if (DateTime.TryParseExact(reportPage.LastActivityDateString, "yyyy-MM-dd", enUS, System.Globalization.DateTimeStyles.None, out activityDate))
+                            totals.ExistingRowLoadMs += existingLoadWatch.ElapsedMilliseconds;
+                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.ExistingRowsLoaded, loaderType, reportTable, "Completed", m =>
                             {
-                                dateRequestedLog.LastActivityDate = activityDate;
+                                m["DateIndex"] = dateIndex;
+                                m["DurationMs"] = existingLoadWatch.ElapsedMilliseconds;
+                                m["ExistingRowCount"] = existingRows.Count;
+                                m["MaterializedLookupCount"] = existingByLookupId.Count;
+                                m["TrackedEntityCount"] = store.TrackedEntityCount;
+                            });
+                        }
+
+                        var pendingChanges = 0;
+                        var pendingBatchRows = 0;
+                        var dateMetrics = instrumentationEnabled ? new SaveLoopMetrics() : null;
+                        foreach (var reportPage in LoadedReportPages[dateTime])
+                        {
+                            dateMetrics?.RecordInputRow();
+                            totals?.RecordInputRow();
+
+                            if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
+                            {
+                                dateMetrics?.RecordMissingLookupValue();
+                                totals?.RecordMissingLookupValue();
+                                Telemetry.LogWarning($"Skipping a {typeof(TReportDbType).Name} report row with no lookup identifier (null/empty user or group name).");
+                                continue;
+                            }
+
+                            var scopeTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                            var inScope = await IdInScope(reportPage.LookupFieldValue);
+                            if (instrumentationEnabled)
+                            {
+                                var elapsed = ElapsedMillisecondsSince(scopeTicks);
+                                dateMetrics.ScopeFilterMs += elapsed;
+                                totals.ScopeFilterMs += elapsed;
+                            }
+                            if (!inScope)
+                            {
+                                dateMetrics?.RecordOutOfScope();
+                                totals?.RecordOutOfScope();
+                                Telemetry.LogInformation($"Skipping {reportPage.LookupFieldValue} as not in scope");
+                                continue;
+                            }
+
+                            var lookupStats = instrumentationEnabled ? new LookupResolutionStats() : null;
+                            var lookupTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                            var lookupId = await ResolveLookupIdAsync(reportPage, userEmailToDbIdCache, lookupCache, lookupStats);
+                            if (instrumentationEnabled)
+                            {
+                                var elapsed = ElapsedMillisecondsSince(lookupTicks);
+                                dateMetrics.LookupResolveMs += elapsed;
+                                totals.LookupResolveMs += elapsed;
+                                dateMetrics.Add(lookupStats);
+                                totals.Add(lookupStats);
+                            }
+
+                            if (i > 0 && i % 1000 == 0)
+                            {
+                                Console.WriteLine($"{loaderType}: Saved {i} / {totalReports}");
+                            }
+
+                            var isNewLog = !existingByLookupId.TryGetValue(lookupId, out var dateRequestedLog);
+                            if (isNewLog)
+                            {
+                                dateRequestedLog = new TReportDbType() { AssociatedLookupId = lookupId };
+                                existingByLookupId[lookupId] = dateRequestedLog;
+                            }
+
+                            dateRequestedLog.Date = dateTime.Date;
+
+                            var parseTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                            var activityDate = DateTime.MinValue;
+                            if (!string.IsNullOrEmpty(reportPage.LastActivityDateString))
+                            {
+                                if (DateTime.TryParseExact(reportPage.LastActivityDateString, "yyyy-MM-dd", enUS, System.Globalization.DateTimeStyles.None, out activityDate))
+                                {
+                                    dateRequestedLog.LastActivityDate = activityDate;
+                                }
+                                else
+                                {
+                                    Telemetry.LogInformation($"Invalid LastActivity value: '{reportPage.LastActivityDateString}'");
+                                    dateRequestedLog.LastActivityDate = null;
+                                }
+                            }
+                            if (instrumentationEnabled)
+                            {
+                                var elapsed = ElapsedMillisecondsSince(parseTicks);
+                                dateMetrics.DateParseMs += elapsed;
+                                totals.DateParseMs += elapsed;
+                            }
+
+                            var projectionTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                            PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
+                            if (instrumentationEnabled)
+                            {
+                                var elapsed = ElapsedMillisecondsSince(projectionTicks);
+                                dateMetrics.ProjectionMs += elapsed;
+                                totals.ProjectionMs += elapsed;
+                            }
+
+                            bool willWrite;
+                            var dirtyTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                            if (isNewLog)
+                            {
+                                store.AddRow(dateRequestedLog);
+                                willWrite = true;
+                                dateMetrics?.RecordAdded();
+                                totals?.RecordAdded();
                             }
                             else
                             {
-                                Telemetry.LogInformation($"Invalid LastActivity value: '{reportPage.LastActivityDateString}'");
-                                dateRequestedLog.LastActivityDate = null;
+                                willWrite = store.MarkUpdatedIfChanged(dateRequestedLog);
+                                if (willWrite)
+                                {
+                                    dateMetrics?.RecordChanged();
+                                    totals?.RecordChanged();
+                                }
+                                else
+                                {
+                                    dateMetrics?.RecordUnchanged();
+                                    totals?.RecordUnchanged();
+                                }
                             }
-                        }
-                        PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
-
-                        // Auto-detect is off, so state the change explicitly. Only write when something actually
-                        // changed: existing rows for finalized days re-fetched by the recent-window rule are almost
-                        // always identical to what's stored, so dirty-checking skips the vast majority of UPDATEs -
-                        // the dominant cost of this import at large-tenant scale.
-                        bool willWrite;
-                        if (isNewLog)
-                        {
-                            store.AddRow(dateRequestedLog);
-                            willWrite = true;
-                        }
-                        else
-                        {
-                            willWrite = store.MarkUpdatedIfChanged(dateRequestedLog);
-                        }
-
-                        i++;
-                        if (willWrite)
-                        {
-                            dbWrites++;
-                            pendingChanges++;
-                            if (pendingChanges >= SaveBatchSize)
+                            if (instrumentationEnabled)
                             {
-                                await store.SaveChangesAsync();
-                                pendingChanges = 0;
+                                var elapsed = ElapsedMillisecondsSince(dirtyTicks);
+                                dateMetrics.DirtyCheckMs += elapsed;
+                                totals.DirtyCheckMs += elapsed;
+                            }
+
+                            i++;
+                            if (willWrite)
+                            {
+                                dbWrites++;
+                                pendingChanges++;
+                                pendingBatchRows++;
+                                if (pendingChanges >= SaveBatchSize)
+                                {
+                                    await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
+                                    pendingChanges = 0;
+                                    pendingBatchRows = 0;
+                                }
                             }
                         }
-                    }
 
-                    if (pendingChanges > 0)
+                        if (pendingChanges > 0)
+                        {
+                            await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
+                        }
+
+                        if (instrumentationEnabled)
+                        {
+                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsProcessed, loaderType, reportTable, "Completed", m => dateMetrics.WriteTo(m, dateIndex));
+                        }
+
+                        var releaseTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                        var trackedBeforeRelease = instrumentationEnabled ? store.TrackedEntityCount : 0;
+                        store.ReleaseSavedRows();
+                        if (instrumentationEnabled)
+                        {
+                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsReleased, loaderType, reportTable, "Completed", m =>
+                            {
+                                m["DateIndex"] = dateIndex;
+                                m["DurationMs"] = ElapsedMillisecondsSince(releaseTicks);
+                                m["TrackedEntityCountBeforeRelease"] = trackedBeforeRelease;
+                                m["TrackedEntityCountAfterRelease"] = store.TrackedEntityCount;
+                            });
+                        }
+                        dateIndex++;
+                    }
+                }
+
+                LastSaveDbWriteCount = dbWrites;
+                if (instrumentationEnabled)
+                {
+                    saveWatch.Stop();
+                    TrackSaveStage(instrumentation, UsageReportSaveStageIds.SaveCompleted, loaderType, reportTable, "Completed", m =>
                     {
-                        await store.SaveChangesAsync();
-                    }
-
-                    // Release this day's tracked rows before moving to the next day.
-                    store.ReleaseSavedRows();
+                        totals.WriteTo(m, null);
+                        m["DurationMs"] = saveWatch.ElapsedMilliseconds;
+                        m["InputRowCount"] = totalReports;
+                        m["DbWriteCount"] = dbWrites;
+                        UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                    });
                 }
             }
+            catch (Exception ex)
+            {
+                if (instrumentationEnabled)
+                {
+                    saveWatch.Stop();
+                    TrackSaveStage(instrumentation, UsageReportSaveStageIds.SaveFailed, loaderType, reportTable, "Failed", m =>
+                    {
+                        m["DurationMs"] = saveWatch.ElapsedMilliseconds;
+                        m["InputRowCount"] = totalReports;
+                        m["DbWriteCount"] = dbWrites;
+                        UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                    }, ex.GetType().Name);
+                }
+                throw;
+            }
+        }
 
-            LastSaveDbWriteCount = dbWrites;
+        private async Task SavePendingBatchAsync(
+            IUsageReportStore<TReportDbType> store,
+            IUsageReportSaveInstrumentation instrumentation,
+            string loaderType,
+            string reportTable,
+            int batchRows)
+        {
+            if (instrumentation == null || !instrumentation.IsEnabled)
+            {
+                await store.SaveChangesAsync();
+                return;
+            }
+
+            var trackedBeforeSave = store.TrackedEntityCount;
+            var saveWatch = Stopwatch.StartNew();
+            await store.SaveChangesAsync();
+            saveWatch.Stop();
+            TrackSaveStage(instrumentation, UsageReportSaveStageIds.SaveBatch, loaderType, reportTable, "Completed", m =>
+            {
+                m["DurationMs"] = saveWatch.ElapsedMilliseconds;
+                m["BatchRowCount"] = batchRows;
+                m["TrackedEntityCountBeforeSave"] = trackedBeforeSave;
+                m["TrackedEntityCountAfterSave"] = store.TrackedEntityCount;
+            });
         }
 
         // Resolve the DB id for a report row's user/group lookup, using the shared cross-thread id cache and
         // only hitting the DB (via GetOrCreateLookup) on a cache miss. Resolution happens OUTSIDE the cache lock:
         // the previous .Result-inside-lock pattern held a shared mutex through a full DB round-trip, starving all
         // parallel import threads on the same cache.
-        private async Task<int> ResolveLookupIdAsync(TUserActivityUserDetail reportPage, ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
+        private async Task<int> ResolveLookupIdAsync(
+            TUserActivityUserDetail reportPage,
+            ConcurrentLookupDbIdsCache userEmailToDbIdCache,
+            CACHETYPE lookupCache,
+            LookupResolutionStats stats = null)
         {
             int? lookupId;
-            lock (userEmailToDbIdCache)
+            var lockStart = stats == null ? 0 : Stopwatch.GetTimestamp();
+            Monitor.Enter(userEmailToDbIdCache);
+            try
             {
+                stats?.AddSynchronizationWait(ElapsedMillisecondsSince(lockStart));
                 lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
+            }
+            finally
+            {
+                Monitor.Exit(userEmailToDbIdCache);
             }
             if (lookupId != null)
             {
+                stats?.RecordHit();
                 return lookupId.Value;
             }
 
+            stats?.RecordMiss();
+            var dbCallStart = stats == null ? 0 : Stopwatch.GetTimestamp();
             var lookup = await reportPage.GetOrCreateLookup(lookupCache);
+            stats?.RecordDatabaseCall(ElapsedMillisecondsSince(dbCallStart));
             if (!lookup.IsSavedToDB)
             {
                 throw new InvalidOperationException("Cannot use unsaved lookups for activity records");
             }
 
-            lock (userEmailToDbIdCache)
+            lockStart = stats == null ? 0 : Stopwatch.GetTimestamp();
+            Monitor.Enter(userEmailToDbIdCache);
+            try
             {
-                // Re-check in case another thread populated it while we were resolving.
+                stats?.AddSynchronizationWait(ElapsedMillisecondsSince(lockStart));
                 lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
                 if (lookupId == null)
                 {
                     lookupId = lookup.ID;
                     userEmailToDbIdCache.AddOrUpdateForName<TReportDbType>(reportPage.LookupFieldValue, lookupId.Value);
                 }
+                else
+                {
+                    stats?.RecordDuplicateConcurrentMiss();
+                }
+            }
+            finally
+            {
+                Monitor.Exit(userEmailToDbIdCache);
             }
             return lookupId.Value;
+        }
+
+        private static long ElapsedMillisecondsSince(long startTimestamp)
+        {
+            if (startTimestamp == 0) return 0;
+            return (long)((Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / Stopwatch.Frequency);
+        }
+
+        private static void TrackSaveStage(
+            IUsageReportSaveInstrumentation instrumentation,
+            string stage,
+            string loaderType,
+            string reportTable,
+            string outcome,
+            Action<Dictionary<string, double>> populateMetrics,
+            string exceptionType = null)
+        {
+            var point = new UsageReportSaveTelemetryPoint
+            {
+                Stage = stage,
+                ReportId = loaderType,
+                LoaderType = loaderType,
+                ReportTable = reportTable,
+                Outcome = outcome,
+                ExceptionType = exceptionType,
+            };
+            populateMetrics?.Invoke(point.Metrics);
+            instrumentation.Track(point);
+        }
+
+        private sealed class LookupResolutionStats
+        {
+            public long CacheHits;
+            public long CacheMisses;
+            public long DatabaseCalls;
+            public long DuplicateConcurrentMisses;
+            public long SynchronizationWaitMs;
+            public long DatabaseCallMs;
+
+            public void RecordHit() => CacheHits++;
+            public void RecordMiss() => CacheMisses++;
+            public void RecordDuplicateConcurrentMiss() => DuplicateConcurrentMisses++;
+            public void AddSynchronizationWait(long milliseconds) => SynchronizationWaitMs += milliseconds;
+            public void RecordDatabaseCall(long milliseconds)
+            {
+                DatabaseCalls++;
+                DatabaseCallMs += milliseconds;
+            }
+        }
+
+        private sealed class SaveLoopMetrics
+        {
+            public long InputRows;
+            public long MissingLookupValueRows;
+            public long OutOfScopeRows;
+            public long AddedRows;
+            public long ChangedRows;
+            public long UnchangedRows;
+            public long ExistingRowLoadMs;
+            public long ScopeFilterMs;
+            public long LookupResolveMs;
+            public long DateParseMs;
+            public long ProjectionMs;
+            public long DirtyCheckMs;
+            public long LookupCacheHits;
+            public long LookupCacheMisses;
+            public long LookupDatabaseCalls;
+            public long DuplicateConcurrentMisses;
+            public long LookupSynchronizationWaitMs;
+            public long LookupDatabaseCallMs;
+
+            public void RecordInputRow() => InputRows++;
+            public void RecordMissingLookupValue() => MissingLookupValueRows++;
+            public void RecordOutOfScope() => OutOfScopeRows++;
+            public void RecordAdded() => AddedRows++;
+            public void RecordChanged() => ChangedRows++;
+            public void RecordUnchanged() => UnchangedRows++;
+
+            public void Add(LookupResolutionStats stats)
+            {
+                if (stats == null) return;
+                LookupCacheHits += stats.CacheHits;
+                LookupCacheMisses += stats.CacheMisses;
+                LookupDatabaseCalls += stats.DatabaseCalls;
+                DuplicateConcurrentMisses += stats.DuplicateConcurrentMisses;
+                LookupSynchronizationWaitMs += stats.SynchronizationWaitMs;
+                LookupDatabaseCallMs += stats.DatabaseCallMs;
+            }
+
+            public void WriteTo(Dictionary<string, double> metrics, int? dateIndex)
+            {
+                if (dateIndex.HasValue) metrics["DateIndex"] = dateIndex.Value;
+                metrics["InputRowCount"] = InputRows;
+                metrics["MissingLookupValueRowCount"] = MissingLookupValueRows;
+                metrics["OutOfScopeRowCount"] = OutOfScopeRows;
+                metrics["AddedRowCount"] = AddedRows;
+                metrics["ChangedRowCount"] = ChangedRows;
+                metrics["UnchangedRowCount"] = UnchangedRows;
+                metrics["ExistingRowLoadMs"] = ExistingRowLoadMs;
+                metrics["ScopeFilterMs"] = ScopeFilterMs;
+                metrics["LookupResolveMs"] = LookupResolveMs;
+                metrics["DateParseMs"] = DateParseMs;
+                metrics["ProjectionMs"] = ProjectionMs;
+                metrics["DirtyCheckMs"] = DirtyCheckMs;
+                metrics["LookupCacheHitCount"] = LookupCacheHits;
+                metrics["LookupCacheMissCount"] = LookupCacheMisses;
+                metrics["LookupDatabaseCallCount"] = LookupDatabaseCalls;
+                metrics["DuplicateConcurrentMissCount"] = DuplicateConcurrentMisses;
+                metrics["LookupSynchronizationWaitMs"] = LookupSynchronizationWaitMs;
+                metrics["LookupDatabaseCallMs"] = LookupDatabaseCallMs;
+            }
         }
 
         protected virtual Task<bool> IdInScope(string lookupId)

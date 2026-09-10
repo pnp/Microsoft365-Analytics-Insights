@@ -3,11 +3,14 @@ using DataUtils;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using Common.Entities;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 
 namespace Tests.UnitTests
 {
@@ -369,6 +372,214 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { storedInWindow }, skip.ToArray(),
                 "A stored date inside the 3-day mutability window can still change in Graph and must be re-imported.");
         }
+
+
+
+        [TestMethod]
+        public async Task DailyActivityLoader_InstrumentationCountsColdWarmMissingScopeAndRowOutcomes()
+        {
+            var instrumentation = new RecordingUsageReportSaveInstrumentation();
+            var lookupCalls = new ConcurrentDictionary<string, int>();
+            CountingUserActivityDetail.ResolveAsync = upn =>
+            {
+                lookupCalls.AddOrUpdate(upn, 1, (_, old) => old + 1);
+                return Task.FromResult(upn == UserA ? UserAId : UserBId);
+            };
+
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                SaveInstrumentation = instrumentation,
+                InScopeRule = upn => upn != "outofscope@contoso.com",
+            };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>
+            {
+                new CountingUserActivityDetail(UserA, 10),       // changed existing
+                new CountingUserActivityDetail(UserB, 20),       // new
+                new CountingUserActivityDetail(null, 30),        // intentionally missing lookup
+                new CountingUserActivityDetail("outofscope@contoso.com", 40),
+            };
+            loader.LoadedReportPages[Day2] = new List<FakeUserActivityDetail>
+            {
+                new CountingUserActivityDetail(UserA, 10),       // repeated user, cache hit after day 1
+            };
+            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
+                .Seed(StoredRow(Day1, UserAId, thingCount: 5));
+            loader.ReportStore = store;
+            var cache = new ConcurrentLookupDbIdsCache();
+
+            await loader.SaveLoadedReportsToSql(cache, new UserCache(null));
+
+            Assert.AreEqual(1, lookupCalls[UserA], "Cold lookup should hit the backing lookup once; the repeated row is a cache hit.");
+            Assert.AreEqual(1, lookupCalls[UserB]);
+            Assert.AreEqual(3, store.Stored.Count);
+            Assert.AreEqual(2, loader.LastSaveDbWriteCount);
+
+            var completed = instrumentation.Single(UsageReportSaveStageIds.SaveCompleted);
+            AssertMetric(completed, "LookupDatabaseCallCount", 2);
+            AssertMetric(completed, "LookupCacheMissCount", 2);
+            AssertMetric(completed, "LookupCacheHitCount", 1);
+            AssertMetric(completed, "MissingLookupValueRowCount", 1);
+            AssertMetric(completed, "OutOfScopeRowCount", 1);
+            AssertMetric(completed, "AddedRowCount", 2);
+            AssertMetric(completed, "ChangedRowCount", 1);
+
+            instrumentation.Events.Clear();
+            lookupCalls.Clear();
+            await loader.SaveLoadedReportsToSql(cache, new UserCache(null));
+
+            var warm = instrumentation.Single(UsageReportSaveStageIds.SaveCompleted);
+            Assert.AreEqual(0, lookupCalls.Count, "Warm lookup-cache run must not call the backing lookup store.");
+            AssertMetric(warm, "LookupDatabaseCallCount", 0);
+            AssertMetric(warm, "LookupCacheHitCount", 3);
+            AssertMetric(warm, "UnchangedRowCount", 3);
+            Assert.AreEqual(0, loader.LastSaveDbWriteCount);
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_InstrumentationCountsDuplicateConcurrentMissesAcrossLoaders()
+        {
+            var instrumentation = new RecordingUsageReportSaveInstrumentation();
+            var lookupCalls = new ConcurrentDictionary<string, int>();
+            var ids = new Dictionary<string, int>
+            {
+                { UserA, UserAId },
+                { "loader1only@contoso.com", 101 },
+                { "loader2only@contoso.com", 202 },
+            };
+            CountingUserActivityDetail.ResolveAsync = async upn =>
+            {
+                lookupCalls.AddOrUpdate(upn, 1, (_, old) => old + 1);
+                await Task.Delay(50);
+                return ids[upn];
+            };
+
+            var cache = new ConcurrentLookupDbIdsCache();
+            var loader1 = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveInstrumentation = instrumentation };
+            var loader2 = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveInstrumentation = instrumentation };
+            loader1.ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            loader2.ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            loader1.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>
+            {
+                new CountingUserActivityDetail(UserA, 1),
+                new CountingUserActivityDetail("loader1only@contoso.com", 10),
+            };
+            loader2.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>
+            {
+                new CountingUserActivityDetail(UserA, 2),
+                new CountingUserActivityDetail("loader2only@contoso.com", 20),
+            };
+
+            await Task.WhenAll(
+                loader1.SaveLoadedReportsToSql(cache, new UserCache(null)),
+                loader2.SaveLoadedReportsToSql(cache, new UserCache(null)));
+
+            Assert.AreEqual(2, lookupCalls[UserA], "Both loaders intentionally miss before either can populate the shared cache.");
+            Assert.AreEqual(1, lookupCalls["loader1only@contoso.com"], "Non-overlapping users still resolve independently.");
+            Assert.AreEqual(1, lookupCalls["loader2only@contoso.com"], "Non-overlapping users still resolve independently.");
+            Assert.AreEqual(1d, instrumentation.Events.Where(e => e.Stage == UsageReportSaveStageIds.SaveCompleted).Sum(e => Metric(e, "DuplicateConcurrentMissCount")),
+                "The second resolver must record that another loader populated the cache while it awaited the lookup.");
+        }
+
+        [TestMethod]
+        public async Task DailyActivityLoader_RetryAfterIntermediateBatchFailure_IsIdempotentAndStampedByHealthyRun()
+        {
+            CountingUserActivityDetail.ResolveAsync = upn => Task.FromResult(int.Parse(upn.Substring(4, 1)));
+            var failingInstrumentation = new RecordingUsageReportSaveInstrumentation();
+            var failingLoader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 2, SaveInstrumentation = failingInstrumentation };
+            var rows = Enumerable.Range(1, 5)
+                .Select(i => new CountingUserActivityDetail($"user{i}@contoso.com", i))
+                .Cast<FakeUserActivityDetail>()
+                .ToList();
+            failingLoader.LoadedReportPages[Day1] = rows;
+            var failingStore = new FailOnSaveNumberUsageReportStore(2);
+            failingLoader.ReportStore = failingStore;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => failingLoader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), new UserCache(null)));
+            Assert.IsTrue(failingInstrumentation.Events.Any(e => e.Stage == UsageReportSaveStageIds.SaveFailed));
+            Assert.AreEqual(2, failingStore.Stored.Count, "Only the first healthy batch should remain committed after the injected failure.");
+
+            var retryInstrumentation = new RecordingUsageReportSaveInstrumentation();
+            var retryLoader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 2, SaveInstrumentation = retryInstrumentation };
+            retryLoader.LoadedReportPages[Day1] = rows;
+            var retryStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
+                .Seed(failingStore.Stored.Select(CloneRow).ToArray());
+            retryLoader.ReportStore = retryStore;
+
+            await retryLoader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), new UserCache(null));
+
+            Assert.AreEqual(5, retryStore.Stored.Count);
+            CollectionAssert.AreEqual(new[] { 1, 2, 3, 4, 5 }, retryStore.Stored.OrderBy(r => r.UserID).Select(r => r.UserID).ToArray());
+            Assert.AreEqual(3, retryLoader.LastSaveDbWriteCount, "The retry must not rewrite the two rows already committed by the failed attempt.");
+            Assert.IsTrue(retryInstrumentation.Events.Any(e => e.Stage == UsageReportSaveStageIds.SaveCompleted));
+            Assert.IsFalse(retryInstrumentation.Events.Any(e => e.Stage == UsageReportSaveStageIds.SaveFailed));
+        }
+
+
+
+        private static FakeUserUsageActivityLog CloneRow(FakeUserUsageActivityLog row)
+            => new FakeUserUsageActivityLog
+            {
+                ID = row.ID,
+                Date = row.Date,
+                UserID = row.UserID,
+                ThingCount = row.ThingCount,
+                LastActivityDate = row.LastActivityDate,
+            };
+
+        private static void AssertMetric(UsageReportSaveTelemetryPoint point, string name, double expected)
+            => Assert.AreEqual(expected, Metric(point, name), $"Metric {name}");
+
+        private static double Metric(UsageReportSaveTelemetryPoint point, string name)
+            => point.Metrics.TryGetValue(name, out var value) ? value : 0;
+
+        private sealed class CountingUserActivityDetail : FakeUserActivityDetail
+        {
+            public static Func<string, Task<int>> ResolveAsync { get; set; }
+
+            public CountingUserActivityDetail(string upn, int thingCount)
+            {
+                UserPrincipalName = upn;
+                ThingCount = thingCount;
+            }
+
+            public override async Task<AbstractEFEntity> GetOrCreateLookup(DBLookupCache<User> lookupCache)
+                => new User { ID = await ResolveAsync(UserPrincipalName), UserPrincipalName = UserPrincipalName };
+        }
+
+        private sealed class RecordingUsageReportSaveInstrumentation : IUsageReportSaveInstrumentation
+        {
+            private readonly object _lock = new object();
+            public bool IsEnabled => true;
+            public List<UsageReportSaveTelemetryPoint> Events { get; } = new List<UsageReportSaveTelemetryPoint>();
+            public void Track(UsageReportSaveTelemetryPoint point)
+            {
+                lock (_lock)
+                {
+                    Events.Add(point);
+                }
+            }
+            public UsageReportSaveTelemetryPoint Single(string stage) => Events.Single(e => e.Stage == stage);
+        }
+
+        private sealed class FailOnSaveNumberUsageReportStore : InMemoryUsageReportStore<FakeUserUsageActivityLog>
+        {
+            private readonly int _saveNumberToFail;
+            private int _saveCalls;
+
+            public FailOnSaveNumberUsageReportStore(int saveNumberToFail) => _saveNumberToFail = saveNumberToFail;
+
+            public override async Task SaveChangesAsync()
+            {
+                _saveCalls++;
+                if (_saveCalls == _saveNumberToFail)
+                {
+                    throw new InvalidOperationException("Synthetic intermediate batch failure.");
+                }
+                await base.SaveChangesAsync();
+            }
+        }
+
 
         /// <summary>
         /// Store whose flush always fails, for the "the bulk-write scope is left even on failure" case.

@@ -78,6 +78,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// O(n^2) - and restoring the PREVIOUS value, not a hard-coded "on", because the context may
         /// have been handed in with it already off.
         /// </summary>
+        /// <summary>Current tracked usage-report entity count, for save-stage diagnostics.</summary>
+        int TrackedEntityCount { get; }
+
         IDisposable BeginBulkWrite();
     }
 
@@ -91,6 +94,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
     {
         private readonly AnalyticsEntitiesContext _db;
         private readonly DbSet<TReportDbType> _table;
+
+        public int TrackedEntityCount => _db.ChangeTracker.Entries<AbstractUsageActivityLog>().Count();
 
         public SqlUsageReportStore(AnalyticsEntitiesContext db, DbSet<TReportDbType> table)
         {

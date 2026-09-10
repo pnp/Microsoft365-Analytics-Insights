@@ -1,4 +1,4 @@
-using Common.Entities.ActivityReports;
+﻿using Common.Entities.ActivityReports;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -78,6 +78,8 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public bool AllWritesInsideBulkScope { get; private set; } = true;
 
         private int _openScopes;
+
+        public int TrackedEntityCount => _snapshots.Count + _pendingInserts.Count;
 
         /// <summary>Pre-populate a committed row (no snapshot: it has not been handed out yet).</summary>
         public InMemoryUsageReportStore<TReportDbType> Seed(params TReportDbType[] rows)
