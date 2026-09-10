@@ -72,7 +72,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         void ReleaseSavedRows();
 
-        /// <summary>Current tracked usage-report entity count, for save-stage diagnostics.</summary>
+        /// <summary>
+        /// Current tracked usage-report entity count, for save-stage diagnostics only. Implementations may need
+        /// to enumerate the change tracker to answer this, so callers must keep it behind the opt-in diagnostics
+        /// gate and never call it on the normal hot path when diagnostics are disabled.
+        /// </summary>
         int TrackedEntityCount { get; }
 
         /// <summary>
@@ -95,7 +99,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         private readonly AnalyticsEntitiesContext _db;
         private readonly DbSet<TReportDbType> _table;
 
-        public int TrackedEntityCount => _db.ChangeTracker.Entries<AbstractUsageActivityLog>().Count();
+        public int TrackedEntityCount
+        {
+            get
+            {
+                // EF6 ChangeTracker.Entries<T>() reaches InternalContext.GetStateEntries<T>(), which calls
+                // DetectChanges(), but InternalContext.DetectChanges() is a no-op when AutoDetectChangesEnabled
+                // is false. The save loop reads this only inside BeginBulkWrite(), where this adapter disables
+                // auto-detect, so diagnostics do not reintroduce the O(n^2) change-detection cost that batching
+                // avoids. It still enumerates tracked entries, so keep this diagnostics-only and gated off the
+                // normal hot path.
+                return _db.ChangeTracker.Entries<AbstractUsageActivityLog>().Count();
+            }
+        }
 
         public SqlUsageReportStore(AnalyticsEntitiesContext db, DbSet<TReportDbType> table)
         {
