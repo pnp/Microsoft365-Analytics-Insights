@@ -84,6 +84,7 @@ namespace App.ControlPanel.Engine
                 var tasks = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig, _configPassword);
                 await tasks.RunPostCreatePaaSTasks(
                     azureBackeEndCreationJob.CreatedWebSiteResource,
+                    azureBackeEndCreationJob.CreatedAppServicePlan,
                     azureBackeEndCreationJob.DatabasePaaSInfo,
                     azureBackeEndCreationJob.Storage,
                     azureBackeEndCreationJob.CreatedAutomationAccount,
@@ -91,7 +92,8 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.Redis,
                     azureBackeEndCreationJob.CognitiveServicesInfo,
                     azureBackeEndCreationJob.KeyVault,
-                    azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription
+                    azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription,
+                    azureBackeEndCreationJob.CreatedSqlServer
                 );
 
                 ct.ThrowIfCancellationRequested();

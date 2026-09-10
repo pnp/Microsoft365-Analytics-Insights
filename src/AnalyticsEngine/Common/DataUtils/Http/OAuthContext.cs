@@ -66,7 +66,13 @@ namespace DataUtils.Http
 
         public TokenCredential Creds { get; set; }
 
-        public async Task<AccessToken> GetAccessToken()
+        /// <summary>
+        /// Acquires (and caches) an app-only access token for <see cref="ResourceURL"/>.
+        /// </summary>
+        /// <remarks>
+        /// Virtual purely so tests can substitute a canned token. Nothing in production overrides it.
+        /// </remarks>
+        public virtual async Task<AccessToken> GetAccessToken()
         {
             // Threadsafe execution of this instance
             await _getAccessTokenSemaphoreSlim.WaitAsync();

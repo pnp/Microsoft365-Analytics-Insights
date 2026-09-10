@@ -45,6 +45,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Copilot\CopilotActivityGenerator.cs" />
+    <Compile Include="Dlp\DlpActivityGenerator.cs" />
     <Compile Include="Copilot\CopilotAdoptionPersonas.cs" />
     <Compile Include="Copilot\CopilotAdoptionScenarioGenerator.cs" />
     <Compile Include="Copilot\CopilotChatFactory.cs" />
@@ -54,6 +55,16 @@
     <Compile Include="Copilot\CopilotLicenseManager.cs" />
     <Compile Include="Copilot\CopilotResourceGenerator.cs" />
     <Compile Include="Copilot\CopilotUserManager.cs" />
+    <Compile Include="Demo\DemoCalendar.cs" />
+    <Compile Include="Demo\DemoCommand.cs" />
+    <Compile Include="Demo\DemoGenerator.cs" />
+    <Compile Include="Demo\DemoInteractive.cs" />
+    <Compile Include="Demo\DemoOptions.cs" />
+    <Compile Include="Demo\DemoPopulation.cs" />
+    <Compile Include="Demo\DemoPortalReadiness.cs" />
+    <Compile Include="Demo\DemoTables.cs" />
+    <Compile Include="Demo\DemoTimeline.cs" />
+    <Compile Include="Demo\SqlDemoDatabase.cs" />
     <Compile Include="Generation\ActivityTimestampGenerator.cs" />
     <Compile Include="Office365\Office365ActivityGenerator.cs" />
     <Compile Include="Office365\Office365ActivityGeneratorConfig.cs" />
@@ -64,6 +75,7 @@
     <Compile Include="StressTests\ActivityAPIStressTest.cs" />
     <Compile Include="StressTests\ActivityApiDbStressTest.cs" />
     <Compile Include="StressTests\BaseStressTest.cs" />
+    <Compile Include="StressTests\CopilotAdoptionPerfTest.cs" />
     <Compile Include="StressTests\CopilotStressTest.cs" />
     <Compile Include="StressTests\MemoryMonitor.cs" />
     <Compile Include="StressTests\PowerPlatformStressTest.cs" />
@@ -85,6 +97,7 @@
     <None Include="App.config" />
     <None Include="Copilot\SQL\ShapeCopilotAdoptionDemo.sql" />
     <None Include="README.md" />
+    <None Include="Verify-DemoCommand.ps1" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj">

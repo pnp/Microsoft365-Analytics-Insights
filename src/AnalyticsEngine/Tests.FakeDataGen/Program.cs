@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using Tests.FakeDataGen.Copilot;
+using Tests.FakeDataGen.Demo;
+using Tests.FakeDataGen.Dlp;
 using Tests.FakeDataGen.Office365;
 using Tests.FakeDataGen.StressTests;
 using Tests.FakeDataGen.StressTests.LoadTest;
@@ -24,6 +26,8 @@ namespace Tests.FakeDataGen
         private static readonly List<MenuItem> MenuItems = new List<MenuItem>
         {
             // Data generation
+            new MenuItem(DemoInteractive.MenuTitle, MenuCategory.DataGeneration,
+                ctx => DemoInteractive.Run()),
             new MenuItem("Generate fake Copilot activity", MenuCategory.DataGeneration,
                 ctx => RunCopilotActivityGenerator(ctx.RequireConnectionString())),
             new MenuItem("Generate fake O365 audit activity", MenuCategory.DataGeneration,
@@ -32,6 +36,8 @@ namespace Tests.FakeDataGen
                 ctx => RunCombinedActivityGenerator(ctx.RequireConnectionString())),
             new MenuItem("Generate fake Copilot prompt history (AI interaction history)", MenuCategory.DataGeneration,
                 ctx => RunCopilotInteractionHistoryGenerator(ctx.RequireConnectionString())),
+            new MenuItem("Generate fake DLP policy activity (Copilot + tenant-wide)", MenuCategory.DataGeneration,
+                ctx => RunDlpActivityGenerator(ctx.RequireConnectionString())),
 
             // Stress tests
             new MenuItem("ActivityAPI import stress test", MenuCategory.StressTest,
@@ -40,6 +46,8 @@ namespace Tests.FakeDataGen
                 ctx => RunStressTest(new ActivityApiDbStressTest(), ctx)),
             new MenuItem("Copilot event import stress test", MenuCategory.StressTest,
                 ctx => RunStressTest(new CopilotStressTest(), ctx)),
+            new MenuItem("Copilot Adoption page performance test (read-only, before/after)", MenuCategory.StressTest,
+                ctx => RunStressTest(new CopilotAdoptionPerfTest(), ctx)),
             new MenuItem("Power Platform event import stress test", MenuCategory.StressTest,
                 ctx => RunStressTest(new PowerPlatformStressTest(), ctx)),
             new MenuItem("Sent email importer stress test", MenuCategory.StressTest,
@@ -51,6 +59,12 @@ namespace Tests.FakeDataGen
         static void Main(string[] args)
         {
             PrintBanner();
+
+            if (args.Length > 0 && args[0].Equals("demo", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.ExitCode = DemoCommand.Run(args.Skip(1).ToArray());
+                return;
+            }
 
             // Non-interactive load-test mode (issue #161 / PR #162). Usage:
             //   Tests.FakeDataGen.exe loadtest "<SQL Connection String>" [targetItemsPerArea] [csvPath]
@@ -75,8 +89,10 @@ namespace Tests.FakeDataGen
             else
             {
                 Console.WriteLine("No SQL connection string provided.");
-                Console.WriteLine("Stress tests that don't need SQL will still run; everything else will be disabled.");
-                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|activityapi|activityapidb|powerplatform|sentemail|useractivity>]");
+                Console.WriteLine("The synthetic demo option (which creates its own new LocalDB database) and the");
+                Console.WriteLine("stress tests that don't need SQL will still run; everything else will be disabled.");
+                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|copilotadoption|activityapi|activityapidb|powerplatform|sentemail|useractivity>]");
+                Console.WriteLine("Safe one-command demo: Tests.FakeDataGen.exe demo --help (or pick it from the menu below)");
             }
             Console.WriteLine();
 
@@ -227,6 +243,7 @@ namespace Tests.FakeDataGen
             new Dictionary<string, Func<BaseStressTest>>(StringComparer.OrdinalIgnoreCase)
             {
                 { "copilot", () => new CopilotStressTest() },
+                { "copilotadoption", () => new CopilotAdoptionPerfTest() },
                 { "activityapi", () => new ActivityAPIStressTest() },
                 { "activityapidb", () => new ActivityApiDbStressTest() },
                 { "powerplatform", () => new PowerPlatformStressTest() },
@@ -320,6 +337,41 @@ namespace Tests.FakeDataGen
 
             Console.WriteLine();
             Console.WriteLine("Copilot activity generation completed successfully!");
+        }
+
+        /// <summary>
+        /// Attaches fake Microsoft Purview DLP policy activity to data that is already in the database,
+        /// so the "DLP impact on Copilot" report has something to show.
+        /// </summary>
+        /// <remarks>
+        /// Runs against EXISTING Copilot interactions on purpose: the report is about which agents and
+        /// people are affected, so the blocks have to hang off the same agents the Copilot reports show.
+        /// Generate Copilot activity first if the database is empty.
+        /// </remarks>
+        private static void RunDlpActivityGenerator(string connectionString)
+        {
+            Console.WriteLine("===========================================");
+            Console.WriteLine("  Generate Fake DLP Policy Activity");
+            Console.WriteLine("===========================================");
+            Console.WriteLine();
+            Console.WriteLine("Attaches DLP policy matches to Copilot interactions and audit events that");
+            Console.WriteLine("already exist. Generate Copilot activity first if this database is empty.");
+            Console.WriteLine();
+
+            if (!ConfirmDatabaseSafeToWrite(connectionString))
+            {
+                Console.WriteLine("Operation cancelled by user.");
+                return;
+            }
+
+            int affectedPercent = PromptInt("Percentage of Copilot interactions affected by a policy (0-100)", 8, 0, 100);
+            int tenantMatches = PromptInt("How many tenant-wide (DLP.All) rule matches?", 500, 0, int.MaxValue);
+
+            Console.WriteLine();
+            new DlpActivityGenerator(connectionString).GenerateDlpActivity(affectedPercent, tenantMatches);
+
+            Console.WriteLine();
+            Console.WriteLine("DLP activity generation completed successfully!");
         }
 
         /// <summary>

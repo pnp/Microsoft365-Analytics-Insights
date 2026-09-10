@@ -81,22 +81,53 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
 
         public async Task<bool> HasInteractionReadAccessAsync()
         {
+            // Behaviour preserved exactly from before the tri-state split: only a proven absence (or an
+            // unreadable token) stops the importer, and a missing app identity still fails OPEN so the
+            // per-user calls report the truth.
+            var access = await GetInteractionReadAccessAsync();
+            return access == InteractionReadAccess.Granted || access == InteractionReadAccess.NoIdentityToInspect;
+        }
+
+        /// <summary>
+        /// The permission state of the app token, keeping "we could not tell" distinct from "it is not
+        /// granted".
+        /// </summary>
+        /// <remarks>
+        /// <see cref="HasInteractionReadAccessAsync"/> collapses these into a single "should the importer
+        /// run?" answer, which is all the importer needs. A verifier must not: reporting a transient token
+        /// failure as a definite missing grant sends an admin off to re-consent a permission they may already
+        /// hold, and reporting "no identity to inspect" as a pass is worse still - it is the one case where
+        /// failing open is right for the importer and wrong for a check whose whole job is to prove the grant
+        /// exists. See issue #329.
+        /// </remarks>
+        public async Task<InteractionReadAccess> GetInteractionReadAccessAsync()
+        {
             if (_appIdentity == null)
             {
-                // Nothing to inspect - fail open and let the per-user calls report the truth.
-                return true;
+                return InteractionReadAccess.NoIdentityToInspect;
             }
 
             try
             {
                 var token = await _appIdentity.GetAccessToken();
-                var permissions = GraphTokenPermissions.Extract(token.Token);
-                return permissions.Any(p => InteractionReadPermissions.Contains(p));
+
+                if (!GraphTokenPermissions.TryExtract(token.Token, out var permissions))
+                {
+                    // The token could not be decoded, which proves nothing either way. Distinct from a token
+                    // that parsed cleanly and simply carries no roles - that IS a definite absence of consent.
+                    _logger.LogWarning("Could not read the access token's permissions, so the "
+                        + "AiEnterpriseInteraction.Read.All grant could not be confirmed either way.");
+                    return InteractionReadAccess.Unknown;
+                }
+
+                return permissions.Any(p => InteractionReadPermissions.Contains(p))
+                    ? InteractionReadAccess.Granted
+                    : InteractionReadAccess.NotGranted;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning($"Could not verify AiEnterpriseInteraction.Read.All on the access token: {ex.Message}. Assuming it has not been granted.");
-                return false;
+                _logger.LogWarning($"Could not verify AiEnterpriseInteraction.Read.All on the access token: {ex.Message}.");
+                return InteractionReadAccess.Unknown;
             }
         }
 
@@ -342,12 +373,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
     {
         public static IReadOnlyCollection<string> Extract(string jwt)
         {
+            TryExtract(jwt, out var permissions);
+            return permissions;
+        }
+
+        /// <summary>
+        /// Reads the permissions off an app-only token, reporting separately whether the token could be
+        /// parsed at all.
+        /// </summary>
+        /// <returns>
+        /// True when the payload was decoded (even if it carried no permissions), false when the token was
+        /// missing, malformed or not decodable.
+        /// </returns>
+        /// <remarks>
+        /// The distinction matters to callers that report on a permission: "the token parsed and carries no
+        /// roles" is a definite, actionable absence of consent, whereas "the token could not be read" proves
+        /// nothing. <see cref="Extract"/> collapses both to an empty set, which is fine for a caller that
+        /// only wants "does it have X?" but would make a diagnostic tell an admin to re-consent a permission
+        /// they may already hold. See issue #329.
+        /// </remarks>
+        public static bool TryExtract(string jwt, out IReadOnlyCollection<string> permissions)
+        {
+            permissions = Array.Empty<string>();
+
             if (string.IsNullOrEmpty(jwt))
-                return Array.Empty<string>();
+                return false;
 
             var parts = jwt.Split('.');
             if (parts.Length < 2)
-                return Array.Empty<string>();
+                return false;
 
             JObject payload;
             try
@@ -356,16 +410,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             }
             catch (Exception)
             {
-                return Array.Empty<string>();
+                return false;
             }
 
-            var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // Application permissions arrive as a "roles" array...
             if (payload["roles"] is JArray roles)
             {
                 foreach (var r in roles)
-                    permissions.Add(r.ToString());
+                    found.Add(r.ToString());
             }
 
             // ...delegated ones as a space-separated "scp" string. This endpoint is app-only, but both are
@@ -374,10 +428,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             if (!string.IsNullOrEmpty(scp))
             {
                 foreach (var s in scp.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
-                    permissions.Add(s);
+                    found.Add(s);
             }
 
-            return permissions;
+            permissions = found;
+            return true;
         }
 
         private static byte[] Base64UrlDecode(string input)

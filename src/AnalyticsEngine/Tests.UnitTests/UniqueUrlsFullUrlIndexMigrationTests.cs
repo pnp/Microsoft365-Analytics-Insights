@@ -300,12 +300,12 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
         {
             // Rule 7 of the migration conventions: the manual upgrade script must contain the migration's
             // Up SQL verbatim, so a by-hand upgrade cannot diverge from the installer's.
-            var manual = ReadManualScript("202609010900001_UniqueUrlsFullUrlIndex");
+            var manual = ReadManualScript("202609101100001_UniqueUrlsFullUrlIndex");
 
             StringAssert.Contains(manual, UniqueUrlsFullUrlIndex.Up_Sql,
                 "The manual script must embed the migration's Up_Sql verbatim.");
 
-            StringAssert.Contains(manual, "202608310800001_ColumnstoreUsageReportMetrics",
+            StringAssert.Contains(manual, "202609101000001_RetireUnusedAuditYammerStreamTables",
                 "The stamp must be conditional on the predecessor, so the scripts cannot be applied out of order.");
 
             StringAssert.Contains(manual, "INSERT INTO dbo.__MigrationHistory",

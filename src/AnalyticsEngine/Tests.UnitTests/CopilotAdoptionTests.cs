@@ -1,6 +1,7 @@
 extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
+using UnitTests.FakeLoaderClasses;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
@@ -849,7 +850,7 @@ namespace Tests.UnitTests
             // what matters is that a failure is DISTINGUISHABLE from a genuine zero.
             var service = new CopilotAdoptionService(
                 CopilotAdoptionOptions.Default,
-                () => throw new InvalidOperationException("simulated database failure"));
+                new ThrowingAnalyticsDbContextFactory("simulated database failure"));
 
             var analysis = await service.AnalyseAsync();
             var summary = analysis.Summary;
@@ -869,7 +870,7 @@ namespace Tests.UnitTests
             // be served to everyone else until the cache expired.
             var service = new CopilotAdoptionService(
                 CopilotAdoptionOptions.Default,
-                () => throw new InvalidOperationException("should not be reached"));
+                new ThrowingAnalyticsDbContextFactory("should not be reached"));
 
             using (var cts = new CancellationTokenSource())
             {
@@ -982,14 +983,15 @@ namespace Tests.UnitTests
         [TestMethod]
         public void Csv_IsUtf8WithABomSoExcelRendersNonLatinNames()
         {
-            // Real tenants have users and departments in Greek, Cyrillic, Japanese and so on. Without a
-            // BOM, Excel on Windows assumes the local ANSI code page and renders them as mojibake - in
-            // a document that is about to be sent to an executive.
+            // Real tenants have departments in Greek, Cyrillic, Japanese and so on. Without a BOM, Excel
+            // on Windows assumes the local ANSI code page and renders them as mojibake - in a document
+            // that is about to be sent to an executive. The UPN is ASCII because Entra does not permit
+            // anything else (#402/#414); Department carries the Unicode here.
             var rows = new[]
             {
                 new LicensedUserAdoptionRow
                 {
-                    UserPrincipalName = "\u03BA\u03B1\u03BB\u03B7\u03BC\u03B5\u03C1\u03B1@contoso.com",
+                    UserPrincipalName = "kalimera@contoso.com",
                     Department = "\u039A\u03B1\u03BB\u03B7\u03BC\u03AD\u03C1\u03B1 \u03BA\u03CC\u03C3\u03BC\u03B5",
                     BandName = "Champion",
                 },

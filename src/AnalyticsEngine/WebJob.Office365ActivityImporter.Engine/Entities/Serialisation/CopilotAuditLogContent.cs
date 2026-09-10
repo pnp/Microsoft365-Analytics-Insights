@@ -209,6 +209,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         public override async Task<bool> ProcessExtendedProperties(SaveSession sessionContext, CommonAuditEvent relatedAuditEvent, ILogger logger)
         {
             await sessionContext.CopilotEventResolver.SaveSingleCopilotEventToSqlStaging(this, relatedAuditEvent);
+
+            // A DLP policy that blocks Microsoft 365 Copilot reports itself HERE, inside the interaction
+            // record's AccessedResources, and nowhere else - not on the DLP.All feed. So this call is what
+            // makes "which agent is being blocked" answerable, and it deliberately does not depend on the
+            // DLP.All import toggle or the ActivityFeed.ReadDlp permission.
+            await sessionContext.DlpEventResolver.SaveCopilotDlpMatchesToSqlStaging(this, relatedAuditEvent);
             return true;
         }
     }
@@ -262,6 +268,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// Information about AI system plugins invoked during the interaction.
         /// </summary>
         public List<AISystemPlugin> AISystemPlugin { get; set; } = new List<AISystemPlugin>();
+
+        /// <summary>
+        /// Bitmask saying that DLP evaluation of one or more content-processing stages could not be
+        /// completed and was deferred for later re-evaluation: 1 = Prompt, 2 = Response, 4 = Grounding,
+        /// 8 = WebGrounding (combined with a bitwise OR).
+        /// https://learn.microsoft.com/en-us/purview/audit-copilot
+        /// </summary>
+        /// <remarks>
+        /// This is NOT a block - it is the opposite signal. A deferred evaluation means the tenant's DLP
+        /// posture for that interaction is <i>unknown</i>, so it must never be counted as either "blocked"
+        /// or "allowed". Reported separately as a data-quality caveat on the DLP page.
+        /// </remarks>
+        [JsonProperty("DLPEvaluationDeferred")]
+        public int? DlpEvaluationDeferred { get; set; }
+
+        /// <summary>
+        /// Why the stages named by <see cref="DlpEvaluationDeferred"/> were deferred (e.g. "Timeout",
+        /// "Authentication Error", "Service Unavailable"). Only populated when the bitmask is non-zero.
+        /// </summary>
+        [JsonProperty("DLPEvaluationDeferredReason")]
+        public string DlpEvaluationDeferredReason { get; set; }
     }
 
     /// <summary>
@@ -308,5 +335,82 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// The action performed against the resource during the Copilot interaction (e.g. Read).
         /// </summary>
         public string Action { get; set; }
+
+        /// <summary>
+        /// Whether Copilot's action on this resource was a <c>success</c> or a <c>failure</c>.
+        /// https://learn.microsoft.com/en-us/purview/audit-copilot
+        /// </summary>
+        /// <remarks>
+        /// A failure on its own does not prove a DLP policy caused it, so it is recorded verbatim and
+        /// interpreted by <c>CopilotDlpRules</c> rather than being collapsed into a bool here.
+        /// </remarks>
+        public string Status { get; set; }
+
+        /// <summary>
+        /// Populated when Copilot's access to this resource was blocked or restricted by a policy.
+        /// This is where a Microsoft Purview DLP policy that targets the "Microsoft 365 Copilot and
+        /// Copilot Chat" location shows up - such policies do NOT emit standalone DlpRuleMatch records
+        /// on the DLP.All feed, so this collection is the only place a Copilot DLP block can be
+        /// attributed to an agent.
+        /// https://learn.microsoft.com/en-us/purview/audit-copilot
+        /// </summary>
+        /// <remarks>
+        /// Microsoft describes this field only in prose ("can include details like PolicyId, PolicyName,
+        /// list of rules, etc.") and omits it entirely from the published OData schema for
+        /// CopilotInteraction, so the exact shape is not contractual. Every member is therefore optional
+        /// and nothing is required to deserialise - an unexpected payload must degrade to "no policy
+        /// detail" rather than throwing away the whole interaction.
+        /// </remarks>
+        public List<AccessedResourcePolicyDetail> PolicyDetails { get; set; }
+
+        /// <summary>
+        /// Whether a Cross-Prompt Injection Attack was detected from this resource.
+        /// </summary>
+        public bool? XPIADetected { get; set; }
+    }
+
+    /// <summary>
+    /// A policy that blocked or restricted Copilot's access to one accessed resource, as carried inside
+    /// <see cref="AccessedResource.PolicyDetails"/>.
+    /// </summary>
+    /// <remarks>
+    /// Field names mirror the Management Activity API's DLP schema <c>PolicyDetails</c> complex type,
+    /// which is what the prose on the audit-copilot page points at. Treated as best-effort: see the
+    /// remarks on <see cref="AccessedResource.PolicyDetails"/>.
+    /// </remarks>
+    public class AccessedResourcePolicyDetail
+    {
+        public string PolicyId { get; set; }
+
+        public string PolicyName { get; set; }
+
+        public List<AccessedResourcePolicyRule> Rules { get; set; }
+    }
+
+    /// <summary>
+    /// One rule of an <see cref="AccessedResourcePolicyDetail"/> that matched.
+    /// </summary>
+    public class AccessedResourcePolicyRule
+    {
+        public string RuleId { get; set; }
+
+        public string RuleName { get; set; }
+
+        /// <summary>
+        /// Actions the rule took, e.g. <c>BlockAccess</c>, <c>NotifyUser</c>, <c>GenerateIncidentReport</c>.
+        /// The Management Activity API schema does not enumerate the permitted values, so they are kept
+        /// verbatim and classified by <c>CopilotDlpRules</c>.
+        /// </summary>
+        public List<string> Actions { get; set; }
+
+        /// <summary>"Low", "Medium" or "High".</summary>
+        public string Severity { get; set; }
+
+        /// <summary>
+        /// "Enforce", "Audit with Notify" or "Audit only". Decisive for block reporting: a rule can match
+        /// and list a blocking action while running in "Audit only" mode, in which case nothing was
+        /// actually blocked.
+        /// </summary>
+        public string RuleMode { get; set; }
     }
 }

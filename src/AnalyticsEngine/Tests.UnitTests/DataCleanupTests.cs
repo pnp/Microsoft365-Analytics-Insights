@@ -757,38 +757,13 @@ namespace Tests.UnitTests
             };
             db.CallFailures.Add(callFailureReason);
 
-            // Stream / Yammer
-            var streamVideo = new StreamVideo { StreamID = Guid.NewGuid(), Name = "Video-" + ticks };
-            db.Streams.Add(streamVideo);
-
+            // Yammer
             var yammerGroup = new YammerGroup { Name = "Group-" + ticks };
             db.YammerGroups.Add(yammerGroup);
-
-            var yammerMessage = new YammerMessage { Created = oneYearAgo, YammerID = DateTime.Now.Ticks };
-            db.YammerMessages.Add(yammerMessage);
-
-            var yammerLink = new YammerStreamLink { Message = yammerMessage, Video = streamVideo };
-            db.YammerStreamLinks.Add(yammerLink);
-
-            var streamEvent = new StreamEventMetada
-            {
-                AuditEvent = new CommonAuditEvent
-                {
-                    Id = Guid.NewGuid(),
-                    TimeStamp = oneYearAgo,
-                    Operation = op,
-                    User = user
-                },
-                Video = streamVideo
-            };
-            db.StreamEvents.Add(streamEvent);
 
             // O365 client app
             var clientApp = new O365ClientApplication { ClientApplicationId = Guid.NewGuid(), Name = "ClientAppName-" + ticks };
             db.O365ClientApplications.Add(clientApp);
-
-            // Associate client app with the previously created stream event (if navigation exists)
-            streamEvent.ClientApplication = clientApp;
 
             // Click tracking
             var clickedTitle = new ClickedElementTitle { Name = "CTitle-" + ticks };

@@ -28,6 +28,12 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
+/* QUOTED_IDENTIFIER must be ON for the xs:base64Binary() call that rebuilds the model blob further
+   down. SSMS connects with it ON, but sqlcmd defaults it OFF, so without this the stamp fails with
+   "INSERT failed because the following SET options have incorrect settings: 'QUOTED_IDENTIFIER'" -
+   after the schema work has already succeeded, leaving the migration unstamped. */
+SET QUOTED_IDENTIFIER ON;
+
 DECLARE @migration nvarchar(100) = N'202608190725064_AddCopilotUsageReports';
 DECLARE @predecessor nvarchar(100) = N'202608190622001_CopilotDroppedAuditFields';
 DECLARE @msg nvarchar(2000);

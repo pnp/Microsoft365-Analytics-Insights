@@ -160,13 +160,16 @@
     <SpaSourceFile Include="$(SpaRoot)tsconfig.json" />
     <SpaSourceFile Include="$(SpaRoot)package.json" />
   </ItemGroup>
-  <!-- Dependencies only. Re-runs when the manifest or the lock file changes. -->
-  <Target Name="NpmInstall" Inputs="$(SpaRoot)package.json;$(SpaRoot)package-lock.json" Outputs="$(NpmInstallStampFile)">
-    <!-- Ensure Node.js is installed -->
-    <Exec Command="node --version" ContinueOnError="true">
-      <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
-    </Exec>
-    <Error Condition="'$(ErrorCode)' != '0'" Text="Node.js is required to build and run this project. To continue, please install Node.js from https://nodejs.org/, and then restart your command prompt or IDE." />
+  <!--
+    Dependencies only. Re-runs when the manifest or the lock file changes.
+
+    CheckNodeVersion is a DependsOnTargets rather than a step inside the body on purpose: MSBuild
+    resolves dependencies BEFORE the Inputs/Outputs up-to-date check, so the guard still runs on an
+    incremental build where node_modules is already current. It used to only assert that some node
+    was on PATH, which let a machine on an older major rebuild the bundle with a different
+    toolchain and never say so.
+  -->
+  <Target Name="NpmInstall" DependsOnTargets="CheckNodeVersion" Inputs="$(SpaRoot)package.json;$(SpaRoot)package-lock.json" Outputs="$(NpmInstallStampFile)">
     <Message Importance="high" Text="Restoring portal dependencies using 'npm'. This may take several minutes..." />
     <Exec Command="npm install" WorkingDirectory="$(SpaRoot)" />
     <Touch Files="$(NpmInstallStampFile)" AlwaysCreate="true" />
@@ -215,6 +218,9 @@
     <Compile Include="Controllers\AccountController.cs" />
     <Compile Include="Controllers\BaseAPIController.cs" />
     <Compile Include="Controllers\CopilotAdoptionAPIController.cs" />
+    <Compile Include="Controllers\AgentCostsAPIController.cs" />
+    <Compile Include="Controllers\DlpAPIController.cs" />
+    <Compile Include="Controllers\LicenceActivityAPIController.cs" />
     <Compile Include="Controllers\ImportConfigController.cs" />
     <Compile Include="Controllers\InstallLogAPIController.cs" />
     <Compile Include="Controllers\ProfilingStatusAPIController.cs" />
@@ -231,18 +237,32 @@
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
     <Compile Include="Models\AuthTeamRequest.cs" />
+    <Compile Include="Models\LicenceActivity\LicenceActivitySnapshotCache.cs" />
+    <Compile Include="Models\LicenceActivity\LicenceActivityTelemetry.cs" />
+    <Compile Include="Models\CopilotAdoption\CopilotAdoptionAnalysisCoordinator.cs" />
+    <Compile Include="Models\Dlp\DlpModels.cs" />
+    <Compile Include="Models\CopilotAdoption\CopilotAdoptionTelemetry.cs" />
     <Compile Include="Models\InstallLogModels.cs" />
     <Compile Include="Models\ProfilingStatusModels.cs" />
     <Compile Include="Models\ReportsModels.cs" />
     <Compile Include="Models\SystemStatus.cs" />
+    <Compile Include="Models\Health\HealthDataSectionRules.cs" />
     <Compile Include="Models\Health\HealthModels.cs" />
     <Compile Include="Models\Health\HealthService.cs" />
+    <Compile Include="Models\Health\IHealthCache.cs" />
+    <Compile Include="Models\Health\IHealthDataSource.cs" />
+    <Compile Include="Models\Health\SqlHealthDataSource.cs" />
     <Compile Include="Models\SystemStatusApiModel.cs" />
     <Compile Include="Models\UpdateCheck\BuildVersion.cs" />
     <Compile Include="Models\UpdateCheck\UpdateCheckApiModel.cs" />
     <Compile Include="Models\UpdateCheck\UpdateChecker.cs" />
     <Compile Include="Models\TeamAuthStatusResponse.cs" />
     <Compile Include="Models\UserDataLookupModels.cs" />
+    <Compile Include="Models\UserDataLookup\IUserDataLookupQuery.cs" />
+    <Compile Include="Models\UserDataLookup\IUserDataLookupService.cs" />
+    <Compile Include="Models\UserDataLookup\SqlUserDataLookupQuery.cs" />
+    <Compile Include="Models\UserDataLookup\UserDataLookupRules.cs" />
+    <Compile Include="Models\UserDataLookup\UserDataLookupService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Startup.cs" />
     <Compile Include="GraphTokenClaims.cs" />
@@ -302,6 +322,8 @@
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
   </PropertyGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- Repo-wide Node.js pin (<repo>/.nvmrc). Defines the CheckNodeVersion target that NpmInstall depends on. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\..\..\build\NodeVersion.targets" />
   <Import Project="$(VSToolsPath)\WebApplications\Microsoft.WebApplication.targets" Condition="'$(VSToolsPath)' != ''" />
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v10.0\WebApplications\Microsoft.WebApplication.targets" Condition="false" />
   <ProjectExtensions>

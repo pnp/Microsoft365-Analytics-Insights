@@ -394,20 +394,36 @@ namespace App.ControlPanel.Engine
                     errs.Add("SQL Server names must be lower-case alphanumerics only");
                 }
             }
-            if (string.IsNullOrWhiteSpace(this.SQLServerAdminUsername))
+            if (this.SqlAuthMode == SqlServerAuthMode.EntraId)
             {
-                errs.Add("Provide a Azure SQL administrator username");
-            }
-            if (string.IsNullOrWhiteSpace(this.SQLServerAdminPassword))
-            {
-                errs.Add("Provide an Azure SQL Server password");
+                // Microsoft Entra ID authentication stores no SQL login, so the deprecated username/password
+                // are not required. They are still accepted (and still used) when the installer is pointed at
+                // an existing SQL-authentication server - see SqlServerAuthDetection.
+                if (!string.IsNullOrWhiteSpace(this.SQLEntraAdminObjectId)
+                    && !Guid.TryParse(this.SQLEntraAdminObjectId.Trim(), out _))
+                {
+                    errs.Add("The Microsoft Entra SQL administrator object ID must be a GUID. Leave it blank to use the installer's own service principal.");
+                }
+                if (!string.IsNullOrWhiteSpace(this.SQLEntraAdminObjectId) && string.IsNullOrWhiteSpace(this.SQLEntraAdminLogin))
+                {
+                    errs.Add("Provide the login/display name of the Microsoft Entra SQL administrator alongside its object ID.");
+                }
             }
             else
             {
-                if (this.SQLServerAdminPassword.Contains(";"))
+                if (string.IsNullOrWhiteSpace(this.SQLServerAdminUsername))
                 {
-                    errs.Add("SQL password cannot contain semi-colons (';')");
+                    errs.Add("Provide a Azure SQL administrator username");
                 }
+                if (string.IsNullOrWhiteSpace(this.SQLServerAdminPassword))
+                {
+                    errs.Add("Provide an Azure SQL Server password");
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(this.SQLServerAdminPassword) && this.SQLServerAdminPassword.Contains(";"))
+            {
+                errs.Add("SQL password cannot contain semi-colons (';')");
             }
 
             // Storage

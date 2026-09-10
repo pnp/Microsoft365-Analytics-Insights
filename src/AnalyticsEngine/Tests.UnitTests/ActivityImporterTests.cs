@@ -270,7 +270,7 @@ namespace Tests.UnitTests
                             .Include(e => e.AuditEvent)
                             .Include(e => e.AuditEvent.User)
                             .Include(e => e.AuditEvent.Operation)
-                            .Include(e => e.Properties).Where(e => e.EventID == log.Id).SingleOrDefault();
+                            .Where(e => e.EventID == log.Id).SingleOrDefault();
                         CompareExchangeReports(dbEvent, log);
 
                         lastInsertedEvents.Add(dbEvent);
@@ -281,7 +281,6 @@ namespace Tests.UnitTests
                             .Include(e => e.AuditEvent)
                             .Include(e => e.AuditEvent.User)
                             .Include(e => e.AuditEvent.Operation)
-                            .Include(e => e.Properties)
                             .Where(e => e.EventID == log.Id).SingleOrDefault();
                         CompareAzureReports(dbEvent, log);
 
@@ -307,11 +306,6 @@ namespace Tests.UnitTests
                 }
                 else if (log.Workload == ActivityImportConstants.WORKLOAD_EXCHANGE)
                 {
-                    // This is a hack because we don't have the right tables in the EF context yet
-                    var metaRecordProps = db.Database.ExecuteSqlCommand(
-                        $"delete from audit_event_exchange_props where [event_id] = '{log.Id}'"
-                    );
-
                     var metaRecord = db.exchange_events.Where(l => l.EventID == log.Id).SingleOrDefault();
                     if (metaRecord != null) db.exchange_events.Remove(metaRecord);
 
@@ -319,11 +313,6 @@ namespace Tests.UnitTests
                 }
                 else if (log.Workload == ActivityImportConstants.WORKLOAD_AZURE_AD)
                 {
-                    // This is a hack because we don't have the right tables in the EF context yet
-                    var metaRecordProps = db.Database.ExecuteSqlCommand(
-                        $"delete from audit_event_azure_ad_props where [event_id] = '{log.Id}'"
-                    );
-
                     var metaRecord = db.azure_ad_events.Where(l => l.EventID == log.Id).SingleOrDefault();
                     if (metaRecord != null) db.azure_ad_events.Remove(metaRecord);
 
@@ -368,14 +357,10 @@ namespace Tests.UnitTests
         private void CompareAzureReports(AzureADEventMetadata databaseObj, AbstractAuditLogContent jsonObj)
         {
             CompareBaseReports(databaseObj, jsonObj);
-
-            Assert.AreEqual(databaseObj.Properties.Count, jsonObj.ExtendedProperties.Count);
         }
         private void CompareExchangeReports(ExchangeEventMetadata databaseObj, AbstractAuditLogContent jsonObj)
         {
             CompareBaseReports(databaseObj, jsonObj);
-
-            Assert.AreEqual(databaseObj.Properties.Count, jsonObj.ExtendedProperties.Count);
         }
 
         private void VerifySharePointLog(SharePointAuditLogContent auditLogContent)
@@ -548,7 +533,7 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
                 new CopilotAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_COPILOT, ObjectId = Guid.NewGuid().ToString() },
                 new ExchangeAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_EXCHANGE, ObjectId = "user@contoso.com" },
                 new AzureADAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_AZURE_AD, ObjectId = Guid.NewGuid().ToString() },
-                new StreamAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_STREAM, ObjectId = "video-id" },
+                new GeneralAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_STREAM, ObjectId = "video-id" },
                 new GeneralAuditLogContent { Workload = "SomeOtherWorkload", ObjectId = "whatever" },
             };
 
@@ -561,6 +546,20 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             // Empty / null ObjectId on a non-SP content type must still pass.
             Assert.IsTrue(spFilterConfig.InScope(new PowerBIAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_BI, ObjectId = null }));
             Assert.IsTrue(spFilterConfig.InScope(new PowerAutomateAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_AUTOMATE, ObjectId = string.Empty }));
+        }
+
+        [TestMethod]
+        public void OrgURLsFilter_EmptyUrlList_DropsSharePointOnly()
+        {
+            var spFilterConfig = new SharePointOrgUrlsFilterConfig();
+
+            var spEvent = DataGenerators.GetRandomSharePointLog();
+            spEvent.ObjectId = "https://contoso.sharepoint.com/sites/example/Shared Documents/file.docx";
+
+            Assert.IsFalse(spFilterConfig.InScope(spEvent),
+                "With no org_urls rows, SharePoint/OneDrive audit events must not fall through to the generic empty-list allow-all URL rule.");
+            Assert.IsTrue(spFilterConfig.InScope(new PowerAppsAuditLogContent { Workload = ActivityImportConstants.WORKLOAD_POWER_APPS, ObjectId = "00000000-0000-0000-0000-000000000015" }),
+                "The empty SharePoint URL whitelist must not block non-SharePoint workloads delivered by the same Activity API cycle.");
         }
 
         /// <summary>
@@ -752,6 +751,12 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             try
             {
                 var s = new AppConfig();
+                s.ImportJobSettings = new ImportTaskSettings
+                {
+                    ActivityLog = true,
+                    Copilot = true,
+                    ImportPowerPlatform = true,
+                };
                 return s;
             }
             catch (FormatException)

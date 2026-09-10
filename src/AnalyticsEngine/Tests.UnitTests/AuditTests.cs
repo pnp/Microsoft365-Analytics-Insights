@@ -55,12 +55,6 @@ namespace Tests.UnitTests
 
                 // Create Exchange event
                 ExchangeEventMetadata exchangeEvent = new ExchangeEventMetadata();
-                exchangeEvent.Properties.Add(new ExchangeExtendedProperties()
-                {
-                    name = SharePointLookupManager.GetAuditPropertyName("Name", db),
-                    value = SharePointLookupManager.GetAuditPropertyValue("Val", db)
-                }
-                );
                 exchangeEvent.AuditEvent = newEvent;
                 db.exchange_events.Add(exchangeEvent);
 
@@ -69,9 +63,6 @@ namespace Tests.UnitTests
                 // Find again
                 ExchangeEventMetadata saved = db.exchange_events.Where(e => e.EventID == exchangeEvent.EventID).FirstOrDefault();
                 Assert.IsNotNull(saved, "Couldn't find previously saved Exchange event");
-
-
-                Assert.IsTrue(saved.Properties.Count > 0, "Couldn't find previously saved Exchange event properties");
             }
         }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Title3,
   Body1,
+  Link,
   Text,
   Card,
   Input,
@@ -98,7 +99,7 @@ export default function ReportsPage() {
   const [areasLoading, setAreasLoading] = useState(true);
 
   const [months, setMonths] = useState(3);
-  const [selectedArea, setSelectedArea] = useState<ReportAreaKey | null>(null);
+  const [selectedTab, setSelectedTab] = useState<ReportAreaKey | null>(null);
   const [topAgents, setTopAgents] = useState(8);
   const [agentNameDraft, setAgentNameDraft] = useState('');
   const [agentNameFilter, setAgentNameFilter] = useState('');
@@ -127,18 +128,18 @@ export default function ReportsPage() {
     [areas],
   );
 
-  // Default the selection to the first enabled area once we know which areas exist.
   useEffect(() => {
-    if (enabledAreas.length === 0) {
-      setSelectedArea(null);
-      return;
-    }
-    setSelectedArea((current) =>
-      current && enabledAreas.some((a) => a.key === current) ? current : enabledAreas[0].key,
-    );
-  }, [enabledAreas]);
+    if (areas === null && !areasError) return; // still loading - don't pick a default yet
+    setSelectedTab((current) => {
+      if (current && enabledAreas.some((a) => a.key === current)) return current;
+      return enabledAreas[0]?.key ?? null;
+    });
+  }, [areas, areasError, enabledAreas]);
 
-  const onTabSelect: SelectTabEventHandler = (_e, data) => setSelectedArea(data.value as ReportAreaKey);
+  const onTabSelect: SelectTabEventHandler = (_e, data) => {
+    const area = enabledAreas.find((a) => a.key === data.value);
+    if (area) setSelectedTab(area.key);
+  };
 
   return (
     <div>
@@ -146,31 +147,40 @@ export default function ReportsPage() {
         <div>
           <Title3>Reports</Title3>
           <Body1 block className={styles.intro}>
-            A quick, built-in view of how your Microsoft 365 usage is trending. Each section below appears only when its
-            data is being imported.
+            A quick, built-in view of how your Microsoft 365 usage is trending. The report charts appear only when
+            their data is being imported. For licence assignments and activity, open{' '}
+            <Link href="#/insights/licence-activity">Licence activity</Link> in the Insights navigation.
           </Body1>
         </div>
-        <div className={styles.controls}>
-          <Text size={200} className={styles.muted}>
-            Period
-          </Text>
-          <Select
-            value={String(months)}
-            onChange={(_e, data) => setMonths(Number(data.value))}
-            aria-label="Reporting period"
-          >
-            {MONTH_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-        </div>
+        {enabledAreas.length > 0 && (
+          <div className={styles.controls}>
+            <Text size={200} className={styles.muted}>
+              Period
+            </Text>
+            <Select
+              value={String(months)}
+              onChange={(_e, data) => setMonths(Number(data.value))}
+              aria-label="Reporting period"
+            >
+              {MONTH_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
       </div>
 
-      {areasLoading && (
-        <div style={{ textAlign: 'center', padding: '32px' }}>
-          <Spinner size={80} label="Loading reports..." />
+      {enabledAreas.length > 0 && (
+        <div className={styles.subTabs}>
+          <TabList selectedValue={selectedTab ?? ''} onTabSelect={onTabSelect}>
+            {enabledAreas.map((a) => (
+              <Tab key={a.key} value={a.key}>
+                {a.label}
+              </Tab>
+            ))}
+          </TabList>
         </div>
       )}
 
@@ -183,27 +193,20 @@ export default function ReportsPage() {
       {!areasLoading && !areasError && enabledAreas.length === 0 && (
         <MessageBar intent="info" style={{ marginTop: '16px' }}>
           <MessageBarBody>
-            No reports are available yet because no data imports are enabled. Enable one or more imports (Copilot, usage
-            reports, SharePoint activity, website traffic, Teams calls or emails) in the installer to see reports here.
+            No built-in report charts are available yet because no data imports are enabled. Enable one or more
+            imports (Copilot, usage reports, SharePoint activity, website traffic, Teams calls or emails) in the
+            installer to see them.
           </MessageBarBody>
         </MessageBar>
       )}
 
-      {!areasLoading && enabledAreas.length > 0 && selectedArea && (
+      {areasLoading ? (
+        <div style={{ textAlign: 'center', padding: '32px' }}>
+          <Spinner size={80} label="Loading reports..." />
+        </div>
+      ) : areasError ? null : selectedTab && enabledAreas.some((a) => a.key === selectedTab) ? (
         <>
-          {enabledAreas.length > 1 && (
-            <div className={styles.subTabs}>
-              <TabList selectedValue={selectedArea} onTabSelect={onTabSelect}>
-                {enabledAreas.map((a) => (
-                  <Tab key={a.key} value={a.key}>
-                    {a.label}
-                  </Tab>
-                ))}
-              </TabList>
-            </div>
-          )}
-
-          {selectedArea === 'copilot-agents' && (
+          {selectedTab === 'copilot-agents' && (
             <div className={styles.controls} style={{ marginTop: '16px', flexWrap: 'wrap' }}>
               <Text size={200} className={styles.muted}>
                 Top agents
@@ -228,10 +231,7 @@ export default function ReportsPage() {
                 placeholder="Filter by agent name"
                 aria-label="Filter Copilot agents by name"
               />
-              <Button
-                size="small"
-                onClick={() => setAgentNameFilter(agentNameDraft.trim())}
-              >
+              <Button size="small" onClick={() => setAgentNameFilter(agentNameDraft.trim())}>
                 Apply
               </Button>
               {agentNameFilter && (
@@ -250,15 +250,15 @@ export default function ReportsPage() {
           )}
 
           <ReportAreaView
-            key={selectedArea}
-            area={selectedArea}
+            key={selectedTab}
+            area={selectedTab}
             months={months}
-            blurb={enabledAreas.find((a) => a.key === selectedArea)?.blurb ?? ''}
+            blurb={enabledAreas.find((a) => a.key === selectedTab)?.blurb ?? ''}
             topAgents={topAgents}
             agentName={agentNameFilter}
           />
         </>
-      )}
+      ) : null}
     </div>
   );
 }
