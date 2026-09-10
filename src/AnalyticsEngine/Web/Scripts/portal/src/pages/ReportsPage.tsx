@@ -1,7 +1,8 @@
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Title3,
   Body1,
+  Link,
   Text,
   Card,
   Input,
@@ -23,11 +24,6 @@ import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import WordCloud from '../components/charts/WordCloud';
-import { lazyWithReload } from '../lazyWithReload';
-
-// The Licence activity tab is an always-present part of Reports (it doesn't depend on any import
-// flag). Lazy-loaded so opening Reports for the charts doesn't pay for it until the tab is chosen.
-const LicenceActivityPage = lazyWithReload(() => import('./LicenceActivityPage'));
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
 const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; label: string; blurb: string }[] = [
@@ -45,10 +41,6 @@ const MONTH_OPTIONS = [
   { value: 3, label: 'Last 3 months' },
   { value: 6, label: 'Last 6 months' },
 ];
-
-/** Tab identity: one of the report areas, or the always-present Licence activity tab. */
-type ReportTab = ReportAreaKey | 'licence-activity';
-const LICENCE_TAB = 'licence-activity' as const;
 
 const useStyles = makeStyles({
   header: {
@@ -107,7 +99,7 @@ export default function ReportsPage() {
   const [areasLoading, setAreasLoading] = useState(true);
 
   const [months, setMonths] = useState(3);
-  const [selectedTab, setSelectedTab] = useState<ReportTab | null>(null);
+  const [selectedTab, setSelectedTab] = useState<ReportAreaKey | null>(null);
   const [topAgents, setTopAgents] = useState(8);
   const [agentNameDraft, setAgentNameDraft] = useState('');
   const [agentNameFilter, setAgentNameFilter] = useState('');
@@ -136,20 +128,18 @@ export default function ReportsPage() {
     [areas],
   );
 
-  // The Licence activity tab is always present and independent of the report-area flags. Choose a
-  // default once areas resolve (or fail to): keep an explicit Licence choice, else land on the first
-  // enabled report area, falling back to Licence activity when no report imports are enabled.
   useEffect(() => {
     if (areas === null && !areasError) return; // still loading - don't pick a default yet
     setSelectedTab((current) => {
-      if (current === LICENCE_TAB) return current;
       if (current && enabledAreas.some((a) => a.key === current)) return current;
-      return enabledAreas.length > 0 ? enabledAreas[0].key : LICENCE_TAB;
+      return enabledAreas[0]?.key ?? null;
     });
   }, [areas, areasError, enabledAreas]);
 
-  const onLicence = selectedTab === LICENCE_TAB;
-  const onTabSelect: SelectTabEventHandler = (_e, data) => setSelectedTab(data.value as ReportTab);
+  const onTabSelect: SelectTabEventHandler = (_e, data) => {
+    const area = enabledAreas.find((a) => a.key === data.value);
+    if (area) setSelectedTab(area.key);
+  };
 
   return (
     <div>
@@ -158,11 +148,11 @@ export default function ReportsPage() {
           <Title3>Reports</Title3>
           <Body1 block className={styles.intro}>
             A quick, built-in view of how your Microsoft 365 usage is trending. The report charts appear only when
-            their data is being imported; the Licence activity tab is always shown and explains what it needs if a
-            prerequisite import is off.
+            their data is being imported. For licence assignments and activity, open{' '}
+            <Link href="#/insights/licence-activity">Licence activity</Link> in the Insights navigation.
           </Body1>
         </div>
-        {!onLicence && (
+        {enabledAreas.length > 0 && (
           <div className={styles.controls}>
             <Text size={200} className={styles.muted}>
               Period
@@ -182,28 +172,21 @@ export default function ReportsPage() {
         )}
       </div>
 
-      {/* The tab strip is ALWAYS rendered - the Licence activity tab must exist even while the
-          report areas are loading, errored, or all disabled. Report-area tabs are added as they load. */}
-      <div className={styles.subTabs}>
-        <TabList selectedValue={selectedTab ?? ''} onTabSelect={onTabSelect}>
-          {enabledAreas.map((a) => (
-            <Tab key={a.key} value={a.key}>
-              {a.label}
-            </Tab>
-          ))}
-          <Tab value={LICENCE_TAB}>Licence activity</Tab>
-        </TabList>
-      </div>
+      {enabledAreas.length > 0 && (
+        <div className={styles.subTabs}>
+          <TabList selectedValue={selectedTab ?? ''} onTabSelect={onTabSelect}>
+            {enabledAreas.map((a) => (
+              <Tab key={a.key} value={a.key}>
+                {a.label}
+              </Tab>
+            ))}
+          </TabList>
+        </div>
+      )}
 
-      {/* The report-areas load failure is rendered HERE, outside the tab content below, so it stays
-          visible even when the Licence activity tab (which does not depend on the report-area flags)
-          is the selected/default tab. Inside the content switch the Licence branch wins and the error
-          would never show. */}
       {areasError && (
         <MessageBar intent="error" style={{ marginTop: '16px' }}>
-          <MessageBarBody>
-            {areasError} This affects only the built-in report charts; the Licence activity tab is unaffected.
-          </MessageBarBody>
+          <MessageBarBody>{areasError}</MessageBarBody>
         </MessageBar>
       )}
 
@@ -212,23 +195,12 @@ export default function ReportsPage() {
           <MessageBarBody>
             No built-in report charts are available yet because no data imports are enabled. Enable one or more
             imports (Copilot, usage reports, SharePoint activity, website traffic, Teams calls or emails) in the
-            installer to see them. The Licence activity tab stays visible; open it to see licence and workload
-            activity, and it explains its own prerequisites if the licence import is off.
+            installer to see them.
           </MessageBarBody>
         </MessageBar>
       )}
 
-      {onLicence ? (
-        <Suspense
-          fallback={
-            <div style={{ textAlign: 'center', padding: '32px' }}>
-              <Spinner size={80} label="Loading licence activity..." />
-            </div>
-          }
-        >
-          <LicenceActivityPage />
-        </Suspense>
-      ) : areasLoading ? (
+      {areasLoading ? (
         <div style={{ textAlign: 'center', padding: '32px' }}>
           <Spinner size={80} label="Loading reports..." />
         </div>
@@ -279,7 +251,7 @@ export default function ReportsPage() {
 
           <ReportAreaView
             key={selectedTab}
-            area={selectedTab as ReportAreaKey}
+            area={selectedTab}
             months={months}
             blurb={enabledAreas.find((a) => a.key === selectedTab)?.blurb ?? ''}
             topAgents={topAgents}

@@ -34,6 +34,8 @@ namespace App.ControlPanel.Controls
                         ImportPowerPlatform = chkPowerPlatform.Checked,
                         GraphCopilotUsageReports = chkCopilotUsageReports.Checked,
                         CopilotInteractionHistory = chkCopilotInteractionHistory.Checked,
+                        CopilotStudioCredits = chkCopilotStudioCredits.Checked,
+                        AzureCostManagement = chkAzureCostManagement.Checked,
                         ImportDlp = chkDlp.Checked
                     }
                 };
@@ -60,6 +62,8 @@ namespace App.ControlPanel.Controls
             chkCopilotUsageReports.Checked = value.ImportTaskSettings.GraphCopilotUsageReports;
             chkCopilotInteractionHistory.Checked = value.ImportTaskSettings.CopilotInteractionHistory;
             chkDlp.Checked = value.ImportTaskSettings.ImportDlp;
+            chkCopilotStudioCredits.Checked = value.ImportTaskSettings.CopilotStudioCredits;
+            chkAzureCostManagement.Checked = value.ImportTaskSettings.AzureCostManagement;
         }
 
 

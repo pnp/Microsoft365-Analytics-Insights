@@ -165,7 +165,9 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 UserMetadata = settings.GraphUsersMetadata, UsageReports = settings.GraphUsageReports,
                 CopilotUsageReports = settings.GraphCopilotUsageReports, CopilotAudit = settings.Copilot,
-                CopilotInteractions = settings.CopilotInteractionHistory, NowUtc = DateTime.UtcNow
+                CopilotInteractions = settings.CopilotInteractionHistory,
+                UsageReportsGroupFiltered = !string.IsNullOrWhiteSpace(config.UserGroupsFilter),
+                NowUtc = DateTime.UtcNow
             };
             string scope;
             using (var sha = SHA256.Create())

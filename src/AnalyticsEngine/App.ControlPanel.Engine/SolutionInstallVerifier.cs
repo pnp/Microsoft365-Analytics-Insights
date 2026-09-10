@@ -5,10 +5,12 @@ using Azure.ResourceManager;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Redis;
 using Azure.ResourceManager.RedisEnterprise;
+using Azure.ResourceManager.AppService;
+using CloudInstallEngine.Azure;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
-using CloudInstallEngine.Azure;
 using Common.Entities;
+using Common.Entities.Installer;
 using DataUtils;
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
@@ -83,6 +85,9 @@ namespace App.ControlPanel.Engine
                 }
             }
 
+            // Verify the existing App Service plan supports solution runtime features.
+            await VerifyAppServicePlanCapabilities(testRg);
+
             // Verify the installer account can create RBAC role assignments
             // (Microsoft.Authorization/roleAssignments/write). Lacking this permission is the cause of
             // "...does not have authorization to perform action 'Microsoft.Authorization/roleAssignments/write'
@@ -130,11 +135,12 @@ namespace App.ControlPanel.Engine
 
         /// <summary>
         /// Return SQL details so connectivity tests can run against an existing server.
-        /// We cannot read back the SQL password, so it must come from config.
+        /// We cannot read back the SQL password, so it must come from config - unless the deployment uses
+        /// Microsoft Entra ID authentication, in which case there is no password at all (issue #117).
         /// </summary>
         public async Task<AutodetectedSqlDetails> GetSqlDetails(string sqlPassword)
         {
-            if (string.IsNullOrEmpty(sqlPassword))
+            if (string.IsNullOrEmpty(sqlPassword) && Config.SqlAuthMode != SqlServerAuthMode.EntraId)
             {
                 throw new ArgumentException($"'{nameof(sqlPassword)}' cannot be null or empty.", nameof(sqlPassword));
             }
@@ -174,11 +180,16 @@ namespace App.ControlPanel.Engine
         {
             if (config == null) return false;
 
+            // A Microsoft Entra ID deployment has no SQL login to supply, so requiring one here would make
+            // autodetection permanently unavailable for it. See issue #117.
+            var haveSqlCredentials = config.SqlAuthMode == SqlServerAuthMode.EntraId
+                || (!string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername));
+
             var installerAccErrors = config.InstallerAccount?.GetValidationErrors();
             return installerAccErrors != null && installerAccErrors.Count == 0
                 && !string.IsNullOrEmpty(config.ResourceGroupName)
                 && config.Subscription.IsValidSubscription
-                && !string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername) && !string.IsNullOrEmpty(config.SQLServerName);
+                && haveSqlCredentials && !string.IsNullOrEmpty(config.SQLServerName);
         }
 
         async Task<(ResourceGroupResource, bool)> GetResourceGroupIfValid()
@@ -209,6 +220,51 @@ namespace App.ControlPanel.Engine
                 }
             }
             return (null, false);
+        }
+
+        /// <summary>
+        /// Warn when an existing App Service plan cannot run Always On / 64-bit workers so Test Configuration
+        /// catches under-provisioned plans before the install writes App Service settings. Logs only; never throws.
+        /// </summary>
+        Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
+        {
+            if (testRg == null)
+            {
+                _logger.LogInformation("Skipping App Service plan capability check - resource group is not available.");
+                return Task.CompletedTask;
+            }
+
+            var planName = string.IsNullOrWhiteSpace(Config.AppServicePlanName) ? Config.AppServiceWebAppName : Config.AppServicePlanName;
+            if (string.IsNullOrWhiteSpace(planName))
+            {
+                _logger.LogInformation("Skipping App Service plan capability check - no App Service plan name is configured.");
+                return Task.CompletedTask;
+            }
+
+            try
+            {
+                var plan = testRg.GetAppServicePlans().Where(p => p.Data.Name == planName).SingleOrDefault();
+                if (plan == null)
+                {
+                    _logger.LogInformation($"App Service plan '{planName}' not found yet; skipping capability check (it will be created during install).");
+                    return Task.CompletedTask;
+                }
+
+                if (!AppServicePlanCapabilities.SupportsAlwaysOn(plan.Data.Sku))
+                {
+                    _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(plan.Data.Name, plan.Data.Sku));
+                }
+                else
+                {
+                    _logger.LogInformation($"App Service plan '{plan.Data.Name}' tier '{AppServicePlanCapabilities.GetDisplayTier(plan.Data.Sku)}' supports Always On and 64-bit workers.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not check App Service plan '{planName}' capabilities: {ex.Message}");
+            }
+
+            return Task.CompletedTask;
         }
 
         #region Configuration & Key Vault checks
@@ -812,6 +868,21 @@ namespace App.ControlPanel.Engine
             new ImportToggleCoverage(nameof(ImportTaskSettings.SentEmails), null,
                 "no check exercises the Graph mailbox read (Mail.Read); a missing grant would first appear at "
                 + "runtime."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotStudioCredits), null,
+                "no check exercises the Power Platform licensing API. It needs a token for a different audience "
+                + "(api.powerplatform.com) plus a Power Platform RBAC role assignment on the service principal, "
+                + "neither of which this installer creates - and Microsoft has not confirmed that the licensing "
+                + "entitlement routes accept an application-only token at all, so a failure here would not "
+                + "necessarily mean the install is wrong. The import records the outcome in "
+                + "agent_cost_import_log, which is where to look after the first cycle."),
+
+            new ImportToggleCoverage(nameof(ImportTaskSettings.AzureCostManagement), null,
+                "no check exercises Microsoft Cost Management. It needs a token for the management.azure.com "
+                + "audience and the 'Cost Management Reader' role on each configured scope, which is an Azure "
+                + "RBAC (or, for EA/MCA billing accounts, a billing-portal) assignment outside this installer's "
+                + "control. The scope itself comes from the AzureCostScopes App Service application setting, "
+                + "which is not set at install time."),
         };
 
         /// <summary>

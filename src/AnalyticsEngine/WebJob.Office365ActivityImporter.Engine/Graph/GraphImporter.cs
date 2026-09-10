@@ -39,6 +39,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IGraphImportSectionFactory _sectionFactory;
 
         private readonly IClock _clock;
+        internal static readonly TimeSpan WeeklyReportNoSundayBackoff = TimeSpan.FromHours(1);
 
         /// <summary>
         /// Production constructor: builds the <see cref="ProductionGraphImportSectionFactory"/> that holds all
@@ -236,11 +237,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (_reportCompletionStore == null) return true;
             if (_settings.ForceUsageReportsImport) return true;
 
+            if (_reportCompletionStore is IReportAttemptScheduleStore scheduleStore)
+            {
+                var nextAttemptUtc = await scheduleStore.GetNextAttemptUtcAsync(reportKey);
+                if (nextAttemptUtc.HasValue)
+                {
+                    return _clock.UtcNow >= nextAttemptUtc.Value.ToUniversalTime();
+                }
+            }
+
             var lastSuccess = await _reportCompletionStore.GetLastSuccessAsync(reportKey);
-            return lastSuccess == null || _clock.UtcNow.Subtract(lastSuccess.Value.ToUniversalTime()) > minWait;
+            return lastSuccess == null || _clock.UtcNow.Subtract(lastSuccess.Value.ToUniversalTime()) >= minWait;
         }
 
-        private async Task RunWeeklyReportIfDueAsync(SharePointSitesWeeklyUsageReportLoader loader, TimeSpan minWait)
+        internal async Task RunWeeklyReportIfDueAsync(SharePointSitesWeeklyUsageReportLoader loader, TimeSpan minWait)
         {
             var reportKey = GetReportKey(loader.GetType());
 
@@ -258,11 +268,55 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 await _reportCompletionStore.ClearAsync(reportKey);
             }
 
-            await loader.LoadAndSaveLastWeeksReportsIfRefreshOnDay(System.DayOfWeek.Sunday);
+            var result = await loader.LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(System.DayOfWeek.Sunday);
 
             if (_reportCompletionStore != null)
             {
-                await _reportCompletionStore.SaveSuccessAsync(reportKey);
+                if (result.ObservedRefreshDayReport)
+                {
+                    await _reportCompletionStore.SaveSuccessAsync(reportKey);
+                    await ScheduleNextReportAttemptAsync(reportKey, minWait);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        $"SharePoint sites weekly usage: Graph returned {result.NotRefreshedOnDay} item(s), " +
+                        "but none had a Sunday refresh date. Not recording a data-success stamp; " +
+                        $"retry after {WeeklyReportNoSundayBackoff.TotalMinutes} minutes.");
+                    await ScheduleReportBackoffAsync(reportKey);
+                }
+            }
+        }
+
+        private async Task ScheduleNextReportAttemptAsync(string reportKey, TimeSpan interval)
+        {
+            if (!(_reportCompletionStore is IReportAttemptScheduleStore scheduleStore)) return;
+
+            var now = _clock.UtcNow;
+            var previousDue = await scheduleStore.GetNextAttemptUtcAsync(reportKey);
+            DateTime nextDueUtc;
+            if (previousDue.HasValue && previousDue.Value.ToUniversalTime() <= now)
+            {
+                nextDueUtc = previousDue.Value.ToUniversalTime();
+                do
+                {
+                    nextDueUtc = nextDueUtc.Add(interval);
+                }
+                while (nextDueUtc <= now);
+            }
+            else
+            {
+                nextDueUtc = now.Add(interval);
+            }
+
+            await scheduleStore.SaveNextAttemptUtcAsync(reportKey, DateTime.SpecifyKind(nextDueUtc, DateTimeKind.Utc));
+        }
+
+        private async Task ScheduleReportBackoffAsync(string reportKey)
+        {
+            if (_reportCompletionStore is IReportAttemptScheduleStore scheduleStore)
+            {
+                await scheduleStore.SaveNextAttemptUtcAsync(reportKey, _clock.UtcNow.Add(WeeklyReportNoSundayBackoff));
             }
         }
 

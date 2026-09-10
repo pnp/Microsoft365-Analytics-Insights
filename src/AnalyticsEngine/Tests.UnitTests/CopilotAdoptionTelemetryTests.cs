@@ -426,29 +426,25 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task AnalysisFailure_AcceptedByTheSink_IsStillVisibleToAWaitingRequest()
         {
-            // Deliberate trade-off, pinned so it is not "tidied" into silence later.
-            //
-            // Acceptance is not delivery: QueueFailure returning true means the failure was added to an
-            // in-memory queue whose worker can drop it. Marking the exception reported on acceptance
-            // would suppress reporting by waiting requests without anything having confirmed the failure
-            // was reported.
-            //
-            // So an accepted failure stays unmarked and a waiting request can still report it. That can
-            // duplicate the sink's own report, which is noise; removing the duplicate needs delivery
-            // acknowledgement from the sink - see issue #454.
+            // Delivery, not acceptance, is the dedup boundary. Once the sink writer has actually
+            // reported the exception, waiting requests must stand down: exactly one exception
+            // telemetry item is the invariant, not "one from the sink plus one from a waiter".
             var channel = new RecordingTelemetryChannel();
             var configuration = new TelemetryConfiguration
             {
                 TelemetryChannel = channel,
                 ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
             };
-            var logger = new AnalyticsLogger(new TelemetryClient(configuration), "WebApiTest");
+            var sinkLogger = new AnalyticsLogger(new TelemetryClient(configuration), "CopilotAdoptionTest");
+            var waiterLogger = new AnalyticsLogger(new TelemetryClient(configuration), "WebApiTest");
+            var sink = new AdoptionQueuedSink(() => new AppInsightsAdoptionWriter(sinkLogger));
+            var heartbeat = new ManualHeartbeatFactory();
 
             var boom = new InvalidOperationException("analysis failed");
             var coordinator = new AdoptionCoordinator(
                 new SequencedRunner(Task.FromException<CopilotAdoptionAnalysis>(boom)),
                 new InMemoryAnalysisCache(),
-                (window, hasOverride) => new AcceptingTelemetry(),
+                (window, hasOverride) => NewTelemetry(sink, heartbeat, window, hasOverride),
                 TimeSpan.FromMinutes(10));
 
             Exception observed = null;
@@ -463,15 +459,112 @@ namespace Tests.UnitTests
             }
 
             Assert.AreSame(boom, observed, "every waiter observes the one shared instance");
+            Assert.IsTrue(
+                SpinWait.SpinUntil(
+                    () => channel.Sent.OfType<ExceptionTelemetry>().Any(),
+                    TimeSpan.FromSeconds(2)),
+                "the queued sink should report the accepted failure");
 
             // Exactly what a request awaiting the shared run does next.
-            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => logger);
-            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => logger);
+            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => waiterLogger);
+            WebExceptionTelemetry.Report(observed, "WebApi /api/copilotadoption", _ => waiterLogger);
 
             Assert.AreEqual(
                 1,
                 channel.Sent.OfType<ExceptionTelemetry>().Count(),
-                "An accepted failure must remain visible to a waiting request - once, not zero and not per waiter.");
+                "A delivered sink failure must be reported exactly once, not once per waiting request.");
+
+            sink.Shutdown(TimeSpan.FromSeconds(2));
+        }
+
+        [TestMethod]
+        public void QueuedSink_AcceptedFailureDroppedByWorker_IsReportedByFallback()
+        {
+            var boom = new InvalidOperationException("analysis failed");
+            var reported = new ConcurrentQueue<Tuple<Exception, string>>();
+            var sink = new AdoptionQueuedSink(
+                () => new ThrowingFailureWriter(),
+                (ex, context) => reported.Enqueue(Tuple.Create(ex, context)));
+            var failure = new AdoptionFailure
+            {
+                RunId = "00000000000000000000000000000005",
+                WindowDays = 28,
+                Exception = boom,
+            };
+
+            Assert.IsTrue(
+                sink.TrackFailure(
+                    failure,
+                    LifecycleEvent(CopilotAdoptionTelemetryStages.Failed, failure.RunId)),
+                "the queue must accept the failure before the worker drops it");
+
+            Assert.IsTrue(
+                SpinWait.SpinUntil(() => reported.Count == 1, TimeSpan.FromSeconds(2)),
+                "a failure dropped after queue acceptance must be redeemed by fallback reporting");
+            Assert.AreSame(boom, reported.Single().Item1);
+            Assert.AreEqual(1, sink.DroppedEvents);
+
+            sink.Shutdown(TimeSpan.FromSeconds(2));
+        }
+
+        [TestMethod]
+        public void ConcurrentWaitingRequests_ReportSharedFailureOnce()
+        {
+            for (var iteration = 0; iteration < 20; iteration++)
+            {
+                var channel = new BlockingExceptionTelemetryChannel();
+                var configuration = new TelemetryConfiguration
+                {
+                    TelemetryChannel = channel,
+                    ConnectionString = "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+                };
+                var logger = new AnalyticsLogger(new TelemetryClient(configuration), "WebApiTest");
+                var boom = new InvalidOperationException("analysis failed " + iteration);
+
+                var first = Task.Run(
+                    () => WebExceptionTelemetry.Report(
+                        boom,
+                        "WebApi /api/copilotadoption",
+                        _ => logger));
+                Assert.IsTrue(
+                    channel.FirstExceptionSendEntered.Wait(TimeSpan.FromSeconds(2)),
+                    "the first waiter should reach the telemetry send and pause before marking reported");
+
+                var second = Task.Run(
+                    () => WebExceptionTelemetry.Report(
+                        boom,
+                        "WebApi /api/copilotadoption",
+                        _ => logger));
+
+                channel.ReleaseFirstExceptionSend.Set();
+                Assert.IsTrue(Task.WaitAll(new[] { first, second }, TimeSpan.FromSeconds(2)));
+                Assert.AreEqual(
+                    1,
+                    channel.Sent.OfType<ExceptionTelemetry>().Count(),
+                    "two concurrent waiters must share one atomic report claim");
+            }
+        }
+
+        [TestMethod]
+        public async Task FailureTelemetryFallbackFailure_DoesNotReplaceAnalysisFailure()
+        {
+            var boom = new InvalidOperationException("analysis failed");
+            var coordinator = new AdoptionCoordinator(
+                new SequencedRunner(Task.FromException<CopilotAdoptionAnalysis>(boom)),
+                new InMemoryAnalysisCache(),
+                (window, hasOverride) => new RejectingTelemetry(),
+                TimeSpan.FromMinutes(10),
+                (ex, context) => throw new ApplicationException("telemetry failed"));
+
+            try
+            {
+                await coordinator.GetAsync(28, new List<int>());
+                Assert.Fail("the fake analysis should fail");
+            }
+            catch (InvalidOperationException ex)
+            {
+                Assert.AreSame(boom, ex, "telemetry failure must not replace the analysis exception");
+            }
         }
 
         private class RejectingTelemetry : StubAnalysisTelemetry
@@ -753,9 +846,19 @@ namespace Tests.UnitTests
 
         private sealed class RecordingTelemetryChannel : ITelemetryChannel
         {
+            private readonly object _gate = new object();
             private readonly List<ITelemetry> _sent = new List<ITelemetry>();
 
-            public IList<ITelemetry> Sent => _sent;
+            public IList<ITelemetry> Sent
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _sent.ToList();
+                    }
+                }
+            }
 
             public bool? DeveloperMode { get; set; }
 
@@ -763,7 +866,60 @@ namespace Tests.UnitTests
 
             public void Send(ITelemetry item)
             {
-                _sent.Add(item);
+                lock (_gate)
+                {
+                    _sent.Add(item);
+                }
+            }
+
+            public void Flush()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class BlockingExceptionTelemetryChannel : ITelemetryChannel
+        {
+            private readonly object _gate = new object();
+            private readonly List<ITelemetry> _sent = new List<ITelemetry>();
+            private int _blockedFirstException;
+
+            public ManualResetEventSlim FirstExceptionSendEntered { get; } =
+                new ManualResetEventSlim(false);
+            public ManualResetEventSlim ReleaseFirstExceptionSend { get; } =
+                new ManualResetEventSlim(false);
+
+            public IList<ITelemetry> Sent
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _sent.ToList();
+                    }
+                }
+            }
+
+            public bool? DeveloperMode { get; set; }
+
+            public string EndpointAddress { get; set; }
+
+            public void Send(ITelemetry item)
+            {
+                if (item is ExceptionTelemetry
+                    && Interlocked.CompareExchange(ref _blockedFirstException, 1, 0) == 0)
+                {
+                    FirstExceptionSendEntered.Set();
+                    ReleaseFirstExceptionSend.Wait(TimeSpan.FromSeconds(2));
+                }
+
+                lock (_gate)
+                {
+                    _sent.Add(item);
+                }
             }
 
             public void Flush()
@@ -928,6 +1084,26 @@ namespace Tests.UnitTests
 
             public void WriteFailure(AdoptionFailure failure)
             {
+            }
+
+            public void Flush()
+            {
+            }
+        }
+
+        private sealed class ThrowingFailureWriter : AdoptionWriter
+        {
+            public void Write(AdoptionEvent telemetryEvent)
+            {
+            }
+
+            public void WriteCompletion(AdoptionCompletion completion)
+            {
+            }
+
+            public void WriteFailure(AdoptionFailure failure)
+            {
+                throw new InvalidOperationException("synthetic telemetry failure");
             }
 
             public void Flush()

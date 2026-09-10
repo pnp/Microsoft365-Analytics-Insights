@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using DataUtils.Sql;
 
 namespace Common.Entities.LicenceActivity
 {
@@ -132,7 +133,7 @@ namespace Common.Entities.LicenceActivity
 
             diagnostics = diagnostics ?? NullLicenceActivityDiagnostics.Instance;
 
-            using (var connection = new SqlConnection(_connectionString))
+            using (var connection = AzureSqlTokenAuth.CreateConnection(_connectionString))
             {
                 var connectionWatch = Stopwatch.StartNew();
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -174,7 +175,7 @@ namespace Common.Entities.LicenceActivity
             ILicenceActivityDiagnostics diagnostics,
             CancellationToken cancellationToken)
         {
-            var connection = new SqlConnection(_connectionString);
+            var connection = AzureSqlTokenAuth.CreateConnection(_connectionString);
             try
             {
                 var watch = Stopwatch.StartNew();
@@ -495,7 +496,7 @@ namespace Common.Entities.LicenceActivity
                     var operationWatch = Stopwatch.StartNew();
                     try
                     {
-                        using (var connection = new SqlConnection(_connectionString))
+                        using (var connection = AzureSqlTokenAuth.CreateConnection(_connectionString))
                         {
                             var connectionWatch = Stopwatch.StartNew();
                             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -794,6 +795,8 @@ namespace Common.Entities.LicenceActivity
             AddDate(command, "@endExclusive", query.EndExclusiveUtc);
             AddDate(command, "@settled", sources.NowUtc.Date.AddDays(-3));
             AddDate(command, "@now", sources.NowUtc.Date);
+            command.Parameters.Add("@groupFiltered", SqlDbType.Bit).Value =
+                sources.UsageReportsGroupFiltered;
             AddNullableInt(command, "@departmentId", query.DepartmentId);
             AddNullableInt(command, "@countryId", query.CountryId);
         }

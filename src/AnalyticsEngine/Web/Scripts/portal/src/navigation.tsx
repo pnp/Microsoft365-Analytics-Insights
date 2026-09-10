@@ -3,8 +3,10 @@ import {
   ChartMultiple20Regular,
   DatabaseSearch20Regular,
   DataTrending20Regular,
+  DataUsage20Regular,
   DocumentBulletList20Regular,
   Home20Regular,
+  Money20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
   Settings20Regular,
@@ -19,6 +21,8 @@ import { lazyWithReload } from './lazyWithReload';
 const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOverviewPage'));
 const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
+const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
+const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivityPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
@@ -31,7 +35,7 @@ const ServiceConfigurationPage = lazyWithReload(() => import('./pages/ServiceCon
  * The portal is split into two areas so the two audiences it serves don't have to wade
  * through each other's tooling:
  *
- * - **Insights** - what the data says. Reports and Copilot adoption, for a business reader.
+ * - **Insights** - what the data says. Reports, Copilot adoption and licence activity.
  * - **Administration** - running the service. Health, logs, permissions, for an IT operator.
  */
 export type AreaId = 'insights' | 'admin';
@@ -90,6 +94,20 @@ export const ROUTES: PortalRoute[] = [
     label: 'Copilot Adoption',
     icon: <Sparkle20Regular />,
     element: <CopilotAdoptionPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/licence-activity',
+    label: 'Licence activity',
+    icon: <DataUsage20Regular />,
+    element: <LicenceActivityPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/agent-costs',
+    label: 'Agent costs',
+    icon: <Money20Regular />,
+    element: <AgentCostsPage />,
   },
   {
     area: 'insights',

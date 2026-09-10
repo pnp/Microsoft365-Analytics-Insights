@@ -1,5 +1,5 @@
 -- =============================================================================================
--- Manual database upgrade script for migration 202609090601123_DlpCopilotImpact
+-- Manual database upgrade script for migration 202609100900001_DlpCopilotImpact
 --
 -- For DBAs who upgrade the Analytics database BY HAND in a controlled maintenance window instead
 -- of running AnalyticsInstaller.exe --initdb.
@@ -20,7 +20,7 @@
 --
 -- PREREQUISITE / RUN ORDER
 --   Run the release's manual scripts in migration-id order. This script's predecessor is
---   202608310800001_ColumnstoreUsageReportMetrics; it hard-fails below if that is not stamped.
+--   202609090647151_AgentCostUserCredits; it hard-fails below if that is not stamped.
 --
 -- SAFE TO RE-RUN: every step is guarded and no-ops if already applied, and the run always reaches
 -- the __MigrationHistory stamp.
@@ -30,7 +30,7 @@ SET NOCOUNT ON;
 SET XACT_ABORT ON;
 GO
 
-DECLARE @prev nvarchar(255) = N'202608310800001_ColumnstoreUsageReportMetrics';
+DECLARE @prev nvarchar(255) = N'202609090647151_AgentCostUserCredits';
 
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = @prev)
 BEGIN
@@ -287,8 +287,8 @@ SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 GO
 
-DECLARE @newId nvarchar(255) = N'202609090601123_DlpCopilotImpact';
-DECLARE @prevId nvarchar(255) = N'202608310800001_ColumnstoreUsageReportMetrics';
+DECLARE @newId nvarchar(255) = N'202609100900001_DlpCopilotImpact';
+DECLARE @prevId nvarchar(255) = N'202609090647151_AgentCostUserCredits';
 IF OBJECT_ID('dbo.dlp_policies', 'U') IS NULL
    OR OBJECT_ID('dbo.dlp_rules', 'U') IS NULL
    OR OBJECT_ID('dbo.dlp_actions', 'U') IS NULL

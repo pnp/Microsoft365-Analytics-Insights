@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import DemographicBreakdown from './DemographicBreakdown';
 import { WORKLOADS } from '../../types/licenceActivity';
 import type { LicenceActivityDemographic } from '../../types/licenceActivity';
+import { BAND_DESCRIPTIONS, COPILOT_COVERAGE_NOTE } from './bands';
 
 function demo(over: Partial<LicenceActivityDemographic> = {}): LicenceActivityDemographic {
   return {
@@ -46,6 +48,44 @@ describe('DemographicBreakdown', () => {
       <DemographicBreakdown title="By country" segmentLabel="Country" rows={[demo()]} truncated />,
     );
     expect(screen.getByText(/not the full list/i)).toBeInTheDocument();
+  });
+
+  it.each(['Department', 'Country'])('explains Unknown beside the %s chart without changing the counts', async (segmentLabel) => {
+    const user = userEvent.setup();
+    renderWithProvider(
+      <DemographicBreakdown
+        title={`By ${segmentLabel.toLowerCase()}`}
+        segmentLabel={segmentLabel}
+        rows={[demo()]}
+        truncated={false}
+      />,
+    );
+
+    expect(screen.getByText(/People with any imported licence, not necessarily a licence for every service/)).toBeVisible();
+    expect(screen.getByRole('note')).toHaveTextContent('Unknown means insufficient data, not no activity.');
+    expect(screen.getByRole('note')).toHaveTextContent('No activity means complete reporting data shows no usage.');
+    expect(screen.getByText(COPILOT_COVERAGE_NOTE)).not.toBeVisible();
+
+    const summary = screen.getByText('Why is activity Unknown?');
+    const details = summary.closest('details');
+    expect(details).not.toHaveAttribute('open');
+    await user.tab();
+    expect(summary).toHaveFocus();
+    await user.click(summary);
+    expect(details).toHaveAttribute('open');
+    expect(screen.getByText(BAND_DESCRIPTIONS.unknown)).toBeVisible();
+    expect(screen.getByText(COPILOT_COVERAGE_NOTE)).toBeVisible();
+    expect(screen.getByText(/finding no events does not prove that the person was inactive/)).toBeVisible();
+    expect(screen.getByText(/Under Where these figures come from, select Show data sources/)).toBeVisible();
+    expect(screen.getAllByRole('img')).toHaveLength(WORKLOADS.length);
+    for (const bar of screen.getAllByRole('img')) {
+      expect(bar).toHaveAccessibleName('High 5, Moderate 3, Low 2, No activity 4, Unknown 1');
+    }
+    expect(screen.getAllByTitle(`Unknown: 1. ${BAND_DESCRIPTIONS.unknown}`)).toHaveLength(WORKLOADS.length);
+    expect(screen.getAllByTitle(`No activity: 4. ${BAND_DESCRIPTIONS.zero}`)).toHaveLength(WORKLOADS.length);
+    await user.click(summary);
+    expect(details).not.toHaveAttribute('open');
+    expect(screen.getByText(COPILOT_COVERAGE_NOTE)).not.toBeVisible();
   });
 
   it('caps at 50 rows and says so', () => {

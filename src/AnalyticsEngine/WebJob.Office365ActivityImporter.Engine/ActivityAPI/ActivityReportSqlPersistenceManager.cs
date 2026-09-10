@@ -183,7 +183,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                 await _sqlSaveSemaphore.WaitAsync();
                 try
                 {
-                    using (var con = new SqlConnection(_defaultConnectionString))
+                    using (var con = AzureSqlTokenAuth.CreateConnection(_defaultConnectionString))
                     {
                         con.Open();
                         using (var db = new AnalyticsEntitiesContext(con))
@@ -207,7 +207,7 @@ namespace WebJob.Office365ActivityImporter.Engine
                 try
                 {
                     var shardedStagingTable = ActivitySaveConcurrencyPolicy.NewShardedStagingTableName();
-                    using (var con = new SqlConnection(_defaultConnectionString))
+                    using (var con = AzureSqlTokenAuth.CreateConnection(_defaultConnectionString))
                     {
                         con.Open();
                         using (var db = new AnalyticsEntitiesContext(con))

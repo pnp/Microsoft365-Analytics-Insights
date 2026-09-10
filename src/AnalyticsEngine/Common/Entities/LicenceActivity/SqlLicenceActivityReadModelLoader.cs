@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using DataUtils.Sql;
 
 namespace Common.Entities.LicenceActivity
 {
@@ -50,7 +51,7 @@ namespace Common.Entities.LicenceActivity
                     var partWatch = Stopwatch.StartNew();
                     var model = new LicenceActivityReadModel(
                         range, directory.Licences, directory.Users, directory.Memberships,
-                        facts.Overview.Coverage, facts.Scores);
+                        facts.Overview.Coverage, facts.Scores, sources.UsageReportsGroupFiltered);
                     _instrumentation?.OperationCompleted?.Invoke("read-model", partWatch.ElapsedMilliseconds);
                     diagnostics.Stage("MaterialisationCompleted", watch.ElapsedMilliseconds);
                     diagnostics.Stage("OverviewSqlCompleted", watch.ElapsedMilliseconds);
@@ -105,7 +106,7 @@ namespace Common.Entities.LicenceActivity
             var directory = new ReadModelDirectory();
             try
             {
-                using (var connection = new SqlConnection(_connectionString))
+                using (var connection = AzureSqlTokenAuth.CreateConnection(_connectionString))
                 {
                     await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
                     if (_instrumentation?.ConnectionOpenedForOperation != null)
@@ -200,7 +201,7 @@ namespace Common.Entities.LicenceActivity
             var watch = Stopwatch.StartNew();
             try
             {
-                using (var connection = new SqlConnection(_connectionString))
+                using (var connection = AzureSqlTokenAuth.CreateConnection(_connectionString))
                 {
                     await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
                     if (_instrumentation?.ConnectionOpenedForOperation != null)

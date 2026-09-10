@@ -34,9 +34,10 @@ This is a Windows-based .NET Framework solution. To build it you will need:
 * **Visual Studio 2022** (17.8 or later) with the *.NET desktop development*,
   *ASP.NET and web development*, and *Azure development* workloads — or a
   matching **MSBuild** install.
-* **Node.js** (LTS) — required to build the admin web app
+* **Node.js 24 (the current LTS)** — required to build the admin web app
   (`src/AnalyticsEngine/Web/Scripts/portal`) and the SharePoint AI Tracker
-  (`src/SPO/AITracker`).
+  (`src/SPO/AITracker`). The major is pinned repo-wide in
+  [`.nvmrc`](.nvmrc); see [Node.js version](#nodejs-version) below.
 * A SQL Server **LocalDB** instance for running the unit tests.
 
 A full end-to-end run also needs Azure resources (Azure SQL, App Service, Redis,
@@ -59,6 +60,49 @@ msbuild ".\O365 Advanced Analytics Engine.sln" /t:Build /p:Configuration=Debug
 
 > Note: building the solution with `dotnet build` is not supported — use Visual
 > Studio or MSBuild.
+
+### Node.js version
+
+Every part of the repository that runs `node` or `npm` builds on the **same
+Node.js major**, and that major lives in exactly one place: the
+[`.nvmrc`](.nvmrc) at the repository root (currently **24**, the active LTS).
+
+If you use `nvm`, `nvm-windows` or `fnm`, run this once from the repository
+root and you are on the right version:
+
+```powershell
+nvm install 24
+nvm use 24
+```
+
+Otherwise install Node.js 24 from [nodejs.org](https://nodejs.org/).
+
+The pin is enforced, not merely documented, so a mismatch fails fast with a
+clear message instead of producing a subtly different bundle:
+
+* **CI** — every workflow job that runs `npm` uses
+  `actions/setup-node` with `node-version-file: .nvmrc`, so no workflow
+  hardcodes a version and none inherits whatever the runner image ships.
+* **MSBuild** — `Web.csproj` builds the portal SPA by shelling out to `npm`,
+  so it depends on the `CheckNodeVersion` target in
+  [`build/NodeVersion.targets`](build/NodeVersion.targets), which reads the same
+  `.nvmrc` and errors if the Node on `PATH` is a different major.
+* **npm** — each Node project declares an `engines.node` range matching the
+  pin, and sets `engine-strict=true` in its `.npmrc` so `npm ci` / `npm install`
+  hard-fail with `EBADENGINE` rather than printing a warning and carrying on.
+
+To move to a new Node major, change `.nvmrc` **and** the `engines.node` range in
+each `package.json`; nothing else hardcodes a version.
+
+#### Exception: the SPFx extension
+
+`src/SPO/ModernPagesAITrackerExtension` is a SharePoint Framework project, and
+SPFx supports only the Node major that Microsoft ships support for — currently
+**Node 22**, not 24. It therefore keeps its own `.nvmrc` and its own
+`engines.node` range, and is deliberately excluded from the repo-wide pin. It is
+not built by CI. Run `nvm use` from *that* directory before building it, and
+raise the pin only when the SPFx version in its `package.json` supports a newer
+Node.
 
 ### Running the tests
 
