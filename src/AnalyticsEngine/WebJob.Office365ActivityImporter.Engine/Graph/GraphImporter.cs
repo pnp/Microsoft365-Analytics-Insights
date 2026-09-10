@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
@@ -500,70 +501,147 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             logger.LogInformation($"Importing {thingWeAreImporting} reports...");
 
-            var reportKey = GetReportKey(abstractActivityLoader.GetType());
-            var lastSuccessfulImport = await ResolveReportSkipListInputAsync(reportKey, lastSuccessfulPhaseImport);
-
-            if (_reportCompletionStore != null)
+            var instrumentation = abstractActivityLoader.SaveInstrumentation ?? NullUsageReportSaveInstrumentation.Instance;
+            var instrumentationEnabled = instrumentation.IsEnabled;
+            var activeLoaderCountAtStart = 0;
+            var phaseWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
+            var reportId = abstractActivityLoader.GetType().Name;
+            if (instrumentationEnabled)
             {
-                // Clear before any writes, for the same reason the phase marker is cleared: if this report
-                // fails part-way through its save, the next cycle must re-import rather than trust a stamp
-                // that claims a window it only partly wrote.
-                await _reportCompletionStore.ClearAsync(reportKey);
+                activeLoaderCountAtStart = UsageReportSaveInstrumentationRuntime.IncrementActiveDailyLoaders();
+                TrackDailyReportPhaseStage(instrumentation, UsageReportSaveStageIds.ReportPhaseStarted, reportId, thingWeAreImporting, "Started", m =>
+                {
+                    m["ActiveLoaderCount"] = activeLoaderCountAtStart;
+                    m["DaysBackMax"] = daysBackMax;
+                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                });
             }
 
-            // Graph usage data is stable once finalized (~2-3 day latency), so days we already hold and that can no
-            // longer change don't need re-downloading or re-writing. Skip them unless a forced full re-import is set.
-            ISet<DateTime> datesToSkip = null;
-            if (!_settings.ForceUsageReportsImport)
+            try
             {
+                var reportKey = GetReportKey(abstractActivityLoader.GetType());
+                var lastSuccessfulImport = await ResolveReportSkipListInputAsync(reportKey, lastSuccessfulPhaseImport);
+
+                if (_reportCompletionStore != null)
+                {
+                    // Clear before any writes, for the same reason the phase marker is cleared: if this report
+                    // fails part-way through its save, the next cycle must re-import rather than trust a stamp
+                    // that claims a window it only partly wrote.
+                    await _reportCompletionStore.ClearAsync(reportKey);
+                }
+
+                // Graph usage data is stable once finalized (~2-3 day latency), so days we already hold and that can no
+                // longer change don't need re-downloading or re-writing. Skip them unless a forced full re-import is set.
+                ISet<DateTime> datesToSkip = null;
+                if (!_settings.ForceUsageReportsImport)
+                {
+                    using (var db = new AnalyticsEntitiesContext())
+                    {
+                        datesToSkip = await abstractActivityLoader.GetFinalizedStoredDatesToSkipAsync(
+                            db,
+                            daysBackMax,
+                            lastSuccessfulImport);
+                    }
+                    if (datesToSkip.Count > 0)
+                    {
+                        logger.LogInformation($"{thingWeAreImporting}: skipping {datesToSkip.Count} already-stored finalized day(s); " +
+                            $"only re-importing the most recent {abstractActivityLoader.RefreshableRecentDays} day(s) that can still change in Graph.");
+                    }
+                }
+
+                await abstractActivityLoader.PopulateLoadedReportPagesFromGraph(daysBackMax, datesToSkip);
+
                 using (var db = new AnalyticsEntitiesContext())
                 {
-                    datesToSkip = await abstractActivityLoader.GetFinalizedStoredDatesToSkipAsync(
-                        db,
-                        daysBackMax,
-                        lastSuccessfulImport);
+                    _logger.LogInformation($"{this.GetType().Name} read {abstractActivityLoader.LoadedReportPages.SelectMany(p => p.Value).Count().ToString("N0")} {thingWeAreImporting} records from Graph API");
+                    await abstractActivityLoader.SaveLoadedReportsToSql(userEmailToDbIdCache, DBLookupCache<TLookupType>.Create<CACHETYPE>(db));
+
+                    // Keep the columnstore index (ColumnstoreUsageReportMetrics) compacted. The upserts above
+                    // land in the rowstore delta store, which is scanned uncompressed, so without this the
+                    // licence-opportunity report gets slower every cycle. A no-op where no columnstore exists.
+                    // Never allowed to fail the import: this is maintenance, not data.
+                    try
+                    {
+                        await abstractActivityLoader.CompactColumnstoreAsync(db);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning($"{thingWeAreImporting}: could not compact the columnstore index "
+                            + $"({ex.Message}). The import succeeded; the licence-opportunity report may be "
+                            + "slower until this is compacted.");
+                    }
                 }
-                if (datesToSkip.Count > 0)
+
+                var total = abstractActivityLoader.LoadedReportPages.SelectMany(r => r.Value).Count();
+                logger.LogInformation($"Imported {total.ToString("N0")} {thingWeAreImporting} reports.");
+
+                // Only reached when the download AND the save both completed - anything else threw and is caught
+                // by RunReportSafely, leaving this report's stamp cleared so its window is retried next cycle.
+                if (_reportCompletionStore != null)
                 {
-                    logger.LogInformation($"{thingWeAreImporting}: skipping {datesToSkip.Count} already-stored finalized day(s); " +
-                        $"only re-importing the most recent {abstractActivityLoader.RefreshableRecentDays} day(s) that can still change in Graph.");
+                    await _reportCompletionStore.SaveSuccessAsync(reportKey);
                 }
+
+                if (instrumentationEnabled)
+                {
+                    phaseWatch.Stop();
+                    TrackDailyReportPhaseStage(instrumentation, UsageReportSaveStageIds.ReportPhaseCompleted, reportId, thingWeAreImporting, "Completed", m =>
+                    {
+                        m["DurationMs"] = phaseWatch.ElapsedMilliseconds;
+                        m["GraphRowCount"] = total;
+                        m["DbWriteCount"] = abstractActivityLoader.LastSaveDbWriteCount;
+                        // The completed event repeats the concurrency observed when this loader started, not
+                        // a racy post-completion snapshot that depends on which sibling reports finish first.
+                        m["ActiveLoaderCount"] = activeLoaderCountAtStart;
+                        UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                    });
+                }
+
+                return total;
             }
-
-            await abstractActivityLoader.PopulateLoadedReportPagesFromGraph(daysBackMax, datesToSkip);
-
-            using (var db = new AnalyticsEntitiesContext())
+            catch (Exception ex)
             {
-                _logger.LogInformation($"{this.GetType().Name} read {abstractActivityLoader.LoadedReportPages.SelectMany(p => p.Value).Count().ToString("N0")} {thingWeAreImporting} records from Graph API");
-                await abstractActivityLoader.SaveLoadedReportsToSql(userEmailToDbIdCache, DBLookupCache<TLookupType>.Create<CACHETYPE>(db));
-
-                // Keep the columnstore index (ColumnstoreUsageReportMetrics) compacted. The upserts above
-                // land in the rowstore delta store, which is scanned uncompressed, so without this the
-                // licence-opportunity report gets slower every cycle. A no-op where no columnstore exists.
-                // Never allowed to fail the import: this is maintenance, not data.
-                try
+                if (instrumentationEnabled)
                 {
-                    await abstractActivityLoader.CompactColumnstoreAsync(db);
+                    phaseWatch.Stop();
+                    TrackDailyReportPhaseStage(instrumentation, UsageReportSaveStageIds.ReportPhaseFailed, reportId, thingWeAreImporting, "Failed", m =>
+                    {
+                        m["DurationMs"] = phaseWatch.ElapsedMilliseconds;
+                        m["ActiveLoaderCount"] = activeLoaderCountAtStart;
+                        UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                    }, ex.GetType().Name);
                 }
-                catch (Exception ex)
-                {
-                    logger.LogWarning($"{thingWeAreImporting}: could not compact the columnstore index "
-                        + $"({ex.Message}). The import succeeded; the licence-opportunity report may be "
-                        + "slower until this is compacted.");
-                }
+                throw;
             }
-
-            var total = abstractActivityLoader.LoadedReportPages.SelectMany(r => r.Value).Count();
-            logger.LogInformation($"Imported {total.ToString("N0")} {thingWeAreImporting} reports.");
-
-            // Only reached when the download AND the save both completed - anything else threw and is caught
-            // by RunReportSafely, leaving this report's stamp cleared so its window is retried next cycle.
-            if (_reportCompletionStore != null)
+            finally
             {
-                await _reportCompletionStore.SaveSuccessAsync(reportKey);
+                if (instrumentationEnabled)
+                {
+                    UsageReportSaveInstrumentationRuntime.DecrementActiveDailyLoaders();
+                }
             }
+        }
 
-            return total;
+        private static void TrackDailyReportPhaseStage(
+            IUsageReportSaveInstrumentation instrumentation,
+            string stage,
+            string reportId,
+            string reportName,
+            string outcome,
+            Action<Dictionary<string, double>> populateMetrics,
+            string exceptionType = null)
+        {
+            var point = new UsageReportSaveTelemetryPoint
+            {
+                Stage = stage,
+                ReportId = reportId,
+                LoaderType = reportId,
+                ReportTable = reportName,
+                Outcome = outcome,
+                ExceptionType = exceptionType,
+            };
+            populateMetrics?.Invoke(point.Metrics);
+            instrumentation.Track(point);
         }
     }
 }
