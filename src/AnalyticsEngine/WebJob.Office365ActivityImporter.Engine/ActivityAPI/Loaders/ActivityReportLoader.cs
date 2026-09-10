@@ -76,6 +76,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             {
                 var logs = new WebActivityReportSet();
 
+                try
+                {
+                    response.EnsureSuccessStatusCode();
+                }
+                catch (HttpRequestException ex)
+                {
+                    Interlocked.Increment(ref _reportDownloadErrors);
+                    _logger.LogError(ex, $"Got HTTP error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
+                    return new WebActivityReportSet { DownloadComplete = false };
+                }
+
                 // Stream one JSON object at a time from the response, so the entire array is never materialised
                 // in memory at once. Each JObject is processed and dropped before the next is read.
                 try
