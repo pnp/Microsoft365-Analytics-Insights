@@ -14,6 +14,17 @@ namespace App.ControlPanel.Engine
     {
         const string SqlResourceNameStart = "App.ControlPanel.Engine.SqlExtentions";
 
+        /// <summary>
+        /// Logged before any connection is opened when the upgrade authenticates with Microsoft Entra ID.
+        /// </summary>
+        /// <remarks>
+        /// Also read back by the parent installer from the child process's captured output
+        /// (<c>SqlInstallerTasks.DownloadedBuildEntraHint</c>) to tell whether the release it downloaded
+        /// supports Entra ID at all, so the two must stay in step. A const rather than a literal for that
+        /// reason.
+        /// </remarks>
+        public const string EntraAuthAnnouncement = "Authenticating to Azure SQL with Microsoft Entra ID";
+
         public static void CheckDbUpgraded(DatabaseUpgradeInfo initInfo, Action<string> log)
         {
             var thisAsembly = System.Reflection.Assembly.GetEntryAssembly();
@@ -29,7 +40,7 @@ namespace App.ControlPanel.Engine
             {
                 if (initInfo.HasEntraCredential)
                 {
-                    log?.Invoke("Authenticating to Azure SQL with Microsoft Entra ID (no SQL login in the connection string).");
+                    log?.Invoke($"{EntraAuthAnnouncement} (no SQL login in the connection string).");
                     AzureSqlTokenAuth.SetCredential(new Azure.Identity.ClientSecretCredential(
                         initInfo.EntraTenantId, initInfo.EntraClientId, initInfo.EntraClientSecret));
                 }
