@@ -127,9 +127,6 @@
   <data name="Create_Update_Temp_Table" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\resources\create update temp table.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
   </data>
-  <data name="Delete_Duplicate_Hits_and_Create_ReqID_IDX" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\resources\delete duplicate hits and create reqid idx.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
-  </data>
   <data name="Migrate_clicks_from_staging" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\resources\migrate clicks from staging.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
   </data>

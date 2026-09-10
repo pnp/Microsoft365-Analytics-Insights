@@ -422,6 +422,10 @@
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609101200001_RetireImportDbHacks.cs" />
+    <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
+      <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
@@ -640,6 +644,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.resx">
       <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609101200001_RetireImportDbHacks.resx">
+      <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>

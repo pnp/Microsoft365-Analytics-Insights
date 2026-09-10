@@ -1,7 +1,9 @@
 using Common.Entities;
+using Common.Entities.Migrations;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
@@ -21,8 +23,8 @@ namespace Tests.UnitTests
     /// This used to fan out via a duplicate <c>urls.full_url</c>. Issue #167 made that index UNIQUE, so a
     /// duplicate URL can no longer be created - but the #165 defence is still needed, because the merge
     /// joins several dimensions and <c>sessions.ai_session_id</c> is deliberately left non-unique by
-    /// <c>ImportDbHacks</c>. The fan-out is therefore driven from a duplicate session instead, which keeps
-    /// the regression covered against a dimension that can still genuinely duplicate.
+    /// migration <c>RetireImportDbHacks</c>. The fan-out is therefore driven from a duplicate session
+    /// instead, which keeps the regression covered against a dimension that can still genuinely duplicate.
     /// </remarks>
     [TestClass]
     public class HitImportFanoutTests
@@ -39,7 +41,10 @@ namespace Tests.UnitTests
             {
                 // Ensure schema: the unique IX_PageRequestID must exist, otherwise a real duplicate
                 // page_request_id wouldn't be rejected and this test couldn't detect the regression.
-                await ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID(db);
+                // It is created by migration RetireImportDbHacks, which is idempotent, so running its SQL
+                // here is a metadata-only no-op once the migration has been applied.
+                await db.Database.ExecuteSqlCommandAsync(
+                    TransactionalBehavior.DoNotEnsureTransaction, RetireImportDbHacks.Up_Sql);
 
                 var url = "http://whatever/" + DateTime.Now.Ticks;
                 var dupSessionId = Guid.NewGuid().ToString();
