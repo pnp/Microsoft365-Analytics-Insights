@@ -40,14 +40,14 @@ namespace App.ControlPanel.Engine
         /// <summary>
         /// Install configure & software on App Service, update target DB. 
         /// </summary>
-        public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
+        public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
             RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
             SqlServerResource sqlServer = null)
         {
             // Configure app-service connection-strings, etc
-            await ConfigureWebApp(webApp, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
+            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
 
             // Download/extract the release while the App Service is still available. Kudu/SCM
             // rejects deployments while the site resource is stopped.
@@ -70,6 +70,16 @@ namespace App.ControlPanel.Engine
                     "SQL Server is not reachable from this host, so the database upgrade cannot run. The App Service has " +
                     "deliberately NOT been stopped, so the existing deployment keeps running on its current schema. " +
                     "Fix the connectivity problem reported above and re-run the installer.");
+            }
+
+            // Give the App Service's managed identity access to the database. Only needed when the database
+            // authenticates with Microsoft Entra ID - a SQL-authentication deployment already has its login
+            // in the connection string, and creating a redundant contained user there would be noise. Done
+            // BEFORE the schema upgrade so the site comes back up with working access. See issue #117.
+            if (sqlReachable && dbInfo.AuthMethod == SqlConnectionAuthMethod.EntraId)
+            {
+                await GrantAppServiceDatabaseAccess(webApp, dbInfo);
+                await GrantAutomationAccountDatabaseAccess(automationAccount, dbInfo);
             }
 
             // Find downloaded installer app
@@ -152,6 +162,92 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation("Skipping SharePoint web components (AITracker / SPFx) install because 'Update solution with latest release' is not selected.");
                 }
             }
+        }
+
+        /// <summary>
+        /// Grants the App Service's system-assigned managed identity access to the analytics database.
+        /// </summary>
+        /// <remarks>
+        /// Azure SQL has no ARM role that confers data-plane access, so "give the App Service its own
+        /// permissions" means creating a contained database user for its identity - which is why this is a
+        /// T-SQL step rather than another role assignment in <c>ResourceSecurityInstallJob</c>. Best-effort:
+        /// a failure is reported with the manual remedy but does not abort the install. See issue #117.
+        /// </remarks>
+        private async Task GrantAppServiceDatabaseAccess(WebSiteResource webApp, DatabasePaaSInfo dbInfo)
+        {
+            if (webApp == null) return;
+
+            // Re-read the site: when this run was the one that turned the system-assigned identity on, the
+            // cached ARM payload predates it and its PrincipalId would still be null.
+            WebSiteResource current;
+            try
+            {
+                current = await webApp.GetAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not re-read the App Service to find its managed identity: {ex.Message}");
+                current = webApp;
+            }
+
+            var principalId = current?.Data?.Identity?.PrincipalId;
+            if (principalId == null || principalId == Guid.Empty)
+            {
+                _logger.LogWarning(
+                    "The App Service has no system-assigned managed identity, so it cannot be granted database access. " +
+                    "The web application will not be able to connect to a database that has SQL authentication disabled. " +
+                    "Re-run the installer to create the identity.");
+                return;
+            }
+
+            var task = new SqlIdentityAccessTask(_logger);
+            await task.GrantDatabaseAccessAsync(
+                dbInfo.ConnectionString,
+                current.Data.Name,
+                principalId.Value,
+                SqlContainedUserScript.AppServiceRoles);
+        }
+
+        /// <summary>
+        /// Grants the Automation account's managed identity access to the analytics database.
+        /// </summary>
+        /// <remarks>
+        /// The Graph usage-report maintenance runbooks connect to the database directly. With SQL
+        /// authentication they use the stored "SQLCredential"; with Microsoft Entra ID there is no
+        /// credential to store, so they authenticate as the Automation account and need a contained user.
+        /// They run Ola Hallengren's IndexOptimize and create/drop objects in the profiling schema, so
+        /// db_owner is the role that actually covers what they do. See issue #117.
+        /// </remarks>
+        private async Task GrantAutomationAccountDatabaseAccess(AutomationAccountResource automationAccount, DatabasePaaSInfo dbInfo)
+        {
+            if (automationAccount == null) return;
+
+            AutomationAccountResource current;
+            try
+            {
+                current = await automationAccount.GetAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not re-read the Automation account to find its managed identity: {ex.Message}");
+                current = automationAccount;
+            }
+
+            var principalId = current?.Data?.Identity?.PrincipalId;
+            if (principalId == null || principalId == Guid.Empty)
+            {
+                _logger.LogWarning(
+                    "The Automation account has no system-assigned managed identity, so the Graph usage-report maintenance " +
+                    "runbooks will not be able to connect to a database that has SQL authentication disabled.");
+                return;
+            }
+
+            var task = new SqlIdentityAccessTask(_logger);
+            await task.GrantDatabaseAccessAsync(
+                dbInfo.ConnectionString,
+                current.Data.Name,
+                principalId.Value,
+                new[] { "db_owner" });
         }
 
         /// <summary>
@@ -292,7 +388,7 @@ namespace App.ControlPanel.Engine
             await installJob.Install();
         }
 
-        async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
+        async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
             RedisInstallResult redis,
             CognitiveServicesInfo cognitiveServicesInfo,
@@ -389,12 +485,38 @@ namespace App.ControlPanel.Engine
             }
             connectionStrings.Properties.Add("Redis", new ConnStringValueTypePair(redisConnectionString, ConnectionStringType.Custom));
 
-            await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = new SiteConfigProperties { Use32BitWorkerProcess = false, IsAlwaysOn = true } });
+            var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
+            try
+            {
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = siteConfig });
+            }
+            catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
+            {
+                _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, appServicePlan?.Data?.Sku));
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku, includePlanSensitiveSettings: false) });
+            }
             await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
             await webApp.UpdateApplicationSettingsAsync(appSettings);
             await webApp.UpdateConnectionStringsAsync(connectionStrings);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        public static SiteConfigProperties BuildPostCreateSiteConfig(AppServiceSkuDescription appServicePlanSku, bool includePlanSensitiveSettings = true)
+        {
+            var siteConfig = new SiteConfigProperties();
+
+            if (includePlanSensitiveSettings && AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku))
+            {
+                siteConfig.IsAlwaysOn = true;
+            }
+
+            if (includePlanSensitiveSettings && AppServicePlanCapabilities.Supports64BitWorkerProcess(appServicePlanSku))
+            {
+                siteConfig.Use32BitWorkerProcess = false;
+            }
+
+            return siteConfig;
         }
 
         /// <summary>
