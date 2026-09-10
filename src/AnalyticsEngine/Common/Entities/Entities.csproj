@@ -422,6 +422,10 @@
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
+    <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
+      <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\v1-0-5.cs" />
     <Compile Include="Migrations\v1-0-5.Designer.cs">
       <DependentUpon>v1-0-5.cs</DependentUpon>
@@ -636,6 +640,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.resx">
       <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
+      <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
