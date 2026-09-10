@@ -142,6 +142,10 @@
     <Compile Include="ActivityImportCacheProviderTests.cs" />
     <Compile Include="ActivityImportCacheWindowTests.cs" />
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="AgentCostApiContractTests.cs" />
+    <Compile Include="AgentCostImportTests.cs" />
+    <Compile Include="AgentCostUserResolutionTests.cs" />
+    <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="AzureSqlEntraAuthTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />

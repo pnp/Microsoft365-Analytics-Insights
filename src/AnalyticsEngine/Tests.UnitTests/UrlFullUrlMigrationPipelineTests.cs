@@ -52,7 +52,7 @@ namespace Tests.UnitTests
         // DenormaliseCopilotChatUserAndTime adds the denormalised user_id / time_stamp columns to
         // copilot_chats, and ColumnstoreUsageReportMetrics is a schema-only index migration over the
         // per-user usage-report tables.
-        private const string LatestId = "202608310800001_ColumnstoreUsageReportMetrics";
+        private const string LatestId = "202609090647151_AgentCostUserCredits";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

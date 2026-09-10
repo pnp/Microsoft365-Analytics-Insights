@@ -6,6 +6,7 @@ import {
   DataUsage20Regular,
   DocumentBulletList20Regular,
   Home20Regular,
+  Money20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
   Settings20Regular,
@@ -19,6 +20,7 @@ import { lazyWithReload } from './lazyWithReload';
 const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOverviewPage'));
 const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
+const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
 const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivityPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
@@ -97,6 +99,13 @@ export const ROUTES: PortalRoute[] = [
     label: 'Licence activity',
     icon: <DataUsage20Regular />,
     element: <LicenceActivityPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/agent-costs',
+    label: 'Agent costs',
+    icon: <Money20Regular />,
+    element: <AgentCostsPage />,
   },
 
   {

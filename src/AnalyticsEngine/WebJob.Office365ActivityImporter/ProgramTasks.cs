@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
+using WebJob.Office365ActivityImporter.Engine.AgentCosts;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
@@ -117,6 +119,87 @@ namespace WebJob.Office365ActivityImporter
 
             _isInitialized = true;
 
+        }
+
+        /// <summary>
+        /// Optional agent-cost imports: billed Copilot Studio Copilot Credits, and daily Azure spend from
+        /// Microsoft Cost Management.
+        /// </summary>
+        /// <remarks>
+        /// <para>Does not call <see cref="InitAuth"/>: neither import touches Graph. Each builds its own
+        /// OAuth context for its own audience, and does so <b>inside the lazy factory</b> so a deployment with
+        /// these toggles off never acquires a token for an API it does not use.</para>
+        /// <para>Never throws - <see cref="AgentCostImportPhase"/> already turns failures into a log row and
+        /// an <c>agent_cost_import_log</c> entry, but this is called from the cycle after the Copilot repair
+        /// step, so it must not be able to abort a cycle that has already done useful work.</para>
+        /// </remarks>
+        internal async Task ImportAgentCosts()
+        {
+            if (!_settings.ImportJobSettings.CopilotStudioCredits && !_settings.ImportJobSettings.AzureCostManagement)
+            {
+                // Nothing enabled: stay silent rather than logging two "skipping" lines every cycle for the
+                // majority of deployments that will never turn these on.
+                return;
+            }
+
+            try
+            {
+                var store = new SqlAgentCostStore(DefaultAnalyticsDbContextFactory.Instance, _logger);
+
+                var phase = new AgentCostImportPhase(
+                    _logger,
+                    _settings,
+                    // The same process-lifetime last-run store the Graph sections use. It is a generic
+                    // key/value stamp keyed by cadence key, not Graph-specific, and it must outlive a cycle:
+                    // ProgramTasks is rebuilt every cycle, so a store created here would forget every stamp
+                    // and the daily gate would never fire.
+                    _graphLastRunStore,
+                    creditImporterFactory: () =>
+                    {
+                        var auth = new PowerPlatformAppIndentityOAuthContext(_logger, _settings.ClientID,
+                            _settings.TenantGUID.ToString(), _settings.ClientSecret, _settings.KeyVaultUrl,
+                            _settings.UseClientCertificate);
+
+                        var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, _logger);
+
+                        return new CopilotStudioCreditImporter(
+                            _logger,
+                            new PowerPlatformLicensingCreditSource(httpClient, _logger),
+                            store,
+                            _settings.CopilotStudioCreditsTrailingWindowDays,
+                            clock: null,
+                            // Links per-user credits to dbo.users on the Entra object id the user import
+                            // already stores in azure_ad_id, falling back to a directory lookup for anyone
+                            // not imported yet. The Graph client is the same one the user import uses, so
+                            // this needs no additional permission.
+                            userResolver: new AgentCostUserResolver(
+                                new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, _logger),
+                                _manualGraphCallClient == null ? null : new GraphEntraUserLookup(_manualGraphCallClient, _logger),
+                                _logger));
+                    },
+                    azureCostImporterFactory: () =>
+                    {
+                        var auth = new AzureManagementAppIndentityOAuthContext(_logger, _settings.ClientID,
+                            _settings.TenantGUID.ToString(), _settings.ClientSecret, _settings.KeyVaultUrl,
+                            _settings.UseClientCertificate);
+
+                        var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, _logger);
+
+                        return new AzureCostImporter(
+                            _logger,
+                            new AzureCostManagementSource(httpClient, _settings.AzureCostImport, _logger),
+                            store,
+                            _settings.AzureCostImport);
+                    });
+
+                await phase.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.TrackException(ex);
+                _logger.LogError(ex, $"Agent cost import phase failed to run: {ex.Message}. "
+                    + "No other import is affected; it will be retried on the next cycle.");
+            }
         }
 
         /// <summary>
