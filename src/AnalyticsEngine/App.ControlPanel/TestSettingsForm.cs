@@ -91,6 +91,12 @@ namespace App.ControlPanel
                 {
                     connectionString = DatabasePaaSInfo.GetConnectionString(r.Sql?.SqlFqdn, null, r.Sql?.SqlUsername, r.Sql?.SqlPassword);
                 }
+                else if (!string.IsNullOrEmpty(r.Sql?.SqlFqdn))
+                {
+                    // No SQL login: the server authenticates with Microsoft Entra ID, so the tests connect
+                    // with a token instead of credentials (issue #117).
+                    connectionString = DatabasePaaSInfo.GetEntraIdConnectionString(r.Sql.SqlFqdn, null);
+                }
 
                 this.TestConfiguration = new TestConfiguration
                 {

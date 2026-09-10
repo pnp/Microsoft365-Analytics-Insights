@@ -27,6 +27,8 @@ namespace Common.Entities.Config
             this.AADInstance = ConfigurationManager.AppSettings.Get("AADInstance");
             this.KeyVaultUrl = ConfigurationManager.AppSettings.Get("KeyVaultUrl");
 
+            RegisterAzureSqlFallbackCredential();
+
             // New: UserGroupsFilter (optional)
             this.UserGroupsFilter = ConfigurationManager.AppSettings.Get("UserGroupsFilter");
 
@@ -265,6 +267,34 @@ namespace Common.Entities.Config
 
             /// <summary>Default daily-gate (hours) for the non-fresh Graph imports. 0 = every cycle (legacy).</summary>
             public int NonFreshGraphIntervalHours { get; set; }
+        }
+
+        /// <summary>
+        /// Makes the runtime service principal available as a fallback identity for Azure SQL, for
+        /// deployments where the database has SQL authentication disabled and the connection string
+        /// therefore carries no login.
+        /// </summary>
+        /// <remarks>
+        /// Only a fallback: <see cref="DataUtils.Sql.AzureSqlTokenAuth"/> prefers the App Service's own
+        /// system-assigned managed identity, which is the identity the installer grants database access
+        /// to. This covers hosts with no managed identity (a hybrid runbook worker, an on-premises job)
+        /// and mirrors how Redis / Storage / Service Bus already fall back to the runtime principal.
+        /// Registered with SetCredentialIfNotSet so it never displaces a credential a caller chose
+        /// deliberately - notably the installer's own principal during a schema upgrade.
+        /// </remarks>
+        private void RegisterAzureSqlFallbackCredential()
+        {
+            if (DataUtils.Sql.AzureSqlTokenAuth.HasHostManagedIdentity()) return;
+
+            if (this.TenantGUID == Guid.Empty
+                || string.IsNullOrEmpty(this.ClientID)
+                || string.IsNullOrEmpty(this.ClientSecret))
+            {
+                return;
+            }
+
+            DataUtils.Sql.AzureSqlTokenAuth.SetCredentialIfNotSet(
+                new Azure.Identity.ClientSecretCredential(this.TenantGUID.ToString(), this.ClientID, this.ClientSecret));
         }
 
         public string BuildLabel { get; set; }

@@ -8,12 +8,16 @@ using Azure.ResourceManager.Network;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using Azure.ResourceManager.Storage;
+using Azure;
 using CloudInstallEngine;
+using CloudInstallEngine.Azure;
 using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
 {
@@ -34,6 +38,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly SqlServerTask _sqlServerTask;
         private readonly SqlServerFirewallConfigTask _sqlServerFirewallConfigTask;
         private readonly SqlDatabaseTask _sqlDatabaseTask;
+        private TaskConfig _sqlServerConfig;
+        private TaskConfig _automationAccountConfig;
+        private SqlAuthDecision _sqlAuthDecision;
         private readonly KeyVaultTask _keyVaultTask;
 
         private readonly AppServicePlanTask _appServicePlanTask;
@@ -128,6 +135,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var sqlServerConfig = TaskConfig.GetConfigForName(config.SQLServerName)
                 .AddSetting(SqlServerTask.CONFIG_KEY_USERNAME, config.SQLServerAdminUsername)
                 .AddSetting(SqlServerTask.CONFIG_KEY_PASSWORD, config.SQLServerAdminPassword);
+            _sqlServerConfig = sqlServerConfig;
             const string FIREWALL_RULE_NAME = INSTALLER_FIREWALL_RULE_NAME;
 
             _sqlServerTask = new SqlServerTask(sqlServerConfig, logger, Location, tagDic, allowPublicAccess);
@@ -284,7 +292,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_SQL_DB, config.SQLServerDatabaseName)
                     .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_SQL_USERNAME, config.SQLServerAdminUsername)
                     .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_SQL_PASSWORD, config.SQLServerAdminPassword)
+                    .AddSetting(AutomationAccountTask.CONFIG_PARAM_NAME_USE_ENTRA_AUTH,
+                        config.SqlAuthMode == SqlServerAuthMode.EntraId ? "true" : "false")
                     ;
+                _automationAccountConfig = automationAccountConfig;
 
                 _automationAccountTask = new AutomationAccountTask(automationAccountConfig, logger, Location, tagDic, allowPublicAccess);
                 this.AddTask(_automationAccountTask);
@@ -415,6 +426,164 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
         }
 
+        /// <summary>
+        /// Runs the install, choosing the SQL authentication method around it: the Microsoft Entra
+        /// administrator has to be resolved BEFORE the SQL server is created (it can only be set at
+        /// creation, since an existing server is never reconfigured), and what the server actually
+        /// supports can only be read back AFTER. See issue #117.
+        /// </summary>
+        public override async Task Install(object previousRunResult)
+        {
+            await ConfigureSqlEntraAdministrator();
+
+            await base.Install(previousRunResult);
+
+            await DetectSqlAuthMethod();
+        }
+
+        /// <summary>
+        /// Works out which Microsoft Entra principal should be the new SQL server's administrator and feeds
+        /// it to <see cref="SqlServerTask"/>. No-op unless the operator selected Entra authentication.
+        /// </summary>
+        /// <remarks>
+        /// Defaults to the installer's own service principal. Azure allows exactly one Entra administrator
+        /// per server, and the installer is the identity that has to sign in to the database to run the
+        /// schema upgrade and create the App Service's contained user - so making anything else the
+        /// administrator by default would break the install it is supposed to enable.
+        /// </remarks>
+        async Task ConfigureSqlEntraAdministrator()
+        {
+            if (_config.SqlAuthMode != SqlServerAuthMode.EntraId || _sqlServerConfig == null) return;
+
+            // Re-entrancy guard: TaskConfig.AddSetting throws on a duplicate key, so a second Install()
+            // call on the same job instance must not try to add these again.
+            if (_sqlServerConfig.ContainsKey(SqlServerTask.CONFIG_KEY_ENTRA_ADMIN_OBJECT_ID)) return;
+
+            var objectId = (_config.SQLEntraAdminObjectId ?? string.Empty).Trim();
+            var login = (_config.SQLEntraAdminLogin ?? string.Empty).Trim();
+            var principalType = string.IsNullOrWhiteSpace(_config.SQLEntraAdminPrincipalType) ? "User" : _config.SQLEntraAdminPrincipalType.Trim();
+
+            if (string.IsNullOrWhiteSpace(objectId))
+            {
+                try
+                {
+                    objectId = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(
+                        _config.InstallerAccount.DirectoryId, _config.InstallerAccount.ClientId, _config.InstallerAccount.Secret);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(
+                        "Could not resolve the installer service principal's object ID, so the SQL Server cannot be created with " +
+                        $"Microsoft Entra ID authentication: {ex.Message}. Falling back to SQL Server authentication.");
+                    return;
+                }
+
+                login = string.IsNullOrWhiteSpace(login) ? _config.InstallerAccount.ClientId : login;
+                principalType = "Application";
+
+                Logger.LogInformation(
+                    "No Microsoft Entra administrator was configured for Azure SQL, so the installer's own service principal will be " +
+                    "used. That is the identity which signs in to the database to apply schema upgrades. You can add a human " +
+                    "administrator afterwards in the Azure portal (SQL Server > Microsoft Entra ID).");
+            }
+            else
+            {
+                Logger.LogWarning(
+                    $"A Microsoft Entra administrator ('{login}') is configured for the SQL Server. Azure allows only ONE Entra " +
+                    "administrator per server, so make sure the installer's service principal can also sign in to the database - " +
+                    "typically by making the administrator a security group that contains it. Otherwise the database schema " +
+                    "upgrade will fail with a login error.");
+            }
+
+            _sqlServerConfig
+                .AddSetting(SqlServerTask.CONFIG_KEY_ENTRA_ADMIN_OBJECT_ID, objectId)
+                .AddSetting(SqlServerTask.CONFIG_KEY_ENTRA_ADMIN_LOGIN, login ?? string.Empty)
+                .AddSetting(SqlServerTask.CONFIG_KEY_ENTRA_ADMIN_TENANT_ID, _config.InstallerAccount.DirectoryId ?? string.Empty)
+                .AddSetting(SqlServerTask.CONFIG_KEY_ENTRA_ADMIN_PRINCIPAL_TYPE, principalType)
+
+                // Entra-only (SQL authentication disabled) is only ever applied to a server this run
+                // creates. SqlServerTask ignores it for an existing server.
+                .AddSetting(SqlServerTask.CONFIG_KEY_ENTRA_ONLY_AUTH, "true");
+        }
+
+        /// <summary>
+        /// Reads back what the SQL server actually supports and decides how to connect to it.
+        /// </summary>
+        async Task DetectSqlAuthMethod()
+        {
+            var haveSqlCredentials = !string.IsNullOrWhiteSpace(_config.SQLServerAdminUsername)
+                && !string.IsNullOrWhiteSpace(_config.SQLServerAdminPassword);
+
+            SqlServerAuthState state = null;
+            try
+            {
+                state = await SqlServerAuthReader.ReadAsync(CreatedSqlServer, Logger);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Could not read the SQL Server's authentication configuration: {ex.Message}");
+            }
+
+            _sqlAuthDecision = SqlServerAuthDetection.Decide(state, haveSqlCredentials, _config.SqlAuthMode);
+            Logger.LogInformation($"SQL authentication: {_sqlAuthDecision.Reason}");
+
+            await RepairAutomationSqlCredentialIfNeeded();
+        }
+
+        /// <summary>
+        /// Creates the Automation account's SQL credential when the install turned out to need one after all.
+        /// </summary>
+        /// <remarks>
+        /// The Automation account is provisioned before the SQL server's real capabilities are known, so it
+        /// is told what the operator asked for. When Entra ID was selected but detection fell back to a SQL
+        /// login - an install pointed at an existing SQL-authentication server, which is never reconfigured -
+        /// the credential the runbooks need was skipped. Put it back rather than leaving Graph usage-report
+        /// automation silently broken. See issue #117.
+        /// </remarks>
+        async Task RepairAutomationSqlCredentialIfNeeded()
+        {
+            if (_automationAccountTask == null || _automationAccountConfig == null) return;
+            if (_sqlAuthDecision == null || _sqlAuthDecision.UsesEntraId) return;
+            if (_config.SqlAuthMode != SqlServerAuthMode.EntraId) return;   // credential was already created
+
+            AutomationAccountResource automationAccount;
+            try
+            {
+                automationAccount = CreatedAutomationAccount;
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            if (automationAccount == null) return;
+
+            if (string.IsNullOrWhiteSpace(_config.SQLServerAdminUsername) || string.IsNullOrWhiteSpace(_config.SQLServerAdminPassword))
+            {
+                Logger.LogWarning(
+                    "This install fell back to SQL Server authentication, but no SQL administrator username/password is " +
+                    $"configured, so the Automation account's '{AutomationAccountTask.CRED_SQL_NAME}' credential could not be " +
+                    "created. The Graph usage-report maintenance runbooks will not be able to connect to the database.");
+                return;
+            }
+
+            try
+            {
+                Logger.LogInformation(
+                    $"Creating the Automation account's '{AutomationAccountTask.CRED_SQL_NAME}' credential: this install fell back " +
+                    "to SQL Server authentication, so the runbooks need a SQL login after all.");
+
+                var credential = new Azure.ResourceManager.Automation.Models.AutomationCredentialCreateOrUpdateContent(
+                    AutomationAccountTask.CRED_SQL_NAME, _config.SQLServerAdminUsername, _config.SQLServerAdminPassword);
+
+                await automationAccount.GetAutomationCredentials()
+                    .CreateOrUpdateAsync(WaitUntil.Completed, AutomationAccountTask.CRED_SQL_NAME, credential);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Could not create the Automation account's SQL credential: {ex.Message}");
+            }
+        }
+
         private void AddPrivateEndpointTask(string peName, string targetResourceId, string groupId, string subnetId, ILogger logger, Dictionary<string, string> tags)
         {
             var peConfig = TaskConfig.GetConfigForName(peName)
@@ -439,7 +608,17 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public SqlDatabaseResource CreatedSqlDatabase => GetTaskResult<SqlDatabaseResource>(_sqlDatabaseTask);
         public AppServicePlanResource CreatedAppServicePlan => GetTaskResult<AppServicePlanResource>(_appServicePlanTask);
         public WebSiteResource CreatedWebSiteResource => GetTaskResult<WebSiteResource>(_appServiceWebsiteTask);
-        public DatabasePaaSInfo DatabasePaaSInfo => new DatabasePaaSInfo(CreatedSqlServer, CreatedSqlDatabase, _config);
+
+        /// <summary>
+        /// How the installer decided to authenticate to SQL for this run, and why. Null until the job has
+        /// run. See issue #117.
+        /// </summary>
+        public SqlAuthDecision SqlAuthDecision => _sqlAuthDecision;
+
+        public DatabasePaaSInfo DatabasePaaSInfo => new DatabasePaaSInfo(CreatedSqlServer, CreatedSqlDatabase, _config)
+        {
+            AuthMethod = _sqlAuthDecision != null ? _sqlAuthDecision.Method : SqlConnectionAuthMethod.SqlLogin
+        };
         public RedisInstallResult Redis => GetTaskResult<RedisInstallResult>(_redisTask);
         public StorageAccountResource Storage => GetTaskResult<StorageAccountResource>(_storageAccountInstallTask);
         public AppInsightsInfo AppInsights => GetTaskResult<AppInsightsInfo>(_appInsightsInstallTask);

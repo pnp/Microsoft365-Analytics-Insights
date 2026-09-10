@@ -80,7 +80,7 @@ namespace DataUtils.Sql.Inserts
             }
 
             // Do database things
-            using (var opGlobalConnection = new SqlConnection(_connectionString))
+            using (var opGlobalConnection = AzureSqlTokenAuth.CreateConnection(_connectionString))
             {
                 await opGlobalConnection.OpenAsync();
 
@@ -138,7 +138,7 @@ namespace DataUtils.Sql.Inserts
 
         private async Task ProcessChunkAsync(string tempTableName, ILogger logger, List<T> threadListChunk, int chunkIdx)
         {
-            using (var chunkSqlConnection = new SqlConnection(_connectionString))
+            using (var chunkSqlConnection = AzureSqlTokenAuth.CreateConnection(_connectionString))
             {
                 await chunkSqlConnection.OpenAsync();
 

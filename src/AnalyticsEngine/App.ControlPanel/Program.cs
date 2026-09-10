@@ -120,6 +120,24 @@ namespace App.ControlPanel
         {
             try
             {
+                // A connection string with no login means the server has SQL authentication disabled, so
+                // register the service principal the parent installer supplied before EF opens anything.
+                // See issue #117.
+                if (DataUtils.Sql.AzureSqlTokenAuth.NeedsAccessToken(initInfo.ConnectionString))
+                {
+                    if (initInfo.HasEntraCredential)
+                    {
+                        DataUtils.Sql.AzureSqlTokenAuth.SetCredential(new Azure.Identity.ClientSecretCredential(
+                            initInfo.EntraTenantId, initInfo.EntraClientId, initInfo.EntraClientSecret));
+                    }
+                    else
+                    {
+                        InstallerLogs.AddToWindowsEventLog(
+                            "The connection string has no SQL login, so Microsoft Entra ID authentication is required, but no " +
+                            "credential was supplied. Registering the install configuration will fail.", true);
+                    }
+                }
+
                 using (var db = new AnalyticsEntitiesContext(initInfo.ConnectionString, true, false))
                 {
                     // If we're here, EF has successfully updated/verified the DB. Now register the config and events involved in the install.

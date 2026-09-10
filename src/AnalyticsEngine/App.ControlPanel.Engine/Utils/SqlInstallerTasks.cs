@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using DataUtils;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -69,6 +70,23 @@ namespace App.ControlPanel.Engine.InstallerTasks
             upgradeInfo.ConnectionString = _dbInfo.ConnectionString;
             upgradeInfo.OrgURLs = targetSites;
 
+            // A connection string with no login means the SQL server has SQL authentication disabled, so
+            // the downloaded app has to authenticate with Microsoft Entra ID. It cannot use a managed
+            // identity - it runs on the operator's machine - so hand it the installer's own service
+            // principal, which is the identity assigned as the server's Entra administrator. See #117.
+            if (AzureSqlTokenAuth.NeedsAccessToken(upgradeInfo.ConnectionString))
+            {
+                upgradeInfo.EntraTenantId = _config.InstallerAccount?.DirectoryId;
+                upgradeInfo.EntraClientId = _config.InstallerAccount?.ClientId;
+                upgradeInfo.EntraClientSecret = _config.InstallerAccount?.Secret;
+
+                _logger.LogInformation(
+                    "The database uses Microsoft Entra ID authentication, so the downloaded control-panel app will sign in with " +
+                    "the installer's service principal. NOTE: this requires the downloaded release to be new enough to support " +
+                    "Microsoft Entra ID authentication - if the upgrade fails with a login error, the downloaded 'latest stable' " +
+                    "build predates that support and you should deploy from a local release override instead.");
+            }
+
             _logger.LogInformation($"Calling downloaded control-panel app to init/update database. This could take a while if the existing schema needs updating.");
 
             var result = await SendMsgToInstaller(InstallerConstants.PARAM_INITDB, upgradeInfo.ToBase64());
@@ -96,6 +114,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 SetupUserName = _installedByUsername,
                 ConnectionString = _dbInfo.ConnectionString
             };
+
+            // Same reasoning as the schema upgrade: the downloaded control-panel process has to authenticate
+            // for itself, and a token-less connection string means Microsoft Entra ID. See issue #117.
+            if (AzureSqlTokenAuth.NeedsAccessToken(status.ConnectionString))
+            {
+                status.EntraTenantId = _config.InstallerAccount?.DirectoryId;
+                status.EntraClientId = _config.InstallerAccount?.ClientId;
+                status.EntraClientSecret = _config.InstallerAccount?.Secret;
+            }
 
             // Write a temp file to pass to control-panel
             var tempFileName = Path.GetTempFileName();
