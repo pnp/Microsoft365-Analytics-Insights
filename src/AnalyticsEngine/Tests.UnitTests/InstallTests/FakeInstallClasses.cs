@@ -185,4 +185,31 @@ namespace Tests.UnitTests.InstallTests
             return Task.FromResult<object>(new object());
         }
     }
+
+    /// <summary>
+    /// Mirrors the optional-resource shape in AzurePaaSInstallJob: a task that is only registered when a
+    /// feature is switched on in the install config, exposed through both the unguarded getter shape that
+    /// caused issue #490 and the null-safe shape every optional resource must use.
+    /// </summary>
+    public class FakeOptionalTaskJob : InstallJobInContainerJob<DummyContainerHost>
+    {
+        private readonly FakeChildInstallTask1 _optionalTask;
+
+        public FakeOptionalTaskJob(ILogger logger, bool featureEnabled)
+            : base(logger, new FakeResourceContainerLoader(TaskConfig.NoConfig, logger))
+        {
+            if (featureEnabled)
+            {
+                _optionalTask = new FakeChildInstallTask1(TaskConfig.NoConfig, logger);
+                AddTask(_optionalTask);
+            }
+        }
+
+        /// <summary>The shape that produced "Value cannot be null. Parameter name: key" when the feature was off.</summary>
+        public FakeCloudResourceType1 OptionalResultUnguarded => GetTaskResult<FakeCloudResourceType1>(_optionalTask);
+
+        /// <summary>The shape used by CognitiveServicesInfo / SBQueueWithConnectionString / VNet / CreatedAutomationAccount.</summary>
+        public FakeCloudResourceType1 OptionalResultNullSafe =>
+            _optionalTask != null ? GetTaskResult<FakeCloudResourceType1>(_optionalTask) : null;
+    }
 }
