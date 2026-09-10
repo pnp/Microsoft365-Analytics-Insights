@@ -23,9 +23,17 @@ namespace Common.Entities.Installer
         //          interaction history import).
         //          2.1.0 -> 2.2.0 added SharePointConfig.AuthClientId / AuthTenantId (optional Entra ID app
         //          registration for the interactive SharePoint sign-in, replacing the old cookie web-login).
-        //          2.2.0 -> 2.3.0 added ImportTaskSettings.ImportDlp (opt-in Microsoft Purview DLP import
+        //          2.2.0 -> 2.3.0 added SqlAuthMode + SQLEntraAdminLogin / SQLEntraAdminObjectId /
+        //          SQLEntraAdminPrincipalType (Microsoft Entra ID authentication for Azure SQL). Additive
+        //          and back-compatible: SQLServerAdminUsername / SQLServerAdminPasswordHash are retained
+        //          (deprecated) and an existing config with neither new field keeps using SQL auth exactly
+        //          as before. See issue #117.
+        //          2.3.0 -> 2.4.0 added ImportTaskSettings.CopilotStudioCredits and
+        //          ImportTaskSettings.AzureCostManagement (opt-in agent cost imports: billed Copilot Studio
+        //          Copilot Credits, and daily Azure spend from Microsoft Cost Management).
+        //          2.4.0 -> 2.5.0 added ImportTaskSettings.ImportDlp (opt-in Microsoft Purview DLP import
         //          from the DLP.All content type; needs the separate ActivityFeed.ReadDlp permission).
-        const string CONFIG_VERSION = "2.3.0";
+        const string CONFIG_VERSION = "2.5.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -64,7 +72,47 @@ namespace Common.Entities.Installer
 
         public string SQLServerName { get; set; } = string.Empty;
         public string SQLServerDatabaseName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// DEPRECATED. SQL Server authentication admin login for the Azure SQL server.
+        /// </summary>
+        /// <remarks>
+        /// Kept for backwards compatibility: existing deployments were created with SQL authentication and
+        /// must keep working untouched. New deployments should use <see cref="SqlAuthMode"/> =
+        /// <see cref="SqlServerAuthMode.EntraId"/>, which authenticates with Microsoft Entra ID and stores
+        /// no long-lived secret. See issue #117.
+        /// </remarks>
         public string SQLServerAdminUsername { get; set; } = string.Empty;
+
+        /// <summary>
+        /// How the solution authenticates to Azure SQL.
+        /// </summary>
+        /// <remarks>
+        /// Defaults to <see cref="SqlServerAuthMode.SqlLogin"/> so a config file written by an older
+        /// installer - which has no such property - deserialises to exactly the behaviour it had before.
+        /// Only ever applied when the installer CREATES the SQL server; an existing server's authentication
+        /// configuration is never changed, and the mode actually used at install time is detected from the
+        /// server itself (see <c>SqlServerAuthDetection</c>).
+        /// </remarks>
+        public SqlServerAuthMode SqlAuthMode { get; set; } = SqlServerAuthMode.SqlLogin;
+
+        /// <summary>
+        /// Display name / UPN of the Microsoft Entra ID principal to set as the SQL server's Entra
+        /// administrator. Optional: when blank the installer uses its own service principal, which is the
+        /// identity that has to run the schema upgrade anyway.
+        /// </summary>
+        public string SQLEntraAdminLogin { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Object (principal) ID of <see cref="SQLEntraAdminLogin"/>. Azure requires the object ID, not the
+        /// UPN, to set a server Entra administrator.
+        /// </summary>
+        public string SQLEntraAdminObjectId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Principal type of the configured Entra administrator - "User", "Group" or "Application".
+        /// </summary>
+        public string SQLEntraAdminPrincipalType { get; set; } = "User";
 
         public bool CognitiveServicesEnabled { get; set; } = true;
         public string CognitiveServiceName { get; set; } = string.Empty;
@@ -73,6 +121,14 @@ namespace Common.Entities.Installer
 
         public bool DownloadLatestStable { get; set; } = true;
 
+        /// <summary>
+        /// DEPRECATED. Encrypted SQL Server authentication admin password.
+        /// </summary>
+        /// <remarks>
+        /// Retained so existing config files keep loading and existing SQL-authentication servers keep
+        /// working. Not written when <see cref="SqlAuthMode"/> is <see cref="SqlServerAuthMode.EntraId"/>.
+        /// See issue #117.
+        /// </remarks>
         public string SQLServerAdminPasswordHash { get; set; } = string.Empty;
 
         public string AppInsightsName { get; set; } = string.Empty;
@@ -118,6 +174,30 @@ namespace Common.Entities.Installer
         public List<AzTag> Tags { get; set; } = new List<AzTag>();
 
         public VNetConfig NetworkConfig { get; set; } = new VNetConfig();
+    }
+
+    /// <summary>
+    /// How the solution authenticates to its Azure SQL database.
+    /// </summary>
+    /// <remarks>
+    /// Serialised by name so saved config files stay readable and stay valid if members are ever
+    /// reordered. <see cref="SqlLogin"/> is deliberately the zero/default value so a config file written
+    /// before this property existed loads as "SQL authentication", which is what those deployments use.
+    /// </remarks>
+    [Newtonsoft.Json.JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]
+    public enum SqlServerAuthMode
+    {
+        /// <summary>
+        /// DEPRECATED for new deployments. SQL Server authentication with an admin login and password
+        /// stored in the connection string. Still fully supported: existing servers are never migrated.
+        /// </summary>
+        SqlLogin = 0,
+
+        /// <summary>
+        /// Microsoft Entra ID authentication. No password is stored anywhere; the App Service uses its
+        /// system-assigned managed identity and the installer uses its own service principal.
+        /// </summary>
+        EntraId = 1,
     }
 
     /// <summary>

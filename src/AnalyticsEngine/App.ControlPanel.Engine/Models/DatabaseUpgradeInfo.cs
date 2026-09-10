@@ -14,6 +14,35 @@ namespace App.ControlPanel.Engine.Models
         public List<string> OrgURLs { get; set; }
 
         /// <summary>
+        /// Directory (tenant) ID of the service principal to authenticate to Azure SQL with, when the
+        /// database uses Microsoft Entra ID authentication.
+        /// </summary>
+        /// <remarks>
+        /// The schema upgrade is not run in-process: the installer shells out to the control-panel app it
+        /// downloaded for this release, and that child process has to authenticate for itself. A refreshable
+        /// credential is passed rather than an access token because an upgrade on a large database can run
+        /// for longer than a token's lifetime. Left empty for a SQL-authentication database, where the
+        /// connection string already carries the login. See issue #117.
+        /// </remarks>
+        public string EntraTenantId { get; set; }
+
+        /// <summary>Client ID of the service principal to authenticate to Azure SQL with.</summary>
+        public string EntraClientId { get; set; }
+
+        /// <summary>Client secret of the service principal to authenticate to Azure SQL with.</summary>
+        public string EntraClientSecret { get; set; }
+
+        /// <summary>
+        /// Whether this upgrade needs Microsoft Entra ID authentication, i.e. all three credential
+        /// properties are populated.
+        /// </summary>
+        [Newtonsoft.Json.JsonIgnore]
+        public bool HasEntraCredential =>
+            !string.IsNullOrWhiteSpace(EntraTenantId)
+            && !string.IsNullOrWhiteSpace(EntraClientId)
+            && !string.IsNullOrWhiteSpace(EntraClientSecret);
+
+        /// <summary>
         /// Save the URLs in the database if they're not there already.
         /// </summary>
         public void EnsureOrgURLs(AnalyticsEntitiesContext db)

@@ -1,4 +1,5 @@
 using Common.Entities;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -60,7 +61,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             var defaultConnectionString = database.Database.Connection.ConnectionString;
 
             // Create our own connection & context to use it
-            using (var con = new SqlConnection(defaultConnectionString))
+            using (var con = AzureSqlTokenAuth.CreateConnection(defaultConnectionString))
             {
                 con.Open();
 

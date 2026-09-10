@@ -1,5 +1,6 @@
 using Common.Entities.Config;
 using Common.Entities.Entities;
+using Common.Entities.Entities.AgentCosts;
 using Common.Entities.Entities.AuditLog;
 using Common.Entities.Entities.Copilot;
 using Common.Entities.Entities.Teams;
@@ -210,6 +211,34 @@ namespace Common.Entities
             // merge's "insert if not already there" safe under concurrent importer batches.
             modelBuilder.Entity<DlpPolicy>().HasIndex(p => p.PolicyId).IsUnique();
             modelBuilder.Entity<DlpRule>().HasIndex(r => r.RuleId).IsUnique();
+
+            // Agent cost imports (Copilot Studio credits + Azure Cost Management).
+            //
+            // Money and credit figures are decimal(18,6), not the EF default decimal(18,2): an Azure meter
+            // is routinely priced in millionths of a currency unit (the Copilot Studio message meter is
+            // $0.01, and a single day's slice can be a fraction of that), so two decimal places would round
+            // real spend to zero.
+            modelBuilder.Entity<CopilotStudioCreditDaily>().Property(c => c.BilledCredits).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditDaily>().Property(c => c.NonBilledCredits).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditUserDaily>().Property(c => c.BilledCredits).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.Entitled).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.Consumed).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.Allocated).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.Available).HasPrecision(18, 6);
+            modelBuilder.Entity<CopilotStudioCreditCapacity>().Property(c => c.PayAsYouGoConsumed).HasPrecision(18, 6);
+            modelBuilder.Entity<AzureCostDaily>().Property(c => c.Cost).HasPrecision(18, 6);
+            modelBuilder.Entity<AzureCostDaily>().Property(c => c.Quantity).HasPrecision(18, 6);
+
+            // Both fact tables are re-imported over a trailing window, because both sources restate history:
+            // Azure re-estimates an open billing period several times a day, and Copilot Studio consumption
+            // is recalculated as usage days settle. The unique index is what makes that re-import an upsert
+            // instead of a duplicate, and it leads on the usage date so a date-range report still seeks.
+            modelBuilder.Entity<CopilotStudioCreditDaily>()
+                .HasIndex(c => new { c.UsageDate, c.DimensionHash }).IsUnique();
+            modelBuilder.Entity<CopilotStudioCreditUserDaily>()
+                .HasIndex(c => new { c.UsageDate, c.DimensionHash }).IsUnique();
+            modelBuilder.Entity<AzureCostDaily>()
+                .HasIndex(c => new { c.UsageDate, c.RowHash }).IsUnique();
 
             modelBuilder.Entity<EmailAddress>()
              .HasIndex(t => new { t.Address })
@@ -509,6 +538,28 @@ namespace Common.Entities
         public virtual DbSet<CopilotDlpEvent> copilot_dlp_events { get; set; }
         public virtual DbSet<DlpRuleMatch> dlp_rule_matches { get; set; }
 
+        // Agent costs. Billed spend from the vendor, as opposed to the per-conversation credit ESTIMATE this
+        // product derives from audit events - see CopilotStudioCreditDaily for why those stay separate.
+
+        /// <summary>Billed Copilot Studio credit consumption per agent, per day, per billing dimension.</summary>
+        public virtual DbSet<CopilotStudioCreditDaily> CopilotStudioCreditDaily { get; set; }
+
+        /// <summary>
+        /// Billed Copilot Studio credit consumption attributed to an individual user, per day. From the
+        /// per-user entitlement routes Microsoft added in July 2026 - a different endpoint from the per-agent
+        /// table above, not a breakdown of it.
+        /// </summary>
+        public virtual DbSet<CopilotStudioCreditUserDaily> CopilotStudioCreditUserDaily { get; set; }
+
+        /// <summary>Daily snapshot of the tenant's whole Copilot Credits entitlement and overage status.</summary>
+        public virtual DbSet<CopilotStudioCreditCapacity> CopilotStudioCreditCapacity { get; set; }
+
+        /// <summary>Daily Azure spend from Microsoft Cost Management, filtered to the configured meters.</summary>
+        public virtual DbSet<AzureCostDaily> AzureCostDaily { get; set; }
+
+        /// <summary>Diagnostics for each agent-cost import, so an empty result can be told from a failure.</summary>
+        public virtual DbSet<AgentCostImportLog> AgentCostImportLogs { get; set; }
+
         // Sent email import - one row per sent message, recipients live in the join table.
         public virtual DbSet<EmailAddress> EmailAddresses { get; set; }
         public virtual DbSet<SentEmail> SentEmails { get; set; }
@@ -550,6 +601,12 @@ namespace Common.Entities
         public SPOInsightsDBConfiguration()
         {
             SetExecutionStrategy("System.Data.SqlClient", () => new System.Data.Entity.SqlServer.SqlAzureExecutionStrategy());
+
+            // Lets EF connect to an Azure SQL server that has SQL authentication disabled, by attaching a
+            // Microsoft Entra ID access token to connections whose connection string carries no
+            // credentials. No-op for every other connection, including the SQL-authentication strings
+            // existing installs still use. See issue #117.
+            AddInterceptor(new Sql.AzureSqlAccessTokenInterceptor());
         }
     }
 }
