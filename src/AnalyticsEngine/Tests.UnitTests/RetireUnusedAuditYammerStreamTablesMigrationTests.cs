@@ -300,6 +300,140 @@ namespace Tests.UnitTests
                 + "copied from the predecessor row.");
         }
 
+        /// <summary>
+        /// Executes the manual script exactly as a DBA running sqlcmd would - GO-separated batches on one
+        /// connection with QUOTED_IDENTIFIER OFF - and proves it both completes and stamps.
+        ///
+        /// Every other test here runs the migration's <c>Up_Sql</c> through SqlClient, so the ~150 lines
+        /// unique to the manual script (the completion guard, the __MigrationHistory stamp and the
+        /// embedded model blob) were never executed by CI at all. That is precisely the surface the
+        /// DenormaliseCopilotChatUserAndTime incident lived on, where a manual script refused to stamp
+        /// after its schema work had succeeded and stranded the rest of the migration chain.
+        /// </summary>
+        [TestMethod]
+        public void ManualScript_UnderSqlcmdDefaults_CompletesAndStamps()
+        {
+            using (var db = CreatePreMigrationSchema())
+            {
+                CreateMigrationHistoryWithPredecessor(db);
+
+                db.ExecuteScript(ManualScript(), quotedIdentifierOn: false);
+
+                AssertAllRetiredTablesGone(db);
+                Assert.AreEqual(1, db.Scalar(
+                    $"SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE MigrationId = N'{MigrationId}';"),
+                    "The schema work succeeded, so the migration must be stamped - an unstamped migration "
+                    + "is reported as pending forever and blocks the next script in the chain.");
+            }
+        }
+
+        /// <summary>
+        /// A view permanently captures the session's QUOTED_IDENTIFIER when it is (re)created, so the
+        /// migration must not leave a database in a different state depending on which client applied it.
+        /// Without the explicit SET at the top of the manual script the installer path (SqlClient,
+        /// QUOTED_IDENTIFIER ON) and the by-hand path (sqlcmd, OFF) produce different views.
+        /// </summary>
+        [TestMethod]
+        public void ManualScript_RewritesViewsWithQuotedIdentifierOn_EvenUnderSqlcmdDefaults()
+        {
+            using (var db = CreatePreMigrationSchema())
+            {
+                CreateMigrationHistoryWithPredecessor(db);
+
+                // The views start out ON, as the historic Audit Log Migration.sql creates them.
+                Assert.AreEqual(1, ViewUsesQuotedIdentifier(db, "events_view_azure_ad"));
+                Assert.AreEqual(1, ViewUsesQuotedIdentifier(db, "events_view_exchange"));
+
+                db.ExecuteScript(ManualScript(), quotedIdentifierOn: false);
+
+                Assert.AreEqual(1, ViewUsesQuotedIdentifier(db, "events_view_azure_ad"),
+                    "The rewritten view must keep QUOTED_IDENTIFIER ON, or the by-hand upgrade silently "
+                    + "produces a different database from the installer's.");
+                Assert.AreEqual(1, ViewUsesQuotedIdentifier(db, "events_view_exchange"),
+                    "The rewritten view must keep QUOTED_IDENTIFIER ON, or the by-hand upgrade silently "
+                    + "produces a different database from the installer's.");
+            }
+        }
+
+        /// <summary>
+        /// A DBA who re-runs the script - because a batch failed, or because they are unsure whether it
+        /// ran - must get a clean no-op, not a second stamp or an error.
+        /// </summary>
+        [TestMethod]
+        public void ManualScript_IsIdempotent()
+        {
+            using (var db = CreatePreMigrationSchema())
+            {
+                CreateMigrationHistoryWithPredecessor(db);
+                var script = ManualScript();
+
+                db.ExecuteScript(script, quotedIdentifierOn: false);
+                db.ExecuteScript(script, quotedIdentifierOn: false);
+
+                AssertAllRetiredTablesGone(db);
+                Assert.AreEqual(1, db.Scalar(
+                    $"SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE MigrationId = N'{MigrationId}';"),
+                    "Re-running must not add a second history row.");
+            }
+        }
+
+        /// <summary>
+        /// The retention path through the manual script: a tenant with historic Yammer messages keeps that
+        /// group, and must STILL be stamped. Refusing to stamp because the data is in an unexpected state
+        /// is what stranded a customer upgrade before, so it is asserted explicitly here.
+        /// </summary>
+        [TestMethod]
+        public void ManualScript_WithRetainedData_StillStamps()
+        {
+            using (var db = CreatePreMigrationSchema())
+            {
+                CreateMigrationHistoryWithPredecessor(db);
+                db.Execute("INSERT INTO dbo.users ([user_name]) VALUES ('someone@contoso.onmicrosoft.com');");
+                db.Execute(
+                    @"INSERT INTO dbo.yammer_messages ([sender_id], [created], [yammer_msg_id], [likes_count], [followers_count])
+                      SELECT TOP 1 id, '2020-01-01', 1, 0, 0 FROM dbo.users;");
+
+                db.ExecuteScript(ManualScript(), quotedIdentifierOn: false);
+
+                Assert.IsTrue(TableExists(db, "yammer_messages"),
+                    "A group holding customer data must be retained untouched.");
+                Assert.AreEqual(1, db.Scalar(
+                    $"SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE MigrationId = N'{MigrationId}';"),
+                    "Retaining a populated group is a valid end state, so the migration must still be "
+                    + "stamped - otherwise the whole manual upgrade chain stalls on the tenants the "
+                    + "retention logic exists to protect.");
+            }
+        }
+
+        private static object ViewUsesQuotedIdentifier(ScratchDatabase db, string view)
+        {
+            return db.Scalar(
+                $@"SELECT CONVERT(int, uses_quoted_identifier) FROM sys.sql_modules
+                   WHERE object_id = OBJECT_ID(N'dbo.{view}', N'V');");
+        }
+
+        /// <summary>
+        /// EF's migration history table, holding the predecessor row the stamp copies ContextKey and
+        /// ProductVersion from.
+        /// </summary>
+        private static void CreateMigrationHistoryWithPredecessor(ScratchDatabase db)
+        {
+            db.Execute(
+                @"CREATE TABLE [dbo].[__MigrationHistory] (
+                      [MigrationId] nvarchar(150) NOT NULL,
+                      [ContextKey] nvarchar(300) NOT NULL,
+                      [Model] varbinary(max) NOT NULL,
+                      [ProductVersion] nvarchar(32) NOT NULL,
+                      CONSTRAINT [PK_dbo.__MigrationHistory] PRIMARY KEY ([MigrationId], [ContextKey]));");
+
+            db.Execute(
+                @"INSERT INTO [dbo].[__MigrationHistory] (MigrationId, ContextKey, Model, ProductVersion)
+                  VALUES (N'202609100900001_DlpCopilotImpact',
+                          N'Common.Entities.Migrations.Configuration',
+                          0x00,
+                          N'6.5.1');");
+        }
+
         private static string ManualScript()
         {
             var directory = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
