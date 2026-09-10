@@ -54,6 +54,10 @@
             this.chkDlp = new System.Windows.Forms.CheckBox();
             this.chkCopilotStudioCredits = new System.Windows.Forms.CheckBox();
             this.chkAzureCostManagement = new System.Windows.Forms.CheckBox();
+            this.lnkInteractionHistoryHelp = new System.Windows.Forms.LinkLabel();
+            this.lnkDlpHelp = new System.Windows.Forms.LinkLabel();
+            this.lnkStudioCreditsHelp = new System.Windows.Forms.LinkLabel();
+            this.lnkAzureCostsHelp = new System.Windows.Forms.LinkLabel();
             this.pictureBoxCopilot = new System.Windows.Forms.PictureBox();
             this.lblCopilotHeader = new System.Windows.Forms.Label();
             this.lblCopilotDesc = new System.Windows.Forms.Label();
@@ -82,6 +86,10 @@
             this.grpProductCfgInsights.Controls.Add(this.pictureBoxCopilot);
             this.grpProductCfgInsights.Controls.Add(this.lblCopilotHeader);
             this.grpProductCfgInsights.Controls.Add(this.lblCopilotDesc);
+            this.grpProductCfgInsights.Controls.Add(this.lnkInteractionHistoryHelp);
+            this.grpProductCfgInsights.Controls.Add(this.lnkDlpHelp);
+            this.grpProductCfgInsights.Controls.Add(this.lnkStudioCreditsHelp);
+            this.grpProductCfgInsights.Controls.Add(this.lnkAzureCostsHelp);
             this.grpProductCfgInsights.Controls.Add(this.label3);
             this.grpProductCfgInsights.Controls.Add(this.label2);
             this.grpProductCfgInsights.Controls.Add(this.label1);
@@ -273,13 +281,15 @@
             this.lblCopilotDesc.ForeColor = System.Drawing.SystemColors.GrayText;
             this.lblCopilotDesc.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.lblCopilotDesc.Location = new System.Drawing.Point(356, 204);
+            this.lblCopilotDesc.Location = new System.Drawing.Point(374, 136);
             this.lblCopilotDesc.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.lblCopilotDesc.Name = "lblCopilotDesc";
-            this.lblCopilotDesc.Size = new System.Drawing.Size(328, 66);
+            this.lblCopilotDesc.Size = new System.Drawing.Size(310, 88);
             this.lblCopilotDesc.TabIndex = 29;
-            this.lblCopilotDesc.Text = "Stores prompt statistics only. If Cognitive Services is enabled, this metadata is " +
-    "enriched with language, sentiment and keyword detection.";
+            this.lblCopilotDesc.Text = "Interaction history stores prompt statistics only - never prompt or response text " +
+                "- and covers the whole tenant unless it is scoped. With Cognitive Services config" +
+                "ured, prompt text is sent to Azure AI Language and the language, sentiment and ke" +
+                "ywords it extracts are stored.";
             // 
             // chkCopilot
             // 
@@ -336,54 +346,115 @@
             this.chkCopilotInteractionHistory.Margin = new System.Windows.Forms.Padding(2);
             this.chkCopilotInteractionHistory.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkCopilotInteractionHistory.Name = "chkCopilotInteractionHistory";
-            this.chkCopilotInteractionHistory.Size = new System.Drawing.Size(244, 17);
+            this.chkCopilotInteractionHistory.Size = new System.Drawing.Size(179, 17);
             this.chkCopilotInteractionHistory.TabIndex = 27;
-            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (tenant-wide)";
-            this.toolTipTargets.SetToolTip(this.chkCopilotInteractionHistory, "Imports Copilot AI interaction history from Microsoft Graph. This is tenant-wide u" +
-                    "nless it is scoped to specific users or groups.");
+            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history";
+            this.toolTipTargets.SetToolTip(this.chkCopilotInteractionHistory, "Imports Copilot AI interaction history from Microsoft Graph. Needs explicit admin " +
+                    "consent for AiEnterpriseInteraction.Read.All, which the installer does not grant." +
+                    " Covers the whole tenant unless scoped with UserGroupsFilter.");
             this.chkCopilotInteractionHistory.UseVisualStyleBackColor = true;
             // 
             // chkDlp
             // 
             this.chkDlp.AutoSize = true;
-            this.chkDlp.Location = new System.Drawing.Point(356, 136);
+            this.chkDlp.Location = new System.Drawing.Point(356, 230);
             this.chkDlp.Margin = new System.Windows.Forms.Padding(2);
             this.chkDlp.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkDlp.Name = "chkDlp";
-            this.chkDlp.Size = new System.Drawing.Size(216, 17);
+            this.chkDlp.Size = new System.Drawing.Size(150, 17);
             this.chkDlp.TabIndex = 28;
-            this.chkDlp.Text = "DLP policy events (needs permission)";
-            this.toolTipTargets.SetToolTip(this.chkDlp, "Imports Data Loss Prevention policy events. Needs the ActivityFeed.ReadDlp permiss" +
-                    "ion granted to the app registration.");
+            this.chkDlp.Text = "DLP policy events (optional)";
+            this.toolTipTargets.SetToolTip(this.chkDlp, "Imports tenant-wide Data Loss Prevention policy activity from the separate DLP.All" +
+                    " feed. Needs the ActivityFeed.ReadDlp permission, which the installer does not gr" +
+                    "ant. Not needed for the DLP impact on Copilot report, which uses the Copilot inte" +
+                    "raction records instead.");
             this.chkDlp.UseVisualStyleBackColor = true;
             // 
             // chkCopilotStudioCredits
             // 
             this.chkCopilotStudioCredits.AutoSize = true;
-            this.chkCopilotStudioCredits.Location = new System.Drawing.Point(356, 156);
+            this.chkCopilotStudioCredits.Location = new System.Drawing.Point(356, 250);
             this.chkCopilotStudioCredits.Margin = new System.Windows.Forms.Padding(2);
             this.chkCopilotStudioCredits.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkCopilotStudioCredits.Name = "chkCopilotStudioCredits";
-            this.chkCopilotStudioCredits.Size = new System.Drawing.Size(233, 17);
+            this.chkCopilotStudioCredits.Size = new System.Drawing.Size(130, 17);
             this.chkCopilotStudioCredits.TabIndex = 29;
-            this.chkCopilotStudioCredits.Text = "Copilot Studio credits (needs extra role)";
-            this.toolTipTargets.SetToolTip(this.chkCopilotStudioCredits, "Imports Copilot Studio credit consumption per agent and per person. Needs an extra" +
-                    " role granted to the app registration.");
+            this.chkCopilotStudioCredits.Text = "Copilot Studio credits";
+            this.toolTipTargets.SetToolTip(this.chkCopilotStudioCredits, "Imports billed Copilot Studio credit consumption per agent, and per person where y" +
+                    "our tenant reports it. Needs a Power Platform role for the runtime service princi" +
+                    "pal, which the installer does not grant.");
             this.chkCopilotStudioCredits.UseVisualStyleBackColor = true;
             // 
             // chkAzureCostManagement
             // 
             this.chkAzureCostManagement.AutoSize = true;
-            this.chkAzureCostManagement.Location = new System.Drawing.Point(356, 176);
+            this.chkAzureCostManagement.Location = new System.Drawing.Point(356, 270);
             this.chkAzureCostManagement.Margin = new System.Windows.Forms.Padding(2);
             this.chkAzureCostManagement.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkAzureCostManagement.Name = "chkAzureCostManagement";
-            this.chkAzureCostManagement.Size = new System.Drawing.Size(184, 17);
+            this.chkAzureCostManagement.Size = new System.Drawing.Size(77, 17);
             this.chkAzureCostManagement.TabIndex = 30;
-            this.chkAzureCostManagement.Text = "Azure costs (needs app setting)";
-            this.toolTipTargets.SetToolTip(this.chkAzureCostManagement, "Imports Azure Cost Management data. Needs the AzureCostScopes app setting to be co" +
-                    "nfigured on the web job.");
+            this.chkAzureCostManagement.Text = "Azure costs";
+            this.toolTipTargets.SetToolTip(this.chkAzureCostManagement, "Imports daily Azure spend from Microsoft Cost Management. Needs the AzureCostScope" +
+                    "s app setting naming the subscriptions to read, and the Cost Management Reader ro" +
+                    "le on each of them. Neither is set up by the installer.");
             this.chkAzureCostManagement.UseVisualStyleBackColor = true;
+            // 
+            // lnkInteractionHistoryHelp
+            // 
+            this.lnkInteractionHistoryHelp.AutoSize = true;
+            this.lnkInteractionHistoryHelp.Location = new System.Drawing.Point(541, 116);
+            this.lnkInteractionHistoryHelp.Name = "lnkInteractionHistoryHelp";
+            this.lnkInteractionHistoryHelp.Size = new System.Drawing.Size(69, 13);
+            this.lnkInteractionHistoryHelp.TabIndex = 31;
+            this.lnkInteractionHistoryHelp.TabStop = true;
+            this.lnkInteractionHistoryHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot#three-prerequi" +
+                "sites-all-required";
+            this.lnkInteractionHistoryHelp.Text = "needs setup";
+            this.toolTipTargets.SetToolTip(this.lnkInteractionHistoryHelp, "Open the wiki: the three prerequisites for Copilot AI interaction history.");
+            this.lnkInteractionHistoryHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
+            // 
+            // lnkDlpHelp
+            // 
+            this.lnkDlpHelp.AutoSize = true;
+            this.lnkDlpHelp.Location = new System.Drawing.Point(512, 230);
+            this.lnkDlpHelp.Name = "lnkDlpHelp";
+            this.lnkDlpHelp.Size = new System.Drawing.Size(69, 13);
+            this.lnkDlpHelp.TabIndex = 32;
+            this.lnkDlpHelp.TabStop = true;
+            this.lnkDlpHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot#the-optional-t" +
+                "enant-wide-half";
+            this.lnkDlpHelp.Text = "needs setup";
+            this.toolTipTargets.SetToolTip(this.lnkDlpHelp, "Open the wiki: what the DLP import adds, and the permission it needs.");
+            this.lnkDlpHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
+            // 
+            // lnkStudioCreditsHelp
+            // 
+            this.lnkStudioCreditsHelp.AutoSize = true;
+            this.lnkStudioCreditsHelp.Location = new System.Drawing.Point(492, 250);
+            this.lnkStudioCreditsHelp.Name = "lnkStudioCreditsHelp";
+            this.lnkStudioCreditsHelp.Size = new System.Drawing.Size(69, 13);
+            this.lnkStudioCreditsHelp.TabIndex = 33;
+            this.lnkStudioCreditsHelp.TabStop = true;
+            this.lnkStudioCreditsHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Agent-Costs#configurin" +
+                "g-power-platform-access";
+            this.lnkStudioCreditsHelp.Text = "needs setup";
+            this.toolTipTargets.SetToolTip(this.lnkStudioCreditsHelp, "Open the wiki: granting the runtime app a Power Platform role.");
+            this.lnkStudioCreditsHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
+            // 
+            // lnkAzureCostsHelp
+            // 
+            this.lnkAzureCostsHelp.AutoSize = true;
+            this.lnkAzureCostsHelp.Location = new System.Drawing.Point(439, 270);
+            this.lnkAzureCostsHelp.Name = "lnkAzureCostsHelp";
+            this.lnkAzureCostsHelp.Size = new System.Drawing.Size(69, 13);
+            this.lnkAzureCostsHelp.TabIndex = 34;
+            this.lnkAzureCostsHelp.TabStop = true;
+            this.lnkAzureCostsHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Agent-Costs#configurin" +
+                "g-azure-cost-management-access";
+            this.lnkAzureCostsHelp.Text = "needs setup";
+            this.toolTipTargets.SetToolTip(this.lnkAzureCostsHelp, "Open the wiki: the AzureCostScopes setting and the Cost Management Reader role.");
+            this.lnkAzureCostsHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
             // 
             // lblGUITargetsHeader
             // 
@@ -445,5 +516,9 @@
         private System.Windows.Forms.CheckBox chkCopilotStudioCredits;
         private System.Windows.Forms.CheckBox chkAzureCostManagement;
         private System.Windows.Forms.ToolTip toolTipTargets;
+        private System.Windows.Forms.LinkLabel lnkInteractionHistoryHelp;
+        private System.Windows.Forms.LinkLabel lnkDlpHelp;
+        private System.Windows.Forms.LinkLabel lnkStudioCreditsHelp;
+        private System.Windows.Forms.LinkLabel lnkAzureCostsHelp;
     }
 }

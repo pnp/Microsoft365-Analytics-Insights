@@ -2,6 +2,7 @@
 using Common.Entities.Installer;
 using System;
 using System.ComponentModel;
+using System.Drawing;
 using System.Windows.Forms;
 
 namespace App.ControlPanel.Controls
@@ -70,6 +71,42 @@ namespace App.ControlPanel.Controls
         private void ImportJobSettingsSelection_Load(object sender, System.EventArgs e)
         {
             grpProductCfgInsights.Dock = DockStyle.Fill;
+            PositionHelpLinks();
+        }
+
+        /// <summary>
+        /// Parks each "needs setup" link just after the caption of the checkbox it belongs to.
+        /// The checkboxes are AutoSize, so their realised width depends on the font and DPI the
+        /// installer happens to be running at - a designer-time X would only be right on one machine.
+        /// </summary>
+        private void PositionHelpLinks()
+        {
+            PlaceHelpLink(lnkInteractionHistoryHelp, chkCopilotInteractionHistory);
+            PlaceHelpLink(lnkDlpHelp, chkDlp);
+            PlaceHelpLink(lnkStudioCreditsHelp, chkCopilotStudioCredits);
+            PlaceHelpLink(lnkAzureCostsHelp, chkAzureCostManagement);
+        }
+
+        private static void PlaceHelpLink(LinkLabel link, CheckBox owner)
+        {
+            link.Location = new Point(owner.Right + 4, owner.Top + 1);
+        }
+
+        private void HelpLink_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        {
+            var url = (sender as Control)?.Tag as string;
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            try
+            {
+                System.Diagnostics.Process.Start(url);
+            }
+            catch (Exception ex)
+            {
+                // Opening a browser is a convenience; failing to must never take the installer down.
+                MessageBox.Show(this, $"Couldn't open {url}\r\n\r\n{ex.Message}", "Open documentation",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         private void chkTeams_CheckedChanged(object sender, System.EventArgs e)
