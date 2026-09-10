@@ -247,6 +247,100 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Regression for #451: a channel delta token is unsafe when any reply iterator stopped at the
+        /// cap. Graph has no reply-level checkpoint, so the channel token must be withheld and the
+        /// stored token left alone for a later re-read, even though additive Teams stats may be counted
+        /// again.
+        /// </summary>
+        [TestMethod]
+        public async Task ChannelMessagesLoader_WithholdsDeltaTokenWhenReplyPageHitsCap()
+        {
+            var channel = Channel("channel-1");
+            var rootMessage = Msg("root-1", AfterToken);
+            var pageReader = new FakeChannelMessagesPageReader()
+                .ReturningRootMessages(channel.Id, DeltaLink("delta-after-partial-replies"), completed: true, rootMessage)
+                .ReturningReplies(rootMessage.Id, completed: false, Msg("reply-kept", AfterToken));
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            await store.SetDeltaToken("team-1", channel.Id, new TeamsRedisManager.TeamChannelDeltaTokenInfo
+            {
+                Token = "previous-delta",
+                LastUpdated = DeltaTokenWrittenAt
+            });
+
+            var crawler = new TeamsChannelCrawler(new DelegatingChannelMessagesSourceLoader(
+                (ch, teamId) => new ChannelMessagesLoader(pageReader, store, AnalyticsLogger.ConsoleOnlyTracer())
+                    .LoadTeamMessagesAndReplies(ch, teamId)));
+
+            var pendingTokens = await crawler.PopulateNewMessagesAndReactions(new List<ChannelWithReactions> { channel }, "team-1");
+            await TeamChannelDeltaTokenCommitter.CommitPendingTokens(store, "team-1", pendingTokens);
+
+            Assert.AreEqual(0, pendingTokens.Count,
+                "A partial reply page must not queue the channel delta token for commit.");
+            Assert.AreEqual("previous-delta", (await store.GetDeltaToken("team-1", channel.Id))?.Token,
+                "Withholding the token must leave the old checkpoint untouched rather than deleting it.");
+            CollectionAssert.AreEqual(new[] { "root-1", "reply-kept" }, channel.Messages.Select(m => m.Id).ToArray(),
+                "The partial data is still returned for persistence; only the checkpoint is withheld.");
+        }
+
+        /// <summary>
+        /// The opposite #451 guard: if the root-message and reply iterators both complete, the channel
+        /// delta token is still queued and committed. This prevents an over-fix that would make every
+        /// Teams channel re-read forever.
+        /// </summary>
+        [TestMethod]
+        public async Task ChannelMessagesLoader_CommitsDeltaTokenWhenAllMessageAndReplyPagesComplete()
+        {
+            var channel = Channel("channel-1");
+            var rootMessage = Msg("root-1", AfterToken);
+            var pageReader = new FakeChannelMessagesPageReader()
+                .ReturningRootMessages(channel.Id, DeltaLink("delta-after-complete-read"), completed: true, rootMessage)
+                .ReturningReplies(rootMessage.Id, completed: true, Msg("reply-1", AfterToken));
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+
+            var crawler = new TeamsChannelCrawler(new DelegatingChannelMessagesSourceLoader(
+                (ch, teamId) => new ChannelMessagesLoader(pageReader, store, AnalyticsLogger.ConsoleOnlyTracer())
+                    .LoadTeamMessagesAndReplies(ch, teamId)));
+
+            var pendingTokens = await crawler.PopulateNewMessagesAndReactions(new List<ChannelWithReactions> { channel }, "team-1");
+            await TeamChannelDeltaTokenCommitter.CommitPendingTokens(store, "team-1", pendingTokens);
+
+            Assert.AreEqual(1, pendingTokens.Count,
+                "A complete channel read must still queue its delta token.");
+            Assert.AreEqual("delta-after-complete-read", (await store.GetDeltaToken("team-1", channel.Id))?.Token);
+            CollectionAssert.AreEqual(new[] { "root-1", "reply-1" }, channel.Messages.Select(m => m.Id).ToArray());
+        }
+
+        /// <summary>
+        /// The root-message cap has the same checkpoint risk if the page iterator is paused while a
+        /// delta link is present: the loader must treat any paused channel-level iterator as incomplete,
+        /// regardless of whether Graph supplied a token.
+        /// </summary>
+        [TestMethod]
+        public async Task ChannelMessagesLoader_WithholdsDeltaTokenWhenRootMessagePageHitsCap()
+        {
+            var channel = Channel("channel-1");
+            var pageReader = new FakeChannelMessagesPageReader()
+                .ReturningRootMessages(channel.Id, DeltaLink("delta-after-partial-roots"), completed: false, Msg("root-1", AfterToken));
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            await store.SetDeltaToken("team-1", channel.Id, new TeamsRedisManager.TeamChannelDeltaTokenInfo
+            {
+                Token = "previous-delta",
+                LastUpdated = DeltaTokenWrittenAt
+            });
+
+            var crawler = new TeamsChannelCrawler(new DelegatingChannelMessagesSourceLoader(
+                (ch, teamId) => new ChannelMessagesLoader(pageReader, store, AnalyticsLogger.ConsoleOnlyTracer())
+                    .LoadTeamMessagesAndReplies(ch, teamId)));
+
+            var pendingTokens = await crawler.PopulateNewMessagesAndReactions(new List<ChannelWithReactions> { channel }, "team-1");
+            await TeamChannelDeltaTokenCommitter.CommitPendingTokens(store, "team-1", pendingTokens);
+
+            Assert.AreEqual(0, pendingTokens.Count,
+                "A paused root-message iterator must not queue a channel delta token even if one is present.");
+            Assert.AreEqual("previous-delta", (await store.GetDeltaToken("team-1", channel.Id))?.Token);
+        }
+
+        /// <summary>
         /// An expired user-delegated token aborts the whole team's crawl, but tokens returned by
         /// earlier channels stay pending so they can be committed if those earlier channels are still
         /// persisted successfully.
@@ -392,6 +486,78 @@ namespace Tests.UnitTests
 
             public Task RemoveDeltaToken(string teamId, string channelId)
                 => _inner.RemoveDeltaToken(teamId, channelId);
+        }
+
+        private static string DeltaLink(string token)
+            => $"https://graph.microsoft.com/v1.0/teams/team-1/channels/channel-1/messages/delta?$deltatoken={token}";
+
+        private class DelegatingChannelMessagesSourceLoader : IChannelMessagesSourceLoader
+        {
+            private readonly Func<ChannelWithReactions, string, Task<TeamsRedisManager.TeamChannelDeltaTokenInfo>> _load;
+
+            public DelegatingChannelMessagesSourceLoader(Func<ChannelWithReactions, string, Task<TeamsRedisManager.TeamChannelDeltaTokenInfo>> load)
+            {
+                _load = load;
+            }
+
+            public Task<TeamsRedisManager.TeamChannelDeltaTokenInfo> LoadMessagesAndReactions(ChannelWithReactions channel, string teamId)
+                => _load(channel, teamId);
+        }
+
+        private class FakeChannelMessagesPageReader : IChannelMessagesPageReader
+        {
+            private readonly Dictionary<string, ChannelRootMessagesPageResult> _rootMessagesByChannelId
+                = new Dictionary<string, ChannelRootMessagesPageResult>(StringComparer.Ordinal);
+
+            private readonly Dictionary<string, ChannelRepliesPageResult> _repliesByMessageId
+                = new Dictionary<string, ChannelRepliesPageResult>(StringComparer.Ordinal);
+
+            public FakeChannelMessagesPageReader ReturningRootMessages(
+                string channelId,
+                string deltaLink,
+                bool completed,
+                params ChatMessage[] messages)
+            {
+                _rootMessagesByChannelId[channelId] = new ChannelRootMessagesPageResult
+                {
+                    Messages = messages.ToList(),
+                    Deltalink = deltaLink,
+                    Completed = completed
+                };
+                return this;
+            }
+
+            public FakeChannelMessagesPageReader ReturningReplies(
+                string messageId,
+                bool completed,
+                params ChatMessage[] replies)
+            {
+                _repliesByMessageId[messageId] = new ChannelRepliesPageResult
+                {
+                    Replies = replies.ToList(),
+                    Completed = completed
+                };
+                return this;
+            }
+
+            public Task<ChannelRootMessagesPageResult> LoadRootMessages(
+                string teamId,
+                string channelId,
+                TeamsRedisManager.TeamChannelDeltaTokenInfo channelDeltaInfo)
+            {
+                _rootMessagesByChannelId.TryGetValue(channelId, out var result);
+                return Task.FromResult(result);
+            }
+
+            public Task<ChannelRepliesPageResult> LoadReplies(string teamId, string channelId, string messageId)
+            {
+                if (_repliesByMessageId.TryGetValue(messageId, out var result))
+                {
+                    return Task.FromResult(result);
+                }
+
+                return Task.FromResult(new ChannelRepliesPageResult { Completed = true });
+            }
         }
 
         #endregion
