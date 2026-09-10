@@ -4,10 +4,12 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate;
 
 namespace Tests.UnitTests
 {
@@ -245,6 +247,84 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task WeeklyReportWithNoSundayRefreshGetsShortBackoffButNoDataSuccessStamp()
+        {
+            var store = new InMemoryReportCompletionStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 10, 4, 0, 0, DateTimeKind.Utc));
+            var importer = NewImporter(store, clock: clock);
+            var loader = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(
+                new DateTime(2024, 2, 26),
+                "https://contoso.sharepoint.com/sites/non-sunday");
+            var reportKey = GraphImporter.GetReportKey(loader.GetType());
+
+            await importer.RunWeeklyReportIfDueAsync(loader, OneDay);
+
+            Assert.AreEqual(1, loader.LoadCount, "The first due run should download the weekly report.");
+            Assert.AreEqual(1, loader.LastSaveResult.NotRefreshedOnDay,
+                "The loader should expose that it saw data, but not for the required Sunday refresh day.");
+            Assert.IsNull(await store.GetLastSuccessAsync(reportKey),
+                "A non-Sunday Graph refresh date is not a data success and must not feed the 24-hour success stamp.");
+
+            clock.Advance(TimeSpan.FromMinutes(30));
+            await importer.RunWeeklyReportIfDueAsync(loader, OneDay);
+            Assert.AreEqual(1, loader.LoadCount,
+                "The short backoff must prevent a full re-download on every import cycle while Graph has not published Sunday data.");
+
+            clock.Advance(TimeSpan.FromMinutes(31));
+            Assert.IsTrue(await importer.IsReportDueAsync(reportKey, OneDay),
+                "The non-Sunday backoff is deliberately short so the importer can retry the same day.");
+        }
+
+        [TestMethod]
+        public async Task WeeklyReportAlreadyStoredSundayStillGetsFullSuccessCadence()
+        {
+            var store = new InMemoryReportCompletionStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 10, 4, 0, 0, DateTimeKind.Utc));
+            var importer = NewImporter(store, clock: clock);
+            var sunday = new DateTime(2024, 2, 25);
+            var siteUrl = "https://contoso.sharepoint.com/sites/already-current";
+            var loader = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(sunday, siteUrl);
+            loader.Store.SeedWeek(loader.Store.SeedSite(siteUrl), sunday);
+            var reportKey = GraphImporter.GetReportKey(loader.GetType());
+
+            await importer.RunWeeklyReportIfDueAsync(loader, OneDay);
+
+            Assert.AreEqual(0, loader.LastSaveResult.ItemsSaved,
+                "The row is already stored, so a naive itemsSaved > 0 success check would fail this case.");
+            Assert.AreEqual(1, loader.LastSaveResult.AlreadyUpToDate);
+            Assert.IsTrue(loader.LastSaveResult.ObservedRefreshDayReport);
+            Assert.IsNotNull(await store.GetLastSuccessAsync(reportKey),
+                "Observing an already-stored Sunday report is still a data success.");
+
+            clock.Advance(TimeSpan.FromHours(23).Add(TimeSpan.FromMinutes(59)));
+            Assert.IsFalse(await importer.IsReportDueAsync(reportKey, OneDay),
+                "A Sunday observation receives the full daily cadence, not the short non-Sunday backoff.");
+        }
+
+        [TestMethod]
+        public async Task WeeklyReportDailyCadenceAnchorsToPreviousDueTimeInsteadOfCompletionTime()
+        {
+            var store = new InMemoryReportCompletionStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 10, 4, 0, 0, DateTimeKind.Utc));
+            var importer = NewImporter(store, clock: clock);
+            var loader = TestSharePointSitesWeeklyUsageReportLoader.WithSingleReport(
+                new DateTime(2024, 2, 25),
+                "https://contoso.sharepoint.com/sites/anti-drift");
+            var reportKey = GraphImporter.GetReportKey(loader.GetType());
+
+            await importer.RunWeeklyReportIfDueAsync(loader, OneDay);
+
+            clock.Advance(OneDay.Add(TimeSpan.FromMinutes(5)));
+            await importer.RunWeeklyReportIfDueAsync(loader, OneDay);
+
+            clock.Advance(OneDay.Subtract(TimeSpan.FromMinutes(4)));
+
+            Assert.IsTrue(await importer.IsReportDueAsync(reportKey, OneDay),
+                "The next due time should remain anchored at the original daily schedule. If completion time " +
+                "were used, this check one minute after the original due time would still be throttled.");
+        }
+
+        [TestMethod]
         public async Task AReportThatSucceededLongerAgoThanTheWindowIsDueAgain()
         {
             var store = new StubCompletionStore { LastSuccess = DateTime.Now.AddDays(-2) };
@@ -295,6 +375,44 @@ namespace Tests.UnitTests
             public Task<DateTime?> GetLastSuccessAsync(string reportKey) => Task.FromResult(LastSuccess);
             public Task SaveSuccessAsync(string reportKey) { LastSuccess = DateTime.Now; return Task.CompletedTask; }
             public Task ClearAsync(string reportKey) { LastSuccess = null; return Task.CompletedTask; }
+        }
+
+        private class TestSharePointSitesWeeklyUsageReportLoader : SharePointSitesWeeklyUsageReportLoader
+        {
+            private readonly SharePointSiteUsageDetail _report;
+
+            private TestSharePointSitesWeeklyUsageReportLoader(InMemorySharePointSiteUsageStore store, SharePointSiteUsageDetail report)
+                : base(store, null, DataUtils.AnalyticsLogger.ConsoleOnlyTracer(), null)
+            {
+                Store = store;
+                _report = report;
+            }
+
+            public InMemorySharePointSiteUsageStore Store { get; }
+            public int LoadCount { get; private set; }
+            public WeeklyUsageReportSaveResult LastSaveResult { get; private set; }
+
+            public static TestSharePointSitesWeeklyUsageReportLoader WithSingleReport(DateTime refreshDate, string siteUrl)
+            {
+                return new TestSharePointSitesWeeklyUsageReportLoader(
+                    new InMemorySharePointSiteUsageStore(),
+                    new SharePointSiteUsageDetail { SiteUrl = siteUrl, ReportRefreshDate = refreshDate, FileCount = 1 });
+            }
+
+            public override Task<AggregateResourceUsageDetail<SharePointSiteUsageDetail>> LoadReportDataForUrl(string requestUrl)
+            {
+                LoadCount++;
+                return Task.FromResult(new AggregateResourceUsageDetail<SharePointSiteUsageDetail>
+                {
+                    Stats = new[] { _report }
+                });
+            }
+
+            public override async Task<WeeklyUsageReportSaveResult> LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(DayOfWeek uptoDay)
+            {
+                LastSaveResult = await base.LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(uptoDay);
+                return LastSaveResult;
+            }
         }
 
         #endregion

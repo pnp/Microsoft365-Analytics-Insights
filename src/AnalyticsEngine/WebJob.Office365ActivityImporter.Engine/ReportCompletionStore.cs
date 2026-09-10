@@ -39,14 +39,23 @@ namespace WebJob.Office365ActivityImporter.Engine
         Task ClearAsync(string reportKey);
     }
 
+    public interface IReportAttemptScheduleStore
+    {
+        Task<DateTime?> GetNextAttemptUtcAsync(string reportKey);
+        Task SaveNextAttemptUtcAsync(string reportKey, DateTime nextAttemptUtc);
+        Task ClearNextAttemptUtcAsync(string reportKey);
+    }
+
     /// <summary>
     /// In-memory fallback used when Redis is not configured; lives only for the life of the WebJob process.
     /// Must be constructed ONCE outside the per-cycle loop, exactly like <see cref="InMemorySingleDateStore"/>.
     /// </summary>
-    public class InMemoryReportCompletionStore : IReportCompletionStore
+    public class InMemoryReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore
     {
         // Reports run concurrently under Task.WhenAll, so this must be thread-safe.
         private readonly ConcurrentDictionary<string, DateTime> _lastSuccess =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, DateTime> _nextAttemptUtc =
             new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
         public Task<DateTime?> GetLastSuccessAsync(string reportKey)
@@ -65,6 +74,25 @@ namespace WebJob.Office365ActivityImporter.Engine
             _lastSuccess.TryRemove(reportKey, out _);
             return Task.CompletedTask;
         }
+
+        public Task<DateTime?> GetNextAttemptUtcAsync(string reportKey)
+        {
+            return Task.FromResult(_nextAttemptUtc.TryGetValue(reportKey, out var dt) ? dt : (DateTime?)null);
+        }
+
+        public Task SaveNextAttemptUtcAsync(string reportKey, DateTime nextAttemptUtc)
+        {
+            _nextAttemptUtc[reportKey] = nextAttemptUtc.Kind == DateTimeKind.Utc
+                ? nextAttemptUtc
+                : nextAttemptUtc.ToUniversalTime();
+            return Task.CompletedTask;
+        }
+
+        public Task ClearNextAttemptUtcAsync(string reportKey)
+        {
+            _nextAttemptUtc.TryRemove(reportKey, out _);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>
@@ -72,13 +100,14 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// (which is the whole point - an in-memory stamp would be lost on every restart and the skip list would
     /// be empty again).
     /// </summary>
-    public class RedisReportCompletionStore : IReportCompletionStore
+    public class RedisReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore
     {
         /// <summary>
         /// Prefix for the per-report keys. Deliberately distinct from the phase-level
         /// <c>UserActivityLastImported</c> key so the two cannot collide.
         /// </summary>
         internal const string KeyPrefix = "UserActivityReportLastImported:";
+        internal const string NextAttemptKeyPrefix = "UserActivityReportNextAttemptUtc:";
 
         private readonly ConcurrentDictionary<string, RedisSingleDateLoader> _loaders =
             new ConcurrentDictionary<string, RedisSingleDateLoader>(StringComparer.OrdinalIgnoreCase);
@@ -102,11 +131,24 @@ namespace WebJob.Office365ActivityImporter.Engine
                 k => new RedisSingleDateLoader(_redisConnectionString, KeyPrefix + k, _tenantId, _clientId, _clientSecret));
         }
 
+        private RedisSingleDateLoader NextAttemptLoaderFor(string reportKey)
+        {
+            return _loaders.GetOrAdd(NextAttemptKeyPrefix + reportKey,
+                k => new RedisSingleDateLoader(_redisConnectionString, k, _tenantId, _clientId, _clientSecret));
+        }
+
         public Task<DateTime?> GetLastSuccessAsync(string reportKey) => LoaderFor(reportKey).GetLastDT();
 
         public Task SaveSuccessAsync(string reportKey) => LoaderFor(reportKey).SaveDT();
 
         public Task ClearAsync(string reportKey) => LoaderFor(reportKey).DeleteDt();
+
+        public Task<DateTime?> GetNextAttemptUtcAsync(string reportKey) => NextAttemptLoaderFor(reportKey).GetLastDT();
+
+        public Task SaveNextAttemptUtcAsync(string reportKey, DateTime nextAttemptUtc)
+            => NextAttemptLoaderFor(reportKey).SaveDT(nextAttemptUtc.Kind == DateTimeKind.Utc ? nextAttemptUtc : nextAttemptUtc.ToUniversalTime());
+
+        public Task ClearNextAttemptUtcAsync(string reportKey) => NextAttemptLoaderFor(reportKey).DeleteDt();
     }
 
     /// <summary>
