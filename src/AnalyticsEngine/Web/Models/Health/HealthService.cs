@@ -46,6 +46,7 @@ namespace Web.AnalyticsWeb.Models.Health
                 { nameof(ImportTaskSettings.Copilot), "Copilot" },
                 { nameof(ImportTaskSettings.CopilotInteractionHistory), "Copilot AI interaction history (tenant-wide unless scoped)" },
                 { nameof(ImportTaskSettings.ImportPowerPlatform), "Power Platform" },
+                { nameof(ImportTaskSettings.ImportDlp), "DLP policy events" },
                 { nameof(ImportTaskSettings.GraphUsersMetadata), "User metadata" },
                 { nameof(ImportTaskSettings.GraphUsageReports), "Usage reports" },
                 { nameof(ImportTaskSettings.GraphCopilotUsageReports), "Copilot usage reports (Graph)" },

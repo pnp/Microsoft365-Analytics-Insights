@@ -10,6 +10,7 @@ import {
   PeopleTeam20Regular,
   Pulse20Regular,
   Settings20Regular,
+  ShieldProhibited20Regular,
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 
@@ -22,6 +23,7 @@ const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
 const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
 const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivityPage'));
+const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
 const TeamsPermissionsPage = lazyWithReload(() => import('./pages/TeamsPermissionsPage'));
 const UserLookupPage = lazyWithReload(() => import('./pages/UserLookupPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
@@ -106,6 +108,13 @@ export const ROUTES: PortalRoute[] = [
     label: 'Agent costs',
     icon: <Money20Regular />,
     element: <AgentCostsPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/dlp',
+    label: 'DLP impact',
+    icon: <ShieldProhibited20Regular />,
+    element: <DlpPage />,
   },
 
   {

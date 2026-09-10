@@ -219,6 +219,7 @@
     <Compile Include="Controllers\BaseAPIController.cs" />
     <Compile Include="Controllers\CopilotAdoptionAPIController.cs" />
     <Compile Include="Controllers\AgentCostsAPIController.cs" />
+    <Compile Include="Controllers\DlpAPIController.cs" />
     <Compile Include="Controllers\LicenceActivityAPIController.cs" />
     <Compile Include="Controllers\ImportConfigController.cs" />
     <Compile Include="Controllers\InstallLogAPIController.cs" />
@@ -239,6 +240,7 @@
     <Compile Include="Models\LicenceActivity\LicenceActivitySnapshotCache.cs" />
     <Compile Include="Models\LicenceActivity\LicenceActivityTelemetry.cs" />
     <Compile Include="Models\CopilotAdoption\CopilotAdoptionAnalysisCoordinator.cs" />
+    <Compile Include="Models\Dlp\DlpModels.cs" />
     <Compile Include="Models\CopilotAdoption\CopilotAdoptionTelemetry.cs" />
     <Compile Include="Models\InstallLogModels.cs" />
     <Compile Include="Models\ProfilingStatusModels.cs" />

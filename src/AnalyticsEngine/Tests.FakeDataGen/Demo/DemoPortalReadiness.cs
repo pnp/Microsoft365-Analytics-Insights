@@ -26,7 +26,7 @@ namespace Tests.FakeDataGen.Demo
         /// </summary>
         internal const string RequiredImportJobSettings =
             "GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;"
-            + "Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True";
+            + "Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;ImportDlp=True";
 
         internal static void PrintPortalSetup(string database, Action<string> write)
         {

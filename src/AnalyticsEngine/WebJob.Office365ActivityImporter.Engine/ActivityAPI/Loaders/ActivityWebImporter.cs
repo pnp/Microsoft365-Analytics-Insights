@@ -25,7 +25,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 logger,
                 settings.TenantGUID.ToString(),
                 settings.ImportJobSettings?.ImportPowerPlatform ?? false,
-                settings.ImportJobSettings?.Copilot ?? false);
+                settings.ImportJobSettings?.Copilot ?? false,
+                settings.ImportJobSettings?.ImportDlp ?? false);
             _contentMetaDataLoader = new WebContentMetaDataLoader(logger, httpClient, settings);
             _activitySubscriptionManager = new ActivitySubscriptionManager(settings, logger, httpClient);
         }
@@ -41,7 +42,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 logger,
                 settings.TenantGUID.ToString(),
                 settings.ImportJobSettings?.ImportPowerPlatform ?? false,
-                settings.ImportJobSettings?.Copilot ?? false);
+                settings.ImportJobSettings?.Copilot ?? false,
+                settings.ImportJobSettings?.ImportDlp ?? false);
             _contentMetaDataLoader = new WebContentMetaDataLoader(logger, httpClient, settings);
             _activitySubscriptionManager = new ActivitySubscriptionManager(settings, logger, httpClient);
         }

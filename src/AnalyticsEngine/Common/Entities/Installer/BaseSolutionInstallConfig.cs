@@ -31,7 +31,9 @@ namespace Common.Entities.Installer
         //          2.3.0 -> 2.4.0 added ImportTaskSettings.CopilotStudioCredits and
         //          ImportTaskSettings.AzureCostManagement (opt-in agent cost imports: billed Copilot Studio
         //          Copilot Credits, and daily Azure spend from Microsoft Cost Management).
-        const string CONFIG_VERSION = "2.4.0";
+        //          2.4.0 -> 2.5.0 added ImportTaskSettings.ImportDlp (opt-in Microsoft Purview DLP import
+        //          from the DLP.All content type; needs the separate ActivityFeed.ReadDlp permission).
+        const string CONFIG_VERSION = "2.5.0";
 
         public BaseSolutionInstallConfig()
         {

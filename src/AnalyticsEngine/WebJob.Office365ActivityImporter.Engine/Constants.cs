@@ -1,4 +1,6 @@
-﻿namespace WebJob.Office365ActivityImporter.Engine
+﻿using System.Collections.Generic;
+
+namespace WebJob.Office365ActivityImporter.Engine
 {
     public static class ActivityImportConstants
     {
@@ -31,6 +33,53 @@
         /// workload-specific content classes.
         /// </summary>
         public static string WORKLOAD_POWER_PLATFORM { get { return "PowerPlatform"; } }
+
+        /// <summary>
+        /// Common-schema <c>RecordType</c> values that identify a Data Loss Prevention record.
+        /// </summary>
+        /// <remarks>
+        /// DLP records must be routed by RecordType, never by <c>Workload</c>: a DLP record carries the
+        /// workload where the match was DETECTED ("SharePoint", "Exchange", "Endpoint"), so a
+        /// workload-based route would deserialise it as an ordinary SharePoint or Exchange audit event
+        /// and silently discard every policy field.
+        /// https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema
+        /// </remarks>
+        public static class DlpRecordTypes
+        {
+            /// <summary>DLP events in SharePoint and OneDrive.</summary>
+            public const int ComplianceDLPSharePoint = 11;
+
+            /// <summary>DLP events in Exchange Online (unified DLP policies only, not transport rules).</summary>
+            public const int ComplianceDLPExchange = 13;
+
+            /// <summary>DLP classification events in SharePoint.</summary>
+            public const int ComplianceDLPSharePointClassification = 33;
+
+            /// <summary>Endpoint DLP events from managed devices.</summary>
+            public const int DLPEndpoint = 63;
+
+            /// <summary>DLP classification events in Exchange.</summary>
+            public const int ComplianceDLPExchangeClassification = 107;
+
+            private static readonly HashSet<int> All = new HashSet<int>
+            {
+                ComplianceDLPSharePoint,
+                ComplianceDLPExchange,
+                ComplianceDLPSharePointClassification,
+                DLPEndpoint,
+                ComplianceDLPExchangeClassification,
+            };
+
+            /// <summary>
+            /// True when the record type identifies a DLP record. A record with no RecordType at all is
+            /// NOT treated as DLP - claiming it here would divert records the workload routes handle
+            /// correctly.
+            /// </summary>
+            public static bool IsDlpRecord(int? recordType)
+            {
+                return recordType.HasValue && All.Contains(recordType.Value);
+            }
+        }
 
         /// <summary>
         /// Property names inside a PowerPlatformAdministratorActivityRecord PropertyCollection.
@@ -211,6 +260,14 @@
         public const string STAGING_TABLE_POWER_AUTOMATE_SHARE = "##import_staging_power_automate_share";
         public const string STAGING_TABLE_POWER_BI = "##import_staging_power_bi";
         public const string STAGING_TABLE_COPILOT_STUDIO = "##import_staging_copilot_studio";
+#endif
+
+#if DEBUG
+        public const string STAGING_TABLE_COPILOT_DLP = "debug_import_staging_copilot_dlp";
+        public const string STAGING_TABLE_DLP_RULE_MATCH = "debug_import_staging_dlp_rule_match";
+#else
+        public const string STAGING_TABLE_COPILOT_DLP = "##import_staging_copilot_dlp";
+        public const string STAGING_TABLE_DLP_RULE_MATCH = "##import_staging_dlp_rule_match";
 #endif
     }
 }

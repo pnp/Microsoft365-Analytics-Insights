@@ -833,6 +833,13 @@ namespace App.ControlPanel.Engine
             new ImportToggleCoverage(nameof(ImportTaskSettings.ImportPowerPlatform),
                 "Office 365 Management Activity API subscription read (Power Platform arrives on the Audit.General feed)"),
 
+            new ImportToggleCoverage(nameof(ImportTaskSettings.ImportDlp), null,
+                "the Activity API check reads the subscription list, which needs only ActivityFeed.Read - it "
+                + "cannot prove the SEPARATE ActivityFeed.ReadDlp grant that the DLP.All feed requires. A "
+                + "missing DLP consent first appears as a warning on the importer's next cycle, which "
+                + "deliberately does not fail the other workloads. Note this toggle is not needed for "
+                + "Microsoft 365 Copilot DLP reporting, which rides on the Copilot interaction records."),
+
             new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsageReports),
                 "Microsoft 365 usage reports via Reports.Read.All"),
 
