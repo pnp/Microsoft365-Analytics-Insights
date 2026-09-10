@@ -151,6 +151,17 @@ namespace CloudInstallEngine
                 throw new InstallException("Installer hasn't run - can't return results");
             }
 
+            // A null task means the caller asked for the result of a task that was never registered,
+            // because the feature that creates it is switched off in the install configuration. Say so.
+            // Without this the lookup below hits Dictionary.ContainsKey(null) and the install dies with a
+            // bare "Value cannot be null. Parameter name: key", which names neither the task nor the setting.
+            if (task == null)
+            {
+                throw new InstallException($"No results for a task of type '{typeof(T).Name}' because the task was never " +
+                    "registered for this install - the feature that creates it is disabled in the installer configuration. " +
+                    "Optional resources must be read through a null-checked property.");
+            }
+
             if (TaskResults.ContainsKey(task))
             {
                 return (T)TaskResults[task];

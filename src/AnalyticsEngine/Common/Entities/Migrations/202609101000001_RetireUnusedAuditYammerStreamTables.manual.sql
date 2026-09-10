@@ -109,6 +109,23 @@
    ===================================================================================================== */
 
 SET NOCOUNT ON;
+
+/* QUOTED_IDENTIFIER must be ON, and this script sets it explicitly because sqlcmd defaults it OFF
+   while SSMS and SqlClient (the installer / EF path) default it ON.
+
+   Unlike the other manual scripts in this release, the reason here is NOT the model blob - that is
+   built from raw 0x... hex literals, which need no XQuery and so no particular SET option. The reason
+   is the ALTER VIEW further down: a view PERMANENTLY CAPTURES the session's QUOTED_IDENTIFIER setting
+   at the moment it is (re)created. Without this line, a DBA running the script under sqlcmd would
+   rewrite events_view_azure_ad and events_view_exchange as QUOTED_IDENTIFIER OFF, whereas the
+   installer rewrites them as ON - the same migration would leave two different databases behind.
+   Nothing in the current schema fails under a QI OFF view, but such a view cannot later take part in
+   a filtered index, an indexed view, a computed column or an XML index (Msg 1934), so the drift would
+   surface much later as an error nobody could trace back to this upgrade.
+
+   Note EXEC sp_executesql does NOT force QUOTED_IDENTIFIER ON - a view altered through it still
+   captures the caller's setting - so issuing the ALTER dynamically is not a substitute for this. */
+SET QUOTED_IDENTIFIER ON;
 GO
 
 SET NOCOUNT ON;
