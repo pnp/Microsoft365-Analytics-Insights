@@ -109,6 +109,10 @@ namespace Tests.UnitTests
 IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.urls') AND name = N'{IndexName}')
     DROP INDEX [{IndexName}] ON [dbo].[urls];
 
+-- dbo.hits.url_id is NO_ACTION, not CASCADE, so any hit still pointing at one of these urls makes the
+-- delete below fail with a FK_hits_urls conflict. Clearing the hits first keeps this reset working
+-- whatever else the suite has left behind. hits_clicked_elements cascades from hits, so it follows.
+DELETE FROM dbo.hits WHERE url_id IN (SELECT id FROM dbo.urls WHERE full_url LIKE N'https://contoso.sharepoint.com/sites/example/%');
 DELETE FROM dbo.file_metadata_property_values WHERE url_id IN (SELECT id FROM dbo.urls WHERE full_url LIKE N'https://contoso.sharepoint.com/sites/example/%');
 DELETE FROM dbo.urls WHERE full_url LIKE N'https://contoso.sharepoint.com/sites/example/%';
 

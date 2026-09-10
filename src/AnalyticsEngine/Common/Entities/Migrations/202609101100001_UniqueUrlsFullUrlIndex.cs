@@ -135,10 +135,13 @@ RAISERROR('UniqueUrlsFullUrlIndex: STOP THE IMPORTER before running this. It de-
    Deliberately placed BEFORE any mutation, so aborting here leaves the database completely unchanged.
 
    Two independent signals, treated differently on purpose:
-     1. Write-intent locks held by another session. Real-time, unambiguous evidence of a live writer, so
-        this one ABORTS. Read-only sessions (the web app) take S locks and are correctly ignored. Needs
-        VIEW DATABASE STATE / VIEW SERVER STATE, so it is wrapped in TRY/CATCH and degrades to a warning
-        rather than blocking the upgrade on a permissions error.
+     1. Write-intent locks held by another session ON THE TABLES THIS MIGRATION TOUCHES. Real-time,
+        unambiguous evidence of a live writer, so this one ABORTS. Scoped to dbo.urls, everything with a
+        foreign key to it, and the legacy event_meta_sharepoint - a writer busy with an unrelated table
+        cannot corrupt a de-duplication of dbo.urls, and treating it as if it could would block
+        legitimate upgrades and automated runs for no reason. Read-only sessions (the web app) take S
+        locks and are correctly ignored. Needs VIEW DATABASE STATE / VIEW SERVER STATE, so it is wrapped
+        in TRY/CATCH and degrades to a warning rather than blocking the upgrade on a permissions error.
      2. Recent rows in the importers' own run-log tables. Only a hint - an importer stopped five minutes
         ago still leaves them - so this one only WARNS. Making it fatal would block legitimate upgrades
         and would repeat the DenormaliseCopilotChatUserAndTime mistake of failing over data state.
@@ -158,12 +161,40 @@ DECLARE @activeWriters bigint = 0;
 
 IF @skipConcurrencyCheck = 0
 BEGIN
+    -- The tables a concurrent writer could actually corrupt: dbo.urls, everything with a foreign key to
+    -- it, and the legacy non-FK reference. Built from the catalogue rather than hard-coded, so it stays
+    -- correct if the set of referencing tables changes.
+    DECLARE @guarded TABLE (object_id int NOT NULL PRIMARY KEY);
+
+    INSERT INTO @guarded (object_id)
+    SELECT OBJECT_ID(N'dbo.urls') WHERE OBJECT_ID(N'dbo.urls') IS NOT NULL;
+
+    INSERT INTO @guarded (object_id)
+    SELECT DISTINCT fk.parent_object_id
+    FROM sys.foreign_keys AS fk
+    WHERE fk.referenced_object_id = OBJECT_ID(N'dbo.urls')
+      AND fk.parent_object_id NOT IN (SELECT object_id FROM @guarded);
+
+    INSERT INTO @guarded (object_id)
+    SELECT OBJECT_ID(N'dbo.event_meta_sharepoint')
+    WHERE OBJECT_ID(N'dbo.event_meta_sharepoint') IS NOT NULL
+      AND OBJECT_ID(N'dbo.event_meta_sharepoint') NOT IN (SELECT object_id FROM @guarded);
+
     BEGIN TRY
+        -- Lock resources name a partition (hobt_id) for PAGE/KEY/RID/HOBT locks and an object_id for
+        -- OBJECT locks, so both have to be mapped back to the table before they can be compared.
         SELECT @activeWriters = COUNT_BIG(DISTINCT l.request_session_id)
         FROM sys.dm_tran_locks AS l
+        LEFT JOIN sys.partitions AS p
+               ON l.resource_type IN (N'PAGE', N'KEY', N'RID', N'HOBT')
+              AND p.hobt_id = l.resource_associated_entity_id
         WHERE l.resource_database_id = DB_ID()
           AND l.request_session_id <> @@SPID
-          AND l.request_mode IN (N'X', N'IX', N'U', N'IU', N'SIX');
+          AND l.request_mode IN (N'X', N'IX', N'U', N'IU', N'SIX')
+          AND ISNULL(p.object_id,
+                     CASE WHEN l.resource_type = N'OBJECT'
+                          THEN CAST(l.resource_associated_entity_id AS int) END)
+              IN (SELECT object_id FROM @guarded);
     END TRY
     BEGIN CATCH
         SET @msg = @migration + N': WARNING - could not check for concurrent writers ('

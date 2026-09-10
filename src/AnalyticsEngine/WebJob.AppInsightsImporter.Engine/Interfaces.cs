@@ -37,16 +37,6 @@ namespace WebJob.AppInsightsImporter.Engine
     }
 
     /// <summary>
-    /// One-off schema maintenance run at importer startup. This is deployment-time work, not import logic -
-    /// it is behind a port so the importer can be exercised without it, and so it has an obvious home if it
-    /// ever moves to a migration where it belongs. Also named in issue #369.
-    /// </summary>
-    public interface IImportDbMaintenance
-    {
-        Task RunStartupMaintenanceAsync();
-    }
-
-    /// <summary>
     /// Writes one day's telemetry. Deliberately coarse - one method per thing the importer saves - because
     /// this is the seam the day loop needs. Issue #369 decomposes the SQL side further (page-views,
     /// searches, clicks, page-updates, hit-updates); those become collaborators of the SQL adapter rather

@@ -95,18 +95,6 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public Task<List<FilterUrlConfig>> LoadAsync() => Task.FromResult(Filters);
     }
 
-    /// <summary><see cref="IImportDbMaintenance"/> that only records that it was asked to run.</summary>
-    public class FakeImportDbMaintenance : IImportDbMaintenance
-    {
-        public int RunCount { get; private set; }
-
-        public Task RunStartupMaintenanceAsync()
-        {
-            RunCount++;
-            return Task.CompletedTask;
-        }
-    }
-
     /// <summary>
     /// In-memory <see cref="IAppInsightsDayPersistenceManager"/>, recording what each day saved and able to
     /// fail on demand so the per-day failure isolation can be asserted.

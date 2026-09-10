@@ -1,4 +1,4 @@
-using Azure.Identity;
+﻿using Azure.Identity;
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
@@ -27,14 +27,12 @@ namespace WebJob.AppInsightsImporter.Engine
         // Optional ports (issue #374). When all of them are supplied the import runs with no database
         // context and no HTTP client created at all, which is what makes the orchestration testable.
         private readonly IAppInsightsSourceLoader _source;
-        private readonly IImportDbMaintenance _dbMaintenance;
         private readonly ISiteFilterLoader _siteFilterLoader;
         private readonly IHitWatermarkStore _hitWatermarkStore;
         private readonly IAppInsightsDayPersistenceManager _persistence;
 
         public AppInsightsImporter(AppConfig importConfig, AnalyticsLogger logger, IClock clock = null,
             IAppInsightsSourceLoader source = null,
-            IImportDbMaintenance dbMaintenance = null,
             ISiteFilterLoader siteFilterLoader = null,
             IHitWatermarkStore hitWatermarkStore = null,
             IAppInsightsDayPersistenceManager persistence = null,
@@ -45,7 +43,6 @@ namespace WebJob.AppInsightsImporter.Engine
             _clock = clock ?? SystemClock.Instance;
             _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             _source = source;
-            _dbMaintenance = dbMaintenance;
             _siteFilterLoader = siteFilterLoader;
             _hitWatermarkStore = hitWatermarkStore;
             _persistence = persistence;
@@ -55,14 +52,14 @@ namespace WebJob.AppInsightsImporter.Engine
         /// True when every database-backed port was supplied, so no context needs creating at all.
         /// </summary>
         private bool AllDatabasePortsSupplied =>
-            _dbMaintenance != null && _siteFilterLoader != null && _hitWatermarkStore != null && _persistence != null;
+            _siteFilterLoader != null && _hitWatermarkStore != null && _persistence != null;
 
         public async Task ImportAndSave(bool saveRestResponses, int? daysBeforeOverride)
         {
             if (AllDatabasePortsSupplied)
             {
                 await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
-                    _dbMaintenance, _siteFilterLoader, _hitWatermarkStore, _persistence);
+                    _siteFilterLoader, _hitWatermarkStore, _persistence);
                 return;
             }
 
@@ -71,7 +68,6 @@ namespace WebJob.AppInsightsImporter.Engine
             using (var db = _contextFactory.Create())
             {
                 await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
-                    _dbMaintenance ?? new SqlImportDbMaintenance(db),
                     _siteFilterLoader ?? new SqlSiteFilterLoader(db),
                     _hitWatermarkStore ?? new SqlHitWatermarkStore(db),
                     _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig, _contextFactory));
@@ -79,7 +75,7 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         private async Task ImportAndSaveWith(bool saveRestResponses, int? daysBeforeOverride,
-            IImportDbMaintenance dbMaintenance, ISiteFilterLoader siteFilterLoader,
+            ISiteFilterLoader siteFilterLoader,
             IHitWatermarkStore hitWatermarkStore, IAppInsightsDayPersistenceManager persistence)
         {
             // App Insights timestamps are UTC, so the scan window must be UTC too. Using local
@@ -91,11 +87,6 @@ namespace WebJob.AppInsightsImporter.Engine
 
             var sw = Stopwatch.StartNew();
 
-            // Delete duplicate hits 1st. It also creates the page-request-ID index
-            await dbMaintenance.RunStartupMaintenanceAsync();
-            _logger.LogInformation($"Startup: duplicate-hit cleanup completed in {sw.Elapsed.TotalSeconds:N1}s");
-
-            sw.Restart();
             var filterUrls = await siteFilterLoader.LoadAsync();
             _logger.LogInformation($"Startup: loaded {filterUrls.Count} URL filters in {sw.Elapsed.TotalSeconds:N1}s");
 

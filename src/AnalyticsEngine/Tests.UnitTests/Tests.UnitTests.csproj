@@ -281,6 +281,7 @@
     <Compile Include="AddAuditEventsOperationFKMigrationTests.cs" />
     <Compile Include="ShrinkUrlsFullUrlColumnMigrationTests.cs" />
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
+    <Compile Include="RetireImportDbHacksMigrationTests.cs" />
     <Compile Include="UniqueUrlsFullUrlIndexMigrationTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
     <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
