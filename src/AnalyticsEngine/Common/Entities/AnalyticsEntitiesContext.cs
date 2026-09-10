@@ -132,9 +132,6 @@ namespace Common.Entities
              .HasIndex(t => new { t.GraphID })
              .IsUnique();
 
-            modelBuilder.Entity<YammerMessage>().HasIndex(b => b.YammerID).IsUnique();
-            modelBuilder.Entity<StreamVideo>().HasIndex(v => v.StreamID).IsUnique();
-
             modelBuilder.Entity<O365ClientApplication>().HasIndex(v => v.ClientApplicationId).IsUnique();
 
 
@@ -363,10 +360,6 @@ namespace Common.Entities
         public virtual DbSet<AzureADEventMetadata> azure_ad_events { get; set; }
         public virtual DbSet<GeneralEventMetada> general_audit_events { get; set; }
 
-        public virtual DbSet<ExchangeExtendedProperties> audit_event_props { get; set; }
-        public virtual DbSet<AuditPropertyName> audit_event_prop_names { get; set; }
-        public virtual DbSet<AuditPropertyValue> audit_event_prop_vals { get; set; }
-
         public virtual DbSet<Site> sites { get; set; }
         public virtual DbSet<Web> webs { get; set; }
         public virtual DbSet<CommonAuditEvent> AuditEventsCommon { get; set; }
@@ -447,12 +440,7 @@ namespace Common.Entities
         public virtual DbSet<ConfigState> ConfigStates { get; set; }
         public virtual DbSet<TelemetryReport> TelemetryReports { get; set; }
 
-        public virtual DbSet<StreamVideo> Streams { get; set; }
-        public virtual DbSet<YammerMessage> YammerMessages { get; set; }
-        public virtual DbSet<YammerStreamLink> YammerStreamLinks { get; set; }
         public virtual DbSet<YammerGroup> YammerGroups { get; set; }
-
-        public virtual DbSet<StreamEventMetada> StreamEvents { get; set; }
 
         public virtual DbSet<O365ClientApplication> O365ClientApplications { get; set; }
         public virtual DbSet<UserDepartment> UserDepartments { get; set; }

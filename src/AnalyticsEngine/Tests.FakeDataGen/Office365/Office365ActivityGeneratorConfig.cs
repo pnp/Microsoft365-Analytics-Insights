@@ -91,66 +91,12 @@ namespace Tests.FakeDataGen.Office365
                 "Taylor OneDrive")
         };
 
-        public static readonly string[] AuditPropertyNames =
-        {
-            "ClientIP", "ClientInfoString", "LogonType",
-            "ResultStatus", "AuthenticationMethod", "UserAgent"
-        };
-
-        public static readonly string[] ExchangeClientIpValues =
-        {
-            "192.0.2.10", "192.0.2.20", "192.0.2.30", "192.0.2.40"
-        };
-
-        public static readonly string[] AzureAdClientIpValues =
-        {
-            "198.51.100.10", "198.51.100.20", "203.0.113.10", "203.0.113.20"
-        };
-
-        public static readonly string[] ExchangeClientInfoValues =
-        {
-            "OutlookWebApp", "OutlookDesktop", "MobileClient", "ServiceAccount"
-        };
-
-        public static readonly string[] LogonTypeValues =
-        {
-            "Owner", "Delegate", "Admin"
-        };
-
-        public static readonly string[] ResultStatusValues =
-        {
-            "Success", "Failure", "Interrupted"
-        };
-
-        public static readonly string[] AuthenticationMethodValues =
-        {
-            "Password", "MFA", "FIDO2", "Certificate"
-        };
-
-        public static readonly string[] UserAgentValues =
-        {
-            "SyntheticBrowser/1.0", "SyntheticMobile/1.0", "SyntheticOfficeClient/1.0"
-        };
-
         public static string[] GetAllOperationNames()
         {
             return SharePointOperations
                 .Concat(OneDriveOperations)
                 .Concat(ExchangeOperations)
                 .Concat(AzureAdOperations)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        }
-
-        public static string[] GetAllAuditPropertyValues()
-        {
-            return ExchangeClientIpValues
-                .Concat(AzureAdClientIpValues)
-                .Concat(ExchangeClientInfoValues)
-                .Concat(LogonTypeValues)
-                .Concat(ResultStatusValues)
-                .Concat(AuthenticationMethodValues)
-                .Concat(UserAgentValues)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }

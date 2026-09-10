@@ -30,6 +30,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         #region Props
 
         // Serialisation properties 
+
+        /// <summary>
+        /// The Management Activity API common-schema "ExtendedProperties" bag. Still deserialised (and carried
+        /// forward when a unified PowerPlatform record is mapped to a workload-specific record), but no longer
+        /// persisted: the audit_event_prop_names / audit_event_prop_vals / audit_event_*_props tables that used
+        /// to hold it were retired because nothing read them. The raw record is still kept verbatim in
+        /// event_meta_general.json for the workloads that write it.
+        /// </summary>
         public List<Dictionary<string, string>> ExtendedProperties { get; set; }
 
         /// <summary>
@@ -61,44 +69,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities
         /// Save new common + specific event to SQL.
         /// </summary>
         public abstract Task<bool> ProcessExtendedProperties(SaveSession saveBatch, CommonAuditEvent relatedAuditEvent, ILogger logger);
-
-        /// <summary>
-        /// Saves "property_name" and "property_value" records for a set of extended properties
-        /// </summary>
-        protected Dictionary<AuditPropertyName, AuditPropertyValue> GetPropertiesAndValues(SaveSession saveSession)
-        {
-            var dbProps = new Dictionary<AuditPropertyName, AuditPropertyValue>();
-
-            // Read each extended property
-            foreach (var item in this.ExtendedProperties)
-            {
-                if (item.Values.Count >= 2)
-                {
-                    string name = item.Values.First();
-                    string val = item.Values.Skip(1).First();
-
-                    // Try and find an existing name & value
-                    AuditPropertyName nameRec = saveSession.SharePointLookupManager.GetAuditPropertyNames().Where(n => n.name == name).FirstOrDefault();
-                    if (nameRec == null)
-                    {
-                        nameRec = new AuditPropertyName() { name = name };
-                        saveSession.Database.audit_event_prop_names.Add(nameRec);
-                    }
-
-                    AuditPropertyValue valRec = saveSession.SharePointLookupManager.GetPropVals().Where(n => n.value == val).FirstOrDefault();
-                    if (valRec == null)
-                    {
-                        valRec = new AuditPropertyValue() { value = val };
-                        saveSession.Database.audit_event_prop_vals.Add(valRec);
-                    }
-
-                    // Add new propery with lookups
-                    dbProps.Add(nameRec, valRec);
-                }
-
-            }
-            return dbProps;
-        }
 
 
         #region IEquatable<AuditLogContent>

@@ -107,11 +107,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return reportItem.ToObject<AzureADAuditLogContent>();
             }
 
-            // Workload "MicrosoftStream" -> AuditLogRecordType 32 MicrosoftStream.
+            // Workload "MicrosoftStream" -> AuditLogRecordType 32 MicrosoftStream. Microsoft Stream (Classic)
+            // is retired, and the Stream-specific tables (stream_videos / event_meta_stream) it fed were
+            // retired with it. Any remaining record is still captured as a generic event: the staging merge
+            // writes an event_meta_general row for the workload, and GeneralAuditLogContent stores the raw
+            // record JSON against it.
             // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_STREAM)
             {
-                return reportItem.ToObject<StreamAuditLogContent>();
+                return reportItem.ToObject<GeneralAuditLogContent>();
             }
 
             // Workload "Copilot" (M365 Copilot user interactions) -> AuditLogRecordType 261

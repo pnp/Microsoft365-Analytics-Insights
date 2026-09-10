@@ -144,7 +144,6 @@
     <Compile Include="Entities\Serialisation\GeneralAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\PowerPlatformAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\SharePointAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\StreamAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\UsageReports\AppPlatformUserActivityDetail.cs" />
     <Compile Include="Entities\Serialisation\TeamsDeviceUsageUserDetail.cs" />
     <Compile Include="Entities\Serialisation\UsageReports\Abstract.cs" />
