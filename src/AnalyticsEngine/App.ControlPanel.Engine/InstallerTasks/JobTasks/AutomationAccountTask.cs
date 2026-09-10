@@ -79,8 +79,9 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                 _logger.LogInformation($"Using existing Automation account '{automationAccount.Data.Name}'.");
                 await base.EnsureTagsOnExisting(automationAccount.Data.Tags, automationAccount.GetTagResource());
 
-                var needsIdentity = automationAccount.Data.Identity == null
-                    || automationAccount.Data.Identity.PrincipalId == null;
+                var existingIdentity = automationAccount.Data.Identity;
+                var needsIdentity = CloudInstallEngine.Azure.ManagedIdentityPlanner
+                    .NeedsSystemAssignedIdentity(existingIdentity);
 
                 if (automationAccount.Data.IsPublicNetworkAccessAllowed != _allowPublicAccess || needsIdentity)
                 {
@@ -99,8 +100,21 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                     };
                     if (needsIdentity)
                     {
-                        patch.Identity = new Azure.ResourceManager.Models.ManagedServiceIdentity(
-                            Azure.ResourceManager.Models.ManagedServiceIdentityType.SystemAssigned);
+                        // ARM replaces the identity block wholesale, so any user-assigned identities the
+                        // operator added must be re-sent or they are deleted by this patch.
+                        var newIdentity = CloudInstallEngine.Azure.ManagedIdentityPlanner
+                            .BuildSystemAssignedPreservingUserAssigned(existingIdentity);
+
+                        // Counted from what was READ, never from the object about to be sent: reading
+                        // Count on a freshly built ManagedServiceIdentity relies on ChangeTrackingDictionary
+                        // not materialising an empty map into the request payload, which is an SDK
+                        // implementation detail rather than a contract.
+                        var preservedCount = existingIdentity?.UserAssignedIdentities?.Count ?? 0;
+                        if (preservedCount > 0)
+                        {
+                            _logger.LogInformation($"Preserving {preservedCount} existing user-assigned managed identity/identities on Automation account '{automationAccount.Data.Name}'.");
+                        }
+                        patch.Identity = newIdentity;
                     }
 
                     try
