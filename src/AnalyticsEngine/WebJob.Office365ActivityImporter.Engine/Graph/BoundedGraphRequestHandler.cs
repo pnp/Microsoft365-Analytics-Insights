@@ -8,7 +8,8 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
-    /// Retries idempotent SDK HTTP reads only when this process' request deadline expires.
+    /// Applies a deadline to every SDK HTTP request and retries idempotent reads only when
+    /// this process' request deadline expires.
     /// Kiota's RetryHandler still owns Graph-directed HTTP retries such as 429/503/504 and
     /// Retry-After. Caller cancellation is never treated as a transient timeout.
     /// </summary>
@@ -25,15 +26,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            if (!IsRetryableRead(request))
-            {
-                return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            }
-
             var started = Stopwatch.StartNew();
             TaskCanceledException lastTimeout = null;
+            var maxAttempts = IsRetryableRead(request) ? _options.MaxAttempts : 1;
 
-            for (var attempt = 1; attempt <= _options.MaxAttempts; attempt++)
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -53,16 +50,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         var response = await base.SendAsync(requestForAttempt, requestDeadline.Token).ConfigureAwait(false);
                         if (attempt > 1)
                         {
-                            _logger?.LogInformation($"Graph user import request succeeded on timeout attempt {attempt:N0} after {started.ElapsedMilliseconds:N0} ms.");
+                            _logger?.LogInformation($"Graph import SDK request succeeded on timeout attempt {attempt:N0} after {started.ElapsedMilliseconds:N0} ms.");
                         }
                         return response;
                     }
                     catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestDeadline.IsCancellationRequested)
                     {
                         lastTimeout = ex;
-                        _logger?.LogWarning($"Graph user import request attempt {attempt:N0}/{_options.MaxAttempts:N0} exceeded its {timeout.TotalSeconds:N0}s deadline after {started.ElapsedMilliseconds:N0} ms.");
+                        _logger?.LogWarning($"Graph import SDK request attempt {attempt:N0}/{maxAttempts:N0} exceeded its {timeout.TotalSeconds:N0}s deadline after {started.ElapsedMilliseconds:N0} ms.");
 
-                        if (attempt >= _options.MaxAttempts || started.Elapsed >= _options.TotalTimeoutRetryBudget)
+                        if (attempt >= maxAttempts || started.Elapsed >= _options.TotalTimeoutRetryBudget)
                         {
                             throw new TimeoutException(BuildExhaustedMessage(attempt, started.Elapsed), ex);
                         }
@@ -77,15 +74,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
 
-            throw new TimeoutException(BuildExhaustedMessage(_options.MaxAttempts, started.Elapsed), lastTimeout);
+            throw new TimeoutException(BuildExhaustedMessage(maxAttempts, started.Elapsed), lastTimeout);
         }
 
         private static bool IsRetryableRead(HttpRequestMessage request)
             => request.Method == HttpMethod.Get || request.Method == HttpMethod.Head;
 
         private string BuildExhaustedMessage(int attempts, TimeSpan elapsed)
-            => $"Graph user import request deadline exhausted after {attempts:N0} attempt(s) and {elapsed.TotalSeconds:N1}s. " +
-               "The user/licence import is deferred; the previous committed delta checkpoint remains in force.";
+            => $"Graph import SDK request deadline exhausted after {attempts:N0} attempt(s) and {elapsed.TotalSeconds:N1}s. " +
+               "The affected Graph import section is deferred; any previous committed checkpoint remains in force.";
 
         private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage request)
         {

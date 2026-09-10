@@ -4,7 +4,7 @@ using System;
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
-    /// Bounded request/retry settings for SDK-backed Graph user and licence reads.
+    /// Bounded request/retry settings for SDK-backed Graph import reads.
     /// The installed Microsoft.Graph 6.5.0 pipeline already includes Kiota's RetryHandler
     /// (3 retries by default, respecting Retry-After for transient HTTP responses). These
     /// values keep that service-directed retry path, but cap the per HTTP request deadline
@@ -13,7 +13,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     public sealed class GraphRequestBudgetOptions
     {
-        public static readonly GraphRequestBudgetOptions UserImportDefault = new GraphRequestBudgetOptions(
+        public static readonly GraphRequestBudgetOptions GraphImportDefault = new GraphRequestBudgetOptions(
             perRequestTimeout: TimeSpan.FromMinutes(2),
             timeoutRetryCount: 2,
             timeoutRetryDelay: TimeSpan.FromSeconds(5),
@@ -60,7 +60,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public void Log(ILogger logger)
         {
             logger?.LogInformation(
-                $"Graph user import request budget: per-request timeout {PerRequestTimeout.TotalSeconds:N0}s, " +
+                $"Graph import SDK request budget: per-request timeout {PerRequestTimeout.TotalSeconds:N0}s, " +
                 $"timeout retries {TimeoutRetryCount:N0} with {TimeoutRetryDelay.TotalSeconds:N0}s delay, " +
                 $"timeout-retry budget {TotalTimeoutRetryBudget.TotalSeconds:N0}s; Kiota RetryHandler remains enabled " +
                 $"for transient HTTP responses with max retry {SdkRetryCount:N0}, initial delay {SdkRetryDelaySeconds:N0}s, " +

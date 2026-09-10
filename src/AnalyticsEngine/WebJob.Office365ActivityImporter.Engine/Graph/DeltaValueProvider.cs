@@ -2,15 +2,20 @@ using Common.Entities.Config;
 using Common.Entities.Redis;
 using DataUtils;
 using System;
+using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
+    /// <summary>
+    /// Interface for delta token provider
+    /// </summary>
     public interface IDeltaValueProvider
     {
-        Task<string> GetDeltaToken();
-        Task SetDeltaToken(string deltaToken);
-        Task ClearDeltaToken();
+        Task<string> GetDeltaToken(CancellationToken cancellationToken = default);
+        Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default);
+        Task ClearDeltaToken(CancellationToken cancellationToken = default);
     }
 
     public sealed class DeltaTokenUnavailableException : Exception
@@ -55,6 +60,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public TimeSpan Delay { get; }
     }
 
+    /// <summary>
+    /// In-process delta token provider. Used when no Redis connection string is provided.
+    /// </summary>
     public class InProcessDeltaValueProvider : IDeltaValueProvider
     {
         private readonly AnalyticsLogger _logger;
@@ -64,15 +72,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _logger = logger;
         }
 
-        public Task ClearDeltaToken()
+        public Task ClearDeltaToken(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             _deltaToken = null;
             _logger.LogWarning($"Cleared in-memory delta token for tenant.");
             return Task.CompletedTask;
         }
 
-        public Task<string> GetDeltaToken()
+        public Task<string> GetDeltaToken(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(_deltaToken))
             {
                 _logger.LogWarning($"No in-memory delta token found.");
@@ -84,14 +94,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             return Task.FromResult(_deltaToken);
         }
 
-        public Task SetDeltaToken(string deltaToken)
+        public Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             _logger.LogInformation($"Setting in-memory delta token.");
             _deltaToken = deltaToken;
             return Task.CompletedTask;
         }
     }
 
+    /// <summary>
+    /// Redis-based delta token provider. Used when Redis connection string is provided.
+    /// </summary>
     public class RedisProcessDeltaValueProvider : IDeltaValueProvider
     {
         private readonly IStringValueStore _store;
@@ -113,20 +127,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _retryOptions = retryOptions ?? DeltaTokenStoreRetryOptions.Default;
         }
 
-        public async Task ClearDeltaToken()
+        public async Task ClearDeltaToken(CancellationToken cancellationToken = default)
         {
             var key = GetRedisUserDeltaCacheKey();
-            await ExecuteWithRetry(() => _store.DeleteString(key), "delete");
+            await ExecuteWithRetry(() => _store.DeleteString(key), "delete", cancellationToken);
             _lastKnownCommittedDeltaToken = null;
             _logger.LogWarning($"Cleared persisted user delta token.");
         }
 
-        public async Task<string> GetDeltaToken()
+        public async Task<string> GetDeltaToken(CancellationToken cancellationToken = default)
         {
             var key = GetRedisUserDeltaCacheKey();
             try
             {
-                var usersQueryDelta = await ExecuteWithRetry(() => _store.GetString(key), "read");
+                var usersQueryDelta = await ExecuteWithRetry(() => _store.GetString(key), "read", cancellationToken);
                 if (string.IsNullOrEmpty(usersQueryDelta))
                 {
                     _logger.LogWarning($"No persisted user delta token found; a confirmed first-run/full-enumeration path will be used.");
@@ -151,19 +165,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        public async Task SetDeltaToken(string deltaToken)
+        public async Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default)
         {
             var key = GetRedisUserDeltaCacheKey();
             _logger.LogInformation($"Setting persisted user delta token.");
-            await ExecuteWithRetry(() => _store.SetString(key, deltaToken), "write");
+            await ExecuteWithRetry(() => _store.SetString(key, deltaToken), "write", cancellationToken);
             _lastKnownCommittedDeltaToken = deltaToken;
         }
 
-        private async Task<T> ExecuteWithRetry<T>(Func<Task<T>> action, string operation)
+        private async Task<T> ExecuteWithRetry<T>(Func<Task<T>> action, string operation, CancellationToken cancellationToken)
         {
             Exception last = null;
             for (var attempt = 1; attempt <= _retryOptions.MaxAttempts; attempt++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     return await action();
@@ -183,21 +198,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _logger?.LogWarning($"User delta token store {operation} attempt {attempt:N0}/{_retryOptions.MaxAttempts:N0} failed ({ex.GetType().Name}); retrying.");
                     if (_retryOptions.Delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(_retryOptions.Delay);
+                        await Task.Delay(_retryOptions.Delay, cancellationToken);
                     }
                 }
             }
 
-            throw last;
+            ExceptionDispatchInfo.Capture(last).Throw();
+            throw new InvalidOperationException("Unreachable retry state.");
         }
 
-        private async Task ExecuteWithRetry(Func<Task> action, string operation)
+        private async Task ExecuteWithRetry(Func<Task> action, string operation, CancellationToken cancellationToken)
         {
             await ExecuteWithRetry(async () =>
             {
                 await action();
                 return true;
-            }, operation);
+            }, operation, cancellationToken);
         }
 
         string GetRedisUserDeltaCacheKey()
@@ -206,5 +222,4 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
     }
 }
-
 

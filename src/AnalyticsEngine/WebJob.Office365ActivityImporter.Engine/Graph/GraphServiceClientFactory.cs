@@ -21,15 +21,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private static readonly string[] DefaultScopes = new[] { "https://graph.microsoft.com/.default" };
 
         /// <summary>
-        /// Create the SDK-backed Graph client used by user metadata and licence imports.
+        /// Create the SDK-backed Graph client used by the Graph importer.
         /// Microsoft.Graph 6.5.0 installs Kiota's RetryHandler in the default pipeline; we
-        /// keep it for service-directed transient HTTP retries and add only a bounded wrapper
-        /// for local request-deadline timeouts.
+        /// keep it for service-directed transient HTTP retries and add a bounded wrapper for
+        /// local request-deadline timeouts. The deadline applies to every method; only idempotent
+        /// reads get local timeout retries.
         /// </summary>
-        public static GraphServiceClient CreateForUserImport(TokenCredential credential, ILogger logger = null)
-            => CreateForUserImport(credential, GraphRequestBudgetOptions.UserImportDefault, logger);
+        public static GraphServiceClient CreateForGraphImport(TokenCredential credential, ILogger logger = null)
+            => CreateForGraphImport(credential, GraphRequestBudgetOptions.GraphImportDefault, logger);
 
-        internal static GraphServiceClient CreateForUserImport(TokenCredential credential, GraphRequestBudgetOptions budget, ILogger logger, HttpMessageHandler finalHandler = null)
+        public static GraphServiceClient CreateForUserImport(TokenCredential credential, ILogger logger = null)
+            => CreateForGraphImport(credential, logger);
+
+        internal static GraphServiceClient CreateForGraphImport(TokenCredential credential, GraphRequestBudgetOptions budget, ILogger logger, HttpMessageHandler finalHandler = null)
         {
             if (credential == null) throw new ArgumentNullException(nameof(credential));
             var authProvider = new AzureIdentityAuthenticationProvider(credential, scopes: DefaultScopes);
@@ -67,7 +71,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// Legacy helper kept for callers outside the user import path. Prefer
-        /// <see cref="CreateForUserImport"/> for SDK-backed user/licence enumeration.
+        /// <see cref="CreateForGraphImport"/> for SDK-backed importer work.
         /// </summary>
         public static GraphServiceClient CreateWithTimeout(TokenCredential credential, TimeSpan timeout)
         {
@@ -78,4 +82,3 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
     }
 }
-

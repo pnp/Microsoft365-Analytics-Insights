@@ -60,6 +60,20 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task BoundedGraphRequestHandler_NonGetRequest_IsDeadlineBoundedButNotRetried()
+        {
+            var terminal = new SequenceHttpHandler(
+                async ct => { await Task.Delay(TimeSpan.FromSeconds(5), ct); return new HttpResponseMessage(HttpStatusCode.OK); });
+            var client = BuildBoundedClient(terminal, timeoutRetryCount: 3, perRequestMs: 25, totalBudgetMs: 500);
+
+            await Assert.ThrowsExceptionAsync<TimeoutException>(() => client.PostAsync(
+                "https://graph.microsoft.com/v1.0/teams",
+                new StringContent("{}")));
+
+            Assert.AreEqual(1, terminal.Attempts, "Non-GET SDK calls must keep a request deadline but must not be retried by the local timeout policy.");
+        }
+
+        [TestMethod]
         public async Task RedisDeltaProvider_ReadUnavailableWithCommittedToken_UsesSafeFallbackOnlyAfterCommit()
         {
             var store = new FakeStringValueStore();
@@ -136,6 +150,24 @@ namespace Tests.UnitTests
             Assert.IsNull(await second.GetDeltaToken(), "A token committed for one synthetic tenant/configuration scope must not be reused for another.");
         }
 
+        [TestMethod]
+        public async Task RedisDeltaProvider_CancellationDuringBackoff_StopsWithoutFurtherAttempts()
+        {
+            var store = new FakeStringValueStore { ThrowOnGet = true };
+            var provider = new RedisProcessDeltaValueProvider(
+                BuildConfig(8),
+                AnalyticsLogger.ConsoleOnlyTracer(),
+                store,
+                new DeltaTokenStoreRetryOptions(3, TimeSpan.FromSeconds(5)));
+
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(25)))
+            {
+                await Assert.ThrowsExceptionAsync<TaskCanceledException>(() => provider.GetDeltaToken(cts.Token));
+            }
+
+            Assert.AreEqual(1, store.GetAttempts, "Cancellation during Redis retry backoff must stop promptly instead of waiting for the bounded delay.");
+        }
+
         private static HttpClient BuildBoundedClient(SequenceHttpHandler terminal, int timeoutRetryCount, int perRequestMs, int totalBudgetMs)
         {
             var handler = new BoundedGraphRequestHandler(
@@ -156,16 +188,18 @@ namespace Tests.UnitTests
         }
 
         private static RedisProcessDeltaValueProvider BuildDeltaProvider(FakeStringValueStore store, int tenantSeed)
+            => new RedisProcessDeltaValueProvider(
+                BuildConfig(tenantSeed),
+                AnalyticsLogger.ConsoleOnlyTracer(),
+                store,
+                new DeltaTokenStoreRetryOptions(3, TimeSpan.Zero));
+
+        private static AppConfig BuildConfig(int tenantSeed)
         {
             var config = (AppConfig)FormatterServices.GetUninitializedObject(typeof(AppConfig));
             config.TenantGUID = Guid.Parse($"00000000-0000-0000-0000-00000000000{tenantSeed}");
             config.ConnectionStrings = new AppConnectionStrings();
-
-            return new RedisProcessDeltaValueProvider(
-                config,
-                AnalyticsLogger.ConsoleOnlyTracer(),
-                store,
-                new DeltaTokenStoreRetryOptions(3, TimeSpan.Zero));
+            return config;
         }
 
         private sealed class SequenceHttpHandler : HttpMessageHandler
@@ -216,4 +250,3 @@ namespace Tests.UnitTests
         }
     }
 }
-
