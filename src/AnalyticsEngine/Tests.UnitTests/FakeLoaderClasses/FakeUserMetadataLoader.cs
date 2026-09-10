@@ -2,6 +2,7 @@ using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 
@@ -29,6 +30,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// committed vs uncommitted import without extra setup.
         /// </summary>
         public string SimulatedNewDeltaToken { get; set; } = "fake-new-delta";
+        public bool ThrowOnCommitDeltaToken { get; set; }
 
         /// <summary>
         /// When non-null AND the delta provider already has a token (i.e. this is
@@ -135,6 +137,11 @@ namespace Tests.UnitTests.FakeLoaderClasses
         {
             if (_hasPendingDeltaToken)
             {
+                if (ThrowOnCommitDeltaToken)
+                {
+                    throw new InvalidOperationException("simulated delta persistence failure");
+                }
+
                 await _deltaProvider.SetDeltaToken(_pendingDeltaToken);
                 _pendingDeltaToken = null;
                 _hasPendingDeltaToken = false;
@@ -149,19 +156,22 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         private string _deltaToken;
 
-        public Task ClearDeltaToken()
+        public Task ClearDeltaToken(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             _deltaToken = null;
             return Task.CompletedTask;
         }
 
-        public Task<string> GetDeltaToken()
+        public Task<string> GetDeltaToken(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_deltaToken);
         }
 
-        public Task SetDeltaToken(string deltaToken)
+        public Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             _deltaToken = deltaToken;
             return Task.CompletedTask;
         }

@@ -215,6 +215,7 @@
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeCallsPorts.cs" />
     <Compile Include="FakeLoaderClasses\FakeGraphImportSections.cs" />
+    <Compile Include="GraphBoundedRequestAndDeltaTests.cs" />
     <Compile Include="GraphImportOrchestrationTests.cs" />
     <Compile Include="GraphImportSectionCompositionTests.cs" />
     <Compile Include="ImportRuntimeOptionsTests.cs" />
@@ -535,3 +536,5 @@
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
 </Project>
+
+

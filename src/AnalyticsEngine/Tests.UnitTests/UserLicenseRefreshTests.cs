@@ -643,6 +643,78 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task UserLicenseRefresh_FailureAfterOneSkuPage_DoesNotReconcilePartialInventory()
+        {
+            var tick = DateTime.Now.Ticks;
+            var userAUpn = $"licencepartialA{tick}@test.com";
+            var userBUpn = $"licencepartialB{tick}@test.com";
+            await RemoveTestUsers(userAUpn, userBUpn);
+
+            var skuAId = Guid.NewGuid();
+            var skuBId = Guid.NewGuid();
+            var initialSkus = new List<SubscribedSku>
+            {
+                new SubscribedSku { SkuId = skuAId, SkuPartNumber = "ENTERPRISEPACK" },
+                new SubscribedSku { SkuId = skuBId, SkuPartNumber = "ENTERPRISEPREMIUM" }
+            };
+
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var userA = await InsertUser(db, userAUpn);
+                    var userB = await InsertUser(db, userBUpn);
+                    var users = new List<Common.Entities.User> { userA, userB };
+
+                    var setupLoader = new FakeUserMetadataLoader(null, initialSkus,
+                        new Dictionary<Guid, List<SkuUser>>
+                        {
+                            { skuAId, new List<SkuUser> { new SkuUser { UserPrincipalName = userAUpn } } },
+                            { skuBId, new List<SkuUser> { new SkuUser { UserPrincipalName = userBUpn } } }
+                        });
+
+                    await new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), setupLoader, new UserMetadataCache(db))
+                        .ProcessSKUsForAllUsers(initialSkus, users, db);
+                    Assert.AreEqual(1, await CountLookups(db, userA.ID));
+                    Assert.AreEqual(1, await CountLookups(db, userB.ID));
+
+                    var partialLoader = new FakeUserMetadataLoader(null, initialSkus,
+                        new Dictionary<Guid, List<SkuUser>>
+                        {
+                            { skuAId, new List<SkuUser> { new SkuUser { UserPrincipalName = userAUpn } } },
+                            { skuBId, new List<SkuUser> { new SkuUser { UserPrincipalName = userBUpn } } }
+                        });
+                    var loadedSkuAPage = false;
+                    partialLoader.OnLoadUsersBySku = skuId =>
+                    {
+                        if (skuId == skuAId)
+                        {
+                            loadedSkuAPage = true;
+                            return Task.CompletedTask;
+                        }
+
+                        throw new InvalidOperationException("simulated failure after a partial SKU-holder inventory");
+                    };
+                    var recorder = new RecordingUserLicenseStore(new SqlUserLicenseStore(db, AnalyticsLogger.ConsoleOnlyTracer()));
+
+                    await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                        new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), partialLoader, new UserMetadataCache(db), _ => recorder)
+                            .ProcessSKUsForAllUsers(initialSkus, users, db));
+
+                    Assert.IsTrue(loadedSkuAPage, "The failure must occur after at least one SKU-holder page has been read.");
+                    Assert.AreEqual(0, recorder.Operations.Count,
+                        "A partial SKU-holder inventory must not be reconciled as complete; writes happen only after every SKU has been read.");
+                    Assert.AreEqual(1, await CountLookups(db, userA.ID));
+                    Assert.AreEqual(1, await CountLookups(db, userB.ID));
+                }
+            }
+            finally
+            {
+                await RemoveTestUsers(userAUpn, userBUpn);
+            }
+        }
+
         #endregion
 
         #region Helpers

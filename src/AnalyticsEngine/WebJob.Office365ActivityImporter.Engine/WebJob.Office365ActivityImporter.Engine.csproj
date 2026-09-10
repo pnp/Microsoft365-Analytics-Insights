@@ -159,6 +159,7 @@
     <Compile Include="Entities\MessageCognitiveStats.cs" />
     <Compile Include="Entities\WebActivityReportSet.cs" />
     <Compile Include="ExceptionHandler.cs" />
+    <Compile Include="Graph\BoundedGraphRequestHandler.cs" />
     <Compile Include="Graph\DeltaValueProvider.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
@@ -221,6 +222,7 @@
     <Compile Include="Graph\Teams\Extensions\ItemBodyExtensions.cs" />
     <Compile Include="Graph\Teams\GraphReadExceptions.cs" />
     <Compile Include="Graph\BearerTokenAuthenticationProvider.cs" />
+    <Compile Include="Graph\GraphRequestBudgetOptions.cs" />
     <Compile Include="Graph\GraphServiceClientFactory.cs" />
     <Compile Include="Graph\ManualGraphCallClient.cs" />
     <Compile Include="Graph\Teams\O365Team.cs" />
@@ -395,3 +397,4 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
+

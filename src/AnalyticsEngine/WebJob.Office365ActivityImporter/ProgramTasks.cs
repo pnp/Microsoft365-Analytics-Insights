@@ -112,7 +112,7 @@ namespace WebJob.Office365ActivityImporter
                 return;
             }
             await _graphAppIndentityOAuthContext.InitClientCredential();
-            _graphClient = GraphServiceClientFactory.CreateWithTimeout(_graphAppIndentityOAuthContext.Creds, TimeSpan.FromHours(1));
+            _graphClient = GraphServiceClientFactory.CreateForGraphImport(_graphAppIndentityOAuthContext.Creds, _logger);
             _manualGraphCallClient = new ManualGraphCallClient(_graphAppIndentityOAuthContext, _logger);
             _graphUserGroupsCache = new GraphUserGroupsCache(_manualGraphCallClient, _logger);
 
