@@ -104,9 +104,15 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
                         // operator added must be re-sent or they are deleted by this patch.
                         var newIdentity = CloudInstallEngine.Azure.ManagedIdentityPlanner
                             .BuildSystemAssignedPreservingUserAssigned(existingIdentity);
-                        if (newIdentity.UserAssignedIdentities.Count > 0)
+
+                        // Counted from what was READ, never from the object about to be sent: reading
+                        // Count on a freshly built ManagedServiceIdentity relies on ChangeTrackingDictionary
+                        // not materialising an empty map into the request payload, which is an SDK
+                        // implementation detail rather than a contract.
+                        var preservedCount = existingIdentity?.UserAssignedIdentities?.Count ?? 0;
+                        if (preservedCount > 0)
                         {
-                            _logger.LogInformation($"Preserving {newIdentity.UserAssignedIdentities.Count} existing user-assigned managed identity/identities on Automation account '{automationAccount.Data.Name}'.");
+                            _logger.LogInformation($"Preserving {preservedCount} existing user-assigned managed identity/identities on Automation account '{automationAccount.Data.Name}'.");
                         }
                         patch.Identity = newIdentity;
                     }
