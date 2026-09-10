@@ -153,6 +153,12 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
             // The case that would otherwise break the upgrade for everyone who has duplicates:
             // file_metadata_property_values has UNIQUE (url_id, field_id), so repointing two duplicate
             // url_ids onto one canonical id creates a duplicate key and the UPDATE fails.
+            //
+            // Which row survives is decided by "most recently updated first". field_value holds a
+            // SharePoint metadata value, so keeping the stale copy would be a silent data regression.
+            // Timestamps are explicit and far apart on purpose: the original version of this test wrote
+            // GETUTCDATE() into both rows, which ties on some machines and not others, and so asserted
+            // the tie-break rule by accident rather than the rule that actually matters.
             using (var db = new AnalyticsEntitiesContext())
             {
                 await EnsureSchemaAsync(db);
@@ -162,10 +168,11 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 var dupId = await InsertUrlAsync(db, PlainUrl);
 
                 // Same field_id under BOTH urls - these collide once dupId becomes keepId.
+                // The DUPLICATE carries the newer value, so "freshest wins" is actually exercised.
                 await ExecAsync(db,
                     $@"DECLARE @f int = (SELECT MIN(id) FROM dbo.file_field_definitions);
-                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, @f, N'keep-me', GETUTCDATE());
-                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, @f, N'collides', GETUTCDATE());");
+                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, @f, N'stale', '2020-01-01T00:00:00');
+                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, @f, N'freshest', '2026-01-01T00:00:00');");
 
                 // Must not throw.
                 await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
@@ -174,8 +181,39 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                     $"SELECT field_value FROM dbo.file_metadata_property_values WHERE url_id = {keepId}").ToListAsync();
 
                 Assert.AreEqual(1, rows.Count, "Exactly one of the colliding rows may survive.");
+                Assert.AreEqual("freshest", rows.Single(),
+                    "The most recently updated row must survive, so the freshest field_value is kept.");
+                Assert.IsTrue(await IndexIsUniqueAsync(db));
+            }
+        }
+
+        [TestMethod]
+        public async Task Migration_CollisionOnEqualTimestamps_KeepsTheRowAlreadyOnTheCanonicalUrl()
+        {
+            // When "most recently updated" cannot decide, the row that already pointed at the canonical
+            // URL wins, and the primary key breaks any remaining tie. That keeps the outcome
+            // deterministic instead of leaving it to whatever order the engine happens to produce.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await EnsureSchemaAsync(db);
+                await ResetToPreMigrationStateAsync(db);
+
+                var keepId = await InsertUrlAsync(db, PlainUrl);
+                var dupId = await InsertUrlAsync(db, PlainUrl);
+
+                await ExecAsync(db,
+                    $@"DECLARE @f int = (SELECT MIN(id) FROM dbo.file_field_definitions);
+                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, @f, N'keep-me', '2026-01-01T00:00:00');
+                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, @f, N'collides', '2026-01-01T00:00:00');");
+
+                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+
+                var rows = await db.Database.SqlQuery<string>(
+                    $"SELECT field_value FROM dbo.file_metadata_property_values WHERE url_id = {keepId}").ToListAsync();
+
+                Assert.AreEqual(1, rows.Count, "Exactly one of the colliding rows may survive.");
                 Assert.AreEqual("keep-me", rows.Single(),
-                    "The row that ALREADY pointed at the canonical URL is the one to keep.");
+                    "On an equal timestamp the row that ALREADY pointed at the canonical URL is the one to keep.");
                 Assert.IsTrue(await IndexIsUniqueAsync(db));
             }
         }
