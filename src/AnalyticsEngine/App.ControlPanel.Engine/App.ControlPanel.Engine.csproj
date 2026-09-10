@@ -91,6 +91,7 @@
     <Compile Include="SPO\SiteTrackerInstaller\Models.cs" />
     <Compile Include="Utils\AzurePublicCloudEnumerator.cs" />
     <Compile Include="Utils\DatabaseUpgrader.cs" />
+    <Compile Include="Utils\DownloadedBuildCapabilityProbe.cs" />
     <Compile Include="SolutionInstallVerifier.cs" />
     <Compile Include="InstallerTasks\AzurePaaSInstallJob.cs" />
     <Compile Include="InstallerTasks\Abstract\BaseAnalyticsSolutionInstallJob.cs" />
