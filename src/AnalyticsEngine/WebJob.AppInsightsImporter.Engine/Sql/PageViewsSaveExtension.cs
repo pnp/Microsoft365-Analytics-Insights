@@ -22,8 +22,8 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         {
             var sw = Stopwatch.StartNew();
 
-            // Hack to change/ensure correct DB schema. Needs moving to a migration
-            await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
+            // The session-table collation and IX_ai_session_id used to be ensured here on every batch.
+            // They are schema, so they now live in migration RetireImportDbHacks.
 
             // Which rows to stage, and why the rest were dropped. Pure decision logic - see issue #369.
             var plan = PageViewStagingRules.Plan(pageViews, filterUrls);

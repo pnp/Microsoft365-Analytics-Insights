@@ -1,9 +1,11 @@
 ﻿using Common.Entities;
 using Common.Entities.Entities;
+using Common.Entities.Migrations;
 using DataUtils;
 using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
@@ -19,16 +21,16 @@ namespace Tests.UnitTests
     /// <remarks>
     /// <para>
     /// This class previously inserted two <c>urls</c> rows with the same <c>full_url</c> and asserted that
-    /// <c>ImportDbHacks.CleanDuplicateUrls</c> consolidated them. That premise is now false by design - the
-    /// unique index rejects the second row - so the test has been turned around to prove the constraint
-    /// rather than the clean-up.
+    /// the old <c>ImportDbHacks.CleanDuplicateUrls</c> hack consolidated them. That premise is now false by
+    /// design - the unique index rejects the second row - so the test has been turned around to prove the
+    /// constraint rather than the clean-up.
     /// </para>
     /// <para>
     /// The de-duplication behaviour itself is not lost: it is covered far more thoroughly by
     /// <see cref="UniqueUrlsFullUrlIndexMigrationTests"/>, which runs the migration's real SQL from a
     /// pre-migration (non-unique) state, including reference repointing, collision pruning and non-ASCII
-    /// URLs. <c>CleanDuplicateUrls</c> has no production caller and is now only a one-time safeguard for
-    /// databases that predate the migration.
+    /// URLs. The old <c>CleanDuplicateUrls</c> hack had no production caller and has been deleted along
+    /// with the rest of <c>ImportDbHacks</c>.
     /// </para>
     /// </remarks>
     [TestClass]
@@ -100,7 +102,10 @@ namespace Tests.UnitTests
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                await ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID(db);
+                // IX_PageRequestID is created by migration RetireImportDbHacks, which is idempotent, so
+                // this is a metadata-only no-op once the migration has been applied.
+                await db.Database.ExecuteSqlCommandAsync(
+                    TransactionalBehavior.DoNotEnsureTransaction, RetireImportDbHacks.Up_Sql);
 
                 var url = "http://whatever/" + DateTime.Now.Ticks;
                 var hitsPreInsert = db.hits.Count();

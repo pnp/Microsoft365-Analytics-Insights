@@ -126,36 +126,6 @@ namespace WebJob.AppInsightsImporter.Engine.Properties {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to 
-        ///-- Delete duplicates
-        ///
-        ///	SET QUOTED_IDENTIFIER ON
-        ///
-        ///	DECLARE @allHitsCursor as CURSOR;
-        ///
-        ///	DECLARE @id as int;
-        ///	DECLARE @page_request_id as uniqueidentifier;
-        ///	DECLARE @lastPage_request_id as uniqueidentifier;
-        ///	DECLARE @duplicateCount as int;
-        ///	declare @rowCount as int
-        ///	set @rowCount= 0
-        ///
-        ///	SET @allHitsCursor = CURSOR FOR
-        ///		SELECT
-        ///		y.id, y.page_request_id, dt.CountOf
-        ///		FROM hits y
-        ///			INNER JOIN (SELECT
-        ///							page_request_id, COUNT(*) AS CountOf
-        ///							FROM hits
-        ///							GROUP BY page_request_id [rest of string was truncated]&quot;;.
-        /// </summary>
-        internal static string Delete_Duplicate_Hits_and_Create_ReqID_IDX {
-            get {
-                return ResourceManager.GetString("Delete_Duplicate_Hits_and_Create_ReqID_IDX", resourceCulture);
-            }
-        }
-        
-        /// <summary>
         ///   Looks up a localized string similar to  
         ///-- Insert missing lookups
         ///
