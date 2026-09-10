@@ -40,6 +40,7 @@
             this.lblGUIAzureServiceBusName = new System.Windows.Forms.Label();
             this.chkServiceBusEnabled = new System.Windows.Forms.CheckBox();
             this.lblGUIAzureHeaderSQL = new System.Windows.Forms.Label();
+            this.chkSqlEntraAuth = new System.Windows.Forms.CheckBox();
             this.txtSQLServerPassword = new System.Windows.Forms.TextBox();
             this.lblGUIAzureSQLPassword = new System.Windows.Forms.Label();
             this.txtSQLServerUsername = new System.Windows.Forms.TextBox();
@@ -171,6 +172,18 @@
             this.lblGUIAzureHeaderSQL.Size = new System.Drawing.Size(102, 19);
             this.lblGUIAzureHeaderSQL.TabIndex = 167;
             this.lblGUIAzureHeaderSQL.Text = "SQL Database";
+            // 
+            // chkSqlEntraAuth
+            // 
+            this.chkSqlEntraAuth.AutoSize = true;
+            this.chkSqlEntraAuth.Location = new System.Drawing.Point(64, 359);
+            this.chkSqlEntraAuth.Name = "chkSqlEntraAuth";
+            this.chkSqlEntraAuth.Size = new System.Drawing.Size(520, 17);
+            this.chkSqlEntraAuth.TabIndex = 178;
+            this.chkSqlEntraAuth.Text = "Use Microsoft Entra ID authentication (recommended) - the SQL login below is depre" +
+    "cated";
+            this.chkSqlEntraAuth.UseVisualStyleBackColor = true;
+            this.chkSqlEntraAuth.CheckedChanged += new System.EventHandler(this.chkSqlEntraAuth_CheckedChanged);
             // 
             // txtSQLServerPassword
             // 
@@ -352,6 +365,7 @@
             this.Controls.Add(this.txtServiceBusName);
             this.Controls.Add(this.lblGUIAzureServiceBusName);
             this.Controls.Add(this.lblGUIAzureHeaderSQL);
+            this.Controls.Add(this.chkSqlEntraAuth);
             this.Controls.Add(this.txtSQLServerPassword);
             this.Controls.Add(this.lblGUIAzureSQLPassword);
             this.Controls.Add(this.txtSQLServerUsername);
@@ -395,6 +409,7 @@
         private System.Windows.Forms.CheckBox chkServiceBusEnabled;
         private System.Windows.Forms.Label lblGUIAzureHeaderSQL;
         private System.Windows.Forms.TextBox txtSQLServerPassword;
+        private System.Windows.Forms.CheckBox chkSqlEntraAuth;
         private System.Windows.Forms.Label lblGUIAzureSQLPassword;
         private System.Windows.Forms.TextBox txtSQLServerUsername;
         private System.Windows.Forms.Label lblGUIAzureSQLUsername;
