@@ -46,7 +46,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // in v5+, so we build a HttpClient with the desired timeout and inject it into the
             // GraphServiceClient. /users/delta over a 200k-tenant can comfortably exceed the
             // default 100s timeout - the explicit 1h timeout is load-bearing.
-            var graphServiceClient = GraphServiceClientFactory.CreateWithTimeout(creds, TimeSpan.FromHours(1));
+            var graphServiceClient = GraphServiceClientFactory.CreateForUserImport(creds, _logger);
 
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient);
             _contextFactory = DefaultAnalyticsDbContextFactory.Instance;
