@@ -204,9 +204,15 @@ BEGIN
     -- Other event metadata (add more if needed)
     -------------------------------------------------
     DELETE FROM event_meta_sharepoint WHERE event_id IN (SELECT Id FROM #UserEvents);
-    DELETE FROM event_meta_stream     WHERE event_id IN (SELECT Id FROM #UserEvents);
     DELETE FROM event_meta_general    WHERE event_id IN (SELECT Id FROM #UserEvents);
     DELETE FROM event_meta_exchange   WHERE event_id IN (SELECT Id FROM #UserEvents);
+
+    -- Microsoft Stream (Classic) audit metadata. The RetireUnusedAuditYammerStreamTables migration drops
+    -- event_meta_stream once it is empty, so on nearly every database this table has already gone; it is
+    -- only pruned when the migration found rows and left it in place. Guarded + run through sp_executesql
+    -- so this procedure still executes where the table no longer exists.
+    IF OBJECT_ID('dbo.event_meta_stream', 'U') IS NOT NULL
+        EXEC sp_executesql N'DELETE FROM event_meta_stream WHERE event_id IN (SELECT Id FROM #UserEvents);';
 
     -------------------------------------------------
     -- Audit events (base)
@@ -215,8 +221,16 @@ BEGIN
 
 
 
-    -- Yammer messages
-        IF OBJECT_ID('tempdb..#MessagesToDelete') IS NOT NULL
+    -- Yammer messages (the legacy Viva Engage message import, retired long ago - the Yammer *activity*
+    -- usage reports are unaffected). The RetireUnusedAuditYammerStreamTables migration drops
+    -- yammer_messages / yammer_msg_to_stream once they are empty, which on a database that never ran the
+    -- old import is always. They are only pruned here when the migration found rows and left them in
+    -- place, and the whole block goes through sp_executesql so this procedure still executes where the
+    -- tables have gone.
+    IF OBJECT_ID('dbo.yammer_messages', 'U') IS NOT NULL
+    BEGIN
+        DECLARE @yammerPurgeSql NVARCHAR(MAX) = N'
+        IF OBJECT_ID(''tempdb..#MessagesToDelete'') IS NOT NULL
             DROP TABLE #MessagesToDelete;
 
         ;WITH RecursiveMessages AS
@@ -239,23 +253,25 @@ BEGIN
 
         IF EXISTS (SELECT 1 FROM #MessagesToDelete)
         BEGIN
-            -- Delete dependent links first
-            DELETE ysl
-            FROM dbo.yammer_msg_to_stream ysl
-            INNER JOIN #MessagesToDelete d ON d.id = ysl.message_id;
+            -- Delete dependent links first. The link table can have been dropped on its own: the
+            -- migration drops each table independently, and only when that table is empty.
+            IF OBJECT_ID(''dbo.yammer_msg_to_stream'', ''U'') IS NOT NULL
+                DELETE ysl
+                FROM dbo.yammer_msg_to_stream ysl
+                INNER JOIN #MessagesToDelete d ON d.id = ysl.message_id;
 
             -- Delete messages
             DELETE ym
             FROM dbo.yammer_messages ym
             INNER JOIN #MessagesToDelete d ON d.id = ym.id;
-
-            -- Optional: capture @Deleted if you need it
-            DECLARE @Deleted INT = @@ROWCOUNT;
         END
 
         -- Always drop the temp table if it exists
-        IF OBJECT_ID('tempdb..#MessagesToDelete') IS NOT NULL
-            DROP TABLE #MessagesToDelete;
+        IF OBJECT_ID(''tempdb..#MessagesToDelete'') IS NOT NULL
+            DROP TABLE #MessagesToDelete;';
+
+        EXEC sp_executesql @yammerPurgeSql, N'@UserId INT', @UserId = @UserId;
+    END
 
 
         -- Unset any users with this user as their manager

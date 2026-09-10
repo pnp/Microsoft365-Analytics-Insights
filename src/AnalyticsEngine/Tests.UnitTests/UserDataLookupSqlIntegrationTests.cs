@@ -31,7 +31,7 @@ namespace Tests.UnitTests
     /// subqueries or dictionary entries were crossed produce different numbers and fail. Equal counts
     /// (or zeroes everywhere) would let a swap pass, which is the whole risk being guarded here.
     ///
-    /// 21 of the 30 categories are seeded. The other nine are left at zero because they need an object
+    /// 20 of the 29 categories are seeded. The other nine are left at zero because they need an object
     /// graph this test does not build: the six Teams/calls categories (memberships, ownerships,
     /// reactions, calls organised, call sessions, call feedback) need a Team or CallRecord,
     /// copilot-interactions needs a Copilot chat, and page-likes / page-comments need per-row URLs. A
@@ -83,14 +83,14 @@ namespace Tests.UnitTests
 
                     // Assert against what the DATABASE actually returned, not the fixture's own
                     // bookkeeping: exactly the seeded categories carry data and the rest really are zero.
-                    // This is what makes the class comment's "21 of 30" claim checkable.
+                    // This is what makes the class comment's "20 of 29" claim checkable.
                     var nonZero = batched.Where(c => c.Value != 0).Select(c => c.Key).OrderBy(k => k).ToList();
                     CollectionAssert.AreEqual(
                         seeded.ExpectedCounts.Keys.OrderBy(k => k).ToList(),
                         nonZero,
                         "the categories reporting data are not the ones that were seeded");
-                    Assert.AreEqual(21, nonZero.Count,
-                        "the class comment says 21 of the 30 categories carry data; keep it honest if that changes");
+                    Assert.AreEqual(20, nonZero.Count,
+                        "the class comment says 20 of the 29 categories carry data; keep it honest if that changes");
                 }
                 finally
                 {
@@ -285,7 +285,6 @@ namespace Tests.UnitTests
             public User User { get; set; }
             public EventOperation Operation { get; set; }
             public O365ClientApplication ClientApp { get; set; }
-            public StreamVideo Video { get; set; }
             public EmailAddress FromAddress { get; set; }
             public List<CommonAuditEvent> AuditEvents { get; } = new List<CommonAuditEvent>();
 
@@ -352,15 +351,10 @@ namespace Tests.UnitTests
             AddAuditChildren(db, seeded, UserDataLookupRules.CatAuditEntra, 3, e => db.azure_ad_events.Add(new AzureADEventMetadata { AuditEvent = e }));
             AddAuditChildren(db, seeded, UserDataLookupRules.CatAuditGeneral, 4, e => db.general_audit_events.Add(new GeneralEventMetada { AuditEvent = e }));
 
-            // Stream events need a client application and a video: both FK columns are non-nullable.
             var clientApp = new O365ClientApplication { Name = seeded.LookupName, ClientApplicationId = Guid.NewGuid() };
-            var video = new StreamVideo { Name = seeded.LookupName, StreamID = Guid.NewGuid() };
             db.O365ClientApplications.Add(clientApp);
-            db.Streams.Add(video);
             await db.SaveChangesAsync();
             seeded.ClientApp = clientApp;
-            seeded.Video = video;
-            AddAuditChildren(db, seeded, UserDataLookupRules.CatAuditStream, 5, e => db.StreamEvents.Add(new StreamEventMetada { AuditEvent = e, ClientApplication = clientApp, Video = video }));
 
             AddAuditChildren(db, seeded, UserDataLookupRules.CatPowerAppEvents, 6, e => db.power_app_events.Add(new PowerAppEventMetadata { AuditEvent = e }));
             AddAuditChildren(db, seeded, UserDataLookupRules.CatFlowEvents, 7, e => db.power_automate_flow_events.Add(new PowerAutomateFlowEventMetadata { AuditEvent = e }));
@@ -489,7 +483,6 @@ namespace Tests.UnitTests
                       DELETE c FROM dbo.event_meta_exchange c INNER JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = @p0;
                       DELETE c FROM dbo.event_meta_azure_ad c INNER JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = @p0;
                       DELETE c FROM dbo.event_meta_general c INNER JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = @p0;
-                      DELETE c FROM dbo.event_meta_stream c INNER JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = @p0;
                       DELETE c FROM dbo.event_meta_power_app c INNER JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = @p0;
                       DELETE c FROM dbo.event_meta_power_automate_flow c INNER JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = @p0;
                       DELETE c FROM dbo.event_meta_power_bi c INNER JOIN dbo.audit_events e ON e.id = c.event_id WHERE e.user_id = @p0;
@@ -507,7 +500,6 @@ namespace Tests.UnitTests
                     @"DELETE FROM dbo.urls WHERE full_url = @p0;
                       DELETE FROM dbo.event_operations WHERE operation_name = @p1;
                       DELETE FROM dbo.o365_client_applications WHERE name = @p2;
-                      DELETE FROM dbo.stream_videos WHERE name = @p2;
                       DELETE FROM dbo.email_addresses WHERE address = @p3;",
                     seeded.FullUrl ?? string.Empty,
                     seeded.OperationName ?? string.Empty,

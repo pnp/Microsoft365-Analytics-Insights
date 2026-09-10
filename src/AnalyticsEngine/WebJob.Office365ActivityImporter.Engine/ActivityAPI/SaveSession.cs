@@ -43,7 +43,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             this.Database.Configuration.AutoDetectChangesEnabled = false;
 
             this.SharePointLookupManager = new SharePointLookupManager(Database);
-            this.StreamLookupManager = new StreamLookupManager(Database);
             _injectedCopilotLoader = copilotLoader;
             if (copilotLoader == null)
             {
@@ -68,7 +67,6 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         public PowerPlatformAuditEventManager PowerPlatformEventResolver => _powerPlatformEventResolver ?? throw new Exception("Session not initialised");
         public DlpAuditEventManager DlpEventResolver => _dlpEventResolver ?? throw new Exception("Session not initialised");
         public SharePointLookupManager SharePointLookupManager { get; set; }
-        public StreamLookupManager StreamLookupManager { get; set; }
 
         public AnalyticsEntitiesContext Database { get; set; }
 

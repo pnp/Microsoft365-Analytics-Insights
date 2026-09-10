@@ -141,7 +141,6 @@
     <Compile Include="LookupCaches\SharePointLookupManager.cs" />
     <Compile Include="LookupCaches\SPWebResolver.cs" />
     <Compile Include="LookupCaches\Discrete\StateOrProvinceCache.cs" />
-    <Compile Include="LookupCaches\StreamLookupManager.cs" />
     <Compile Include="LookupCaches\TeamsAndCallsDBLookupManager.cs" />
     <Compile Include="LookupCaches\Discrete\TeamsCache.cs" />
     <Compile Include="LookupCaches\Discrete\TeamsChannelCache.cs" />
@@ -154,12 +153,8 @@
     <Compile Include="Config\SiteFilterLoader.cs" />
     <Compile Include="EFInsertBatch.cs" />
     <Compile Include="Config\ConfigState.cs" />
-    <Compile Include="Entities\AuditLog\ExtendedPropertiesClasses.cs" />
-    <Compile Include="Entities\AuditLog\AuditPropertyName.cs" />
-    <Compile Include="Entities\AuditLog\AuditPropertyValue.cs" />
     <Compile Include="Entities\AuditLog\AzureADEventMetadata.cs" />
     <Compile Include="Entities\AuditLog\BaseClasses.cs" />
-    <Compile Include="Entities\AuditLog\StreamEventMetada.cs" />
     <Compile Include="Entities\AuditLog\GeneralEventMetada.cs" />
     <Compile Include="Entities\AuditLog\Office365Event.cs" />
     <Compile Include="Entities\AuditLog\ExchangeEventMetadata.cs" />
@@ -187,7 +182,6 @@
     <Compile Include="Entities\Language.cs" />
     <Compile Include="Entities\O365ClientApplication.cs" />
     <Compile Include="Entities\Site.cs" />
-    <Compile Include="Entities\StreamVideo.cs" />
     <Compile Include="Entities\Teams\BaseClasses.cs" />
     <Compile Include="Entities\Teams\CallFailureReason.cs" />
     <Compile Include="Entities\Teams\CallFeedback.cs" />
@@ -217,7 +211,6 @@
     <Compile Include="Entities\TelemetryReport.cs" />
     <Compile Include="Entities\Web.cs" />
     <Compile Include="Entities\YammerGroup.cs" />
-    <Compile Include="Entities\YammerMessage.cs" />
     <Compile Include="ImportTaskSettings.cs" />
     <Compile Include="Entities\ImportLog.cs" />
     <Compile Include="Entities\WebTraffic\OperatingSystem.cs" />
@@ -421,6 +414,10 @@
     <Compile Include="Migrations\202609100900001_DlpCopilotImpact.cs" />
     <Compile Include="Migrations\202609100900001_DlpCopilotImpact.Designer.cs">
       <DependentUpon>202609100900001_DlpCopilotImpact.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.cs" />
+    <Compile Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.Designer.cs">
+      <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
@@ -636,6 +633,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609100900001_DlpCopilotImpact.resx">
       <DependentUpon>202609100900001_DlpCopilotImpact.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.resx">
+      <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>
