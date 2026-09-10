@@ -119,7 +119,7 @@ namespace Tests.UnitTests
                 Response(HttpStatusCode.OK, MetadataJson("page-1"))
             });
 
-            using (var httpClient = NewConfidentialClient(handler, clock, budgetSeconds: 90))
+            using (var httpClient = NewConfidentialClient(handler, clock, retryBudgetSeconds: 90))
             {
                 var loader = new WebContentMetaDataLoader(AnalyticsLogger.ConsoleOnlyTracer(), httpClient, NewConfig());
                 var result = await loader.DownloadMetadata("https://contoso.example/metadata?page=1", batchId: 42);
@@ -193,20 +193,20 @@ namespace Tests.UnitTests
             return new AutoThrottleHttpClientTests.FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         }
 
-        private static AutoThrottleHttpClient NewAutoClient(HttpMessageHandler handler, AutoThrottleHttpClientTests.FakeRetryClock clock, int budgetSeconds = 60, int maxRetries = 10)
+        private static AutoThrottleHttpClient NewAutoClient(HttpMessageHandler handler, AutoThrottleHttpClientTests.FakeRetryClock clock, int retryBudgetSeconds = 60, int maxRetries = 10)
         {
             return new AutoThrottleHttpClient(handler, AnalyticsLogger.ConsoleOnlyTracer(), clock)
             {
-                MaxRetryAfterWaitSeconds = budgetSeconds,
+                MaxTotalRetryBudgetSeconds = retryBudgetSeconds,
                 MaxRetries = maxRetries
             };
         }
 
-        private static ConfidentialClientApplicationThrottledHttpClient NewConfidentialClient(HttpMessageHandler handler, AutoThrottleHttpClientTests.FakeRetryClock clock, int budgetSeconds = 60, int maxRetries = 10)
+        private static ConfidentialClientApplicationThrottledHttpClient NewConfidentialClient(HttpMessageHandler handler, AutoThrottleHttpClientTests.FakeRetryClock clock, int retryBudgetSeconds = 60, int maxRetries = 10)
         {
             return new ConfidentialClientApplicationThrottledHttpClient(handler, AnalyticsLogger.ConsoleOnlyTracer(), clock)
             {
-                MaxRetryAfterWaitSeconds = budgetSeconds,
+                MaxTotalRetryBudgetSeconds = retryBudgetSeconds,
                 MaxRetries = maxRetries
             };
         }

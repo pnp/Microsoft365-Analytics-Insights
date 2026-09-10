@@ -36,7 +36,7 @@ namespace DataUtils.Http
         private DateTimeOffset? _nextCallEarliestTime = null;
         private int _concurrentCalls = 0, _throttledCalls = 0, _completedCalls = 0;
         private int _maxRetries = 10;
-        private int _maxRetryAfterWaitSeconds = 3600;
+        private int _maxTotalRetryBudgetSeconds = 3600;
         private object _concurrentCallsObj = new object(), _throttledCallsObject = new object(), _completedCallsObject = new object(), _maxRetriesObj = new object();
 
 
@@ -104,10 +104,11 @@ namespace DataUtils.Http
                 HttpResponseMessage response = null;
                 try
                 {
+                    // Get response but don't buffer full content (which will buffer overflow for large files).
                     attempt++;
                     response = await httpAction(cancellationToken);
                 }
-                catch (Exception ex) when (IsTransientException(ex))
+                catch (Exception ex) when (IsTransientException(ex) && !cancellationToken.IsCancellationRequested)
                 {
                     lock (_concurrentCallsObj)
                     {
@@ -120,9 +121,13 @@ namespace DataUtils.Http
                         throw;
                     }
 
+                    // A client-side HTTP timeout (HttpClient.Timeout elapsed) surfaces as TaskCanceledException,
+                    // and a transient socket/DNS blip as HttpRequestException thrown from the send itself before
+                    // any response is received. Neither is an HTTP 429, so response-status retry logic never sees
+                    // them; without retrying here they would abort a whole import section (or crash in DEBUG).
                     var delay = GetFallbackDelay(attempt);
                     _logger.LogWarning($"Transient error calling {url}: '{ex.Message}'. Waiting {FormatDelay(delay)} before retry (attempt #{attempt} of {MaxRetries})...");
-                    await DelayWithinRetryBudget(delay, startedUtc, url, null, cancellationToken);
+                    await DelayWithinRetryBudget(delay, startedUtc, url, publishSharedDeadline: false, cancellationToken: cancellationToken);
                     continue;
                 }
 
@@ -146,6 +151,10 @@ namespace DataUtils.Http
                     _throttledCalls++;
                 }
 
+                // Enforce the retry budget on EVERY 429, not just the ones without a 'retry-after'
+                // header. Graph almost always sends that header, so the previous shape only counted
+                // retries and never stopped: a persistently throttled endpoint looped forever, blocking
+                // the calling import section indefinitely.
                 if (attempt >= MaxRetries)
                 {
                     _logger.LogError($"Retryable HTTP {(int)response.StatusCode} from {url}. Maximum retry attempts {MaxRetries} reached; giving up.");
@@ -160,8 +169,18 @@ namespace DataUtils.Http
                 }
 
                 var delayNeeded = GetRetryDelay(response, attempt, url);
-                await DelayWithinRetryBudget(delayNeeded, startedUtc, url, response, cancellationToken);
-                response.Dispose();
+                try
+                {
+                    await DelayWithinRetryBudget(delayNeeded.Delay, startedUtc, url, delayNeeded.PublishSharedDeadline, cancellationToken);
+                }
+                finally
+                {
+                    // This response is being discarded, so release it before looping or when cancellation stops
+                    // the loop. It matters for callers that request HttpCompletionOption.ResponseHeadersRead
+                    // (the Copilot CSV report downloads): the body is still unread, so without this each retry
+                    // leaks a connection.
+                    response.Dispose();
+                }
             }
         }
 
@@ -196,11 +215,11 @@ namespace DataUtils.Http
                     _throttledCalls++;
                 }
 
-                await DelayWithinRetryBudget(delay, startedUtc, url, null, cancellationToken);
+                await DelayWithinRetryBudget(delay, startedUtc, url, publishSharedDeadline: false, cancellationToken: cancellationToken);
             }
         }
 
-        private TimeSpan GetRetryDelay(HttpResponseMessage response, int attempt, string url)
+        private RetryDelayDecision GetRetryDelay(HttpResponseMessage response, int attempt, string url)
         {
             int? retryAfterSeconds = null;
             if (!ignoreRetryHeader)
@@ -214,16 +233,16 @@ namespace DataUtils.Http
                 if (delay < MinimumRetryDelay)
                 {
                     _logger.LogInformation($"Retryable HTTP {(int)response.StatusCode} from {url}. 'retry-after' was due now/past; using {FormatDelay(MinimumRetryDelay)} minimum retry delay for attempt #{attempt}.");
-                    return MinimumRetryDelay;
+                    return new RetryDelayDecision(MinimumRetryDelay, ShouldPublishSharedDeadline(response, hasRetryAfterHeader: true));
                 }
 
                 _logger.LogInformation($"Retryable HTTP {(int)response.StatusCode} from {url}. Waiting full 'retry-after' delay of {FormatDelay(delay)} for attempt #{attempt}.");
-                return delay;
+                return new RetryDelayDecision(delay, ShouldPublishSharedDeadline(response, hasRetryAfterHeader: true));
             }
 
             var fallback = GetFallbackDelay(attempt);
             _logger.LogInformation($"Retryable HTTP {(int)response.StatusCode} from {url} without a usable 'retry-after'. Waiting {FormatDelay(fallback)} before attempt #{attempt + 1}...");
-            return fallback;
+            return new RetryDelayDecision(fallback, ShouldPublishSharedDeadline(response, hasRetryAfterHeader: false));
         }
 
         private static TimeSpan GetFallbackDelay(int attempt)
@@ -232,7 +251,7 @@ namespace DataUtils.Http
             return TimeSpan.FromSeconds(seconds);
         }
 
-        private async Task DelayWithinRetryBudget(TimeSpan delay, DateTimeOffset startedUtc, string url, HttpResponseMessage responseToFail, CancellationToken cancellationToken)
+        private async Task DelayWithinRetryBudget(TimeSpan delay, DateTimeOffset startedUtc, string url, bool publishSharedDeadline, CancellationToken cancellationToken)
         {
             if (delay < MinimumRetryDelay)
             {
@@ -241,24 +260,12 @@ namespace DataUtils.Http
 
             var now = _clock.UtcNow;
             var elapsed = now - startedUtc;
-            var budget = TimeSpan.FromSeconds(Math.Max(0, MaxRetryAfterWaitSeconds));
+            var budget = TimeSpan.FromSeconds(Math.Max(0, MaxTotalRetryBudgetSeconds));
             var remaining = budget - elapsed;
 
             if (remaining < TimeSpan.Zero || delay > remaining)
             {
                 _logger.LogError($"Retry deadline for {url} is {FormatDelay(delay)} away, exceeding the remaining retry budget of {FormatDelay(remaining)}. Not retrying before the server's not-before time.");
-                if (responseToFail != null)
-                {
-                    try
-                    {
-                        responseToFail.EnsureSuccessStatusCode();
-                    }
-                    finally
-                    {
-                        responseToFail.Dispose();
-                    }
-                }
-
                 throw new HttpRequestException($"Retry deadline for {url} exceeds the remaining retry budget; not retrying before the server's not-before time.");
             }
 
@@ -266,18 +273,17 @@ namespace DataUtils.Http
             if (!TryAdd(now, delay, out deadline))
             {
                 _logger.LogError($"Retry deadline for {url} is too large to represent. Not retrying before the server's not-before time.");
-                if (responseToFail != null)
-                {
-                    responseToFail.Dispose();
-                }
                 throw new HttpRequestException($"Retry deadline for {url} is too large to represent.");
             }
 
-            lock (this)
+            if (publishSharedDeadline)
             {
-                if (!_nextCallEarliestTime.HasValue || _nextCallEarliestTime.Value < deadline)
+                lock (this)
                 {
-                    _nextCallEarliestTime = deadline;
+                    if (!_nextCallEarliestTime.HasValue || _nextCallEarliestTime.Value < deadline)
+                    {
+                        _nextCallEarliestTime = deadline;
+                    }
                 }
             }
 
@@ -287,11 +293,14 @@ namespace DataUtils.Http
             }
             finally
             {
-                lock (this)
+                if (publishSharedDeadline)
                 {
-                    if (_nextCallEarliestTime.HasValue && _nextCallEarliestTime.Value <= _clock.UtcNow)
+                    lock (this)
                     {
-                        _nextCallEarliestTime = null;
+                        if (_nextCallEarliestTime.HasValue && _nextCallEarliestTime.Value <= _clock.UtcNow)
+                        {
+                            _nextCallEarliestTime = null;
+                        }
                     }
                 }
             }
@@ -333,6 +342,31 @@ namespace DataUtils.Http
                 || response.StatusCode == HttpStatusCode.GatewayTimeout;
         }
 
+        private static bool ShouldPublishSharedDeadline(HttpResponseMessage response, bool hasRetryAfterHeader)
+        {
+            if ((int)response.StatusCode == 429)
+            {
+                return true;
+            }
+
+            // A 503 Retry-After is an explicit service not-before signal, so share it across the client. Guessed
+            // fallback delays for 502/503/504 are scoped only to the replayed GET: one flaky endpoint should not
+            // stall unrelated requests on the same ManualGraphCallClient.
+            return response.StatusCode == HttpStatusCode.ServiceUnavailable && hasRetryAfterHeader;
+        }
+
+        private struct RetryDelayDecision
+        {
+            public RetryDelayDecision(TimeSpan delay, bool publishSharedDeadline)
+            {
+                Delay = delay;
+                PublishSharedDeadline = publishSharedDeadline;
+            }
+
+            public TimeSpan Delay { get; }
+            public bool PublishSharedDeadline { get; }
+        }
+
         private static string FormatDelay(TimeSpan delay)
         {
             if (delay < TimeSpan.Zero)
@@ -352,7 +386,9 @@ namespace DataUtils.Http
         /// Transient failures worth retrying at the HTTP layer: a client-side timeout (HttpClient.Timeout
         /// elapsed) surfaces as a <see cref="TaskCanceledException"/>, and a transient socket/DNS failure as an
         /// <see cref="HttpRequestException"/> thrown from the send itself. HTTP status codes are handled
-        /// separately via the response status code.
+        /// separately via the response status code. A caller-requested cancellation also surfaces as
+        /// <see cref="TaskCanceledException"/>, so callers must check their own token before treating this as
+        /// transient; caller cancellation propagates immediately and does not consume another retry.
         /// </summary>
         private static bool IsTransientException(Exception ex)
         {
@@ -381,24 +417,32 @@ namespace DataUtils.Http
         /// <summary>
         /// Total retry/back-off execution budget, in seconds. Retry-After is never clipped to this value: when a
         /// server not-before deadline would exceed the remaining budget, the call fails visibly instead of
-        /// retrying early.
+        /// retrying early. Defaults to 3600 seconds, so the worst-case retry back-off is bounded by this budget
+        /// per retryable response cycle and by MaxRetries for total attempts.
         /// </summary>
-        public int MaxRetryAfterWaitSeconds
+        public int MaxTotalRetryBudgetSeconds
         {
             get
             {
                 lock (_maxRetriesObj)
                 {
-                    return _maxRetryAfterWaitSeconds;
+                    return _maxTotalRetryBudgetSeconds;
                 }
             }
             set
             {
                 lock (_maxRetriesObj)
                 {
-                    _maxRetryAfterWaitSeconds = value;
+                    _maxTotalRetryBudgetSeconds = value;
                 }
             }
+        }
+
+        [Obsolete("Use MaxTotalRetryBudgetSeconds. Retry-After values are no longer clipped to this property; it now forwards to the total retry budget.")]
+        public int MaxRetryAfterWaitSeconds
+        {
+            get { return MaxTotalRetryBudgetSeconds; }
+            set { MaxTotalRetryBudgetSeconds = value; }
         }
         public int ConcurrentCalls
         {

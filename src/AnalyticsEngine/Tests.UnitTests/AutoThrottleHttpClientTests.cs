@@ -3,6 +3,7 @@ using DataUtils.Http;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -20,7 +21,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, HeaderStatus((HttpStatusCode)429, "Retry-After", "600"), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 900))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 900))
             using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -35,7 +36,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, HeaderStatus((HttpStatusCode)429, "Retry-After", "30"), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 120))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 120))
             using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -52,7 +53,7 @@ namespace Tests.UnitTests
             var retryAt = start.AddSeconds(120).UtcDateTime.ToString("r");
             var handler = SequencedHandler.FromStatuses(clock, HeaderStatus((HttpStatusCode)429, "Retry-After", retryAt), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 300))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 300))
             using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -67,7 +68,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, HeaderStatus((HttpStatusCode)429, "Retry-After", "600"), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 180))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 180))
             {
                 await AssertThrowsAsync<HttpRequestException>(() => client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer()));
             }
@@ -85,7 +86,7 @@ namespace Tests.UnitTests
                 HeaderStatus((HttpStatusCode)429, "Retry-After", "20"),
                 Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 60))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 60))
             using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -107,7 +108,7 @@ namespace Tests.UnitTests
                 HeaderStatus((HttpStatusCode)429, "Retry-After", past),
                 Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 60))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 60))
             using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -122,7 +123,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, HeaderStatus((HttpStatusCode)429, "Retry-After", "999999999999"), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 3600))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 3600))
             {
                 await AssertThrowsAsync<HttpRequestException>(() => client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer()));
             }
@@ -139,7 +140,7 @@ namespace Tests.UnitTests
             {
                 clock.BeforeDelay = (delay, token) => cts.Cancel();
 
-                using (var client = NewClient(handler, clock, budgetSeconds: 900))
+                using (var client = NewClient(handler, clock, retryBudgetSeconds: 900))
                 {
                     await AssertThrowsAsync<OperationCanceledException>(() => client.GetAsyncWithThrottleRetries("https://contoso.example/throttled", AnalyticsLogger.ConsoleOnlyTracer(), cts.Token));
                 }
@@ -149,12 +150,60 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ExecuteHttpCallWithThrottleRetries_CancellationDuringBackoffDisposesHeadersReadResponse()
+        {
+            var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            var content = new DisposalTrackingContent();
+            var handler = SequencedHandler.FromStatuses(clock, () =>
+            {
+                var response = new HttpResponseMessage((HttpStatusCode)429) { Content = content };
+                response.Headers.TryAddWithoutValidation("Retry-After", "600");
+                return response;
+            }, Status(HttpStatusCode.OK));
+
+            using (var cts = new CancellationTokenSource())
+            {
+                clock.BeforeDelay = (delay, token) => cts.Cancel();
+
+                using (var client = NewClient(handler, clock, retryBudgetSeconds: 900))
+                {
+                    await AssertThrowsAsync<OperationCanceledException>(() => client.GetAsyncWithThrottleRetries(
+                        "https://contoso.example/throttled",
+                        HttpCompletionOption.ResponseHeadersRead,
+                        AnalyticsLogger.ConsoleOnlyTracer(),
+                        cts.Token));
+                }
+            }
+
+            AssertAttemptOffsets(clock, handler, 0);
+            Assert.IsTrue(content.Disposed, "The discarded 429 response content must be disposed even when cancellation interrupts the backoff.");
+        }
+
+        [TestMethod]
+        public async Task ExecuteHttpCallWithThrottleRetries_CallerCancellationDuringRequestPropagatesWithoutRetry()
+        {
+            var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            using (var cts = new CancellationTokenSource())
+            {
+                var handler = new CallerCanceledHandler(clock, cts);
+
+                using (var client = NewClient(handler, clock, retryBudgetSeconds: 30))
+                {
+                    await AssertThrowsAsync<TaskCanceledException>(() => client.GetAsyncWithThrottleRetries("https://contoso.example/cancelled", AnalyticsLogger.ConsoleOnlyTracer(), cts.Token));
+                }
+
+                AssertAttemptOffsets(clock, handler, 0);
+                Assert.AreEqual(TimeSpan.Zero, clock.Elapsed, "Caller cancellation during the request must not consume a retry/backoff attempt.");
+            }
+        }
+
+        [TestMethod]
         public async Task GetAsyncWithThrottleRetries_RetriesGatewayResponsesForIdempotentGet()
         {
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, Status(HttpStatusCode.BadGateway), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 30))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 30))
             using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/gateway", AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -170,7 +219,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, HeaderStatus(HttpStatusCode.ServiceUnavailable, "Retry-After", "45"), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 90))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 90))
             using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/gateway", AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
@@ -185,7 +234,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, Status(HttpStatusCode.GatewayTimeout), Status(HttpStatusCode.GatewayTimeout), Status(HttpStatusCode.GatewayTimeout), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 30, maxRetries: 3))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 30, maxRetries: 3))
             {
                 await AssertThrowsAsync<HttpRequestException>(() => client.GetAsyncWithThrottleRetries("https://contoso.example/gateway", AnalyticsLogger.ConsoleOnlyTracer()));
             }
@@ -201,7 +250,7 @@ namespace Tests.UnitTests
                 var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
                 var handler = SequencedHandler.FromStatuses(clock, Status(status), Status(HttpStatusCode.OK));
 
-                using (var client = NewClient(handler, clock, budgetSeconds: 30))
+                using (var client = NewClient(handler, clock, retryBudgetSeconds: 30))
                 using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/client-error", AnalyticsLogger.ConsoleOnlyTracer()))
                 {
                     Assert.AreEqual(status, response.StatusCode);
@@ -217,7 +266,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = SequencedHandler.FromStatuses(clock, Status(HttpStatusCode.BadGateway), Status(HttpStatusCode.OK));
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 30))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 30))
             using (var response = await client.PostAsyncWithThrottleRetries("https://contoso.example/post", new { value = "synthetic" }, AnalyticsLogger.ConsoleOnlyTracer()))
             {
                 Assert.AreEqual(HttpStatusCode.BadGateway, response.StatusCode);
@@ -233,7 +282,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = new TimeoutThenOkHandler(clock, timeoutsBeforeSuccess: 1);
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 30))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 30))
             using (var response = await client.ExecuteHttpCallWithThrottleRetries(ct => client.GetAsync("https://contoso.example/timeout", ct), "https://contoso.example/timeout", isReplayableIdempotentGet: true))
             {
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, "A transient timeout should be retried and then succeed.");
@@ -248,7 +297,7 @@ namespace Tests.UnitTests
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             var handler = new TimeoutThenOkHandler(clock, timeoutsBeforeSuccess: int.MaxValue);
 
-            using (var client = NewClient(handler, clock, budgetSeconds: 30, maxRetries: 2))
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 30, maxRetries: 2))
             {
                 await AssertThrowsAsync<TaskCanceledException>(() => client.ExecuteHttpCallWithThrottleRetries(ct => client.GetAsync("https://contoso.example/timeout", ct), "https://contoso.example/timeout", isReplayableIdempotentGet: true));
             }
@@ -256,11 +305,11 @@ namespace Tests.UnitTests
             AssertAttemptOffsets(clock, handler, 0, 2);
         }
 
-        private static AutoThrottleHttpClient NewClient(HttpMessageHandler handler, FakeRetryClock clock, int budgetSeconds, int maxRetries = 10)
+        private static AutoThrottleHttpClient NewClient(HttpMessageHandler handler, FakeRetryClock clock, int retryBudgetSeconds, int maxRetries = 10)
         {
             return new AutoThrottleHttpClient(handler, AnalyticsLogger.ConsoleOnlyTracer(), clock)
             {
-                MaxRetryAfterWaitSeconds = budgetSeconds,
+                MaxTotalRetryBudgetSeconds = retryBudgetSeconds,
                 MaxRetries = maxRetries
             };
         }
@@ -395,6 +444,48 @@ namespace Tests.UnitTests
                 }
 
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            }
+        }
+
+        private sealed class CallerCanceledHandler : RecordingHandler
+        {
+            private readonly CancellationTokenSource _cts;
+
+            public CallerCanceledHandler(FakeRetryClock clock, CancellationTokenSource cts) : base(clock)
+            {
+                _cts = cts;
+            }
+
+            protected override Task<HttpResponseMessage> SendRecordedAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                _cts.Cancel();
+                return Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+            }
+        }
+
+        private sealed class DisposalTrackingContent : HttpContent
+        {
+            public bool Disposed { get; private set; }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context)
+            {
+                return Task.FromResult(0);
+            }
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = 0;
+                return true;
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    Disposed = true;
+                }
+
+                base.Dispose(disposing);
             }
         }
     }
